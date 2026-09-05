@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif; }
+    a { color: #255d4e; text-decoration: none; }
+    a:hover { color: #1a463b; }
+  </style>
+</helmet>
+
+<div style="display: flex; width: 1180px; height: 820px; background: #f6f4ee; color: #22332e; font-size: 13px; line-height: 1.7; overflow: hidden;">
+
+  <div style="display: flex; flex-direction: column; width: 190px; flex: 0 0 190px; background: #163a30; color: #cfe0d5; padding: 24px 12px 16px;">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 0 8px 28px;">
+      <div style="display: grid; place-items: center; width: 34px; height: 38px; flex: 0 0 auto; border: 1px solid rgba(145,173,150,.5); border-radius: 4px 11px 4px 4px; color: #e2cf9c; font-family: Georgia,'Songti SC',serif; font-size: 21px;">镜</div>
+      <div>
+        <div style="font-size: 17px; font-weight: 700; letter-spacing: .16em; color: #f2f7f0;">镜译</div>
+        <div style="font-size: 9px; letter-spacing: .1em; color: #8fab99;">正文翻译器</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg>
+        <span>翻译台</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg>
+        <span>翻译规则</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg>
+        <span>模型连接</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg>
+        <span>正文处理</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; background: #e6eadb; color: #204737; font-weight: 700;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>
+        <span>运行记录</span>
+      </div>
+    </div>
+
+    <div style="flex-grow: 1;"></div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 10px 0; border-top: 1px solid rgba(255,255,255,.1);">
+      <div style="display: flex; align-items: center; gap: 7px; color: #a9c0b2; font-size: 11px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 000 16z" fill="currentColor" stroke="none"/></svg>
+        <span>外观</span>
+      </div>
+      <div style="color: #7d9a89; font-size: 11px;">v0.10.0</div>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 22px 26px 0;">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <div style="font-size: 17px; font-weight: 650; letter-spacing: -.01em;">运行记录</div>
+        <div style="color: #6b7770; font-size: 12px;">最近 24 次 · 保存在本机</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 13px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffdf7; font-size: 12px; font-weight: 600;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9h11v11H9z"/><path d="M15 5H4v11"/></svg>
+          <span>复制安全摘要</span>
+        </div>
+        <div style="display: flex; align-items: center; height: 32px; padding: 0 13px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffdf7; font-size: 12px; font-weight: 600; color: #6b7770;">清空</div>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 10px; padding: 11px 15px; margin-bottom: 14px; background: #faf3e4; border: 1px solid #e6d5ae; border-radius: 8px;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a6c2a" stroke-width="1.9" stroke-linecap="round" flex="0"><path d="M12 8v5"/><circle cx="12" cy="16.5" r=".6" fill="#8a6c2a"/><path d="M12 3l9 17H3z"/></svg>
+      <div style="color: #6d5522; font-size: 12px;">完整日志含正文与模型思考。「复制完整日志」前请自行检查隐私内容；「复制安全摘要」不含这些。</div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 8px; flex-grow: 1; min-height: 0;">
+
+      <div style="background: #fffdf7; border: 1px solid #255d4e; border-radius: 10px; overflow: hidden;">
+        <div style="display: flex; align-items: center; gap: 14px; padding: 12px 16px;">
+          <span style="width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #3f7a5f;"></span>
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="display: flex; align-items: baseline; gap: 10px;">
+              <div style="font-weight: 650;">第 42 楼 · 首次翻译</div>
+              <div style="color: #8b958c; font-size: 11px;">14:32:07</div>
+            </div>
+            <div style="color: #6b7770; font-size: 11px;">translator-pro · 37 / 37 行 · 用时 11.4 秒</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="padding: 2px 8px; border-radius: 4px; background: #e7ede2; color: #3f7a5f; font-size: 10px; font-weight: 700;">完成</div>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6b7770" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 6px; padding: 0 16px 11px;">
+          <div style="padding: 4px 11px; border-radius: 5px; background: #255d4e; color: #fffef3; font-size: 11px; font-weight: 650;">返回正文</div>
+          <div style="padding: 4px 11px; border-radius: 5px; border: 1px solid #d8dccf; font-size: 11px; font-weight: 600; color: #6b7770;">思考过程</div>
+          <div style="padding: 4px 11px; border-radius: 5px; border: 1px solid #d8dccf; font-size: 11px; font-weight: 600; color: #6b7770;">请求参数</div>
+          <div style="flex-grow: 1;"></div>
+          <div style="padding: 4px 11px; border-radius: 5px; border: 1px solid #d8dccf; font-size: 11px; font-weight: 600; color: #255d4e;">复制这一条</div>
+        </div>
+
+        <div style="padding: 12px 16px; border-top: 1px solid #ebeade; background: #faf8f1; font-family: ui-monospace,'Cascadia Mono',Consolas,monospace; font-size: 11.5px; line-height: 1.9; color: #33443d; white-space: pre-line;">{"translations":[
+  {"id":1,"text":"傍晚的教室里，一个人也没有。"},
+  {"id":2,"text":"窗外照进来的光，淡淡地照着桌子。"},
+  {"id":3,"text":"「明天，也能在这里见面吗？」"},
+  {"id":4,"text":"我没有回答，只是轻轻点了点头。"}</div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 14px; padding: 12px 16px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px;">
+        <span style="width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #b08a3c;"></span>
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="display: flex; align-items: baseline; gap: 10px;">
+            <div style="font-weight: 650;">第 41 楼 · 缺段补译</div>
+            <div style="color: #8b958c; font-size: 11px;">14:28:51</div>
+          </div>
+          <div style="color: #6b7770; font-size: 11px;">translator-pro · 补回 3 行 · 用时 2.6 秒</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="padding: 2px 8px; border-radius: 4px; background: #f6efdd; color: #8a6c2a; font-size: 10px; font-weight: 700;">已恢复</div>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6b7770" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 14px; padding: 12px 16px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px;">
+        <span style="width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #b54332;"></span>
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="display: flex; align-items: baseline; gap: 10px;">
+            <div style="font-weight: 650;">第 40 楼 · 首次翻译</div>
+            <div style="color: #8b958c; font-size: 11px;">14:19:03</div>
+          </div>
+          <div style="color: #b54332; font-size: 11px;">请求超时（120 秒）· 已按设置重试 1 次</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="padding: 2px 8px; border-radius: 4px; background: #f7e6e2; color: #b54332; font-size: 10px; font-weight: 700;">失败</div>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6b7770" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 14px; padding: 12px 16px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px;">
+        <span style="width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #3f7a5f;"></span>
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="display: flex; align-items: baseline; gap: 10px;">
+            <div style="font-weight: 650;">第 40 楼 · 定向修正</div>
+            <div style="color: #8b958c; font-size: 11px;">14:18:44</div>
+          </div>
+          <div style="color: #6b7770; font-size: 11px;">命中绝对禁用「眸光」· 修正 1 行 · 用时 1.9 秒</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="padding: 2px 8px; border-radius: 4px; background: #e7ede2; color: #3f7a5f; font-size: 10px; font-weight: 700;">完成</div>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6b7770" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

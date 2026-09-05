@@ -1,0 +1,214 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif; }
+    a { color: #255d4e; text-decoration: none; }
+    a:hover { color: #1a463b; }
+  </style>
+</helmet>
+
+<div style="display: flex; width: 1180px; height: 820px; background: #f6f4ee; color: #22332e; font-size: 13px; line-height: 1.7; overflow: hidden;">
+
+  <div style="display: flex; flex-direction: column; width: 190px; flex: 0 0 190px; background: #163a30; color: #cfe0d5; padding: 24px 12px 16px;">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 0 8px 28px;">
+      <div style="display: grid; place-items: center; width: 34px; height: 38px; flex: 0 0 auto; border: 1px solid rgba(145,173,150,.5); border-radius: 4px 11px 4px 4px; color: #e2cf9c; font-family: Georgia,'Songti SC',serif; font-size: 21px;">镜</div>
+      <div>
+        <div style="font-size: 17px; font-weight: 700; letter-spacing: .16em; color: #f2f7f0;">镜译</div>
+        <div style="font-size: 9px; letter-spacing: .1em; color: #8fab99;">正文翻译器</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg>
+        <span>翻译台</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg>
+        <span>翻译规则</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg>
+        <span>模型连接</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; background: #e6eadb; color: #204737; font-weight: 700;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg>
+        <span>正文处理</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>
+        <span>运行记录</span>
+      </div>
+    </div>
+
+    <div style="flex-grow: 1;"></div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 10px 0; border-top: 1px solid rgba(255,255,255,.1);">
+      <div style="display: flex; align-items: center; gap: 7px; color: #a9c0b2; font-size: 11px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 000 16z" fill="currentColor" stroke="none"/></svg>
+        <span>外观</span>
+      </div>
+      <div style="color: #7d9a89; font-size: 11px;">v0.10.0</div>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 22px 26px 0;">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <div style="font-size: 17px; font-weight: 650; letter-spacing: -.01em;">正文处理</div>
+        <div style="color: #6b7770; font-size: 12px;">决定哪些内容会被送去翻译</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; height: 32px; padding: 0 15px; border-radius: 6px; background: #255d4e; color: #fffef3; font-size: 12px; font-weight: 650;">保存设置</div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 16px; flex-grow: 1; min-height: 0; padding-bottom: 20px;">
+
+      <div style="display: flex; flex-direction: column; gap: 12px; min-height: 0;">
+
+        <div style="padding: 15px 17px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="width: 8px; height: 8px; border-radius: 2px; background: #255d4e;"></span>
+            <div style="font-weight: 650;">提取正文</div>
+          </div>
+          <div style="margin-top: 3px; color: #8b958c; font-size: 11px;">每行一个标签名，只取每种标签的最后一组完整内容。</div>
+          <div style="margin-top: 9px; padding: 9px 11px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9; font-family: ui-monospace,'Cascadia Mono',Consolas,monospace; font-size: 12px; line-height: 1.9;">story_scene</div>
+        </div>
+
+        <div style="padding: 15px 17px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="width: 8px; height: 8px; border-radius: 2px; background: #b08a3c;"></span>
+            <div style="font-weight: 650;">排除标签</div>
+          </div>
+          <div style="margin-top: 3px; color: #8b958c; font-size: 11px;">标签及内部内容留在原位，不送去翻译。</div>
+          <div style="margin-top: 9px; padding: 9px 11px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9; font-family: ui-monospace,'Cascadia Mono',Consolas,monospace; font-size: 12px; line-height: 1.9;">thinking<br>status</div>
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 17px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px;">
+          <div style="display: flex; align-items: center; gap: 9px;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4a6357" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            <div style="font-weight: 650;">原样保留白名单</div>
+          </div>
+          <div style="color: #8b958c; font-size: 11px;">3 条规则 · 本楼命中 1 行</div>
+        </div>
+
+        <div style="padding: 14px 17px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px;">
+          <div style="display: flex; align-items: center; gap: 9px; padding-bottom: 11px;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4a6357" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>
+            <div style="font-weight: 650;">段落前后缀</div>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 8px; padding-bottom: 6px;">
+            <span style="width: 8px; height: 8px; border-radius: 2px; background: #255d4e;"></span>
+            <div style="color: #6b7770; font-size: 11px; font-weight: 600;">原文</div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;">
+            <div style="display: flex; align-items: center; height: 32px; padding: 0 10px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9; font-family: ui-monospace,'Cascadia Mono',Consolas,monospace; font-size: 12px; color: #8b958c;">&lt;small&gt;</div>
+            <div style="display: flex; align-items: center; height: 32px; padding: 0 10px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9; font-family: ui-monospace,'Cascadia Mono',Consolas,monospace; font-size: 12px; color: #8b958c;">&lt;/small&gt;</div>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 8px; padding: 12px 0 6px;">
+            <span style="width: 8px; height: 8px; border-radius: 2px; background: #7a9c8b;"></span>
+            <div style="color: #6b7770; font-size: 11px; font-weight: 600;">译文</div>
+            <div style="padding: 1px 6px; border-radius: 4px; background: #e7ede2; color: #3f7a5f; font-size: 10px; font-weight: 700;">新增</div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;">
+            <div style="display: flex; align-items: center; height: 32px; padding: 0 10px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9; font-family: ui-monospace,'Cascadia Mono',Consolas,monospace; font-size: 12px;">&lt;font color=#8aa&gt;</div>
+            <div style="display: flex; align-items: center; height: 32px; padding: 0 10px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9; font-family: ui-monospace,'Cascadia Mono',Consolas,monospace; font-size: 12px;">&lt;/font&gt;</div>
+          </div>
+
+          <div style="margin-top: 10px; padding-top: 9px; border-top: 1px solid #ebeade; color: #8b958c; font-size: 11px;">译文前后缀写在不可见边界标记内部，随译文块一起被生成拦截器剥掉，不会进入主模型历史。</div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 11px; padding: 15px 17px; background: #eef1e7; border: 1px solid #dfe3d5; border-radius: 10px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+            <div>
+              <div style="font-weight: 650;">编辑回复后自动重译</div>
+              <div style="color: #6b7770; font-size: 11px;">改动原文后重新翻译该楼。</div>
+            </div>
+            <div style="display: flex; align-items: center; width: 38px; height: 21px; padding: 3px; border-radius: 20px; background: #c9d0c2;">
+              <div style="width: 15px; height: 15px; border-radius: 50%; background: #fffef3;"></div>
+              <div style="flex-grow: 1;"></div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 11px; border-top: 1px solid #dfe3d5;">
+            <div>
+              <div style="font-weight: 650;">显示悬浮入口</div>
+              <div style="color: #6b7770; font-size: 11px;">聊天界面上可拖动的「译」按钮。</div>
+            </div>
+            <div style="display: flex; align-items: center; width: 38px; height: 21px; padding: 3px; border-radius: 20px; background: #255d4e;">
+              <div style="flex-grow: 1;"></div>
+              <div style="width: 15px; height: 15px; border-radius: 50%; background: #fffef3;"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div style="display: flex; flex-direction: column; min-height: 0; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px; overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 17px; border-bottom: 1px solid #ebeade;">
+          <div style="font-size: 14px; font-weight: 650;">当前楼层的判定结果</div>
+          <div style="display: flex; align-items: center; gap: 6px; height: 27px; padding: 0 11px; border: 1px solid #d8dccf; border-radius: 5px; font-size: 11px; font-weight: 600;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2 6"/><path d="M20 5v6h-6"/></svg>
+            <span>重新检查</span>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 16px; padding: 11px 17px; border-bottom: 1px solid #ebeade; background: #faf8f1;">
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600;">
+            <span style="width: 8px; height: 8px; border-radius: 2px; background: #255d4e;"></span>
+            <span>送译 37 行</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600;">
+            <span style="width: 8px; height: 8px; border-radius: 2px; background: #b08a3c;"></span>
+            <span>排除 1 块</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600;">
+            <span style="width: 8px; height: 8px; border-radius: 2px; background: #9aa398;"></span>
+            <span>原样保留 1 行</span>
+          </div>
+        </div>
+
+        <div style="flex-grow: 1; min-height: 0; overflow: hidden; padding: 12px 0; font-family: ui-monospace,'Cascadia Mono',Consolas,monospace; font-size: 11.5px; line-height: 1.95;">
+
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid transparent; color: #9aa398;">&lt;thinking&gt;</div>
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid #b08a3c; background: #fbf5e8; color: #7a6534;">她在犹豫要不要开口……</div>
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid transparent; color: #9aa398;">&lt;/thinking&gt;</div>
+
+          <div style="height: 8px;"></div>
+
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid transparent; color: #9aa398;">&lt;story_scene&gt;</div>
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid #9aa398; background: #f4f3ec; color: #6b7770;">──────────────</div>
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid #255d4e; background: #eef3e9; color: #22332e;"><span style="color: #8fa793; flex: 0 0 auto;">1</span><span>夕暮れの教室には、誰もいなかった。</span></div>
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid #255d4e; background: #eef3e9; color: #22332e;"><span style="color: #8fa793; flex: 0 0 auto;">2</span><span>窓から差し込む光が、机を淡く照らしている。</span></div>
+
+          <div style="height: 8px;"></div>
+
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid #255d4e; background: #eef3e9; color: #22332e;"><span style="color: #8fa793; flex: 0 0 auto;">3</span><span>「明日も、ここで会える？」</span></div>
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid #255d4e; background: #eef3e9; color: #22332e;"><span style="color: #8fa793; flex: 0 0 auto;">4</span><span>返事をする代わりに、僕は小さく頷いた。</span></div>
+
+          <div style="height: 8px;"></div>
+
+          <div style="display: flex; gap: 10px; padding: 1px 17px; border-left: 3px solid transparent; color: #9aa398;">&lt;/story_scene&gt;</div>
+        </div>
+
+        <div style="padding: 10px 17px; border-top: 1px solid #ebeade; background: #faf8f1; color: #8b958c; font-size: 11px;">灰色行由白名单或自动规则原样保留，不建立翻译编号。</div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

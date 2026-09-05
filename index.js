@@ -27,7 +27,7 @@ import {
   rebuildTaggedRegions,
   segmentSource,
   stripGeneratedTranslationLines,
-} from './core.js?v=0.11.5';
+} from './core.js?v=0.11.6';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -43,15 +43,15 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.11.5';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.11.5';
+} from './prompts.js?v=0.11.6';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.11.6';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatDiagnosticReport,
   formatFullDiagnosticReport,
   readDiagnostics,
-} from './diagnostics.js?v=0.11.5';
+} from './diagnostics.js?v=0.11.6';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -2368,27 +2368,29 @@ async function openMiniWindow() {
     <button type="button" class="jy-button" data-jy-action="mini-stop" hidden>停止</button>
     <button type="button" class="jy-button" data-jy-action="mini-refresh">刷新楼层</button>
   </div>
-  <div class="jy-mini-quick">
-    <label><span class="jy-label">模型</span><select data-jy-mini-channel></select></label>
-    <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
-  </div>
-  <details class="jy-mini-scratch" data-jy-mini-scratch>
+  <details class="jy-mini-scratch" data-jy-mini-scratch data-expanded="false">
     <summary class="jy-mini-scratch-top"><strong>随手翻</strong><span data-jy-mini-target>简体中文</span></summary>
-    <div class="jy-mini-scratch-body">
-      <textarea data-jy-mini-input rows="3" spellcheck="false" placeholder="粘一段原文进来，不写回楼层。"></textarea>
-      <div class="jy-mini-run">
-        <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-scratch">翻译这段</button>
-        <p class="jy-muted" data-jy-mini-note>Ctrl + Enter 直接翻</p>
-      </div>
-      <div class="jy-mini-result" data-jy-mini-result hidden>
-        <p data-jy-mini-output></p>
-        <div class="jy-mini-result-foot">
-          <p class="jy-muted" data-jy-mini-meta></p>
-          <button type="button" data-jy-action="mini-copy">复制</button>
+    <div class="jy-mini-scratch-drawer">
+      <div class="jy-mini-scratch-body">
+        <textarea data-jy-mini-input rows="3" spellcheck="false" placeholder="粘一段原文进来，不写回楼层。"></textarea>
+        <div class="jy-mini-run">
+          <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-scratch">翻译这段</button>
+          <p class="jy-muted" data-jy-mini-note>Ctrl + Enter 直接翻</p>
+        </div>
+        <div class="jy-mini-result" data-jy-mini-result hidden>
+          <p data-jy-mini-output></p>
+          <div class="jy-mini-result-foot">
+            <p class="jy-muted" data-jy-mini-meta></p>
+            <button type="button" data-jy-action="mini-copy">复制</button>
+          </div>
         </div>
       </div>
     </div>
   </details>
+  <div class="jy-mini-quick">
+    <label><span class="jy-label">模型</span><select data-jy-mini-channel></select></label>
+    <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
+  </div>
 </div>`;
   shadow.append(style, win);
   document.body.appendChild(host);
@@ -2399,6 +2401,7 @@ async function openMiniWindow() {
   const output = win.querySelector('[data-jy-mini-output]');
   const meta = win.querySelector('[data-jy-mini-meta]');
   const scratch = win.querySelector('[data-jy-mini-scratch]');
+  const scratchSummary = scratch.querySelector('summary');
   const channelSelect = win.querySelector('[data-jy-mini-channel]');
   const profileSelect = win.querySelector('[data-jy-mini-profile]');
 
@@ -2522,6 +2525,7 @@ async function openMiniWindow() {
     input.removeEventListener('keydown', onInputKeydown);
     input.removeEventListener('input', onInput);
     scratch.removeEventListener('toggle', onScratchToggle);
+    scratchSummary.removeEventListener('click', onSummaryClick);
     document.removeEventListener('keydown', onWindowKeydown, true);
     channelSelect.removeEventListener('change', onQuickChange);
     profileSelect.removeEventListener('change', onQuickChange);
@@ -2548,6 +2552,36 @@ async function openMiniWindow() {
   };
   const onScratchToggle = () => {
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
+  };
+
+  // details would snap shut and take the body out of the layout before it could animate, so the
+  // open attribute is held for the length of the collapse and removed at the end.
+  const setScratchOpen = open => {
+    if (scratch.dataset.expanded === String(open)) return;
+    if (open) {
+      scratch.open = true;
+      // Reading a layout property commits the collapsed start state; rAF is throttled to nothing in
+      // a backgrounded tab and would leave the drawer stuck shut.
+      void scratch.offsetHeight;
+      scratch.dataset.expanded = 'true';
+    } else {
+      scratch.dataset.expanded = 'false';
+      const timer = setTimeout(() => {
+        runtime.timers.delete(timer);
+        if (scratch.dataset.expanded !== 'true') scratch.open = false;
+      }, 330);
+      runtime.timers.add(timer);
+    }
+    const settle = setTimeout(() => {
+      runtime.timers.delete(settle);
+      if (win.isConnected) reanchor();
+    }, 360);
+    runtime.timers.add(settle);
+  };
+
+  const onSummaryClick = event => {
+    event.preventDefault();
+    setScratchOpen(scratch.dataset.expanded !== 'true');
   };
 
   const onQuickChange = event => {
@@ -2592,6 +2626,7 @@ async function openMiniWindow() {
           const seconds = ((globalThis.performance.now() - started) / 1000).toFixed(1);
           setText(win, '[data-jy-mini-meta]', `${seconds} 秒 · ${channel.model || '跟随酒馆'}`);
           resultBox.hidden = false;
+          setScratchOpen(true);
         } finally {
           runtime.inflight.delete(key);
         }
@@ -2610,6 +2645,8 @@ async function openMiniWindow() {
   input.addEventListener('keydown', onInputKeydown);
   input.addEventListener('input', onInput);
   scratch.addEventListener('toggle', onScratchToggle);
+  scratchSummary.addEventListener('click', onSummaryClick);
+  input.addEventListener('focus', () => setScratchOpen(true));
   document.addEventListener('keydown', onWindowKeydown, true);
   channelSelect.addEventListener('change', onQuickChange);
   profileSelect.addEventListener('change', onQuickChange);

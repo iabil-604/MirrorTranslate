@@ -1,0 +1,232 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif; }
+    a { color: #255d4e; text-decoration: none; }
+    a:hover { color: #1a463b; }
+  </style>
+</helmet>
+
+<div style="display: flex; width: 1180px; height: 820px; background: #f6f4ee; color: #22332e; font-size: 13px; line-height: 1.7; overflow: hidden;">
+
+  <div style="display: flex; flex-direction: column; width: 190px; flex: 0 0 190px; background: #163a30; color: #cfe0d5; padding: 24px 12px 16px;">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 0 8px 28px;">
+      <div style="display: grid; place-items: center; width: 34px; height: 38px; flex: 0 0 auto; border: 1px solid rgba(145,173,150,.5); border-radius: 4px 11px 4px 4px; color: #e2cf9c; font-family: Georgia,'Songti SC',serif; font-size: 21px;">镜</div>
+      <div>
+        <div style="font-size: 17px; font-weight: 700; letter-spacing: .16em; color: #f2f7f0;">镜译</div>
+        <div style="font-size: 9px; letter-spacing: .1em; color: #8fab99;">正文翻译器</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg>
+        <span>翻译台</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; background: #e6eadb; color: #204737; font-weight: 700;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg>
+        <span>翻译规则</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg>
+        <span>模型连接</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg>
+        <span>正文处理</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>
+        <span>运行记录</span>
+      </div>
+    </div>
+
+    <div style="flex-grow: 1;"></div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 10px 0; border-top: 1px solid rgba(255,255,255,.1);">
+      <div style="display: flex; align-items: center; gap: 7px; color: #a9c0b2; font-size: 11px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 000 16z" fill="currentColor" stroke="none"/></svg>
+        <span>外观</span>
+      </div>
+      <div style="color: #7d9a89; font-size: 11px;">v0.10.0</div>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 22px 26px 0;">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <div style="font-size: 17px; font-weight: 650; letter-spacing: -.01em;">翻译规则</div>
+        <div style="color: #6b7770; font-size: 12px;">共 3 748 字随请求发送</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 13px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffdf7; font-size: 12px; font-weight: 600;">
+          <span>方案管理</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+        <div style="display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 15px; border-radius: 6px; background: #255d4e; color: #fffef3; font-size: 12px; font-weight: 650;">
+          <span style="width: 6px; height: 6px; border-radius: 50%; background: #e2cf9c;"></span>
+          <span>保存方案</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-bottom: 14px;">
+      <div>
+        <div style="color: #6b7770; font-size: 11px; font-weight: 600; margin-bottom: 5px;">当前方案</div>
+        <div style="display: flex; align-items: center; justify-content: space-between; height: 34px; padding: 0 11px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffdf7; font-weight: 600;">
+          <span>中文轻小说</span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6b7770" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+      </div>
+      <div>
+        <div style="color: #6b7770; font-size: 11px; font-weight: 600; margin-bottom: 5px;">方案名称</div>
+        <div style="display: flex; align-items: center; height: 34px; padding: 0 11px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffdf7;">中文轻小说</div>
+      </div>
+      <div>
+        <div style="color: #6b7770; font-size: 11px; font-weight: 600; margin-bottom: 5px;">目标语言</div>
+        <div style="display: flex; align-items: center; height: 34px; padding: 0 11px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffdf7;">简体中文</div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 16px; flex-grow: 1; min-height: 0; padding-bottom: 18px;">
+
+      <div style="display: flex; flex-direction: column; gap: 2px; overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 4px 8px;">
+          <div style="color: #6b7770; font-size: 11px; font-weight: 700;">标准条目</div>
+          <div style="color: #6b7770; font-size: 11px;">2 处已改</div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid #255d4e; border-radius: 0 6px 6px 0; background: #eaefe3;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 650;">破限词</div>
+            <div style="color: #4a6357; font-size: 11px; font-weight: 600;">已自定义 · 2 920 字</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid #255d4e; border-radius: 0 6px 6px 0; background: #255d4e; color: #f2f7f0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 650;">核心翻译规范</div>
+            <div style="color: #b9d3c4; font-size: 11px; font-weight: 600;">默认 · 2 058 字</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 600;">翻译文风</div>
+            <div style="color: #8b958c; font-size: 11px;">中文轻小说</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 600;">称谓与角色口吻</div>
+            <div style="color: #8b958c; font-size: 11px;">保留日式敬称</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 600;">未知姓名与专名</div>
+            <div style="color: #8b958c; font-size: 11px;">依据资料判断</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 600;">对话与标点</div>
+            <div style="color: #8b958c; font-size: 11px;">日式引号</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid #255d4e; border-radius: 0 6px 6px 0; background: #eaefe3;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 650;">禁用表达 / 杀八股</div>
+            <div style="color: #4a6357; font-size: 11px; font-weight: 600;">已自定义 · 避免 63 · 禁用 4</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 600;">姓名与术语表</div>
+            <div style="color: #8b958c; font-size: 11px;">12 条</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 600;">输出前检查清单</div>
+            <div style="color: #8b958c; font-size: 11px;">默认</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 4px 8px;">
+          <div style="color: #6b7770; font-size: 11px; font-weight: 700;">自定义条目</div>
+          <div style="display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid #d8dccf; border-radius: 5px; background: #fffdf7; color: #255d4e;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 600;">战斗场景</div>
+            <div style="color: #8b958c; font-size: 11px;">启用 · 短句优先</div>
+          </div>
+          <div style="display: flex; align-items: center; width: 30px; height: 17px; padding: 2px; border-radius: 20px; background: #255d4e;">
+            <div style="flex-grow: 1;"></div>
+            <div style="width: 13px; height: 13px; border-radius: 50%; background: #fffef3;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; min-height: 0; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px; overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; border-bottom: 1px solid #ebeade;">
+          <div style="display: flex; align-items: baseline; gap: 10px;">
+            <div style="font-size: 14px; font-weight: 650;">核心翻译规范</div>
+            <div style="color: #8b958c; font-size: 11px;">2 058 字</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="height: 27px; display: flex; align-items: center; padding: 0 10px; border: 1px solid #d8dccf; border-radius: 5px; font-size: 11px; font-weight: 600; color: #6b7770;">恢复默认</div>
+          </div>
+        </div>
+
+        <div style="flex-grow: 1; min-height: 0; overflow: hidden; padding: 14px 16px; font-size: 12px; line-height: 1.85; color: #33443d; white-space: pre-line;"># 正文翻译规范 · Narrative Translation Specification
+
+# 任务
+用户消息是一个 JSON 对象，下称 INPUT。把 INPUT.segments 中的故事正文翻译为 简体中文。来源语言按每段正文自行识别。译文是同一份内容在目标语言中的呈现，不是续写、讲解、摘要或再创作。
+每个 segment 带一个整数 id，一个 id 是一个完整翻译单位。为本次要求的每个 id 生成一条译文，不多不少。
+
+# 1. 输入与模式
+INPUT 的顶层字段固定为 task、source_language、target_language、mode、references、segments；mode 为 style_repair 时另有 draft_translations 和 triggered_phrases。
+INPUT.mode 决定本次要做的事：
+- primary：翻译 INPUT.segments 中的全部段落。
+- repair：只翻译本次列出的段落，不补写没有列出的编号。</div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 16px; border-top: 1px solid #ebeade; background: #faf8f1;">
+          <div style="color: #8b958c; font-size: 11px;">可用变量：{{source_language}} · {{target_language}} · {{translation_direction}}</div>
+          <div style="color: #b18537; font-size: 11px; font-weight: 600;">已修改，未保存</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; padding: 12px 18px; background: #eef1e7; border: 1px solid #dfe3d5; border-radius: 10px;">
+      <div style="display: flex; align-items: center; gap: 9px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4a6357" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        <div style="font-size: 13px; font-weight: 650;">参考资料与上下文</div>
+      </div>
+      <div style="color: #6b7770; font-size: 12px;">世界书 · 角色卡设定 · 近期对话 6 条</div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

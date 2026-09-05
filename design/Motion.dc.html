@@ -1,0 +1,254 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif; }
+    a { color: #255d4e; text-decoration: none; }
+    a:hover { color: #1a463b; }
+  </style>
+</helmet>
+
+<div style="display: flex; width: 1180px; height: 700px; background: #f6f4ee; color: #22332e; font-size: 13px; line-height: 1.7; overflow: hidden;">
+
+  <div style="display: flex; flex-direction: column; width: 660px; flex: 0 0 660px; padding: 20px;">
+
+    <div style="display: flex; align-items: center; gap: 8px; padding-bottom: 14px;">
+      <div onClick="{{ pickBall }}" style="{{ tabBall }}">悬浮球</div>
+      <div onClick="{{ pickMini }}" style="{{ tabMini }}">悬浮窗</div>
+      <div onClick="{{ pickPanel }}" style="{{ tabPanel }}">大面板</div>
+      <div style="flex-grow: 1;"></div>
+      <div style="color: #8b958c; font-size: 11px;">点上面三个按钮看过渡</div>
+    </div>
+
+    <div style="position: relative; flex-grow: 1; border-radius: 12px; background: #15171c; overflow: hidden;">
+
+      <div style="padding: 18px 20px; color: #7b8595; font-size: 12px; line-height: 2;">
+        <div style="color: #c7cedb; font-weight: 600; padding-bottom: 8px;">SillyTavern 聊天区</div>
+        夕暮れの教室には、誰もいなかった。<br>
+        窓から差し込む光が、机を淡く照らしている。
+      </div>
+
+      <div style="{{ scrimStyle }}"></div>
+
+      <div style="{{ ballStyle }}">
+        <span style="font: 600 17px/1 Georgia,'Songti SC',serif; color: #e7d6a6;">译</span>
+        <span style="position: absolute; right: 2px; bottom: 3px; width: 9px; height: 9px; border: 2px solid #17333a; border-radius: 50%; background: #f0c56e;"></span>
+      </div>
+
+      <div style="{{ miniStyle }}">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 9px 11px; background: #163a30; color: #e7eee3;">
+          <span style="font-weight: 700; letter-spacing: .1em; font-size: 12px;">镜译</span>
+          <span style="width: 6px; height: 6px; border-radius: 50%; background: #f0c56e;"></span>
+          <div style="flex-grow: 1;"></div>
+          <span style="color: #a9c0b2; font-size: 11px;">第 42 楼</span>
+        </div>
+        <div style="padding: 12px;">
+          <div style="display: flex; align-items: baseline; justify-content: space-between;">
+            <div style="font-size: 13px; font-weight: 650;">正在翻译</div>
+            <div style="color: #6b7770; font-size: 11px;">24 / 37 行</div>
+          </div>
+          <div style="height: 4px; margin-top: 7px; border-radius: 3px; background: #e7ede2; overflow: hidden;">
+            <div style="width: 65%; height: 100%; background: #255d4e;"></div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-top: 11px;">
+            <div style="display: grid; place-items: center; height: 29px; border: 1px solid #d8dccf; border-radius: 6px; font-size: 11px; font-weight: 600;">重译</div>
+            <div style="display: grid; place-items: center; height: 29px; border: 1px solid #d8dccf; border-radius: 6px; font-size: 11px; font-weight: 600; color: #b54332;">停止</div>
+            <div style="display: grid; place-items: center; height: 29px; border: 1px solid #d8dccf; border-radius: 6px; font-size: 11px; font-weight: 600;">刷新</div>
+          </div>
+          <div style="margin-top: 11px; padding-top: 11px; border-top: 1px solid #ebeade;">
+            <div style="font-size: 12px; font-weight: 650;">随手翻</div>
+            <div style="margin-top: 7px; padding: 8px 10px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9; color: #8b958c; font-size: 12px;">粘一段原文进来……</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="{{ panelStyle }}">
+        <div style="display: flex; width: 100%; height: 100%;">
+          <div style="width: 118px; flex: 0 0 118px; background: #163a30; padding: 14px 9px;">
+            <div style="display: flex; align-items: center; gap: 7px; padding: 0 5px 16px;">
+              <div style="display: grid; place-items: center; width: 22px; height: 25px; border: 1px solid rgba(145,173,150,.5); border-radius: 3px 8px 3px 3px; color: #e2cf9c; font-family: Georgia,'Songti SC',serif; font-size: 14px;">镜</div>
+              <div style="color: #f2f7f0; font-size: 12px; font-weight: 700; letter-spacing: .12em;">镜译</div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <div style="padding: 7px 9px; border-radius: 6px; background: #e6eadb; color: #204737; font-size: 12px; font-weight: 700;">翻译台</div>
+              <div style="padding: 7px 9px; border-radius: 6px; color: #a9c0b2; font-size: 12px;">翻译规则</div>
+              <div style="padding: 7px 9px; border-radius: 6px; color: #a9c0b2; font-size: 12px;">模型连接</div>
+              <div style="padding: 7px 9px; border-radius: 6px; color: #a9c0b2; font-size: 12px;">正文处理</div>
+              <div style="padding: 7px 9px; border-radius: 6px; color: #a9c0b2; font-size: 12px;">运行记录</div>
+            </div>
+          </div>
+          <div style="flex-grow: 1; min-width: 0; padding: 16px 18px;">
+            <div style="display: flex; align-items: baseline; gap: 10px; padding-bottom: 14px;">
+              <div style="font-size: 15px; font-weight: 650;">翻译台</div>
+              <div style="color: #6b7770; font-size: 11px;">第 42 楼 · 滑动页 1/1</div>
+            </div>
+            <div style="padding: 14px 16px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 9px;">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="font-size: 17px; font-weight: 650;">正在翻译</div>
+                <div style="color: #6b7770; font-size: 11px;">24 / 37 行</div>
+              </div>
+              <div style="height: 4px; margin-top: 10px; border-radius: 3px; background: #e7ede2; overflow: hidden;">
+                <div style="width: 65%; height: 100%; background: #255d4e;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div style="flex-grow: 1; min-width: 0; padding: 20px 22px 20px 0;">
+    <div style="font-size: 15px; font-weight: 650; padding-bottom: 4px;">动效规格</div>
+    <div style="color: #8b958c; font-size: 11px; padding-bottom: 14px;">只动 transform 和 opacity，不动 width / height / box-shadow / backdrop-filter。</div>
+
+    <div style="display: flex; flex-direction: column; gap: 1px; background: #e3e6da; border: 1px solid #d8dccf; border-radius: 9px; overflow: hidden;">
+
+      <div style="display: flex; gap: 10px; padding: 9px 13px; background: #eef1e7; font-size: 11px; font-weight: 700; color: #4a6357;">
+        <div style="flex-grow: 1;">场景</div>
+        <div style="width: 62px; flex: 0 0 62px;">时长</div>
+        <div style="width: 116px; flex: 0 0 116px;">曲线</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; padding: 9px 13px; background: #fffdf7;">
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-weight: 600;">球 → 窗 展开</div>
+          <div style="color: #8b958c; font-size: 11px;">origin 取球心，scale .82 → 1</div>
+        </div>
+        <div style="width: 62px; flex: 0 0 62px; font-family: ui-monospace,Consolas,monospace; font-size: 11px;">200ms</div>
+        <div style="width: 116px; flex: 0 0 116px; font-family: ui-monospace,Consolas,monospace; font-size: 10.5px; color: #6b7770;">(.2,.8,.24,1)</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; padding: 9px 13px; background: #fffdf7;">
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-weight: 600;">窗 → 球 收起</div>
+          <div style="color: #8b958c; font-size: 11px;">收起比展开快，避免拖沓</div>
+        </div>
+        <div style="width: 62px; flex: 0 0 62px; font-family: ui-monospace,Consolas,monospace; font-size: 11px;">130ms</div>
+        <div style="width: 116px; flex: 0 0 116px; font-family: ui-monospace,Consolas,monospace; font-size: 10.5px; color: #6b7770;">(.4,0,1,1)</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; padding: 9px 13px; background: #fffdf7;">
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-weight: 600;">打开大面板</div>
+          <div style="color: #8b958c; font-size: 11px;">scale .97 → 1，translateY 10 → 0</div>
+        </div>
+        <div style="width: 62px; flex: 0 0 62px; font-family: ui-monospace,Consolas,monospace; font-size: 11px;">220ms</div>
+        <div style="width: 116px; flex: 0 0 116px; font-family: ui-monospace,Consolas,monospace; font-size: 10.5px; color: #6b7770;">(.2,.8,.24,1)</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; padding: 9px 13px; background: #fffdf7;">
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-weight: 600;">遮罩淡入</div>
+          <div style="color: #8b958c; font-size: 11px;">比面板早 0ms 起、早结束</div>
+        </div>
+        <div style="width: 62px; flex: 0 0 62px; font-family: ui-monospace,Consolas,monospace; font-size: 11px;">120ms</div>
+        <div style="width: 116px; flex: 0 0 116px; font-family: ui-monospace,Consolas,monospace; font-size: 10.5px; color: #6b7770;">linear</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; padding: 9px 13px; background: #fffdf7;">
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-weight: 600;">关闭大面板</div>
+          <div style="color: #8b958c; font-size: 11px;">回到球或窗，取决于从哪打开</div>
+        </div>
+        <div style="width: 62px; flex: 0 0 62px; font-family: ui-monospace,Consolas,monospace; font-size: 11px;">150ms</div>
+        <div style="width: 116px; flex: 0 0 116px; font-family: ui-monospace,Consolas,monospace; font-size: 10.5px; color: #6b7770;">(.4,0,1,1)</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; padding: 9px 13px; background: #fffdf7;">
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-weight: 600;">左栏切页</div>
+          <div style="color: #8b958c; font-size: 11px;">内容 translateY 4 → 0 淡入</div>
+        </div>
+        <div style="width: 62px; flex: 0 0 62px; font-family: ui-monospace,Consolas,monospace; font-size: 11px;">140ms</div>
+        <div style="width: 116px; flex: 0 0 116px; font-family: ui-monospace,Consolas,monospace; font-size: 10.5px; color: #6b7770;">ease-out</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; padding: 9px 13px; background: #fffdf7;">
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-weight: 600;">进度条</div>
+          <div style="color: #8b958c; font-size: 11px;">transform: scaleX，不改 width</div>
+        </div>
+        <div style="width: 62px; flex: 0 0 62px; font-family: ui-monospace,Consolas,monospace; font-size: 11px;">240ms</div>
+        <div style="width: 116px; flex: 0 0 116px; font-family: ui-monospace,Consolas,monospace; font-size: 10.5px; color: #6b7770;">linear</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; padding: 9px 13px; background: #fffdf7;">
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-weight: 600;">悬停 / 按下</div>
+          <div style="color: #8b958c; font-size: 11px;">按钮、列表行、图标</div>
+        </div>
+        <div style="width: 62px; flex: 0 0 62px; font-family: ui-monospace,Consolas,monospace; font-size: 11px;">120ms</div>
+        <div style="width: 116px; flex: 0 0 116px; font-family: ui-monospace,Consolas,monospace; font-size: 10.5px; color: #6b7770;">ease</div>
+      </div>
+
+    </div>
+
+    <div style="margin-top: 14px; padding: 13px 15px; background: #faf3e4; border: 1px solid #e6d5ae; border-radius: 9px;">
+      <div style="font-weight: 650; color: #6d5522; padding-bottom: 5px;">酒馆里的开销</div>
+      <div style="color: #6d5522; font-size: 11.5px; line-height: 1.85;">面板在 shadow DOM 的 position: fixed 覆盖层里，动画不会引起酒馆主文档回流。只动 transform / opacity 走合成层，几乎不吃主线程；过渡开始前加 will-change: transform，transitionend 后移掉。毛玻璃主题不要一起动 backdrop-filter，那个是真的贵。</div>
+      <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e6d5ae; color: #6d5522; font-size: 11.5px;">host.css 里悬浮球已经写了 prefers-reduced-motion 降到 1ms，新动效沿用同一条媒体查询。</div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":1180,"height":700}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const mode = this.state?.mode ?? 'mini';
+    const enter = '200ms cubic-bezier(.2,.8,.24,1)';
+    const exit = '130ms cubic-bezier(.4,0,1,1)';
+
+    const tab = (on) => 'display:flex;align-items:center;height:30px;padding:0 14px;border-radius:6px;font-size:12px;font-weight:650;cursor:pointer;transition:background 120ms ease,color 120ms ease;'
+      + (on ? 'background:#255d4e;color:#fffef3;' : 'background:#fffdf7;color:#4a6357;border:1px solid #d8dccf;');
+
+    const ballOn = mode === 'ball';
+    const miniOn = mode === 'mini';
+    const panelOn = mode === 'panel';
+
+    const ballStyle = 'position:absolute;right:22px;bottom:22px;display:grid;place-items:center;width:38px;height:38px;'
+      + 'border:1px solid #9caf91;border-radius:11px;background:#173b31;box-shadow:0 7px 20px rgba(7,24,19,.4);'
+      + 'transform-origin:100% 100%;transition:opacity ' + (ballOn ? enter : exit) + ',transform ' + (ballOn ? enter : exit) + ';'
+      + (ballOn ? 'opacity:1;transform:scale(1);' : 'opacity:0;transform:scale(.6);pointer-events:none;');
+
+    const miniStyle = 'position:absolute;right:22px;bottom:22px;width:268px;border-radius:12px;background:#fffdf7;'
+      + 'border:1px solid #cfd5c8;box-shadow:0 18px 44px rgba(4,14,11,.5);overflow:hidden;'
+      + 'transform-origin:100% 100%;transition:opacity ' + (miniOn ? enter : exit) + ',transform ' + (miniOn ? enter : exit) + ';'
+      + (miniOn ? 'opacity:1;transform:scale(1);' : 'opacity:0;transform:scale(.82);pointer-events:none;');
+
+    const scrimStyle = 'position:absolute;inset:0;background:rgba(7,27,24,.62);'
+      + 'transition:opacity 120ms linear;'
+      + (panelOn ? 'opacity:1;' : 'opacity:0;pointer-events:none;');
+
+    const panelStyle = 'position:absolute;left:50%;top:50%;width:540px;height:330px;margin:-165px 0 0 -270px;'
+      + 'border-radius:12px;background:#f6f4ee;box-shadow:0 26px 70px rgba(7,24,19,.5);overflow:hidden;'
+      + 'transition:opacity ' + (panelOn ? '220ms cubic-bezier(.2,.8,.24,1)' : '150ms cubic-bezier(.4,0,1,1)') + ','
+      + 'transform ' + (panelOn ? '220ms cubic-bezier(.2,.8,.24,1)' : '150ms cubic-bezier(.4,0,1,1)') + ';'
+      + (panelOn ? 'opacity:1;transform:scale(1) translateY(0);' : 'opacity:0;transform:scale(.97) translateY(10px);pointer-events:none;');
+
+    return {
+      tabBall: tab(ballOn),
+      tabMini: tab(miniOn),
+      tabPanel: tab(panelOn),
+      ballStyle,
+      miniStyle,
+      scrimStyle,
+      panelStyle,
+      pickBall: () => this.setState({ mode: 'ball' }),
+      pickMini: () => this.setState({ mode: 'mini' }),
+      pickPanel: () => this.setState({ mode: 'panel' }),
+    };
+  }
+}
+</script>
+</body>
+</html>

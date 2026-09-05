@@ -1,0 +1,170 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif; }
+    a { color: #255d4e; text-decoration: none; }
+    a:hover { color: #1a463b; }
+  </style>
+</helmet>
+
+<div style="width: 1180px; height: 640px; background: #f6f4ee; color: #22332e; font-size: 13px; line-height: 1.7; padding: 22px 26px; overflow: hidden;">
+
+  <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding-bottom: 4px;">
+    <div style="display: flex; align-items: baseline; gap: 12px;">
+      <div style="font-size: 17px; font-weight: 650; letter-spacing: -.01em;">最小化形态</div>
+      <div style="color: #6b7770; font-size: 12px;">悬浮窗收起后留在聊天上的那一小块</div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 7px;">
+      <div onClick="{{ pickIdle }}" style="{{ tabIdle }}">空闲</div>
+      <div onClick="{{ pickRunning }}" style="{{ tabRunning }}">翻译中</div>
+      <div onClick="{{ pickDone }}" style="{{ tabDone }}">完成</div>
+      <div onClick="{{ pickError }}" style="{{ tabError }}">失败</div>
+    </div>
+  </div>
+
+  <div style="color: #8b958c; font-size: 11px; padding-bottom: 16px;">点右上角切状态，看哪个形态在翻译中最说得清楚。</div>
+
+  <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px;">
+
+    <div style="display: flex; flex-direction: column; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px; overflow: hidden;">
+      <div style="position: relative; height: 190px; background: #15171c; overflow: hidden;">
+        <div style="padding: 14px 16px; color: #4a5364; font-size: 11px; line-height: 1.9;">夕暮れの教室には、<br>誰もいなかった。</div>
+        <div style="position: absolute; right: 18px; bottom: 18px; display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #9caf91; border-radius: 11px; background: #173b31; box-shadow: 0 7px 20px rgba(7,24,19,.4);">
+          <span style="font: 600 17px/1 Georgia,'Songti SC',serif; color: #e7d6a6;">译</span>
+          <span style="position: absolute; right: 2px; bottom: 3px; width: 9px; height: 9px; border: 2px solid #17333a; border-radius: 50%; background: {{ dot }};"></span>
+        </div>
+      </div>
+      <div style="padding: 12px 14px 14px;">
+        <div style="font-size: 13px; font-weight: 650;">A · 方牌</div>
+        <div style="margin-top: 3px; color: #6b7770; font-size: 11.5px; line-height: 1.8;">现状。最省地方，但状态全压在一个 9px 的点上，翻到第几行完全看不出来。</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px; overflow: hidden;">
+      <div style="position: relative; height: 190px; background: #15171c; overflow: hidden;">
+        <div style="padding: 14px 16px; color: #4a5364; font-size: 11px; line-height: 1.9;">夕暮れの教室には、<br>誰もいなかった。</div>
+        <div style="{{ pillStyle }}">
+          <span style="display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 7px; background: #0f2c24; font: 600 13px/1 Georgia,'Songti SC',serif; color: #e7d6a6;">译</span>
+          <sc-if value="{{ expanded }}" hint-placeholder-val="{{ true }}">
+            <span style="display: flex; flex-direction: column; gap: 4px; flex-grow: 1; min-width: 0;">
+              <span style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;">
+                <span style="color: #e7eee3; font-size: 11px; font-weight: 600;">{{ label }}</span>
+                <span style="color: #9db4a6; font-size: 10px;">{{ count }}</span>
+              </span>
+              <span style="display: block; height: 3px; border-radius: 2px; background: #0f2c24; overflow: hidden;">
+                <span style="display: block; height: 100%; width: {{ pct }}; background: {{ dot }};"></span>
+              </span>
+            </span>
+          </sc-if>
+        </div>
+      </div>
+      <div style="padding: 12px 14px 14px;">
+        <div style="font-size: 13px; font-weight: 650;">B · 状态胶囊</div>
+        <div style="margin-top: 3px; color: #6b7770; font-size: 11.5px; line-height: 1.8;">空闲时收成方牌，一开译就横向展开报进度，完成两秒后自己缩回。信息最全，但会动。</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px; overflow: hidden;">
+      <div style="position: relative; height: 190px; background: #15171c; overflow: hidden;">
+        <div style="padding: 14px 16px; color: #4a5364; font-size: 11px; line-height: 1.9;">夕暮れの教室には、<br>誰もいなかった。</div>
+        <div style="position: absolute; right: 18px; bottom: 18px; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: #173b31; box-shadow: 0 7px 20px rgba(7,24,19,.4);">
+          <svg width="42" height="42" viewBox="0 0 42 42" style="position: absolute; inset: 0; transform: rotate(-90deg);">
+            <circle cx="21" cy="21" r="18.5" fill="none" stroke="#2c5546" stroke-width="3"></circle>
+            <circle cx="21" cy="21" r="18.5" fill="none" stroke="{{ dot }}" stroke-width="3" stroke-linecap="round" stroke-dasharray="116.2" stroke-dashoffset="{{ ringOffset }}"></circle>
+          </svg>
+          <span style="font: 600 16px/1 Georgia,'Songti SC',serif; color: #e7d6a6;">译</span>
+        </div>
+      </div>
+      <div style="padding: 12px 14px 14px;">
+        <div style="font-size: 13px; font-weight: 650;">C · 进度环</div>
+        <div style="margin-top: 3px; color: #6b7770; font-size: 11.5px; line-height: 1.8;">尺寸恒定不推挤画面，环的长度就是进度，颜色就是状态。看不到具体行数。</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px; overflow: hidden;">
+      <div style="position: relative; height: 190px; background: #15171c; overflow: hidden;">
+        <div style="padding: 14px 16px; color: #4a5364; font-size: 11px; line-height: 1.9;">夕暮れの教室には、<br>誰もいなかった。</div>
+        <div style="position: absolute; right: 0; bottom: 42px; display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 10px 0 9px; border: 1px solid #9caf91; border-right: 0; border-radius: 10px 0 0 10px; background: #173b31; box-shadow: -4px 6px 18px rgba(7,24,19,.45);">
+          <span style="width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: {{ dot }};"></span>
+          <span style="font: 600 14px/1 Georgia,'Songti SC',serif; color: #e7d6a6;">译</span>
+        </div>
+      </div>
+      <div style="padding: 12px 14px 14px;">
+        <div style="font-size: 13px; font-weight: 650;">D · 边缘贴条</div>
+        <div style="margin-top: 3px; color: #6b7770; font-size: 11.5px; line-height: 1.8;">贴着屏幕右缘，只占半个身位，最不挡正文。但只能上下拖，位置自由度最低。</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="display: flex; gap: 14px; margin-top: 16px; padding: 14px 17px; background: #eef1e7; border: 1px solid #dfe3d5; border-radius: 10px;">
+    <div style="flex-grow: 1;">
+      <div style="font-weight: 650;">建议选 B</div>
+      <div style="margin-top: 3px; color: #4a6357; font-size: 11.5px; line-height: 1.85;">翻译中是唯一需要盯着它的时刻，而这恰恰是 A 说不清楚的地方——现在只能靠一个点的颜色猜。B 平时和 A 一样小，只在真的有事发生时才变大，代价是一次展开动画。若嫌它会动，C 是次选：尺寸恒定，进度靠环表达，但报不出行数。</div>
+    </div>
+    <div style="width: 232px; flex: 0 0 232px; padding-left: 14px; border-left: 1px solid #dfe3d5;">
+      <div style="color: #6b7770; font-size: 11px; font-weight: 700; padding-bottom: 6px;">状态配色</div>
+      <div style="display: flex; flex-direction: column; gap: 5px; font-size: 11px;">
+        <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 9px; height: 9px; border-radius: 50%; background: #96a1ad;"></span>空闲 #96a1ad</div>
+        <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 9px; height: 9px; border-radius: 50%; background: #f0c56e;"></span>翻译中 #f0c56e</div>
+        <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 9px; height: 9px; border-radius: 50%; background: #8ee1d6;"></span>完成 #8ee1d6</div>
+        <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 9px; height: 9px; border-radius: 50%; background: #f18f8f;"></span>失败 #f18f8f</div>
+      </div>
+      <div style="margin-top: 8px; color: #8b958c; font-size: 10.5px; line-height: 1.7;">沿用 host.css 里悬浮球已有的四色，不新增颜色。</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":1180,"height":640}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const status = this.state?.status ?? 'running';
+    const map = {
+      idle: { dot: '#96a1ad', label: '等待正文', count: '', pct: 0 },
+      running: { dot: '#f0c56e', label: '翻译中', count: '24 / 37', pct: 65 },
+      done: { dot: '#8ee1d6', label: '已完成', count: '37 / 37', pct: 100 },
+      error: { dot: '#f18f8f', label: '请求超时', count: '12 / 37', pct: 32 },
+    };
+    const current = map[status] ?? map.running;
+    const expanded = status !== 'idle';
+
+    const tab = (on) => 'display:flex;align-items:center;height:28px;padding:0 12px;border-radius:6px;font-size:12px;font-weight:650;cursor:pointer;transition:background 120ms ease,color 120ms ease;'
+      + (on ? 'background:#255d4e;color:#fffef3;' : 'background:#fffdf7;color:#4a6357;border:1px solid #d8dccf;');
+
+    const pillStyle = 'position:absolute;right:18px;bottom:18px;display:flex;align-items:center;gap:9px;'
+      + 'border:1px solid #9caf91;border-radius:11px;background:#173b31;box-shadow:0 7px 20px rgba(7,24,19,.4);'
+      + 'transition:width 200ms cubic-bezier(.2,.8,.24,1),padding 200ms cubic-bezier(.2,.8,.24,1);'
+      + (expanded ? 'width:170px;padding:8px 11px;' : 'width:38px;padding:8px;');
+
+    return {
+      dot: current.dot,
+      label: current.label,
+      count: current.count,
+      pct: `${current.pct}%`,
+      ringOffset: (116.2 * (1 - current.pct / 100)).toFixed(1),
+      expanded,
+      pillStyle,
+      tabIdle: tab(status === 'idle'),
+      tabRunning: tab(status === 'running'),
+      tabDone: tab(status === 'done'),
+      tabError: tab(status === 'error'),
+      pickIdle: () => this.setState({ status: 'idle' }),
+      pickRunning: () => this.setState({ status: 'running' }),
+      pickDone: () => this.setState({ status: 'done' }),
+      pickError: () => this.setState({ status: 'error' }),
+    };
+  }
+}
+</script>
+</body>
+</html>

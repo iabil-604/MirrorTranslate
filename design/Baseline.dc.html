@@ -1,0 +1,184 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif; }
+    a { color: #255d4e; text-decoration: none; }
+    a:hover { color: #1a463b; }
+  </style>
+</helmet>
+
+<div style="width: 1180px; height: 820px; background: #f6f4ee; color: #22332e; font-size: 13px; line-height: 1.7; padding: 30px 34px; overflow: hidden;">
+
+  <div style="display: flex; align-items: baseline; gap: 12px; padding-bottom: 22px;">
+    <div style="font-size: 19px; font-weight: 650; letter-spacing: -.01em;">样式基线</div>
+    <div style="color: #6b7770; font-size: 12px;">替换 style.css 顶部的 :host 变量，其余规则跟着变量走</div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px;">
+
+    <div style="display: flex; flex-direction: column; gap: 20px;">
+
+      <div>
+        <div style="color: #6b7770; font-size: 11px; font-weight: 700; padding-bottom: 10px;">颜色</div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 7px;">
+            <div style="width: 26px; height: 26px; flex: 0 0 auto; border-radius: 5px; background: #163a30;"></div>
+            <div style="min-width: 0;">
+              <div style="font-size: 12px; font-weight: 650;">rail</div>
+              <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">#163a30</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 7px;">
+            <div style="width: 26px; height: 26px; flex: 0 0 auto; border-radius: 5px; background: #255d4e;"></div>
+            <div style="min-width: 0;">
+              <div style="font-size: 12px; font-weight: 650;">accent</div>
+              <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">#255d4e</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 7px;">
+            <div style="width: 26px; height: 26px; flex: 0 0 auto; border-radius: 5px; background: #f6f4ee; border: 1px solid #d8dccf;"></div>
+            <div style="min-width: 0;">
+              <div style="font-size: 12px; font-weight: 650;">paper</div>
+              <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">#f6f4ee</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 7px;">
+            <div style="width: 26px; height: 26px; flex: 0 0 auto; border-radius: 5px; background: #fffdf7; border: 1px solid #d8dccf;"></div>
+            <div style="min-width: 0;">
+              <div style="font-size: 12px; font-weight: 650;">surface</div>
+              <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">#fffdf7</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 7px;">
+            <div style="width: 26px; height: 26px; flex: 0 0 auto; border-radius: 5px; background: #d8dccf;"></div>
+            <div style="min-width: 0;">
+              <div style="font-size: 12px; font-weight: 650;">line</div>
+              <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">#d8dccf</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 7px;">
+            <div style="width: 26px; height: 26px; flex: 0 0 auto; border-radius: 5px; background: #6b7770;"></div>
+            <div style="min-width: 0;">
+              <div style="font-size: 12px; font-weight: 650;">muted</div>
+              <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">#6b7770</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 7px;">
+            <div style="width: 26px; height: 26px; flex: 0 0 auto; border-radius: 5px; background: #b08a3c;"></div>
+            <div style="min-width: 0;">
+              <div style="font-size: 12px; font-weight: 650;">warn</div>
+              <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">#b08a3c</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 7px;">
+            <div style="width: 26px; height: 26px; flex: 0 0 auto; border-radius: 5px; background: #b54332;"></div>
+            <div style="min-width: 0;">
+              <div style="font-size: 12px; font-weight: 650;">error</div>
+              <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">#b54332</div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top: 9px; color: #8b958c; font-size: 11px;">分隔线从 #dddfd5 提到 #d8dccf，卡片边界在暖白底上才立得住。</div>
+      </div>
+
+      <div>
+        <div style="color: #6b7770; font-size: 11px; font-weight: 700; padding-bottom: 10px;">字号</div>
+        <div style="display: flex; flex-direction: column; gap: 9px; padding: 14px 16px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 9px;">
+          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+            <div style="font-size: 17px; font-weight: 650;">页面标题</div>
+            <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">17 / 650</div>
+          </div>
+          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+            <div style="font-size: 14px; font-weight: 650;">卡片标题</div>
+            <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">14 / 650</div>
+          </div>
+          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+            <div style="font-size: 13px;">正文与表单值</div>
+            <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">13 / 400</div>
+          </div>
+          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+            <div style="color: #6b7770; font-size: 11px; font-weight: 600;">字段标签与状态</div>
+            <div style="color: #8b958c; font-size: 11px; font-family: ui-monospace,Consolas,monospace;">11 / 600</div>
+          </div>
+          <div style="padding-top: 9px; border-top: 1px solid #ebeade; color: #8b958c; font-size: 11px;">全局改用 PingFang SC / 微软雅黑 UI；Georgia 只留给「镜」字徽标，导航图标换成描边 SVG。</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 20px;">
+
+      <div>
+        <div style="color: #6b7770; font-size: 11px; font-weight: 700; padding-bottom: 10px;">控件</div>
+        <div style="display: flex; flex-direction: column; gap: 12px; padding: 16px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 9px;">
+
+          <div style="display: flex; align-items: center; gap: 9px;">
+            <div style="display: flex; align-items: center; height: 32px; padding: 0 15px; border-radius: 6px; background: #255d4e; color: #fffef3; font-size: 12px; font-weight: 650;">主要动作</div>
+            <div style="display: flex; align-items: center; height: 32px; padding: 0 13px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffdf7; font-size: 12px; font-weight: 600;">次要动作</div>
+            <div style="display: flex; align-items: center; height: 32px; padding: 0 13px; font-size: 12px; font-weight: 600; color: #255d4e;">文字动作</div>
+            <div style="display: flex; align-items: center; height: 32px; padding: 0 13px; border: 1px solid #d8dccf; border-radius: 6px; font-size: 12px; font-weight: 600; color: #b54332;">危险动作</div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;">
+            <div style="display: flex; align-items: center; height: 34px; padding: 0 11px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9; color: #8b958c;">输入框 34px</div>
+            <div style="display: flex; align-items: center; height: 34px; padding: 0 11px; border: 1px solid #255d4e; border-radius: 6px; background: #fffef9; box-shadow: 0 0 0 3px rgba(37,93,78,.14);">聚焦态</div>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <div style="display: flex; align-items: center; width: 38px; height: 21px; padding: 3px; border-radius: 20px; background: #255d4e;">
+              <div style="flex-grow: 1;"></div>
+              <div style="width: 15px; height: 15px; border-radius: 50%; background: #fffef3;"></div>
+            </div>
+            <div style="display: flex; align-items: center; width: 38px; height: 21px; padding: 3px; border-radius: 20px; background: #c9d0c2;">
+              <div style="width: 15px; height: 15px; border-radius: 50%; background: #fffef3;"></div>
+              <div style="flex-grow: 1;"></div>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <div style="padding: 3px 9px; border: 1px solid #d8dccf; border-radius: 20px; font-size: 11px; font-weight: 600;">标签胶囊</div>
+              <div style="padding: 2px 8px; border-radius: 4px; background: #e7ede2; color: #4a6357; font-size: 10px; font-weight: 700;">状态徽章</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div>
+        <div style="color: #6b7770; font-size: 11px; font-weight: 700; padding-bottom: 10px;">列表行的三种状态</div>
+        <div style="display: flex; flex-direction: column; gap: 2px; padding: 12px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 9px;">
+          <div style="display: flex; align-items: center; padding: 9px 11px; border-left: 2px solid #255d4e; border-radius: 0 6px 6px 0; background: #255d4e; color: #f2f7f0;">
+            <div>
+              <div style="font-weight: 650;">选中</div>
+              <div style="color: #b9d3c4; font-size: 11px;">墨绿实底，状态字提亮</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; padding: 9px 11px; border-left: 2px solid #255d4e; border-radius: 0 6px 6px 0; background: #eaefe3;">
+            <div>
+              <div style="font-weight: 650;">已改动</div>
+              <div style="color: #4a6357; font-size: 11px; font-weight: 600;">左竖条 + 浅底，状态字加深</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; padding: 9px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+            <div>
+              <div style="font-weight: 600;">默认</div>
+              <div style="color: #8b958c; font-size: 11px;">无底色，状态字保持灰</div>
+            </div>
+          </div>
+          <div style="margin-top: 8px; padding-top: 9px; border-top: 1px solid #ebeade; color: #8b958c; font-size: 11px;">翻译规则、模型连接两页共用这套列表，扫一眼就知道自己动过哪些。</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

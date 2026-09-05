@@ -1,0 +1,207 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif; }
+    a { color: #255d4e; text-decoration: none; }
+    a:hover { color: #1a463b; }
+  </style>
+</helmet>
+
+<div style="display: flex; width: 1180px; height: 820px; background: #f6f4ee; color: #22332e; font-size: 13px; line-height: 1.7; overflow: hidden;">
+
+  <div style="display: flex; flex-direction: column; width: 190px; flex: 0 0 190px; background: #163a30; color: #cfe0d5; padding: 24px 12px 16px;">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 0 8px 28px;">
+      <div style="display: grid; place-items: center; width: 34px; height: 38px; flex: 0 0 auto; border: 1px solid rgba(145,173,150,.5); border-radius: 4px 11px 4px 4px; color: #e2cf9c; font-family: Georgia,'Songti SC',serif; font-size: 21px;">镜</div>
+      <div>
+        <div style="font-size: 17px; font-weight: 700; letter-spacing: .16em; color: #f2f7f0;">镜译</div>
+        <div style="font-size: 9px; letter-spacing: .1em; color: #8fab99;">正文翻译器</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg>
+        <span>翻译台</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg>
+        <span>翻译规则</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; background: #e6eadb; color: #204737; font-weight: 700;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg>
+        <span>模型连接</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg>
+        <span>正文处理</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 7px; color: #a9c0b2;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>
+        <span>运行记录</span>
+      </div>
+    </div>
+
+    <div style="flex-grow: 1;"></div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 10px 0; border-top: 1px solid rgba(255,255,255,.1);">
+      <div style="display: flex; align-items: center; gap: 7px; color: #a9c0b2; font-size: 11px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 000 16z" fill="currentColor" stroke="none"/></svg>
+        <span>外观</span>
+      </div>
+      <div style="color: #7d9a89; font-size: 11px;">v0.10.0</div>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 22px 26px 0;">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <div style="font-size: 17px; font-weight: 650; letter-spacing: -.01em;">模型连接</div>
+        <div style="display: flex; align-items: center; gap: 6px; color: #3f7a5f; font-size: 12px; font-weight: 600;">
+          <span style="width: 6px; height: 6px; border-radius: 50%; background: #3f7a5f;"></span>
+          <span>上次测试 14:32 通过 · 1.8 秒</span>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 13px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffdf7; font-size: 12px; font-weight: 600;">
+          <span>测试连接</span>
+        </div>
+        <div style="display: flex; align-items: center; height: 32px; padding: 0 15px; border-radius: 6px; background: #255d4e; color: #fffef3; font-size: 12px; font-weight: 650;">保存设置</div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-bottom: 16px;">
+      <div style="display: flex; align-items: center; gap: 11px; padding: 13px 16px; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 9px;">
+        <div style="display: grid; place-items: center; width: 17px; height: 17px; flex: 0 0 auto; border: 1.5px solid #c2c9ba; border-radius: 50%;"></div>
+        <div>
+          <div style="font-weight: 650;">跟随酒馆</div>
+          <div style="color: #8b958c; font-size: 11px;">用当前聊天的 API 和模型</div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 11px; padding: 13px 16px; background: #eaefe3; border: 1px solid #255d4e; border-radius: 9px;">
+        <div style="display: grid; place-items: center; width: 17px; height: 17px; flex: 0 0 auto; border: 1.5px solid #255d4e; border-radius: 50%;">
+          <div style="width: 8px; height: 8px; border-radius: 50%; background: #255d4e;"></div>
+        </div>
+        <div>
+          <div style="font-weight: 650;">独立副 API</div>
+          <div style="color: #4a6357; font-size: 11px;">给翻译单独挑一个模型</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 16px; flex-grow: 1; min-height: 0; padding-bottom: 20px;">
+
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 4px 8px;">
+          <div style="color: #6b7770; font-size: 11px; font-weight: 700;">已保存的连接</div>
+          <div style="display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid #d8dccf; border-radius: 5px; background: #fffdf7; color: #255d4e;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-left: 2px solid #255d4e; border-radius: 0 6px 6px 0; background: #255d4e; color: #f2f7f0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 650;">translator-pro</div>
+            <div style="color: #b9d3c4; font-size: 11px;">api.deepseek.com</div>
+          </div>
+          <span style="width: 6px; height: 6px; border-radius: 50%; background: #9fd3ae;"></span>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 600;">本地 LM Studio</div>
+            <div style="color: #8b958c; font-size: 11px;">127.0.0.1:1234</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-left: 2px solid transparent; border-radius: 0 6px 6px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-weight: 600;">备用中转</div>
+            <div style="color: #8b958c; font-size: 11px;">未填写密钥</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; min-height: 0; background: #fffdf7; border: 1px solid #d8dccf; border-radius: 10px; overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 18px; border-bottom: 1px solid #ebeade;">
+          <div style="font-size: 14px; font-weight: 650;">translator-pro</div>
+          <div style="color: #b54332; font-size: 11px; font-weight: 600;">删除此连接</div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 13px; padding: 16px 18px;">
+
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+            <div>
+              <div style="color: #6b7770; font-size: 11px; font-weight: 600; margin-bottom: 5px;">API 基础地址</div>
+              <div style="display: flex; align-items: center; height: 34px; padding: 0 11px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9;">https://api.deepseek.com/v1</div>
+            </div>
+            <div>
+              <div style="color: #6b7770; font-size: 11px; font-weight: 600; margin-bottom: 5px;">API 密钥</div>
+              <div style="display: flex; align-items: center; justify-content: space-between; height: 34px; padding: 0 11px; border: 1px solid #d8dccf; border-radius: 6px; background: #fffef9; color: #6b7770; letter-spacing: .16em;">
+                <span>••••••••••••</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8b958c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.6"/></svg>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <div style="color: #6b7770; font-size: 11px; font-weight: 600;">选择模型</div>
+              <div style="display: flex; align-items: center; gap: 6px; color: #255d4e; font-size: 11px; font-weight: 600;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2 6"/><path d="M20 5v6h-6"/></svg>
+                <span>拉取模型列表</span>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 11px; border: 1px solid #d8dccf; border-radius: 6px 6px 0 0; background: #fffef9; color: #8b958c;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+              <span>搜索 37 个模型</span>
+            </div>
+            <div style="border: 1px solid #d8dccf; border-top: 0; border-radius: 0 0 6px 6px; overflow: hidden;">
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #eaefe3; font-weight: 650;">
+                <span>translator-pro</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#255d4e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+              </div>
+              <div style="padding: 8px 12px; border-top: 1px solid #f0efe6; color: #33443d;">translator-small</div>
+              <div style="padding: 8px 12px; border-top: 1px solid #f0efe6; color: #33443d;">deepseek-chat</div>
+              <div style="padding: 8px 12px; border-top: 1px solid #f0efe6; color: #33443d;">deepseek-reasoner</div>
+            </div>
+            <div style="margin-top: 6px; color: #8b958c; font-size: 11px;">接口不提供列表时，也可以直接手动填写模型名。</div>
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid #ebeade;">
+            <div style="display: flex; align-items: center; gap: 9px;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4a6357" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              <div style="font-weight: 650;">请求参数</div>
+            </div>
+            <div style="color: #8b958c; font-size: 11px;">超时 120 秒 · 输出 8192 · 温度 0.6 · 排除 2 项</div>
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid #ebeade;">
+            <div>
+              <div style="font-weight: 650;">失败后自动重试</div>
+              <div style="color: #8b958c; font-size: 11px;">同时用于缺段恢复与保存失败重试。</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 2px;">
+              <div style="display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #d8dccf; border-radius: 6px 0 0 6px; background: #fffef9; color: #6b7770;">−</div>
+              <div style="display: grid; place-items: center; width: 42px; height: 30px; border-top: 1px solid #d8dccf; border-bottom: 1px solid #d8dccf; background: #fffef9; font-weight: 650;">1</div>
+              <div style="display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #d8dccf; border-radius: 0 6px 6px 0; background: #fffef9; color: #6b7770;">+</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
