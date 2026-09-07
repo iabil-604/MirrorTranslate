@@ -105,6 +105,12 @@ export function addDiagnostic(entry, storage) {
   if (entry && Object.hasOwn(entry, 'fullResponse')) {
     normalized.fullResponse = sanitizeFullResponse(entry.fullResponse);
   }
+  // The request sits in the same tier as the response: never in the safe summary, because it carries
+  // the prompt, the glossary and the story text.
+  if (entry && Object.hasOwn(entry, 'fullRequest')) {
+    normalized.fullRequest = sanitizeFullResponse(entry.fullRequest);
+  }
+  if (Number.isInteger(entry?.floor)) normalized.floor = entry.floor;
   const fitted = fitEntriesForStorage([...readDiagnostics(target), normalized]);
   memoryEntries = fitted.entries;
   try {
@@ -139,9 +145,15 @@ function formatReport(entries, metadata = {}, includeFullResponses = false) {
     '',
   ];
   for (const entry of Array.isArray(entries) ? entries : []) {
-    lines.push(`[${entry.time}] ${String(entry.level).toUpperCase()} / ${entry.scope}`);
+    lines.push(`[${entry.time}] ${String(entry.level).toUpperCase()} / ${entry.scope}${Number.isInteger(entry.floor) ? ` / 第 ${entry.floor} 楼` : ''}`);
     lines.push(entry.message || '（无说明）');
     if (entry.details && Object.keys(entry.details).length) lines.push(JSON.stringify(entry.details, null, 2));
+    if (includeFullResponses && Object.hasOwn(entry, 'fullRequest')) {
+      lines.push('--- 发送给副 API 的完整请求（凭据特征已隐藏）---');
+      lines.push(typeof entry.fullRequest === 'string'
+        ? entry.fullRequest
+        : JSON.stringify(entry.fullRequest, null, 2));
+    }
     if (includeFullResponses && Object.hasOwn(entry, 'fullResponse')) {
       lines.push('--- 完整副 API 返回（凭据特征已隐藏）---');
       lines.push(typeof entry.fullResponse === 'string'
@@ -159,6 +171,20 @@ export function formatDiagnosticReport(entries, metadata = {}) {
 
 export function formatFullDiagnosticReport(entries, metadata = {}) {
   return formatReport(entries, metadata, true);
+}
+
+export function filterDiagnosticsByFloor(entries, floor) {
+  const target = Number(floor);
+  if (!Number.isInteger(target)) return [];
+  return (Array.isArray(entries) ? entries : []).filter(entry => entry?.floor === target);
+}
+
+export function listDiagnosticFloors(entries) {
+  const floors = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (Number.isInteger(entry?.floor)) floors.add(entry.floor);
+  }
+  return [...floors].sort((left, right) => left - right);
 }
 
 export const __diagnosticsTesting = Object.freeze({ STORAGE_KEY, MAX_ENTRIES, MAX_STORAGE_CHARACTERS });

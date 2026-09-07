@@ -15,6 +15,9 @@ import {
   getActivePromptProfile,
   hashText,
   interceptGenerationChat,
+  planTranslationBatches,
+  remapTranslationsBySource,
+  translationCharBudget,
   inspectTagConfiguration,
   mergeSettings,
   normalizeChannel,
@@ -29,13 +32,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.12.0';
+} from './core.js?v=0.12.3';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.12.0';
+} from './processing.js?v=0.12.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -51,15 +54,17 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.12.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.0';
+} from './prompts.js?v=0.12.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.3';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatDiagnosticReport,
+  filterDiagnosticsByFloor,
   formatFullDiagnosticReport,
+  listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.12.0';
+} from './diagnostics.js?v=0.12.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -83,6 +88,10 @@ const runtime = {
   processingRevision: 0,
   nativeRegexInstalled: false,
   mainGenerationActive: false,
+  activeFloor: null,
+  interceptorSeen: false,
+  interceptorWarned: false,
+  promptFallbackStrips: 0,
   task: {
     status: 'idle',
     title: '等待正文',
@@ -200,7 +209,7 @@ const CONTROL_CENTER_MARKUP = `
 
 <section class="jy-page" data-jy-page="logs" role="tabpanel" hidden>
 <header class="jy-page-heading"><div><h1>运行记录</h1><span class="jy-page-context" data-jy-log-count>0 条</span></div></header>
-<div class="jy-log-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="copy-logs">复制报错摘要</button><button type="button" class="jy-button" data-jy-action="copy-full-logs">复制完整日志</button><div class="jy-log-tools"><button type="button" class="jy-button" data-jy-action="refresh-logs">刷新</button><button type="button" class="jy-button" data-jy-action="clear-logs">清空</button></div></div>
+<div class="jy-log-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="copy-logs">复制报错摘要</button><button type="button" class="jy-button" data-jy-action="copy-full-logs">复制完整日志</button><button type="button" class="jy-button" data-jy-action="copy-floor-logs">复制本楼日志</button><div class="jy-log-tools"><button type="button" class="jy-button" data-jy-action="refresh-logs">刷新</button><button type="button" class="jy-button" data-jy-action="clear-logs">清空</button></div></div>
 <p class="jy-muted">展开记录可查看模型完整回复。完整日志含正文，分享前请检查。</p><div class="jy-log-list" data-jy-log-list></div>
 </section>
 <p class="jy-sr-only" aria-live="polite" data-jy-live></p>
@@ -250,13 +259,15 @@ function toast(kind, message) {
   else (kind === 'error' ? console.error : console.info)(`[${APP_NAME}] ${message}`);
 }
 
-function recordDiagnostic(level, scope, message, details = {}, fullResponse) {
+function recordDiagnostic(level, scope, message, details = {}, fullResponse, extra = {}) {
   const entry = addDiagnostic({
     level,
     scope,
     message,
     details,
     ...(arguments.length >= 5 ? { fullResponse } : {}),
+    ...(Number.isInteger(runtime.activeFloor) ? { floor: runtime.activeFloor } : {}),
+    ...extra,
   });
   for (const subscriber of runtime.diagnosticSubscribers) subscriber(readDiagnostics());
   return entry;
@@ -595,28 +606,67 @@ async function withAbortTimeout(externalSignal, timeoutSec, task) {
   }
 }
 
+// Hosts and relays surface failures in wildly different shapes. Keep whatever is there so the full
+// log can show it, instead of reducing everything to one opaque line in a toast.
+function describeRequestFailure(error) {
+  if (!error || typeof error !== 'object') return { value: String(error ?? '') };
+  const described = {
+    name: error.name ?? null,
+    message: typeof error.message === 'string' ? error.message : null,
+  };
+  for (const key of ['status', 'statusText', 'code', 'body', 'response', 'error', 'data']) {
+    if (error[key] !== undefined) described[key] = error[key];
+  }
+  if (error.cause instanceof Error) described.cause = { name: error.cause.name, message: error.cause.message };
+  else if (error.cause !== undefined) described.cause = error.cause;
+  return described;
+}
+
+// A bare token such as "<none>" tells the user nothing and hides that a full trace was captured.
+function enrichRequestError(error) {
+  const raw = safeError(error);
+  const opaque = !raw || raw.length <= 24 || /^[<\[(（【][^\s]{0,20}[>\])）】]$/.test(raw.trim());
+  if (!opaque) return error;
+  const wrapped = new Error(`副 API 没有返回可用内容（${raw || '空响应'}）。完整请求与返回已记入运行记录，可在「运行记录」页用「复制本楼日志」导出排查。`);
+  wrapped.cause = error instanceof Error ? error : new Error(raw);
+  return wrapped;
+}
+
 async function invokeTranslationBatch(segments, settings, signal, packet = {}, phase = 'primary', requestMeta = {}) {
   const context = getContext();
   const messages = buildTranslationMessages(segments, settings, packet, phase, requestMeta);
   const channel = getActiveChannel(settings);
   let raw;
 
-  if (settings.apiMode === 'independent') {
-    const service = context.ChatCompletionService;
-    if (!service?.processRequest) throw new Error('当前 SillyTavern 不提供独立聊天补全请求接口。');
-    raw = await withAbortTimeout(signal, channel.timeoutSec, requestSignal => service.processRequest(
-      createIndependentRequest(settings, messages),
-      {},
-      true,
-      requestSignal,
-    ));
-  } else {
-    if (typeof context.generateRaw !== 'function') throw new Error('当前 SillyTavern 不提供静默生成接口。');
-    raw = await context.generateRaw({
-      prompt: messages,
-      responseLength: channel.maxTokens,
-      trimNames: false,
-    });
+  try {
+    if (settings.apiMode === 'independent') {
+      const service = context.ChatCompletionService;
+      if (!service?.processRequest) throw new Error('当前 SillyTavern 不提供独立聊天补全请求接口。');
+      raw = await withAbortTimeout(signal, channel.timeoutSec, requestSignal => service.processRequest(
+        createIndependentRequest(settings, messages),
+        {},
+        true,
+        requestSignal,
+      ));
+    } else {
+      if (typeof context.generateRaw !== 'function') throw new Error('当前 SillyTavern 不提供静默生成接口。');
+      raw = await context.generateRaw({
+        prompt: messages,
+        responseLength: channel.maxTokens,
+        trimNames: false,
+      });
+    }
+  } catch (error) {
+    if (!isAbortError(error)) {
+      recordDiagnostic('error', 'translation.request-failed', `副 API 请求失败：${safeError(error)}`, {
+        phase,
+        requestedSegments: segments.length,
+        requestedIds: segments.map(segment => segment.id),
+        apiMode: settings.apiMode,
+        model: channel.model || 'follow-current',
+      }, describeRequestFailure(error), { fullRequest: messages });
+    }
+    throw enrichRequestError(error);
   }
 
   recordDiagnostic('info', 'translation.raw-response', '已收到副 API 完整返回。', {
@@ -625,9 +675,18 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
     requestedIds: segments.map(segment => segment.id),
     apiMode: settings.apiMode,
     model: channel.model || 'follow-current',
-  }, raw);
+  }, raw, { fullRequest: messages });
   signal?.throwIfAborted?.();
-  return recoverStructuredTranslations(raw, segments);
+  const recovered = recoverStructuredTranslations(raw, segments);
+  if (!recovered.translations.size) {
+    recordDiagnostic('error', 'translation.empty-response', '副 API 返回中没有任何可用译文。', {
+      phase,
+      requestedIds: segments.map(segment => segment.id),
+      parserWarnings: recovered.warnings,
+      response: recovered.response,
+    }, raw, { fullRequest: messages });
+  }
+  return recovered;
 }
 
 function consumeRetry(retryBudget, reason, details = {}) {
@@ -641,16 +700,25 @@ function consumeRetry(retryBudget, reason, details = {}) {
   return true;
 }
 
-async function invokeWithRetries(segments, settings, signal, packet = {}, seedTranslations = new Map(), retryBudget = null) {
-  const budget = retryBudget || { remaining: settings.retries };
-  const translations = new Map(seedTranslations);
-  let pending = segments;
-  let lastError;
-  let attempt = 0;
+const MAX_TRANSLATION_REQUESTS = 16;
+
+// Repeating an identical request that already truncated truncates again, so a batch that comes back
+// with nothing new is halved instead of being resent as-is.
+async function translateOneBatch(batch, settings, signal, packet, translations, budget, state) {
+  let pending = batch;
+  let lastError = null;
   while (pending.length) {
-    attempt += 1;
+    if (state.requests >= MAX_TRANSLATION_REQUESTS) {
+      recordDiagnostic('warn', 'translation.request-cap', '本次翻译已达到请求次数上限，停止继续补译。', {
+        requests: state.requests,
+        missingIds: pending.map(item => item.id),
+      });
+      return lastError;
+    }
     try {
       signal?.throwIfAborted?.();
+      state.requests += 1;
+      const before = translations.size;
       const recovered = await invokeTranslationBatch(
         pending,
         settings,
@@ -659,23 +727,54 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
         translations.size ? 'repair' : 'primary',
       );
       for (const [id, text] of recovered.translations) translations.set(id, text);
-      pending = segments.filter(segment => !translations.has(segment.id));
-      recordDiagnostic(pending.length ? 'warn' : 'info', 'translation.response', pending.length ? '副 API 返回的段落不完整，准备补译。' : '本次译文返回完整。', {
-        attempt,
-        expected: segments.length,
+      const progressed = translations.size > before;
+      pending = pending.filter(segment => !translations.has(segment.id));
+      recordDiagnostic(pending.length ? 'warn' : 'info', 'translation.response', pending.length ? '本批返回不完整，准备补译。' : '本批译文返回完整。', {
+        request: state.requests,
+        batchSize: batch.length,
         recovered: translations.size,
         missingIds: pending.map(item => item.id),
         parserWarnings: recovered.warnings,
         response: recovered.response,
       });
-      if (!pending.length) return { translations, missingIds: [], complete: true };
+      if (!pending.length) return null;
       lastError = new Error(`仍缺少第 ${pending.map(item => item.id).join('、')} 段译文。`);
-      if (!consumeRetry(budget, 'missing-translations', { missingIds: pending.map(item => item.id) })) break;
+      if (!progressed && pending.length > 1) {
+        // Shrinking changes the request, so it is not charged to the retry budget.
+        pending = pending.slice(0, Math.ceil(pending.length / 2));
+        recordDiagnostic('warn', 'translation.shrink', '本批没有新增译文，改用更小的批次重试。', { nextBatch: pending.length });
+        continue;
+      }
+      if (!consumeRetry(budget, 'missing-translations', { missingIds: pending.map(item => item.id) })) return lastError;
     } catch (error) {
       if (signal?.aborted) throw error;
       lastError = error;
-      if (!consumeRetry(budget, 'request-error', { error: safeError(error) })) break;
+      if (!consumeRetry(budget, 'request-error', { error: safeError(error) })) return lastError;
     }
+  }
+  return null;
+}
+
+async function invokeWithRetries(segments, settings, signal, packet = {}, seedTranslations = new Map(), retryBudget = null) {
+  const budget = retryBudget || { remaining: settings.retries };
+  const translations = new Map(seedTranslations);
+  const channel = getActiveChannel(settings);
+  const batches = planTranslationBatches(segments, { maxChars: translationCharBudget(channel.maxTokens) });
+  const state = { requests: 0 };
+  let lastError;
+  recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
+    segments: segments.length,
+    batches: batches.length,
+    charBudget: translationCharBudget(channel.maxTokens),
+    maxTokens: channel.maxTokens,
+  });
+  for (const batch of batches) {
+    const failure = await translateOneBatch(batch, settings, signal, packet, translations, budget, state);
+    if (failure) lastError = failure;
+  }
+  {
+    const pending = segments.filter(segment => !translations.has(segment.id));
+    if (!pending.length) return { translations, missingIds: [], complete: true };
   }
   if (translations.size) {
     const missingIds = segments.filter(segment => !translations.has(segment.id)).map(segment => segment.id);
@@ -738,7 +837,18 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
   if (latest.chatId !== snapshot.chatId || latest.swipeId !== snapshot.swipeId) {
     throw new Error('翻译期间聊天或滑动页已经变化，旧结果没有写回。');
   }
-  if (latest.sourceHash !== snapshot.sourceHash) throw sourceChangedError();
+  let effectiveTranslations = translationMap;
+  if (latest.sourceHash !== snapshot.sourceHash) {
+    // Salvage the paragraphs whose source text survived the edit instead of discarding the whole run.
+    effectiveTranslations = remapTranslationsBySource(snapshot.segments, translationMap, latest.segments);
+    if (!effectiveTranslations.size) throw sourceChangedError();
+    recordDiagnostic('warn', 'translation.resync', '正文在翻译期间变化，已保留仍然对得上的译文，其余段落留待补译。', {
+      messageId: snapshot.messageId,
+      before: translationMap.size,
+      carried: effectiveTranslations.size,
+      segments: latest.segments.length,
+    });
+  }
   const rebased = latest.messageHash !== snapshot.messageHash;
   if (rebased) {
     recordDiagnostic('info', 'translation.rebase', '检测到排除内容或正文外内容更新，已在最新楼层上安全合并译文。', {
@@ -747,11 +857,11 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
     });
   }
 
-  const missingIds = latest.segments.filter(segment => !translationMap.has(segment.id)).map(segment => segment.id);
+  const missingIds = latest.segments.filter(segment => !effectiveTranslations.has(segment.id)).map(segment => segment.id);
   const complete = missingIds.length === 0;
   const bilingual = rebuildTaggedRegions(latest.extraction, region => assembleBilingual(
     region.layout,
-    translationMap,
+    effectiveTranslations,
     { ...settings, allowMissing: !complete },
   ));
   const message = latest.message;
@@ -769,7 +879,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
     excluded_tags: settings.excludedTags,
     preserve_line_rules: settings.preserveLineRules,
     complete,
-    translated_segments: translationMap.size,
+    translated_segments: effectiveTranslations.size,
     total_segments: latest.segments.length,
     total_paragraphs: latest.paragraphs,
     missing_ids: missingIds,
@@ -817,6 +927,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
 }
 
 async function translateMessage(messageId = null, { force = false, quiet = false } = {}) {
+  runtime.activeFloor = Number.isInteger(Number(messageId)) ? Number(messageId) : null;
   const epoch = runtime.epoch;
   const settings = runtime.settings;
   const targetLanguage = normalizeTargetLanguage(getActivePromptProfile(settings).targetLanguage);
@@ -827,6 +938,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable' };
     throw error;
   }
+  runtime.activeFloor = snapshot.messageId;
   if (!snapshot.segments.length) throw new Error('当前 AI 回复没有可翻译的正文段落。');
   if (snapshot.translated && !force) return { skipped: true, reason: 'already-translated', snapshot };
 
@@ -1669,7 +1781,9 @@ async function inspectCurrentFloor(root) {
   );
   const lines = ['正文标签：'];
   for (const item of report.bodyTags) {
-    lines.push(item.count ? `  <${item.tag}>：${item.count} 组，采用第 ${item.selected} 组` : `  <${item.tag}>：未找到`);
+    if (item.count) lines.push(`  <${item.tag}>：${item.count} 组，采用第 ${item.selected} 组`);
+    else if (item.streaming) lines.push(`  <${item.tag}>：标签已出现但尚未闭合，这一楼可能还在生成`);
+    else lines.push(`  <${item.tag}>：未找到`);
   }
   lines.push('排除标签：');
   if (!report.excludedTags.length) lines.push('  未设置');
@@ -1864,6 +1978,10 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'translate') {
         saveSettings(collectSettings(root));
         await translateMessage(null, { force: true });
+      } else if (action === 'translate-missing') {
+        // Seeds with whatever is already written back, so only the gaps go to the API.
+        saveSettings(collectSettings(root));
+        await translateMessage(null, { force: false });
       } else if (action === 'test-api') {
         saveSettings(collectSettings(root));
         await testTranslationChannel();
@@ -1996,8 +2114,19 @@ function createControlCenter(rootDocument = document) {
         const report = formatFullDiagnosticReport(readDiagnostics(), diagnosticReportMetadata());
         await copyText(report);
         toast('success', '包含完整副 API 返回的日志已复制，请在发送前检查隐私内容。');
+      } else if (action === 'copy-floor-logs') {
+        const entries = readDiagnostics();
+        const floors = listDiagnosticFloors(entries);
+        const target = Number.isInteger(runtime.activeFloor) && floors.includes(runtime.activeFloor)
+          ? runtime.activeFloor
+          : floors.at(-1);
+        if (!Number.isInteger(target)) throw new Error('日志里还没有带楼层的翻译记录。');
+        const scoped = filterDiagnosticsByFloor(entries, target);
+        const report = formatFullDiagnosticReport(scoped, { ...diagnosticReportMetadata(), floor: target });
+        await copyText(report);
+        toast('success', `第 ${target} 楼的完整日志已复制（含请求与返回），发送前请检查隐私内容。`);
       }
-      if (['translate', 'test-api'].includes(action)) await refreshCurrentCard(root);
+      if (['translate', 'translate-missing', 'test-api'].includes(action)) await refreshCurrentCard(root);
     } catch (error) {
       setText(root, '[data-jy-live]', safeError(error));
       toast('error', safeError(error));
@@ -2838,6 +2967,7 @@ async function openMiniWindow() {
     button.disabled = true;
     try {
       if (action === 'mini-translate') await translateMessage(null, { force: true });
+      else if (action === 'mini-repair') await translateMessage(null, { force: false });
       else if (action === 'mini-refresh') await refreshFloor();
       else if (action === 'mini-stop') {
         for (const entry of runtime.inflight.values()) entry.controller.abort();
@@ -2860,7 +2990,7 @@ async function openMiniWindow() {
           runtime.inflight.delete(key);
         }
       }
-      if (action === 'mini-translate') await refreshFloor();
+      if (action === 'mini-translate' || action === 'mini-repair') await refreshFloor();
     } catch (error) {
       toast('error', safeError(error));
     } finally {
@@ -2952,8 +3082,86 @@ function cancelPendingWork() {
   runtime.inflight.clear();
 }
 
+
+// Hosts older than the manifest hook never call generate_interceptor. The mirrored translations then
+// stay in the prompt and the main model starts imitating them, which reads as the prose degrading.
+function chatCarriesMirrorBlocks() {
+  try {
+    const chat = getContext().chat;
+    if (!Array.isArray(chat)) return false;
+    return chat.some(item => typeof item?.mes === 'string' && item.mes.includes(INVISIBLE_MARKER));
+  } catch {
+    return false;
+  }
+}
+
+function verifyGenerationInterceptor() {
+  if (runtime.interceptorSeen || runtime.interceptorWarned) return;
+  // The prompt-event fallback already removed the mirrors, so nothing leaked and nothing to report.
+  if (runtime.promptFallbackStrips > 0) return;
+  if (!chatCarriesMirrorBlocks()) return;
+  runtime.interceptorWarned = true;
+  const message = '当前酒馆既没有调用生成拦截器，也没有可用的提示词事件，聊天中的译文会随提示词进入主模型，正文质量会下降。建议升级酒馆，或先关闭「主回复完成后翻译」。';
+  recordDiagnostic('error', 'host.interceptor-missing', '宿主未调用生成拦截器，且提示词事件回退也未生效，译文正在泄漏进主模型上下文。', {
+    promptEvents: PROMPT_EVENT_NAMES,
+  });
+  toast('error', message);
+  updateTask({ status: 'error', title: '译文可能进入主模型', message, progress: 0 });
+}
+
+
+// Second line of defence for hosts that never call generate_interceptor. These prompt events are much
+// older than the manifest hook, and they hand over the outgoing prompt precisely so extensions can
+// edit it. Only blocks carrying our own boundaries are removed, so nothing else can be damaged.
+const PROMPT_EVENT_NAMES = Object.freeze([
+  'CHAT_COMPLETION_PROMPT_READY',
+  'GENERATE_BEFORE_COMBINE_PROMPTS',
+  'GENERATE_AFTER_COMBINE_PROMPTS',
+]);
+
+function stripPromptPayload(payload) {
+  if (!payload || typeof payload !== 'object') return 0;
+  let stripped = 0;
+  const entries = Array.isArray(payload.chat) ? payload.chat : [];
+  for (const item of entries) {
+    if (typeof item?.content !== 'string') continue;
+    const clean = stripGeneratedTranslationLines(item.content);
+    if (clean !== item.content) {
+      item.content = clean;
+      stripped += 1;
+    }
+  }
+  if (typeof payload.prompt === 'string') {
+    const clean = stripGeneratedTranslationLines(payload.prompt);
+    if (clean !== payload.prompt) {
+      payload.prompt = clean;
+      stripped += 1;
+    }
+  }
+  return stripped;
+}
+
+function registerPromptFallback(eventTypes) {
+  for (const name of PROMPT_EVENT_NAMES) {
+    const eventType = eventTypes?.[name];
+    if (!eventType) continue;
+    bindEvent(eventType, payload => {
+      const stripped = stripPromptPayload(payload);
+      if (!stripped) return;
+      runtime.promptFallbackStrips += stripped;
+      if (runtime.promptFallbackStrips === stripped) {
+        recordDiagnostic('warn', 'host.prompt-fallback', '宿主没有调用生成拦截器，已改用提示词事件移除译文镜像块。', {
+          event: name,
+          stripped,
+        });
+      }
+    });
+  }
+}
+
 function registerRuntimeEvents() {
   const eventTypes = getContext().eventTypes ?? {};
+  registerPromptFallback(eventTypes);
   bindEvent(eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
     if (!dryRun && !['quiet', 'impersonate'].includes(type)) runtime.mainGenerationActive = true;
     runtime.generationGate.begin(getCurrentChatId(), type, dryRun);
@@ -2961,6 +3169,7 @@ function registerRuntimeEvents() {
   bindEvent(eventTypes.CHARACTER_MESSAGE_RENDERED, (messageId, type) => {
     if (runtime.generationGate.consume(getCurrentChatId(), type)) {
       runtime.mainGenerationActive = false;
+      verifyGenerationInterceptor();
       scheduleAuto(messageId, 'generation');
     }
   });
@@ -2998,6 +3207,7 @@ function cleanupRuntime() {
 }
 
 export function interceptGeneration(chat) {
+  runtime.interceptorSeen = true;
   return interceptGenerationChat(chat);
 }
 

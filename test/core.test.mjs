@@ -16,6 +16,8 @@ import {
   extractTaggedRegion,
   extractTaggedRegions,
   interceptGenerationChat,
+  planTranslationBatches,
+  translationCharBudget,
   inspectTagConfiguration,
   mergeSettings,
   getActiveChannel,
@@ -34,8 +36,11 @@ import {
 } from '../core.js';
 import {
   addDiagnostic,
+  clearDiagnostics,
   formatDiagnosticReport,
+  filterDiagnosticsByFloor,
   formatFullDiagnosticReport,
+  listDiagnosticFloors,
   readDiagnostics,
   sanitizeDiagnostic,
 } from '../diagnostics.js';
@@ -143,6 +148,54 @@ test('independent channel request uses an isolated OpenAI-compatible proxy paylo
   assert.equal('temperature' in excluded, false);
   assert.equal('presence_penalty' in excluded, false);
   assert.equal(excluded.model, 'translator');
+});
+
+test('logs can be exported per floor and carry the request without leaking it into the safe summary', () => {
+  clearDiagnostics();
+  addDiagnostic({
+    level: 'info', scope: 'translation.raw-response', message: '返回', details: { phase: 'primary' }, floor: 42,
+    fullRequest: [{ role: 'system', content: '核心规范正文' }, { role: 'user', content: '夕暮れの教室' }],
+    fullResponse: '{"translations":[{"id":1,"text":"傍晚的教室"}]}',
+  });
+  addDiagnostic({ level: 'info', scope: 'translation.raw-response', message: '别楼', details: {}, floor: 41, fullResponse: '别楼返回' });
+
+  const entries = readDiagnostics();
+  assert.deepEqual(listDiagnosticFloors(entries), [41, 42]);
+  assert.equal(filterDiagnosticsByFloor(entries, 42).length, 1);
+  assert.deepEqual(filterDiagnosticsByFloor(entries, 999), []);
+
+  const scoped = formatFullDiagnosticReport(filterDiagnosticsByFloor(entries, 42), { floor: 42 });
+  assert.match(scoped, /发送给副 API 的完整请求/);
+  assert.match(scoped, /完整副 API 返回/);
+  assert.match(scoped, /第 42 楼/);
+  assert.doesNotMatch(scoped, /别楼/);
+
+  // The safe summary is what people paste in public, so it must never carry the prompt or the story.
+  const safe = formatDiagnosticReport(entries, {});
+  assert.doesNotMatch(safe, /核心规范正文|夕暮れの教室/);
+  clearDiagnostics();
+});
+
+test('long floors are split into batches that fit the channel output budget', () => {
+  assert.equal(translationCharBudget(4096), 1434);
+  assert.equal(translationCharBudget(256), 400);
+  assert.equal(translationCharBudget(32768), 11469);
+
+  const segments = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
+  const batches = planTranslationBatches(segments, { maxChars: translationCharBudget(4096) });
+  assert.ok(batches.length > 1, '40 段长正文必须拆批');
+  assert.deepEqual(batches.flat().map(item => item.id), segments.map(item => item.id));
+  for (const batch of batches) {
+    assert.ok(batch.length <= 20);
+    assert.ok(batch.reduce((sum, item) => sum + item.text.length, 0) <= 1434 || batch.length === 1);
+  }
+
+  const short = planTranslationBatches([{ id: 1, text: '短い。' }], { maxChars: 1434 });
+  assert.equal(short.length, 1);
+  assert.deepEqual(planTranslationBatches([]), []);
+
+  const huge = planTranslationBatches([{ id: 1, text: 'あ'.repeat(9000) }], { maxChars: 1434 });
+  assert.equal(huge.length, 1, '超长单段仍然独立成批，不会被丢掉');
 });
 
 test('generation gate only consumes the matching real generation', () => {

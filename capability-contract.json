@@ -55,6 +55,13 @@
       "fallback": "save-profile-without-rendered-beautification"
     },
     {
+      "id": "generation-interceptor",
+      "owner": "sillytavern",
+      "symbol": "manifest.generate_interceptor",
+      "required": false,
+      "fallback": "warn-and-recommend-disabling-auto-translation"
+    },
+    {
       "id": "native-chat-reload",
       "owner": "sillytavern",
       "symbol": "SillyTavern.getContext().reloadCurrentChat",

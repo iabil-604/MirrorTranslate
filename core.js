@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.12.0';
+} from './prompts.js?v=0.12.3';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.12.0';
+export const APP_VERSION = '0.12.3';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -602,6 +602,23 @@ function scanTagGroups(source, tagName, options = {}) {
   return groups.sort((left, right) => left.openStart - right.openStart);
 }
 
+// True when the tag opens but never closes, which is what a half-streamed floor looks like.
+export function hasUnclosedTag(text, tagName) {
+  const tag = String(tagName || '').trim();
+  if (!VALID_TAG_RE.test(tag)) return false;
+  const target = tag.toLowerCase();
+  const tokenPattern = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
+  let depth = 0;
+  for (const match of normalizeNewlines(String(text ?? '')).matchAll(tokenPattern)) {
+    if (match[1].toLowerCase() !== target) continue;
+    const token = match[0];
+    if (token.endsWith('/>')) continue;
+    if (token.includes('</')) depth = Math.max(0, depth - 1);
+    else depth += 1;
+  }
+  return depth > 0;
+}
+
 export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags) {
   const source = normalizeNewlines(text);
   const tags = parseTagNames(tagNames, DEFAULT_SETTINGS.bodyTags);
@@ -642,7 +659,9 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
       return { tag, count: groups.length, selected: groups.length ? groups.length : null };
     } catch (error) {
       errors.push(error.message);
-      return { tag, count: 0, selected: null, error: error.message };
+      // A tag that opens but has not closed yet is a floor still being written, not a wrong setting.
+      const streaming = hasUnclosedTag(source, tag);
+      return { tag, count: 0, selected: null, streaming, error: error.message };
     }
   });
   const excludedResults = excluded.map(tag => {
@@ -902,6 +921,29 @@ export function segmentSource(text, options = {}) {
   };
 }
 
+// When the floor's body changed while the API was working, the ids no longer line up, but the
+// paragraphs that were not touched still have identical source text. Carrying those across turns a
+// total loss into a partial write that 补译 can finish.
+export function remapTranslationsBySource(previousSegments, translations, currentSegments) {
+  const carried = new Map();
+  if (!(translations instanceof Map) || !translations.size) return carried;
+  const byText = new Map();
+  for (const segment of Array.isArray(previousSegments) ? previousSegments : []) {
+    const text = String(segment?.text ?? '');
+    if (!translations.has(segment?.id)) continue;
+    if (!byText.has(text)) byText.set(text, []);
+    byText.get(text).push(segment.id);
+  }
+  for (const segment of Array.isArray(currentSegments) ? currentSegments : []) {
+    const queue = byText.get(String(segment?.text ?? ''));
+    if (!queue?.length) continue;
+    const sourceId = queue.shift();
+    const value = translations.get(sourceId);
+    if (value) carried.set(segment.id, value);
+  }
+  return carried;
+}
+
 export function createTranslationSignature(regions) {
   return JSON.stringify((Array.isArray(regions) ? regions : []).map(region => ({
     tag: String(region?.tagName ?? '').toLowerCase(),
@@ -1012,12 +1054,18 @@ function translationItems(parsed) {
   return [];
 }
 
+const TRANSLATION_PLACEHOLDER_RE = /^(?:[<\[(（【]\s*)?(?:none|null|nil|empty|undefined|n\/a|no\s+translation|not?\s+applicable|untranslated)(?:\s*[>\])）】])?$/i;
+
 function normalizeTranslationText(value) {
   if (typeof value !== 'string') return '';
   let text = value.trim().replace(/^```(?:text)?\s*/i, '').replace(/\s*```$/i, '').trim();
   if (text.startsWith('{') && text.endsWith('}') && text.length > 2) text = text.slice(1, -1).trim();
   text = text.replaceAll(INVISIBLE_MARKER, '').replace(/\r?\n+/g, ' ').replace(/[ \t]{2,}/g, ' ').trim();
-  return text.replace(/^(?:中文|译文|translation)\s*[:：]\s*/i, '').trim();
+  text = text.replace(/^(?:中文|译文|translation)\s*[:：]\s*/i, '').trim();
+  // Some models answer a segment they decided not to translate with a placeholder token. Writing that
+  // into the floor is worse than reporting the segment as missing, which lets 补译 pick it up.
+  if (TRANSLATION_PLACEHOLDER_RE.test(text)) return '';
+  return text;
 }
 
 function lineProtocolItems(raw) {
@@ -1027,6 +1075,37 @@ function lineProtocolItems(raw) {
     const match = line.trim().match(/^(?:\[|【)?\s*(\d+)\s*(?:\]|】)?\s*[:：|]\s*(.+)$/);
     return match ? { id: Number(match[1]), text: match[2] } : null;
   }).filter(Boolean);
+}
+
+// A whole floor sent as one request is capped by the channel's own output budget, so a long floor
+// truncates the JSON and comes back missing most of its ids. Batches are sized from that budget:
+// CJK output runs close to one token per character, plus JSON overhead and the model's own thinking.
+export function translationCharBudget(maxTokens) {
+  const tokens = clampInteger(maxTokens, 256, 32768, 4096);
+  return clampInteger(Math.round(tokens * 0.35), 400, 20000, 1400);
+}
+
+export function planTranslationBatches(segments, options = {}) {
+  const list = Array.isArray(segments) ? segments.filter(Boolean) : [];
+  if (!list.length) return [];
+  const maxSegments = clampInteger(options.maxSegments, 1, 500, 20);
+  const maxChars = clampInteger(options.maxChars, 200, 200000, 1400);
+  const batches = [];
+  let current = [];
+  let chars = 0;
+  for (const segment of list) {
+    const length = String(segment?.text ?? '').length;
+    // A single oversized segment still travels alone rather than being dropped or split.
+    if (current.length && (current.length >= maxSegments || chars + length > maxChars)) {
+      batches.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(segment);
+    chars += length;
+  }
+  if (current.length) batches.push(current);
+  return batches;
 }
 
 export function recoverStructuredTranslations(raw, expectedSegments) {
