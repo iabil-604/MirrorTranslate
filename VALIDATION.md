@@ -1,11 +1,25 @@
 # 验证边界
 
-当前版本的证据分为两层：
+## v0.12.0 · 本次改动
+
+按作者要求，本轮只进行相关本地检查与模拟页面查看，未连接真实翻译 API，未安装到真实酒馆，也未进行多版本运行测试。
+
+- 语法检查通过；核心与上下文的相关检查通过，正文方案的 8 项检查通过。
+- 覆盖空前后缀、自然同名符号保留、主模型过滤、旧标记迁移、重复换样式、已有滑动页译文复用及保存失败回退。
+- 覆盖原生正则完整字段、顺序与开关随方案往返，导入后重新分配 ID，隔离镜译规则组，保留其他原生规则。
+- 模拟页面确认默认方案、紧凑管理行、底部折叠美化入口及方案切换。独立阅读预览使用同一份美化正则和样式，支持明暗切换与原文展开。
+- 移除了清单最低版本限制；旧版脚本加载提供幂等启动回退。源码接口比对不等同于旧版酒馆实际运行通过。
+
+原生正则接口依据 SillyTavern [1.18.0 的引擎](https://github.com/SillyTavern/SillyTavern/blob/8172dcd0ee672d3cd9a5e5f7af134f91a45cd2b8/public/scripts/extensions/regex/engine.js)、[管理器](https://github.com/SillyTavern/SillyTavern/blob/8172dcd0ee672d3cd9a5e5f7af134f91a45cd2b8/public/scripts/extensions/regex/index.js)及 [1.14.0 上下文](https://github.com/SillyTavern/SillyTavern/blob/9c9be90821ffd6132b40b5f04982522a61d7ad30/public/scripts/st-context.js)核对。使用 `extensionSettings.regex`、`saveSettingsDebounced()` 与原生显示正则；未依赖私有的正则列表刷新函数。路由资料为 2026-08-18 快照的 A0、D5、E5 与扩展/API 参考技能，未采用设计目录候选。
+
+## 既有版本验证记录
+
+以下是此前版本的证据与真实宿主验证参考，不代表本轮新增运行结果：
 
 1. `validation/sillytavern-1.18.0.snapshot.json` 来自 SillyTavern `1.18.0` 标签源码审计，证明所调用的上下文符号和事件存在；
 2. `npm run validate` 执行本地语法、核心行为、清单和能力契约检查。
 
-这些检查不能替代真实宿主验收。GitHub 发布前仍需在 SillyTavern 1.18.0 中逐项验证：
+这些检查不能替代真实宿主验收。后续有需要时可在目标 SillyTavern 中参考以下检查项：
 
 - 从 Git URL 安装并刷新后扩展正常激活；
 - 魔法棒入口与扩展设置入口均能打开控制中心；

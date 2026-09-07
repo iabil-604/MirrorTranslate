@@ -27,7 +27,15 @@ import {
   rebuildTaggedRegions,
   segmentSource,
   stripGeneratedTranslationLines,
-} from './core.js?v=0.11.6';
+  upgradeLegacyBilingual,
+  restyleBilingual,
+} from './core.js?v=0.12.0';
+import {
+  VISUAL_FIELDS, REGEX_OWNER_KEY,
+  normalizeProcessingSettings, getActiveProcessingProfile,
+  captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
+  importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
+} from './processing.js?v=0.12.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -43,15 +51,15 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.11.6';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.11.6';
+} from './prompts.js?v=0.12.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatDiagnosticReport,
   formatFullDiagnosticReport,
   readDiagnostics,
-} from './diagnostics.js?v=0.11.6';
+} from './diagnostics.js?v=0.12.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -70,7 +78,11 @@ const EXTENSION_API_PATHS = Object.freeze({
 const runtime = {
   initialized: false,
   epoch: 0,
-  settings: mergeSettings(),
+  settings: normalizeProcessingSettings(),
+  processingRefresh: Promise.resolve(),
+  processingRevision: 0,
+  nativeRegexInstalled: false,
+  mainGenerationActive: false,
   task: {
     status: 'idle',
     title: '等待正文',
@@ -167,13 +179,21 @@ const CONTROL_CENTER_MARKUP = `
 
 <section class="jy-page" data-jy-page="processing" role="tabpanel" hidden>
 <header class="jy-page-heading"><div><h1>正文处理</h1><span class="jy-page-context">决定哪些内容会被送去翻译</span></div><button type="button" class="jy-button" data-jy-action="inspect-tags">检查当前楼层</button></header>
+<div class="jy-processing-bar">
+<label class="jy-processing-choice"><span>方案</span><select aria-label="正文方案" data-jy-processing-select></select></label>
+<button type="button" class="jy-button" data-jy-action="import-processing">导入方案</button><button type="button" class="jy-button" data-jy-action="export-processing">导出方案</button>
+<details class="jy-profile-menu"><summary>管理</summary><div class="jy-profile-menu-body"><label><span class="jy-label">方案名称</span><input type="text" maxlength="80" data-jy-processing-name></label><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="save-processing">保存</button><button type="button" class="jy-text-button" data-jy-action="delete-processing">删除方案</button></div></div></details>
+<input type="file" accept=".json,application/json" data-jy-processing-import hidden>
+</div>
 <div class="jy-processing-columns">
 <div class="jy-text-scope"><span class="jy-overline">送去翻译</span><h2>提取正文</h2><label><span class="jy-label">提取标签</span><textarea rows="4" data-jy-field="bodyTags" placeholder="story_scene" spellcheck="false"></textarea></label><p class="jy-muted">每行一个标签名，只取每种标签的最后一组完整内容。</p></div>
 <div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位。</p></div>
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 匹配整行。纯边框、纯符号与标签行自动保留。</p></details>
-<details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="&lt;small&gt;"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="&lt;/small&gt;"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="&lt;font color=#8aa&gt;"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="&lt;/font&gt;"></label></div></div><p class="jy-muted">每段原样附加，显示效果由你的正则决定。译文前后缀写在不可见边界标记内部，会随译文块一起被移除，不进入主模型历史。</p></details>
+<details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><p class="jy-muted">留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。</p></details>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label></div>
+<details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
+<details class="jy-advanced"><summary>内置美化</summary><div class="jy-processing-toolbar"><select aria-label="内置美化" data-jy-reading-style><option value="cute">可爱风</option><option value="minimal">极简风</option><option value="fold">原文折叠</option></select><button type="button" class="jy-button" data-jy-action="builtin-processing">使用</button></div></details>
 <pre class="jy-inspection" data-jy-tag-inspection hidden></pre>
 <footer class="jy-footer"><span class="jy-save-note">修改后保存设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-settings">保存设置</button></footer>
 </section>
@@ -375,7 +395,13 @@ function subscribeTask(subscriber) {
 
 function initializeSettings() {
   const context = getContext();
-  runtime.settings = mergeSettings(context.extensionSettings[MODULE_ID]);
+  runtime.settings = normalizeProcessingSettings(context.extensionSettings[MODULE_ID]);
+  const profile = getActiveProcessingProfile(runtime.settings);
+  if (context.extensionSettings.regex?.some(rule => rule?.[REGEX_OWNER_KEY]?.profileId === profile.id && rule[REGEX_OWNER_KEY].owner === MODULE_ID)) {
+    profile.regexScripts = readNativeRegexEdits(context.extensionSettings.regex, profile);
+  }
+  context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, profile);
+  runtime.nativeRegexInstalled = true;
   context.extensionSettings[MODULE_ID] = runtime.settings;
   context.saveSettingsDebounced?.();
   return runtime.settings;
@@ -383,7 +409,14 @@ function initializeSettings() {
 
 function saveSettings(next) {
   const context = getContext();
-  runtime.settings = mergeSettings(next);
+  const previous = runtime.settings;
+  runtime.settings = captureProcessingProfile(normalizeProcessingSettings(next));
+  const active = getActiveProcessingProfile(runtime.settings);
+  const previousRules = getActiveProcessingProfile(previous).regexScripts;
+  const visualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
+    || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
+  if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || visualChanged) cancelPendingWork();
+  context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, active);
   context.extensionSettings[MODULE_ID] = runtime.settings;
   context.saveSettingsDebounced?.();
   syncFloatingButton();
@@ -394,7 +427,62 @@ function saveSettings(next) {
   }
   const floating = document.getElementById(FLOATING_ID);
   if (floating) floating.dataset.theme = runtime.settings.theme || 'day';
+  if (visualChanged) {
+    const revision = ++runtime.processingRevision;
+    const settings = runtime.settings;
+    runtime.processingRefresh = runtime.processingRefresh.catch(() => {}).then(() => {
+      if (revision !== runtime.processingRevision || !runtime.initialized) return;
+      return restyleCurrentChat(settings);
+    });
+    runtime.processingRefresh.catch(error => toast('error', `设置已保存，刷新已有译文失败：${safeError(error)}`));
+  }
   return runtime.settings;
+}
+
+async function restyleCurrentChat(settings) {
+  const context = getContext();
+  const chat = context.chat;
+  const chatId = getCurrentChatId(context);
+  if (!Array.isArray(chat)) return;
+  const changes = [];
+  const updateExtra = (extra, text) => {
+    // Keep the original provenance if an edited legacy block could not be migrated.
+    // New owned blocks can be read without consulting these visible-affix settings.
+    if (text.includes(`{${INVISIBLE_MARKER}`)) return extra;
+    return { ...extra, [MESSAGE_META_KEY]: {
+      ...extra?.[MESSAGE_META_KEY], schema_version: 4,
+      segment_prefix: settings.segmentPrefix, segment_suffix: settings.segmentSuffix,
+      translation_prefix: settings.translationPrefix, translation_suffix: settings.translationSuffix,
+    } };
+  };
+  for (const message of chat) {
+    if (!message || message.is_user || message.is_system || typeof message.mes !== 'string') continue;
+    const next = { mes: restyleBilingual(message.mes, settings, message.extra?.[MESSAGE_META_KEY]), extra: message.extra };
+    if (next.mes !== message.mes) next.extra = updateExtra(message.extra, next.mes);
+    if (Array.isArray(message.swipes)) {
+      next.swipes = [...message.swipes];
+      next.swipe_info = message.swipe_info?.map(info => ({ ...info }));
+      for (let index = 0; index < next.swipes.length; index += 1) {
+        const extra = message.swipe_info?.[index]?.extra;
+        const text = index === Number(message.swipe_id ?? 0) ? next.mes : restyleBilingual(next.swipes[index], settings, extra?.[MESSAGE_META_KEY]);
+        if (text !== next.swipes[index] && next.swipe_info?.[index]) next.swipe_info[index].extra = updateExtra(extra, text);
+        next.swipes[index] = text;
+      }
+    }
+    if (next.mes === message.mes && JSON.stringify(next.swipes) === JSON.stringify(message.swipes)) continue;
+    changes.push({ message, before: { mes: message.mes, extra: message.extra, swipes: message.swipes, swipe_info: message.swipe_info }, next });
+    Object.assign(message, next);
+  }
+  try {
+    if (changes.length) await context.saveChat();
+  } catch (error) {
+    for (const { message, before, next } of changes) if (message.mes === next.mes && message.swipes === next.swipes) Object.assign(message, before);
+    throw error;
+  }
+  if (context.chat !== chat || getCurrentChatId(context) !== chatId) return;
+  // A real chat reload also lets the native regex manager rebuild its list.
+  if (!runtime.mainGenerationActive && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+  else for (const [id, message] of chat.entries()) context.updateMessageBlock?.(id, message);
 }
 
 function getCurrentChatId(context = getContext()) {
@@ -418,10 +506,11 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   if (message.is_user || message.is_system) throw new Error('目标楼层不是普通 AI 回复。');
 
   const swipeId = Number(message.swipe_id ?? 0);
-  const originalExtraction = extractTaggedRegions(message.mes, settings.bodyTags);
-  const cleanMessage = stripGeneratedTranslationLines(message.mes);
-  const extraction = extractTaggedRegions(cleanMessage, settings.bodyTags);
   const metadata = message.extra?.[MESSAGE_META_KEY];
+  const upgraded = upgradeLegacyBilingual(message.mes, metadata);
+  const originalExtraction = extractTaggedRegions(upgraded, settings.bodyTags);
+  const cleanMessage = stripGeneratedTranslationLines(upgraded);
+  const extraction = extractTaggedRegions(cleanMessage, settings.bodyTags);
   const segmentOptions = {
     segmentPrefix: metadata?.segment_prefix ?? settings.segmentPrefix,
     segmentSuffix: metadata?.segment_suffix ?? settings.segmentSuffix,
@@ -667,7 +756,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
   ));
   const message = latest.message;
   const metadata = {
-    schema_version: 3,
+    schema_version: 4,
     app_version: APP_VERSION,
     source_hash: latest.sourceHash,
     swipe_id: snapshot.swipeId,
@@ -678,6 +767,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
     translation_suffix: settings.translationSuffix,
     body_tags: settings.bodyTags,
     excluded_tags: settings.excludedTags,
+    preserve_line_rules: settings.preserveLineRules,
     complete,
     translated_segments: translationMap.size,
     total_segments: latest.segments.length,
@@ -1298,12 +1388,21 @@ function syncFields(root, settings) {
   for (const [name, value] of Object.entries(settings)) setField(root, name, value);
   syncChannelFields(root, settings);
   syncPromptFields(root, settings);
+  syncProcessingFields(root, settings);
   updateApiPanels(root);
   updateSummary(root, settings);
 }
 
 function collectSettings(root) {
-  const current = mergeSettings(runtime.settings);
+  const current = normalizeProcessingSettings(runtime.settings);
+  const processing = getActiveProcessingProfile(current);
+  if (runtime.nativeRegexInstalled) processing.regexScripts = readNativeRegexEdits(getContext().extensionSettings.regex, processing);
+  const processingName = root.querySelector('[data-jy-processing-name]')?.value.trim();
+  if (processingName) processing.name = processingName;
+  for (const control of root.querySelectorAll('[data-jy-processing-rule]')) {
+    const rule = processing.regexScripts.find(item => item.id === control.dataset.jyProcessingRule);
+    if (rule) rule.disabled = !control.checked;
+  }
   collectPromptFields(root, current);
   const radio = root.querySelector('[data-jy-field="apiMode"]:checked');
   if (radio) current.apiMode = radio.value;
@@ -1354,7 +1453,77 @@ function collectSettings(root) {
   }
   const selected = root.querySelector('[data-jy-field="selectedChannelId"]')?.value;
   if (selected && current.channels.some(channel => channel.id === selected)) current.selectedChannelId = selected;
-  return mergeSettings(current);
+  return captureProcessingProfile(normalizeProcessingSettings(current));
+}
+
+function syncProcessingFields(root, settings) {
+  const select = root.querySelector('[data-jy-processing-select]');
+  if (!select) return;
+  const doc = root.ownerDocument;
+  const active = getActiveProcessingProfile(settings);
+  select.replaceChildren(...settings.processingProfiles.map(profile => {
+    const option = doc.createElement('option'); option.value = profile.id; option.textContent = profile.name; return option;
+  }));
+  select.value = active.id;
+  root.querySelector('[data-jy-processing-name]').value = active.name;
+  const list = root.querySelector('[data-jy-processing-regex-list]');
+  list.replaceChildren();
+  active.regexScripts.forEach((rule, index) => {
+    const row = doc.createElement('div'); row.className = 'jy-processing-regex';
+    const label = doc.createElement('label'); label.className = 'jy-check';
+    const enabled = doc.createElement('input'); enabled.type = 'checkbox'; enabled.checked = !rule.disabled; enabled.dataset.jyProcessingRule = rule.id;
+    const name = doc.createElement('span'); name.textContent = rule.scriptName;
+    label.append(enabled, name);
+    const tools = doc.createElement('div'); tools.className = 'jy-processing-regex-tools';
+    for (const [action, text, title, disabled] of [
+      ['move-processing-up', '↑', '上移', index === 0],
+      ['move-processing-down', '↓', '下移', index === active.regexScripts.length - 1],
+      ['remove-processing-regex', '×', '解除绑定', false],
+    ]) {
+      const button = doc.createElement('button'); button.type = 'button'; button.className = 'jy-icon-button';
+      button.textContent = text; button.title = title; button.setAttribute('aria-label', `${title}：${rule.scriptName}`);
+      button.dataset.jyAction = action; button.dataset.jyRegexId = rule.id; button.disabled = disabled;
+      tools.append(button);
+    }
+    row.append(label, tools); list.append(row);
+  });
+  if (!active.regexScripts.length) {
+    const empty = doc.createElement('p'); empty.className = 'jy-muted'; empty.textContent = '暂无绑定正则'; list.append(empty);
+  }
+  setText(root, '[data-jy-processing-regex-count]', `· ${active.regexScripts.length} 条`);
+  const nativeStatus = root.querySelector('[data-jy-native-regex-status]');
+  nativeStatus.hidden = !getContext().extensionSettings.disabledExtensions?.includes('regex');
+  nativeStatus.textContent = nativeStatus.hidden ? '' : '酒馆正则已停用，启用后美化生效。';
+}
+
+function downloadProcessingProfile(profile) {
+  const file = new Blob([JSON.stringify(exportProcessingProfile(profile), null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a'); link.href = url;
+  link.download = `${profile.name.replace(/[\\/:*?"<>|]/g, '_')}.json`;
+  document.body.append(link); link.click(); link.remove();
+  const timer = setTimeout(() => { URL.revokeObjectURL(url); runtime.timers.delete(timer); }, 30000);
+  runtime.timers.add(timer);
+}
+
+async function persistProcessing(root, settings) {
+  saveSettings(settings);
+  await runtime.processingRefresh;
+  syncFields(root, runtime.settings);
+}
+
+function addProcessingProfile(settings, profile) {
+  if (settings.processingProfiles.length >= 40) throw new Error('最多保存 40 套正文方案，请先删除不用的方案。');
+  const baseName = profile.name;
+  let suffix = 2;
+  while (settings.processingProfiles.some(item => item.name === profile.name)) profile.name = `${baseName} ${suffix++}`;
+  settings.processingProfiles.push(profile);
+  return selectProcessingProfile(settings, profile.id);
+}
+
+async function readProcessingJson(file) {
+  if (file.size > 2 * 1024 * 1024) throw new Error('每个文件不能超过 2 MB。');
+  return JSON.parse((await file.text()).replace(/^\uFEFF/, ''));
 }
 
 function updateApiPanels(root) {
@@ -1621,6 +1790,10 @@ function createControlCenter(rootDocument = document) {
     const button = event.target.closest('[data-jy-action]');
     if (!button) return;
     const action = button.dataset.jyAction;
+    if (action === 'import-processing' || action === 'import-processing-regex') {
+      root.querySelector(action === 'import-processing' ? '[data-jy-processing-import]' : '[data-jy-processing-regex-import]').click();
+      return;
+    }
     if (action === 'set-theme') {
       const next = mergeSettings(runtime.settings);
       next.theme = button.dataset.jyTheme;
@@ -1657,10 +1830,38 @@ function createControlCenter(rootDocument = document) {
       await handleUpdateAction(button);
       return;
     }
-    const original = button.textContent;
     button.disabled = true;
     try {
-      if (action === 'translate') {
+      if (action === 'save-processing') {
+        await persistProcessing(root, collectSettings(root));
+        root.querySelector('.jy-profile-menu').open = false;
+        toast('success', '正文方案及绑定正则已保存。');
+      } else if (action === 'export-processing') {
+        downloadProcessingProfile(getActiveProcessingProfile(collectSettings(root)));
+        toast('success', '已导出正文方案，包含设置和绑定的完整正则。');
+      } else if (action === 'delete-processing') {
+        const next = collectSettings(root);
+        if (next.processingProfiles.length <= 1) throw new Error('至少保留一个正文方案。');
+        const removed = next.selectedProcessingProfileId;
+        const selected = selectProcessingProfile(next, next.processingProfiles.find(item => item.id !== removed).id);
+        selected.processingProfiles = selected.processingProfiles.filter(item => item.id !== removed);
+        await persistProcessing(root, selected);
+        toast('success', '正文方案已删除。');
+      } else if (action === 'builtin-processing') {
+        const next = collectSettings(root);
+        await persistProcessing(root, addProcessingProfile(next, makeBuiltinReadingProfile(next, root.querySelector('[data-jy-reading-style]').value)));
+        toast('success', '已生成美化方案，已有译文同步换好样式。');
+      } else if (['move-processing-up', 'move-processing-down', 'remove-processing-regex'].includes(action)) {
+        const next = collectSettings(root), rules = getActiveProcessingProfile(next).regexScripts;
+        const index = rules.findIndex(rule => rule.id === button.dataset.jyRegexId);
+        if (index < 0) throw new Error('没有找到这条绑定正则。');
+        if (action === 'remove-processing-regex') rules.splice(index, 1);
+        else {
+          const target = index + (action === 'move-processing-up' ? -1 : 1);
+          if (target >= 0 && target < rules.length) [rules[index], rules[target]] = [rules[target], rules[index]];
+        }
+        await persistProcessing(root, next);
+      } else if (action === 'translate') {
         saveSettings(collectSettings(root));
         await translateMessage(null, { force: true });
       } else if (action === 'test-api') {
@@ -1773,6 +1974,7 @@ function createControlCenter(rootDocument = document) {
         toast('success', '当前副 API 预设已保存。');
       } else if (action === 'save-settings') {
         saveSettings(collectSettings(root));
+        await runtime.processingRefresh;
         syncFields(root, runtime.settings);
         setText(root, '[data-jy-save-note]', `已保存于 ${new Date().toLocaleTimeString()}`);
         toast('success', '镜译设置已保存。');
@@ -1801,11 +2003,38 @@ function createControlCenter(rootDocument = document) {
       toast('error', safeError(error));
     } finally {
       button.disabled = false;
-      button.textContent = original;
     }
   };
 
   const onChange = async event => {
+    if (event.target.matches('[data-jy-processing-import], [data-jy-processing-regex-import]')) {
+      const input = event.target, files = [...(input.files ?? [])];
+      if (!files.length) return;
+      input.disabled = true;
+      try {
+        if (files.length > 100) throw new Error('一次最多选择 100 个文件。');
+        const data = await Promise.all(files.map(readProcessingJson));
+        let next = collectSettings(root);
+        if (input.matches('[data-jy-processing-import]')) next = addProcessingProfile(next, importProcessingProfile(data[0]));
+        else {
+          const rules = data.flatMap(importNativeRegex), active = getActiveProcessingProfile(next);
+          if (active.regexScripts.length + rules.length > 100) throw new Error('每个正文方案最多绑定 100 条正则。');
+          active.regexScripts.push(...rules);
+        }
+        await persistProcessing(root, next);
+        toast('success', `已导入并绑定，当前方案共 ${getActiveProcessingProfile(runtime.settings).regexScripts.length} 条正则。`);
+      } catch (error) { toast('error', `导入失败：${safeError(error)}`); }
+      finally { input.value = ''; input.disabled = false; }
+      return;
+    }
+    if (event.target.matches('[data-jy-processing-select], [data-jy-processing-rule]')) {
+      try {
+        let next = collectSettings(root);
+        if (event.target.matches('[data-jy-processing-select]')) next = selectProcessingProfile(next, event.target.value);
+        await persistProcessing(root, next);
+      } catch (error) { toast('error', safeError(error)); syncFields(root, runtime.settings); }
+      return;
+    }
     if (event.target.matches('[data-jy-profile-import]')) {
       const input = event.target, file = input.files?.[0];
       if (!file) return;
@@ -2692,6 +2921,7 @@ function scheduleEntries() {
 function bindEvent(eventType, handler) {
   if (!eventType) return;
   const context = getContext();
+  if (typeof context.eventSource?.on !== 'function') return;
   context.eventSource.on(eventType, handler);
   runtime.eventBindings.push({ source: context.eventSource, eventType, handler });
 }
@@ -2723,17 +2953,22 @@ function cancelPendingWork() {
 }
 
 function registerRuntimeEvents() {
-  const { eventTypes } = getContext();
+  const eventTypes = getContext().eventTypes ?? {};
   bindEvent(eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
+    if (!dryRun && !['quiet', 'impersonate'].includes(type)) runtime.mainGenerationActive = true;
     runtime.generationGate.begin(getCurrentChatId(), type, dryRun);
   });
   bindEvent(eventTypes.CHARACTER_MESSAGE_RENDERED, (messageId, type) => {
-    if (runtime.generationGate.consume(getCurrentChatId(), type)) scheduleAuto(messageId, 'generation');
+    if (runtime.generationGate.consume(getCurrentChatId(), type)) {
+      runtime.mainGenerationActive = false;
+      scheduleAuto(messageId, 'generation');
+    }
   });
-  bindEvent(eventTypes.GENERATION_STOPPED, () => runtime.generationGate.clear());
+  bindEvent(eventTypes.GENERATION_STOPPED, () => { runtime.mainGenerationActive = false; runtime.generationGate.clear(); });
   bindEvent(eventTypes.MESSAGE_SWIPED, messageId => scheduleAuto(messageId, 'swipe'));
   bindEvent(eventTypes.MESSAGE_EDITED, messageId => scheduleAuto(messageId, 'edit'));
   bindEvent(eventTypes.CHAT_CHANGED, () => {
+    runtime.mainGenerationActive = false;
     cancelPendingWork();
     scheduleEntries();
     if (runtime.panel?.controller?.root) refreshCurrentCard(runtime.panel.controller.root);
@@ -2741,6 +2976,7 @@ function registerRuntimeEvents() {
 }
 
 function cleanupRuntime() {
+  runtime.processingRevision += 1;
   runtime.epoch += 1;
   cancelPendingWork();
   for (const binding of runtime.eventBindings.splice(0)) {
@@ -2780,6 +3016,12 @@ export async function onActivate() {
 }
 
 export function onDisable() {
+  const context = getContext();
+  const active = getActiveProcessingProfile(runtime.settings);
+  if (runtime.nativeRegexInstalled) active.regexScripts = readNativeRegexEdits(context.extensionSettings.regex, active);
+  context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, null);
+  runtime.nativeRegexInstalled = false;
+  context.saveSettingsDebounced?.();
   cleanupRuntime();
   if (globalThis[INTERCEPTOR_NAME] === interceptGeneration) delete globalThis[INTERCEPTOR_NAME];
 }
@@ -2793,9 +3035,31 @@ export function onClean() {
     // Restricted storage does not prevent the rest of the cleanup.
   }
   const context = getContext();
+  context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, null);
+  runtime.nativeRegexInstalled = false;
   delete context.extensionSettings[MODULE_ID];
   context.saveSettingsDebounced?.();
   if (globalThis[INTERCEPTOR_NAME] === interceptGeneration) delete globalThis[INTERCEPTOR_NAME];
 }
 
-export const __testing = Object.freeze({ buildTranslationMessages, latestAssistantMessageId });
+// SillyTavern 1.14 loads module scripts but has no manifest activate hook.
+// 1.18 calls onActivate itself; the deferred fallback is idempotent and checks capabilities, not versions.
+if (typeof document !== 'undefined') {
+  let attempts = 0;
+  const bootstrap = () => {
+    if (runtime.initialized) return;
+    const context = globalThis.SillyTavern?.getContext?.();
+    if (context?.extensionSettings) {
+      void onActivate().catch(error => console.error(`[${APP_NAME}] 启动失败：${safeError(error)}`));
+      return;
+    }
+    if (++attempts < 40) {
+      const timer = setTimeout(() => { runtime.timers.delete(timer); bootstrap(); }, 250);
+      runtime.timers.add(timer);
+    }
+  };
+  const timer = setTimeout(() => { runtime.timers.delete(timer); bootstrap(); }, 0);
+  runtime.timers.add(timer);
+}
+
+export const __testing = Object.freeze({ buildTranslationMessages, latestAssistantMessageId, readMessageSnapshot, restyleCurrentChat });

@@ -77,7 +77,7 @@ test('legacy single-channel settings migrate into a saved channel', () => {
   assert.equal(channel.key, 'secret');
   assert.equal(channel.model, 'model-x');
   assert.equal(channel.timeoutSec, 600);
-  assert.equal(independent.schemaVersion, 10);
+  assert.equal(independent.schemaVersion, 11);
 });
 
 test('legacy prompt settings migrate into one editable translation profile', () => {
@@ -216,7 +216,7 @@ test('segmentation and bilingual assembly preserve blank-line layout', () => {
   ]);
   assert.equal(segmented.paragraphs, 2);
   const output = assembleBilingual(segmented.layout, new Map([[1, '一。'], [2, '继续。'], [3, '二。']]));
-  assert.equal(output, `\n一。\n続き。\n{${INVISIBLE_MARKER}一。\n继续。${INVISIBLE_MARKER}}\n\n二。\n{${INVISIBLE_MARKER}二。${INVISIBLE_MARKER}}\n`);
+  assert.equal(output.replace(/[\u200b\u200c\u2060-\u2064]/g, ''), '\n一。\n続き。\n{一。\n继续。}\n\n二。\n{二。}\n');
 });
 
 test('custom wrappers surround each blank-line paragraph and are removed before retranslation', () => {
@@ -225,7 +225,7 @@ test('custom wrappers surround each blank-line paragraph and are removed before 
     new Map([[1, '一。'], [2, '继续。'], [3, '二。']]),
     { segmentPrefix: '<small>', segmentSuffix: '</small>' },
   );
-  assert.equal(wrapped, `<small>一。\n続き。</small>\n{${INVISIBLE_MARKER}一。\n继续。${INVISIBLE_MARKER}}\n\n<small>二。</small>\n{${INVISIBLE_MARKER}二。${INVISIBLE_MARKER}}`);
+  assert.equal(wrapped.replace(/[\u200b\u200c\u2060-\u2064]/g, ''), '<small>一。\n続き。</small>\n{一。\n继续。}\n\n<small>二。</small>\n{二。}');
   const segmentedAgain = segmentSource(wrapped, { segmentPrefix: '<small>', segmentSuffix: '</small>' });
   assert.deepEqual(segmentedAgain.segments, [{ id: 1, text: '一。' }, { id: 2, text: '続き。' }, { id: 3, text: '二。' }]);
 });
@@ -237,9 +237,9 @@ test('translation wrappers stay inside the invisible markers and survive a round
   const rendered = assembleBilingual(layout, map, options);
 
   assert.equal(
-    rendered,
-    `一。\n続き。\n{${INVISIBLE_MARKER}<font color=#8aa>一。\n继续。</font>${INVISIBLE_MARKER}}`
-      + `\n\n二。\n{${INVISIBLE_MARKER}<font color=#8aa>二。</font>${INVISIBLE_MARKER}}`,
+    rendered.replace(/[\u200b\u200c\u2060-\u2064]/g, ''),
+    '一。\n続き。\n<font color=#8aa>一。\n继续。</font>'
+      + '\n\n二。\n<font color=#8aa>二。</font>',
   );
   assert.equal(stripGeneratedTranslationLines(rendered), '一。\n続き。\n\n二。');
   assert.deepEqual([...extractGeneratedTranslations(rendered, options)], [...map]);
@@ -255,7 +255,7 @@ test('excluded nested tags stay in place but never enter translation segments', 
   ]);
   const output = assembleBilingual(segmented.layout, new Map([[1, '第一行。'], [2, '第二行。'], [3, '第三段。']]));
   assert.match(output, /<status>\nHP: 10\n<meta>secret<\/meta>\n<\/status>/);
-  assert.match(output, new RegExp(`二行目。\\n\\{${INVISIBLE_MARKER}第一行。\\n第二行。${INVISIBLE_MARKER}\\}`));
+  assert.match(output.replace(/[\u200b\u200c\u2060-\u2064]/g, ''), /二行目。\n\{第一行。\n第二行。\}/);
   assert.doesNotMatch(segmented.segments[0].text, /HP|secret|status/);
 });
 
@@ -287,7 +287,7 @@ test('preserve whitelist supports exact, prefix and regular-expression rules', (
     [1, '西蒙斯视角'],
     [2, '他静静地斟上红茶。'],
   ]));
-  assert.ok(output.indexOf('VIEW: KEEP') < output.indexOf(`{${INVISIBLE_MARKER}西蒙斯视角`));
+  assert.ok(output.indexOf('VIEW: KEEP') < output.indexOf('西蒙斯视角'));
   assert.throws(() => segmentSource('本文。', { preserveLineRules: '/[/' }), /第 1 行正则无效/);
   assert.throws(() => segmentSource('本文。', { preserveLineRules: 'prefix:' }), /prefix 不能为空/);
 });
@@ -314,7 +314,7 @@ test('transparent container tags and escaped excluded blocks never enter API seg
     [2, '他迈步走去。'],
   ]));
   assert.match(output, /\\<parallel_line_drive>\n\[平行线思考]: 原样保留\n\\<\/parallel_line_drive>/);
-  assert.match(output, new RegExp(`他迈步走去。${INVISIBLE_MARKER}\\}\\n\\\\<\\/parallel_line>`));
+  assert.match(output.replace(/[\u200b\u200c\u2060-\u2064]/g, ''), /他迈步走去。\}\n\\<\/parallel_line>/);
   assert.doesNotMatch(segmented.segments.map(item => item.text).join('\n'), /parallel_line|平行线思考/);
 });
 
@@ -397,7 +397,7 @@ test('all complete items are recovered from a truncated JSON envelope', () => {
 test('partial bilingual assembly keeps untranslated source segments untouched', () => {
   const layout = segmentSource('一。\n\n二。\n\n三。').layout;
   const output = assembleBilingual(layout, new Map([[1, '一。'], [3, '三。']]), { allowMissing: true });
-  assert.equal(output, `一。\n{${INVISIBLE_MARKER}一。${INVISIBLE_MARKER}}\n\n二。\n\n三。\n{${INVISIBLE_MARKER}三。${INVISIBLE_MARKER}}`);
+  assert.equal(output.replace(/[\u200b\u200c\u2060-\u2064]/g, ''), '一。\n{一。}\n\n二。\n\n三。\n{三。}');
 });
 
 test('reasoning-only compatibility responses can still recover the final JSON', () => {
@@ -474,7 +474,7 @@ test('diagnostics preserve complete model content separately from the safe summa
 test('manifest and entry describe a native extension without TavernHelper calls', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
   const entry = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
-  assert.equal(manifest.minimum_client_version, '1.18.0');
+  assert.equal(Object.hasOwn(manifest, 'minimum_client_version'), false);
   assert.equal(manifest.version, APP_VERSION);
   assert.equal(manifest.generate_interceptor, 'JingyiTranslator_interceptGeneration');
   assert.equal(manifest.hooks.activate, 'onActivate');
@@ -519,7 +519,8 @@ test('manifest files, lifecycle exports, and capability snapshot are self-consis
 
   const contract = JSON.parse(fs.readFileSync(path.join(root, 'capability-contract.json'), 'utf8'));
   const snapshot = JSON.parse(fs.readFileSync(path.join(root, 'validation', 'sillytavern-1.18.0.snapshot.json'), 'utf8'));
-  assert.equal(snapshot.versions.sillytavern, manifest.minimum_client_version);
+  assert.equal(contract.minimum.sillytavern, null);
+  assert.equal(typeof snapshot.versions.sillytavern, 'string');
   for (const requirement of contract.requirements.filter(item => item.required)) {
     assert.ok(snapshot.symbols.includes(requirement.symbol), `${requirement.symbol} must be observed`);
   }

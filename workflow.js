@@ -1,11 +1,11 @@
-import { getActivePromptProfile, stripGeneratedTranslationLines } from './core.js?v=0.11.6';
-import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.11.6';
+import { getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.12.0';
+import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.12.0';
 
 const CONTEXT_CHAR_LIMIT = 14000;
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
-function cleanReferenceText(value) {
-  return stripGeneratedTranslationLines(String(value ?? ''))
+function cleanReferenceText(value, metadata) {
+  return stripGeneratedTranslationLines(String(value ?? ''), metadata)
     .replace(/<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/[ \t]+\n/g, '\n')
@@ -59,7 +59,7 @@ function relevantMessages(snapshot, settings, includeTarget = false) {
 function buildRecentContext(snapshot, settings) {
   if (!settings.includeRecentContext) return '';
   return relevantMessages(snapshot, settings).map(message => {
-    const text = cleanReferenceText(message.mes);
+    const text = cleanReferenceText(message.mes, message.extra?.[MESSAGE_META_KEY]);
     return text ? `【${messageLabel(snapshot.context, message)}】\n${text}` : '';
   }).filter(Boolean).join('\n\n');
 }

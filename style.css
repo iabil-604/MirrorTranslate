@@ -76,6 +76,21 @@ label { min-width: 0; }
 .jy-page-context { color: var(--jy-muted); font-size: 12px; overflow-wrap: anywhere; }
 .jy-overline { font-size: 11px; color: var(--jy-muted); font-weight: 700; margin-bottom: 5px; }
 .jy-muted { color: var(--jy-muted); font-size: 12px; line-height: 1.7; margin-top: 6px; overflow-wrap: anywhere; }
+.jy-processing-bar, .jy-processing-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.jy-processing-bar { margin-bottom: 20px; }
+.jy-processing-choice { display: flex; align-items: center; gap: 10px; flex: 1 1 170px; max-width: 320px; }
+.jy-processing-choice > span { flex-shrink: 0; color: var(--jy-muted); font-size: 12px; }
+.jy-processing-choice select { min-width: 0; }
+.jy-processing-toolbar { margin: 10px 0 4px; }
+.jy-processing-toolbar select { width: auto; min-width: 150px; }
+.jy-profile-menu { position: relative; margin-left: auto; font-size: 12px; }
+.jy-profile-menu > summary { padding: 6px 0 6px 6px; cursor: pointer; color: var(--jy-muted); }
+.jy-profile-menu-body { position: absolute; right: 0; top: 100%; z-index: 5; width: 240px; padding: 14px; border: 1px solid var(--jy-line); border-radius: var(--jy-radius-sm); background: var(--jy-surface); box-shadow: 0 6px 18px #163a3012; }
+.jy-processing-regex { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--jy-line-soft); }
+.jy-processing-regex .jy-check { min-width: 0; }
+.jy-processing-regex .jy-check span { overflow-wrap: anywhere; }
+.jy-processing-regex-tools { display: flex; gap: 5px; flex-shrink: 0; }
+.jy-processing-regex-tools button:disabled { opacity: .35; cursor: default; }
 .jy-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 6px 13px; border: 1px solid var(--jy-line); border-radius: var(--jy-radius-sm); background: var(--jy-surface); color: var(--jy-text); font-weight: 600; font-size: 12px; transition: background var(--jy-hover), border-color var(--jy-hover), color var(--jy-hover); }
 .jy-button:hover { background: var(--jy-accent-soft); border-color: var(--jy-line-strong); }
 .jy-button-primary { background: var(--jy-accent); color: var(--jy-on-accent); border-color: var(--jy-accent); }

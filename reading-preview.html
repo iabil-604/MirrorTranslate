@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>镜译 · 三种阅读心情</title><style>
+:root{color-scheme:light;--bg:#f5f3ed;--surface:#fffefa;--text:#35453f;--muted:#7a867e;--line:#e0e4db}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#1b2320;--surface:#232e28;--text:#e1e7df;--muted:#9ba89e;--line:#3b483f}
+*{box-sizing:border-box}body{margin:0;padding:40px 28px;font:15px/1.7 system-ui,"Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg)}main{max-width:1220px;margin:0 auto}header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:28px;border-bottom:1px solid var(--line)}.brand{letter-spacing:.18em;font-size:12px;color:var(--muted)}.hero{margin:38px 0 32px}h1{font:500 clamp(27px,4vw,39px)/1.4 Georgia,"Noto Serif SC",serif;letter-spacing:.04em;margin:0 0 12px}.hero p{color:var(--muted);margin:0;font-size:14px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}article{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px 22px 27px;min-width:0}.card-heading{display:flex;gap:12px;border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:25px;min-height:112px}.number{font:italic 23px Georgia,serif;color:#9da99e}.card-heading h2{font-size:17px;font-weight:600;margin:0 0 8px}.card-heading p{font-size:12px;color:var(--muted);margin:0;line-height:1.8}.sample{font-size:15px}.hint{margin-top:26px;color:var(--muted);font-size:12px}.theme{padding:9px 15px;border:1px solid var(--line);border-radius:20px;background:var(--surface);color:var(--text);font:inherit;font-size:12px;cursor:pointer}.theme:focus-visible{outline:2px solid #9cae99;outline-offset:3px}@media(max-width:850px){.grid{grid-template-columns:1fr}.card-heading{min-height:0}.sample{font-size:16px}body{padding:24px 18px}.hero{margin:28px 0}.card-heading{margin-bottom:16px}article{padding:22px}}
+/* Both class forms are intentional: SillyTavern sanitizes message classes with custom-. */
+:is(.jy-reading, .custom-jy-reading) {
+  margin: .9em 0 1.25em;
+  color: inherit;
+  font: inherit;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+:is(.jy-reading, .custom-jy-reading) p { margin: .35em 0; }
+:is(.jy-reading-source, .custom-jy-reading-source) {
+  font-size: .88em;
+  color: color-mix(in srgb, currentColor 72%, transparent);
+  line-height: 1.8;
+}
+:is(.jy-reading-translation, .custom-jy-reading-translation) { margin-top: .8em; }
+:is(.jy-reading-cute, .custom-jy-reading-cute) {
+  position: relative;
+  padding: 17px 20px 18px 24px;
+  border: 1px solid #c88b952e;
+  border-radius: 13px 13px 13px 4px;
+  background: linear-gradient(120deg, #d597a312, #d597a306);
+}
+:is(.jy-reading-cute, .custom-jy-reading-cute)::before {
+  content: '✿';
+  position: absolute;
+  top: 14px;
+  left: -8px;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 22px;
+  font-size: 17px;
+  color: #bf8792;
+}
+:is(.jy-reading-cute, .custom-jy-reading-cute) :is(.jy-reading-translation, .custom-jy-reading-translation) {
+  padding-top: .75em;
+  border-top: 1px dashed #c88b9538;
+}
+:is(.jy-reading-minimal, .custom-jy-reading-minimal) { padding: 4px 0 4px 18px; border-left: 2px solid #879b923b; }
+:is(.jy-reading-minimal, .custom-jy-reading-minimal) :is(.jy-reading-source, .custom-jy-reading-source) { max-width: 68ch; }
+:is(.jy-reading-minimal, .custom-jy-reading-minimal) :is(.jy-reading-translation, .custom-jy-reading-translation) { margin-top: .65em; }
+:is(.jy-reading-fold, .custom-jy-reading-fold) { padding: 3px 0; }
+:is(.jy-reading-original, .custom-jy-reading-original) { margin: 0; padding: 0; border: 0; background: transparent; }
+:is(.jy-reading-original, .custom-jy-reading-original) > summary {
+  width: fit-content;
+  padding: 3px 10px;
+  border: 1px solid #879b922e;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: .76em;
+  line-height: 1.65;
+  color: color-mix(in srgb, currentColor 75%, transparent);
+  background: #879b920a;
+  list-style: revert;
+}
+:is(.jy-reading-original, .custom-jy-reading-original) > summary::marker { color: #91a196; font-size: .8em; }
+:is(.jy-reading-original, .custom-jy-reading-original) > summary:focus-visible { outline: 2px solid #91a196; outline-offset: 3px; }
+:is(.jy-reading-original, .custom-jy-reading-original) > :is(.jy-reading-source, .custom-jy-reading-source) { margin: .8em 0 .2em; padding: .7em 1em; background: #879b920b; border-radius: 6px; }
+:is(.jy-reading-fold, .custom-jy-reading-fold) > :is(.jy-reading-translation, .custom-jy-reading-translation) { margin: .85em 0 0 .3em; padding-left: 1.1em; border-left: 2px solid #879b9233; }
+@media (max-width: 560px) {
+  :is(.jy-reading-cute, .custom-jy-reading-cute) { padding: 13px 15px 14px 18px; }
+  :is(.jy-reading-minimal, .custom-jy-reading-minimal) { padding-left: 13px; }
+}
+
+</style></head><body><main><header><span class="brand">镜译 · MIRROR TRANSLATE</span><button class="theme" type="button" aria-pressed="false">切换为夜间</button></header><div class="hero"><h1>同一段话，三种阅读心情。</h1><p>原文与译文各有位置，故事自然连在一起。</p></div><div class="grid"><article><div class="card-heading"><span class="number">01</span><div><h2>可爱风</h2><p>一点桃粉，一枚小花。</p></div></div><div class="sample"><div class="jy-reading jy-reading-cute">
+<div class="jy-reading-source">
+
+雨上がりの窓辺で、彼女は小さく笑った。
+
+</div>
+<div class="jy-reading-translation">
+
+雨后的窗边，她轻轻笑了。
+
+</div>
+</div>
+
+<div class="jy-reading jy-reading-cute">
+<div class="jy-reading-source">
+
+「明日も、ここで会える？」
+
+</div>
+<div class="jy-reading-translation">
+
+“明天，也能在这里见到你吗？”
+
+</div>
+</div></div></article>
+<article><div class="card-heading"><span class="number">02</span><div><h2>极简风</h2><p>淡化原文，留白分隔。</p></div></div><div class="sample"><div class="jy-reading jy-reading-minimal">
+<div class="jy-reading-source">
+
+雨上がりの窓辺で、彼女は小さく笑った。
+
+</div>
+<div class="jy-reading-translation">
+
+雨后的窗边，她轻轻笑了。
+
+</div>
+</div>
+
+<div class="jy-reading jy-reading-minimal">
+<div class="jy-reading-source">
+
+「明日も、ここで会える？」
+
+</div>
+<div class="jy-reading-translation">
+
+“明天，也能在这里见到你吗？”
+
+</div>
+</div></div></article>
+<article><div class="card-heading"><span class="number">03</span><div><h2>原文折叠</h2><p>原文可展开，译文缩进。</p></div></div><div class="sample"><div class="jy-reading jy-reading-fold">
+<details class="jy-reading-original"><summary>原文</summary><div class="jy-reading-source">
+
+雨上がりの窓辺で、彼女は小さく笑った。
+
+</div></details>
+<div class="jy-reading-translation">
+
+雨后的窗边，她轻轻笑了。
+
+</div>
+</div>
+
+<div class="jy-reading jy-reading-fold">
+<details class="jy-reading-original"><summary>原文</summary><div class="jy-reading-source">
+
+「明日も、ここで会える？」
+
+</div></details>
+<div class="jy-reading-translation">
+
+“明天，也能在这里见到你吗？”
+
+</div>
+</div></div></article></div><p class="hint">点击「原文」可展开折叠内容。三款美化可在正文处理页选择、修改，并连同正则导出。</p></main><script>document.querySelector('.theme').addEventListener('click',function(){const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';this.textContent=dark?'切换为日间':'切换为夜间';this.setAttribute('aria-pressed',String(dark));});</script></body></html>

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "minimum": {
-    "sillytavern": "1.18.0",
+    "sillytavern": null,
     "tavernHelper": null
   },
   "requirements": [
@@ -46,6 +46,20 @@
       "symbol": "SillyTavern.getContext().getRequestHeaders",
       "required": false,
       "fallback": "manual-model-name"
+    },
+    {
+      "id": "native-processing-regex",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext().extensionSettings.regex",
+      "required": false,
+      "fallback": "save-profile-without-rendered-beautification"
+    },
+    {
+      "id": "native-chat-reload",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext().reloadCurrentChat",
+      "required": false,
+      "fallback": "updateMessageBlock"
     },
     {
       "id": "native-extension-updater",

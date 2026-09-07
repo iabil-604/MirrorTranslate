@@ -6,13 +6,23 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.11.6';
+} from './prompts.js?v=0.12.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.11.6';
+export const APP_VERSION = '0.12.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
+// These boundaries belong to MirrorTranslate; visible affixes never identify a block.
+export const SOURCE_START = '\u2063\u2060\u2063';
+export const SOURCE_END = '\u2063\u2061\u2063';
+export const TRANSLATION_START = '\u2063\u2062\u2063';
+export const TRANSLATION_END = '\u2063\u2064\u2063';
+export const AFFIX_START = '\u2063\u200b\u2063';
+export const AFFIX_END = '\u2063\u200c\u2063';
+const SOURCE_BLOCK_RE = new RegExp(`${SOURCE_START}([\\s\\S]*?)${SOURCE_END}`, 'g');
+const TRANSLATION_BLOCK_RE = new RegExp(`\\n?${TRANSLATION_START}([\\s\\S]*?)${TRANSLATION_END}`, 'g');
+const AFFIX_RE = new RegExp(`${AFFIX_START}[\\s\\S]*?${AFFIX_END}`, 'g');
 
 const GENERATED_BLOCK_RE = new RegExp(`(?:^|\\n)\\{${INVISIBLE_MARKER}([\\s\\S]*?)${INVISIBLE_MARKER}\\}[ \\t]*(?=\\n|$)`, 'g');
 const LEGACY_GENERATED_LINE_RE = new RegExp(`^\\{${INVISIBLE_MARKER}[^\\r\\n]*\\}[ \\t]*$`);
@@ -35,7 +45,7 @@ export const DEFAULT_CHANNEL = Object.freeze({
 });
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  schemaVersion: 10,
+  schemaVersion: 11,
   theme: 'day',
   autoGeneration: true,
   autoSwipe: true,
@@ -51,8 +61,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   preserveLineRules: '',
   segmentPrefix: '',
   segmentSuffix: '',
-  translationPrefix: '',
-  translationSuffix: '',
+  translationPrefix: '{',
+  translationSuffix: '}',
   includeWorldbook: true,
   includeCharacterCard: true,
   includeRecentContext: true,
@@ -258,7 +268,7 @@ export function mergeSettings(value = {}) {
   const source = value && typeof value === 'object' ? value : {};
   const merged = { ...deepClone(DEFAULT_SETTINGS), ...source };
   const sourceSchemaVersion = clampInteger(source.schemaVersion, 0, 999, 0);
-  merged.schemaVersion = 10;
+  merged.schemaVersion = 11;
   merged.theme = ['day', 'night', 'fresh', 'vampire', 'glass'].includes(source.theme) ? source.theme : 'day';
   delete merged.chunkChars;
   delete merged.chunkSegments;
@@ -331,6 +341,11 @@ export function mergeSettings(value = {}) {
   merged.segmentSuffix = typeof merged.segmentSuffix === 'string' ? merged.segmentSuffix : '';
   merged.translationPrefix = typeof merged.translationPrefix === 'string' ? merged.translationPrefix : '';
   merged.translationSuffix = typeof merged.translationSuffix === 'string' ? merged.translationSuffix : '';
+  // Older versions added their braces outside the user's fields. Preserve that appearance once.
+  if (sourceSchemaVersion < 11 && Object.keys(source).length) {
+    merged.translationPrefix = `{${typeof source.translationPrefix === 'string' ? source.translationPrefix : ''}`;
+    merged.translationSuffix = `${typeof source.translationSuffix === 'string' ? source.translationSuffix : ''}}`;
+  }
   merged.contextMessages = clampInteger(merged.contextMessages, 1, 20, DEFAULT_SETTINGS.contextMessages);
   merged.includeWorldbook = Boolean(merged.includeWorldbook);
   merged.includeCharacterCard = Boolean(merged.includeCharacterCard);
@@ -440,8 +455,10 @@ export function createGenerationGate() {
   });
 }
 
-export function stripGeneratedTranslationLines(text) {
-  return normalizeNewlines(text)
+export function stripGeneratedTranslationLines(text, metadata) {
+  return upgradeLegacyBilingual(text, metadata)
+    .replace(TRANSLATION_BLOCK_RE, '')
+    .replace(SOURCE_BLOCK_RE, (_match, source) => source.replace(AFFIX_RE, ''))
     .replace(GENERATED_BLOCK_RE, '')
     .split('\n')
     .filter(line => !LEGACY_GENERATED_LINE_RE.test(line))
@@ -450,6 +467,8 @@ export function stripGeneratedTranslationLines(text) {
 
 function generatedBlockAfter(value) {
   const current = String(value ?? '');
+  const owned = current.match(new RegExp(`^\\n${TRANSLATION_START}([\\s\\S]*?)${TRANSLATION_END}`));
+  if (owned) return { full: owned[0], text: owned[1].replace(AFFIX_RE, ''), modern: true, owned: true };
   const modern = current.match(new RegExp(`^\\n\\{${INVISIBLE_MARKER}([\\s\\S]*?)${INVISIBLE_MARKER}\\}(?=\\n|$)`));
   if (modern) return { full: modern[0], text: modern[1], modern: true };
   const legacy = current.match(new RegExp(`^\\n\\{${INVISIBLE_MARKER}([^\\r\\n]*)\\}(?=\\n|$)`));
@@ -458,8 +477,8 @@ function generatedBlockAfter(value) {
 
 export function translationAffixes(options = {}) {
   return {
-    prefix: typeof options.translationPrefix === 'string' ? options.translationPrefix : '',
-    suffix: typeof options.translationSuffix === 'string' ? options.translationSuffix : '',
+    prefix: typeof options.translationPrefix === 'string' ? options.translationPrefix : DEFAULT_SETTINGS.translationPrefix,
+    suffix: typeof options.translationSuffix === 'string' ? options.translationSuffix : DEFAULT_SETTINGS.translationSuffix,
   };
 }
 
@@ -475,22 +494,37 @@ export function stripTranslationAffixes(text, affixes = {}) {
 
 export function extractGeneratedTranslations(text, options = {}) {
   const source = normalizeNewlines(text);
-  const segmented = segmentSource(stripGeneratedTranslationLines(source), options);
+  const segmented = segmentSource(stripGeneratedTranslationLines(source), {
+    ...options, legacyWrappers: !source.includes(SOURCE_START) && source.includes(`{${INVISIBLE_MARKER}`),
+  });
   const prefix = typeof options.segmentPrefix === 'string' ? options.segmentPrefix : '';
   const suffix = typeof options.segmentSuffix === 'string' ? options.segmentSuffix : '';
-  const translationAffix = translationAffixes(options);
   const translations = new Map();
   let cursor = 0;
 
   for (const layoutPart of segmented.layout.filter(part => part.type === 'segment')) {
     const ids = Array.isArray(layoutPart.ids) && layoutPart.ids.length ? layoutPart.ids : [layoutPart.id];
-    const renderedSource = `${prefix}${layoutPart.sourceText ?? layoutPart.text}${suffix}`;
-    const start = source.indexOf(renderedSource, cursor);
+    const original = layoutPart.sourceText ?? layoutPart.text;
+    const ownedSources = new RegExp(SOURCE_BLOCK_RE.source, 'g');
+    ownedSources.lastIndex = cursor;
+    let match, start = -1, renderedSource = '';
+    while ((match = ownedSources.exec(source))) {
+      if (match[1].replace(AFFIX_RE, '') !== original) continue;
+      start = match.index;
+      renderedSource = match[0];
+      break;
+    }
+    if (start < 0) {
+      renderedSource = `${prefix}${layoutPart.sourceText ?? layoutPart.text}${suffix}`;
+      start = source.indexOf(renderedSource, cursor);
+    }
     if (start < 0) continue;
     const end = start + renderedSource.length;
     const generated = generatedBlockAfter(source.slice(end));
     if (generated?.text?.trim()) {
-      const body = stripTranslationAffixes(generated.text, translationAffix);
+      const body = generated.owned ? generated.text : stripTranslationAffixes(generated.text, {
+        prefix: options.translationPrefix ?? '', suffix: options.translationSuffix ?? '',
+      });
       const lines = generated.modern ? normalizeNewlines(body).split('\n') : [body];
       if (ids.length === lines.length) {
         ids.forEach((id, index) => {
@@ -509,11 +543,12 @@ export function extractGeneratedTranslations(text, options = {}) {
 export function interceptGenerationChat(chat) {
   if (!Array.isArray(chat)) return 0;
   let changed = 0;
-  for (const item of chat) {
+  for (const [index, item] of chat.entries()) {
     if (!item || typeof item.mes !== 'string') continue;
-    const stripped = stripGeneratedTranslationLines(item.mes);
+    const stripped = stripGeneratedTranslationLines(item.mes, item.extra?.[MESSAGE_META_KEY]);
     if (stripped !== item.mes) {
-      item.mes = stripped;
+      // Some hosts pass shallow prompt copies. Never mutate the canonical message object.
+      chat[index] = { ...item, mes: stripped };
       changed += 1;
     }
   }
@@ -784,7 +819,9 @@ export function segmentSource(text, options = {}) {
   const appendParagraph = maskedParagraph => {
     if (!maskedParagraph) return;
     const restoredParagraph = replaceMaskedBlocks(maskedParagraph, blocks, 'restore');
-    const unwrapped = stripSegmentWrappers(maskedParagraph, prefix, suffix);
+    const unwrapped = options.legacyWrappers === true
+      ? stripSegmentWrappers(maskedParagraph, prefix, suffix)
+      : maskedParagraph;
     const lines = splitPhysicalLines(unwrapped).map(line => {
       const sourceLine = replaceMaskedBlocks(line.text, blocks, 'restore');
       const withoutExcluded = replaceMaskedBlocks(line.text, blocks, 'remove');
@@ -1072,9 +1109,6 @@ export function parseStructuredTranslations(raw, expectedSegments) {
 }
 
 export function assembleBilingual(layout, translationMap, options = {}) {
-  const prefix = typeof options.segmentPrefix === 'string' ? options.segmentPrefix : '';
-  const suffix = typeof options.segmentSuffix === 'string' ? options.segmentSuffix : '';
-  const { prefix: translationPrefix, suffix: translationSuffix } = translationAffixes(options);
   const allowMissing = options.allowMissing === true;
   const pieces = [];
   for (const part of layout) {
@@ -1085,11 +1119,67 @@ export function assembleBilingual(layout, translationMap, options = {}) {
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
     const missingIds = ids.filter(id => !translationMap.get(id));
     if (missingIds.length && !allowMissing) throw new Error(`缺少第 ${missingIds.join('、')} 段译文。`);
-    pieces.push(`${prefix}${part.sourceText ?? part.text}${suffix}`);
+    pieces.push(renderSourceBlock(part.sourceText ?? part.text, options));
     const translations = ids.map(id => translationMap.get(id)).filter(Boolean);
-    if (translations.length) pieces.push(`\n{${INVISIBLE_MARKER}${translationPrefix}${translations.join('\n')}${translationSuffix}${INVISIBLE_MARKER}}`);
+    if (translations.length) pieces.push(`\n${renderTranslationBlock(translations.join('\n'), options)}`);
   }
   return pieces.join('');
+}
+
+function markedAffix(value) {
+  return value ? `${AFFIX_START}${value}${AFFIX_END}` : '';
+}
+
+export function renderSourceBlock(source, options = {}) {
+  return `${SOURCE_START}${markedAffix(options.segmentPrefix ?? '')}${source}${markedAffix(options.segmentSuffix ?? '')}${SOURCE_END}`;
+}
+
+export function renderTranslationBlock(translation, options = {}) {
+  const { prefix, suffix } = translationAffixes(options);
+  return `${TRANSLATION_START}${markedAffix(prefix)}${translation}${markedAffix(suffix)}${TRANSLATION_END}`;
+}
+
+// Upgrade only source paragraphs proven by saved metadata AND an adjacent legacy translation.
+// Without that provenance, legacy translations still filter, but ordinary source symbols stay.
+export function upgradeLegacyBilingual(text, metadata) {
+  const source = normalizeNewlines(text);
+  if (!metadata || Number(metadata.schema_version) >= 4 || !source.includes(`{${INVISIBLE_MARKER}`)) return source;
+  const options = {
+    segmentPrefix: metadata.segment_prefix ?? '', segmentSuffix: metadata.segment_suffix ?? '',
+    translationPrefix: metadata.translation_prefix ?? '', translationSuffix: metadata.translation_suffix ?? '',
+    excludedTags: metadata.excluded_tags ?? [], preserveLineRules: metadata.preserve_line_rules ?? '',
+    legacyWrappers: true,
+  };
+  let extraction;
+  try { extraction = extractTaggedRegions(source, metadata.body_tags ?? DEFAULT_SETTINGS.bodyTags); }
+  catch { return source; } // An edited legacy wrapper must not block generation or trigger guessed removals.
+  return rebuildTaggedRegions(extraction, region => {
+    let cursor = 0;
+    const parts = [];
+    for (const part of segmentSource(region.inner, options).layout) {
+      if (part.type !== 'segment') continue;
+      const original = part.sourceText ?? part.text;
+      const wrapped = `${options.segmentPrefix}${original}${options.segmentSuffix}`;
+      const start = region.inner.indexOf(wrapped, cursor);
+      if (start < 0) continue;
+      const end = start + wrapped.length;
+      const generated = generatedBlockAfter(region.inner.slice(end));
+      if (!generated || generated.owned) continue;
+      const translation = stripTranslationAffixes(generated.text, { prefix: options.translationPrefix, suffix: options.translationSuffix });
+      parts.push(region.inner.slice(cursor, start), renderSourceBlock(original, options), '\n', renderTranslationBlock(translation, {
+        translationPrefix: `{${options.translationPrefix}`, translationSuffix: `${options.translationSuffix}}`,
+      }));
+      cursor = end + generated.full.length;
+    }
+    parts.push(region.inner.slice(cursor));
+    return parts.join('');
+  });
+}
+
+export function restyleBilingual(text, options = {}, metadata) {
+  return upgradeLegacyBilingual(text, metadata)
+    .replace(SOURCE_BLOCK_RE, (_match, source) => renderSourceBlock(source.replace(AFFIX_RE, ''), options))
+    .replace(TRANSLATION_BLOCK_RE, (match, translation) => `${match.startsWith('\n') ? '\n' : ''}${renderTranslationBlock(translation.replace(AFFIX_RE, ''), options)}`);
 }
 
 export async function hashText(text) {

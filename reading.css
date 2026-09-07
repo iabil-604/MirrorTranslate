@@ -1,0 +1,65 @@
+/* Both class forms are intentional: SillyTavern sanitizes message classes with custom-. */
+:is(.jy-reading, .custom-jy-reading) {
+  margin: .9em 0 1.25em;
+  color: inherit;
+  font: inherit;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+:is(.jy-reading, .custom-jy-reading) p { margin: .35em 0; }
+:is(.jy-reading-source, .custom-jy-reading-source) {
+  font-size: .88em;
+  color: color-mix(in srgb, currentColor 72%, transparent);
+  line-height: 1.8;
+}
+:is(.jy-reading-translation, .custom-jy-reading-translation) { margin-top: .8em; }
+:is(.jy-reading-cute, .custom-jy-reading-cute) {
+  position: relative;
+  padding: 17px 20px 18px 24px;
+  border: 1px solid #c88b952e;
+  border-radius: 13px 13px 13px 4px;
+  background: linear-gradient(120deg, #d597a312, #d597a306);
+}
+:is(.jy-reading-cute, .custom-jy-reading-cute)::before {
+  content: '✿';
+  position: absolute;
+  top: 14px;
+  left: -8px;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 22px;
+  font-size: 17px;
+  color: #bf8792;
+}
+:is(.jy-reading-cute, .custom-jy-reading-cute) :is(.jy-reading-translation, .custom-jy-reading-translation) {
+  padding-top: .75em;
+  border-top: 1px dashed #c88b9538;
+}
+:is(.jy-reading-minimal, .custom-jy-reading-minimal) { padding: 4px 0 4px 18px; border-left: 2px solid #879b923b; }
+:is(.jy-reading-minimal, .custom-jy-reading-minimal) :is(.jy-reading-source, .custom-jy-reading-source) { max-width: 68ch; }
+:is(.jy-reading-minimal, .custom-jy-reading-minimal) :is(.jy-reading-translation, .custom-jy-reading-translation) { margin-top: .65em; }
+:is(.jy-reading-fold, .custom-jy-reading-fold) { padding: 3px 0; }
+:is(.jy-reading-original, .custom-jy-reading-original) { margin: 0; padding: 0; border: 0; background: transparent; }
+:is(.jy-reading-original, .custom-jy-reading-original) > summary {
+  width: fit-content;
+  padding: 3px 10px;
+  border: 1px solid #879b922e;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: .76em;
+  line-height: 1.65;
+  color: color-mix(in srgb, currentColor 75%, transparent);
+  background: #879b920a;
+  list-style: revert;
+}
+:is(.jy-reading-original, .custom-jy-reading-original) > summary::marker { color: #91a196; font-size: .8em; }
+:is(.jy-reading-original, .custom-jy-reading-original) > summary:focus-visible { outline: 2px solid #91a196; outline-offset: 3px; }
+:is(.jy-reading-original, .custom-jy-reading-original) > :is(.jy-reading-source, .custom-jy-reading-source) { margin: .8em 0 .2em; padding: .7em 1em; background: #879b920b; border-radius: 6px; }
+:is(.jy-reading-fold, .custom-jy-reading-fold) > :is(.jy-reading-translation, .custom-jy-reading-translation) { margin: .85em 0 0 .3em; padding-left: 1.1em; border-left: 2px solid #879b9233; }
+@media (max-width: 560px) {
+  :is(.jy-reading-cute, .custom-jy-reading-cute) { padding: 13px 15px 14px 18px; }
+  :is(.jy-reading-minimal, .custom-jy-reading-minimal) { padding-left: 13px; }
+}
