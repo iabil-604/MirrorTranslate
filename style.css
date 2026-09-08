@@ -46,7 +46,7 @@ h2 { font-size: 14px; line-height: 1.5; font-weight: 650; }
 h3 { font-size: 13px; font-weight: 650; }
 label { min-width: 0; }
 .jy-overlay { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: #071b18b3; pointer-events: auto; animation: jy-scrim-in 120ms linear; }
-.jy-dialog { position: relative; width: min(1180px, 100%); height: min(820px, calc(100dvh - 48px)); overflow: clip; border-radius: 14px; background: var(--jy-paper); box-shadow: 0 26px 70px #07181359; animation: jy-panel-in 220ms cubic-bezier(.2, .8, .24, 1); }
+.jy-dialog { position: relative; width: min(1180px, 100%); min-width: 0; height: min(820px, calc(100dvh - 48px)); overflow: clip; border-radius: 14px; background: var(--jy-paper); box-shadow: 0 26px 70px #07181359; animation: jy-panel-in 220ms cubic-bezier(.2, .8, .24, 1); }
 @keyframes jy-panel-in { from { opacity: 0; transform: scale(.97) translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes jy-scrim-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes jy-page-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -303,8 +303,12 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-connection-choice span { padding: 13px; }
   .jy-connection-choice strong { font-size: 12px; }
   .jy-connection-choice small { font-size: 10px; }
-  .jy-processing-columns { gap: 18px; }
+  .jy-processing-columns { grid-template-columns: 1fr; gap: 18px; }
   .jy-text-scope h2 { font-size: 18px; }
+  /* A select sizes itself to its longest option; without min-width 0 that intrinsic width becomes
+     the flex row's minimum and props the whole dialog open past the phone screen. */
+  .jy-inline-field { margin-left: 0; }
+  .jy-inline-field select { min-width: 0; max-width: 100%; }
   .jy-log-tools { margin-left: 0; }
   .jy-footer { padding-bottom: max(14px,env(safe-area-inset-bottom)); }
 }

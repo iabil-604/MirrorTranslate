@@ -2,9 +2,9 @@
   "display_name": "镜译 · 正文翻译器",
   "loading_order": 100,
   "dependencies": [],
-  "js": "index.js?v=0.12.6",
+  "js": "index.js?v=0.12.7",
   "author": "iabil",
-  "version": "0.12.6",
+  "version": "0.12.7",
   "homePage": "https://github.com/iabil-604/MirrorTranslate",
   "auto_update": true,
   "generate_interceptor": "JingyiTranslator_interceptGeneration",
@@ -13,5 +13,5 @@
     "disable": "onDisable",
     "clean": "onClean"
   },
-  "css": "host.css?v=0.12.6"
+  "css": "host.css?v=0.12.7"
 }

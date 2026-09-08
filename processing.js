@@ -1,7 +1,7 @@
 import {
   DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END,
   deepClone, mergeSettings, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors,
-} from './core.js?v=0.12.6';
+} from './core.js?v=0.12.7';
 
 export const PROCESSING_FIELDS = Object.freeze([
   'bodyTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',

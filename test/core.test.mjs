@@ -85,6 +85,15 @@ test('legacy single-channel settings migrate into a saved channel', () => {
   assert.equal(independent.schemaVersion, 11);
 });
 
+test('channel output budget scales with the raised default and no longer flattens above 32768', () => {
+  assert.equal(getActiveChannel(mergeSettings({})).maxTokens, 60000);
+  const wide = mergeSettings({
+    channels: [{ id: 'c1', url: 'https://example.com/v1', key: 'k', model: 'm', maxTokens: 120000 }],
+    selectedChannelId: 'c1',
+  });
+  assert.equal(getActiveChannel(wide).maxTokens, 120000);
+});
+
 test('legacy prompt settings migrate into one editable translation profile', () => {
   const migrated = mergeSettings({
     schemaVersion: 5,
@@ -180,6 +189,8 @@ test('long floors are split into batches that fit the channel output budget', ()
   assert.equal(translationCharBudget(4096), 1434);
   assert.equal(translationCharBudget(256), 400);
   assert.equal(translationCharBudget(32768), 11469);
+  assert.equal(translationCharBudget(60000), 21000);
+  assert.equal(translationCharBudget(200000), 70000);
 
   const segments = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
   const batches = planTranslationBatches(segments, { maxChars: translationCharBudget(4096) });

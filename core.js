@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.12.6';
+} from './prompts.js?v=0.12.7';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.12.6';
+export const APP_VERSION = '0.12.7';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -30,6 +30,8 @@ const VALID_TAG_RE = /^[A-Za-z][A-Za-z0-9_:-]*$/;
 const STRUCTURAL_TAG_RE = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
 const HTML_ENTITY_RE = /&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi;
 const LEGACY_BUNDLED_PRELUDE_FINGERPRINT = '2921:75ac807f';
+// A guard against typos and NaN, not a real output-policy ceiling; providers reject what they reject.
+const MAX_OUTPUT_TOKENS_LIMIT = 1000000;
 
 export const DEFAULT_CHANNEL = Object.freeze({
   id: 'default',
@@ -39,7 +41,7 @@ export const DEFAULT_CHANNEL = Object.freeze({
   model: '',
   models: [],
   timeoutSec: 180,
-  maxTokens: 4096,
+  maxTokens: 60000,
   temperature: 0.15,
   excludeParams: [],
 });
@@ -188,7 +190,7 @@ export function normalizeChannel(value = {}, fallbackId = DEFAULT_CHANNEL.id) {
     model: String(source.model ?? source.apiModel ?? '').trim(),
     models,
     timeoutSec: clampInteger(source.timeoutSec, 10, 600, DEFAULT_CHANNEL.timeoutSec),
-    maxTokens: clampInteger(source.maxTokens, 256, 32768, DEFAULT_CHANNEL.maxTokens),
+    maxTokens: clampInteger(source.maxTokens, 256, MAX_OUTPUT_TOKENS_LIMIT, DEFAULT_CHANNEL.maxTokens),
     temperature: clampNumber(source.temperature, 0, 2, DEFAULT_CHANNEL.temperature),
     excludeParams: parseExcludedParams(source.excludeParams),
   };
@@ -1167,8 +1169,8 @@ function lineProtocolItems(raw) {
 // truncates the JSON and comes back missing most of its ids. Batches are sized from that budget:
 // CJK output runs close to one token per character, plus JSON overhead and the model's own thinking.
 export function translationCharBudget(maxTokens) {
-  const tokens = clampInteger(maxTokens, 256, 32768, 4096);
-  return clampInteger(Math.round(tokens * 0.35), 400, 20000, 1400);
+  const tokens = clampInteger(maxTokens, 256, MAX_OUTPUT_TOKENS_LIMIT, DEFAULT_CHANNEL.maxTokens);
+  return clampInteger(Math.round(tokens * 0.35), 400, 70000, 1400);
 }
 
 export function planTranslationBatches(segments, options = {}) {

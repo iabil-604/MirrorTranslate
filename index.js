@@ -32,13 +32,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.12.6';
+} from './core.js?v=0.12.7';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.12.6';
+} from './processing.js?v=0.12.7';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -54,8 +54,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.12.6';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.6';
+} from './prompts.js?v=0.12.7';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.7';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -64,7 +64,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.12.6';
+} from './diagnostics.js?v=0.12.7';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -179,7 +179,7 @@ const CONTROL_CENTER_MARKUP = `
  <p id="jy-api-model-help" class="jy-muted" data-jy-model-help></p>
  </div></div>
  <details class="jy-advanced"><summary>请求参数</summary><div class="jy-form-grid">
- <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="32768" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label>
+ <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label>
  </div></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
 </div>
 <div class="jy-retry-setting"><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-field="retries" min="0" max="3" step="1"></label><p class="jy-muted">适用于当前翻译通道。</p></div>
