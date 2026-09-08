@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.12.5';
+} from './prompts.js?v=0.12.6';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.12.5';
+export const APP_VERSION = '0.12.6';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -63,7 +63,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   segmentSuffix: '',
   translationPrefix: '{',
   translationSuffix: '}',
-  affixPerLine: false,
+  paragraphPerLine: false,
   includeWorldbook: true,
   includeCharacterCard: true,
   includeRecentContext: true,
@@ -340,7 +340,9 @@ export function mergeSettings(value = {}) {
     : merged.promptProfiles[0].id;
   merged.segmentPrefix = typeof merged.segmentPrefix === 'string' ? merged.segmentPrefix : '';
   merged.segmentSuffix = typeof merged.segmentSuffix === 'string' ? merged.segmentSuffix : '';
-  merged.affixPerLine = Boolean(merged.affixPerLine);
+  // 0.12.4 shipped this as a pure affix switch; the intent was always one line per paragraph.
+  merged.paragraphPerLine = Boolean(merged.paragraphPerLine ?? merged.affixPerLine);
+  delete merged.affixPerLine;
   merged.translationPrefix = typeof merged.translationPrefix === 'string' ? merged.translationPrefix : '';
   merged.translationSuffix = typeof merged.translationSuffix === 'string' ? merged.translationSuffix : '';
   // Older versions added their braces outside the user's fields. Preserve that appearance once.
@@ -922,6 +924,41 @@ export function segmentSource(text, options = {}) {
     const leading = lines.slice(0, firstSemantic).map(line => `${line.source}${line.separator}`).join('');
     if (leading) layout.push({ type: 'raw', text: leading });
 
+    if (options.paragraphPerLine === true) {
+      const selected = lines.slice(firstSemantic, lastIncluded + 1);
+      const lastSemantic = selected.reduce((last, line, index) => (line.semantic ? index : last), -1);
+      let pendingRaw = '';
+      selected.forEach((line, index) => {
+        const separator = index < selected.length - 1 ? line.separator : '';
+        if (!line.semantic) {
+          pendingRaw += `${line.source}${separator}`;
+          return;
+        }
+        if (pendingRaw) {
+          layout.push({ type: 'raw', text: pendingRaw });
+          pendingRaw = '';
+        }
+        const segment = { id: startId + segments.length, text: line.translationText };
+        segments.push(segment);
+        layout.push({
+          type: 'segment',
+          id: segment.id,
+          ids: [segment.id],
+          text: segment.text,
+          sourceText: line.source,
+          padAfter: index !== lastSemantic,
+        });
+        paragraphs += 1;
+        if (separator) layout.push({ type: 'raw', text: separator });
+      });
+      if (pendingRaw) layout.push({ type: 'raw', text: pendingRaw });
+      const tail = `${lines[lastIncluded].separator}${lines.slice(lastIncluded + 1)
+        .map(line => `${line.source}${line.separator}`)
+        .join('')}`;
+      if (tail) layout.push({ type: 'raw', text: tail });
+      return;
+    }
+
     const ids = [];
     const unitTexts = [];
     for (let index = firstSemantic; index <= lastIncluded; index += 1) {
@@ -1137,7 +1174,10 @@ export function translationCharBudget(maxTokens) {
 export function planTranslationBatches(segments, options = {}) {
   const list = Array.isArray(segments) ? segments.filter(Boolean) : [];
   if (!list.length) return [];
-  const maxSegments = clampInteger(options.maxSegments, 1, 500, 20);
+  // The character budget is the real constraint; a fixed segment cap would otherwise split a floor
+  // into needless requests whenever the channel allows a large output.
+  const maxChars0 = clampInteger(options.maxChars, 200, 200000, 1400);
+  const maxSegments = clampInteger(options.maxSegments, 1, 500, clampInteger(Math.round(maxChars0 / 55), 12, 100, 20));
   const maxChars = clampInteger(options.maxChars, 200, 200000, 1400);
   const batches = [];
   let current = [];
@@ -1249,7 +1289,7 @@ export function assembleBilingual(layout, translationMap, options = {}) {
     if (missingIds.length && !allowMissing) throw new Error(`缺少第 ${missingIds.join('、')} 段译文。`);
     pieces.push(renderSourceBlock(part.sourceText ?? part.text, options));
     const translations = ids.map(id => translationMap.get(id)).filter(Boolean);
-    if (translations.length) pieces.push(`\n${renderTranslationBlock(translations.join('\n'), options)}`);
+    if (translations.length) pieces.push(`\n${renderTranslationBlock(translations.join('\n'), { ...options, padAfter: part.padAfter === true })}`);
   }
   return pieces.join('');
 }
@@ -1258,27 +1298,16 @@ function markedAffix(value) {
   return value ? `${AFFIX_START}${value}${AFFIX_END}` : '';
 }
 
-// Per-line mode only changes where the affixes sit inside the block. The outer boundaries stay put,
-// so stripping, re-parsing and the generation filter keep working exactly as before.
-function wrapWithAffixes(text, prefix, suffix, perLine) {
-  const open = markedAffix(prefix);
-  const close = markedAffix(suffix);
-  if (!perLine) return `${open}${text}${close}`;
-  return normalizeNewlines(String(text ?? ''))
-    .split('\n')
-    .map(line => (line.trim() ? `${open}${line}${close}` : line))
-    .join('\n');
-}
-
 export function renderSourceBlock(source, options = {}) {
-  const body = wrapWithAffixes(source, options.segmentPrefix ?? '', options.segmentSuffix ?? '', options.affixPerLine === true);
-  return `${SOURCE_START}${body}${SOURCE_END}`;
+  return `${SOURCE_START}${markedAffix(options.segmentPrefix ?? '')}${source}${markedAffix(options.segmentSuffix ?? '')}${SOURCE_END}`;
 }
 
+// The blank line that separates one pair from the next lives INSIDE the boundaries, so stripping the
+// translation also removes it and the main model still sees the original line structure.
 export function renderTranslationBlock(translation, options = {}) {
   const { prefix, suffix } = translationAffixes(options);
-  const body = wrapWithAffixes(translation, prefix, suffix, options.affixPerLine === true);
-  return `${TRANSLATION_START}${body}${TRANSLATION_END}`;
+  const padding = options.padAfter === true ? '\n' : '';
+  return `${TRANSLATION_START}${markedAffix(prefix)}${translation}${markedAffix(suffix)}${padding}${TRANSLATION_END}`;
 }
 
 // Upgrade only source paragraphs proven by saved metadata AND an adjacent legacy translation.

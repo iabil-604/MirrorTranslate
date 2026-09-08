@@ -431,24 +431,26 @@ test('a stray tag no longer discards the complete groups next to it', () => {
   assert.match(report.errors[0], /没有对应的结束标签/);
 });
 
-test('affixes can attach per line without changing segmentation', () => {
-  const source = '一行目。\n二行目。\n\n三行目。';
-  const layout = segmentSource(source).layout;
-  const translations = new Map([[1, '第一行'], [2, '第二行'], [3, '第三行']]);
-  const base = { segmentPrefix: '<small>', segmentSuffix: '</small>', translationPrefix: '{', translationSuffix: '}' };
-  const visible = text => text.replace(/[\u2060-\u2064\u200b\u200c]/g, '');
+test('one line per paragraph pairs each line with its translation and stays strippable', () => {
+  const source = 'a\n\nb\nc\nd';
+  const translationsFor = seg => new Map(seg.segments.map(item => [item.id, item.text.toUpperCase()]));
+  const visible = text => text.replace(/[⁠-⁤​‌]/g, '');
 
-  const perParagraph = assembleBilingual(layout, translations, base);
-  assert.match(visible(perParagraph), /<small>一行目。\n二行目。<\/small>/);
+  const grouped = segmentSource(source);
+  const groupedOut = assembleBilingual(grouped.layout, translationsFor(grouped), {});
+  assert.equal(grouped.paragraphs, 2);
+  assert.match(visible(groupedOut), /b\nc\nd\n\{B\nC\nD\}/);
 
-  const perLine = assembleBilingual(layout, translations, { ...base, affixPerLine: true });
-  assert.match(visible(perLine), /<small>一行目。<\/small>\n<small>二行目。<\/small>/);
-  assert.match(visible(perLine), /\{第一行\}\n\{第二行\}/);
+  const perLine = segmentSource(source, { paragraphPerLine: true });
+  const perLineOut = assembleBilingual(perLine.layout, translationsFor(perLine), { paragraphPerLine: true });
+  assert.equal(perLine.paragraphs, 4);
+  // Every source line is followed by its own translation, with a blank line between the pairs.
+  assert.match(visible(perLineOut), /b\n\{B\}\n\nc\n\{C\}\n\nd\n\{D\}/);
 
-  // Both layouts still strip back to the untouched source and read their translations back.
-  for (const [rendered, options] of [[perParagraph, base], [perLine, { ...base, affixPerLine: true }]]) {
+  // Those separating blank lines sit inside the boundaries, so the main model still sees the original.
+  for (const [rendered, options] of [[groupedOut, {}], [perLineOut, { paragraphPerLine: true }]]) {
     assert.equal(stripGeneratedTranslationLines(rendered), source);
-    assert.deepEqual([...extractGeneratedTranslations(rendered, options)], [...translations]);
+    assert.equal(extractGeneratedTranslations(rendered, options).size, 4);
   }
 });
 

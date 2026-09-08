@@ -1,5 +1,5 @@
-import { getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.12.5';
-import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.12.5';
+import { getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.12.6';
+import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.12.6';
 
 const CONTEXT_CHAR_LIMIT = 14000;
 const WORLD_INFO_SCAN_CONTEXT = 65536;
