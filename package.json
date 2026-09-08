@@ -1,6 +1,6 @@
 {
   "name": "st-jingyi-translator",
-  "version": "0.12.3",
+  "version": "0.12.5",
   "private": true,
   "type": "module",
   "scripts": {

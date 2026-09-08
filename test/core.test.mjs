@@ -404,7 +404,52 @@ test('tag inspection reports last-group selection, excluded blocks and structura
   assert.equal(report.translationUnits, 2);
   assert.equal(report.customPreservedLines, 0);
   assert.deepEqual(report.errors, []);
-  assert.match(inspectTagConfiguration('<story_scene>未闭合', ['story_scene'], []).errors[0], /没有对应的结束标签/);
+  assert.match(inspectTagConfiguration('<story_scene>未闭合', ['story_scene'], []).errors[0], /没有结束标签/);
+});
+
+test('a stray tag no longer discards the complete groups next to it', () => {
+  // A preset that emits one extra opener used to fail the whole floor with no way to proceed.
+  const strayOpen = extractTaggedRegions('<story_scene>正文。</story_scene>\n<story_scene>', ['story_scene']);
+  assert.equal(strayOpen.regions.length, 1);
+  assert.equal(strayOpen.regions[0].inner, '正文。');
+  assert.equal(strayOpen.unbalanced, 1);
+
+  const strayClose = extractTaggedRegions('</story_scene>\n<story_scene>正文。</story_scene>', ['story_scene']);
+  assert.equal(strayClose.regions.length, 1);
+  assert.equal(strayClose.regions[0].inner, '正文。');
+
+  // An opener with no partner is read to the end of the message instead of failing outright.
+  const unclosed = extractTaggedRegions('<story_scene>还在生成', ['story_scene']);
+  assert.equal(unclosed.regions.length, 1);
+  assert.equal(unclosed.regions[0].inner, '还在生成');
+  assert.equal(unclosed.regions[0].assumedClose, true);
+  assert.equal(unclosed.assumedCloses, 1);
+  assert.throws(() => extractTaggedRegions('普通文本', ['story_scene']), /没有找到正文标签/);
+
+  const report = inspectTagConfiguration('<story_scene>正文。</story_scene>\n<story_scene>', ['story_scene'], []);
+  assert.equal(report.bodyTags[0].count, 1);
+  assert.match(report.errors[0], /没有对应的结束标签/);
+});
+
+test('affixes can attach per line without changing segmentation', () => {
+  const source = '一行目。\n二行目。\n\n三行目。';
+  const layout = segmentSource(source).layout;
+  const translations = new Map([[1, '第一行'], [2, '第二行'], [3, '第三行']]);
+  const base = { segmentPrefix: '<small>', segmentSuffix: '</small>', translationPrefix: '{', translationSuffix: '}' };
+  const visible = text => text.replace(/[\u2060-\u2064\u200b\u200c]/g, '');
+
+  const perParagraph = assembleBilingual(layout, translations, base);
+  assert.match(visible(perParagraph), /<small>一行目。\n二行目。<\/small>/);
+
+  const perLine = assembleBilingual(layout, translations, { ...base, affixPerLine: true });
+  assert.match(visible(perLine), /<small>一行目。<\/small>\n<small>二行目。<\/small>/);
+  assert.match(visible(perLine), /\{第一行\}\n\{第二行\}/);
+
+  // Both layouts still strip back to the untouched source and read their translations back.
+  for (const [rendered, options] of [[perParagraph, base], [perLine, { ...base, affixPerLine: true }]]) {
+    assert.equal(stripGeneratedTranslationLines(rendered), source);
+    assert.deepEqual([...extractGeneratedTranslations(rendered, options)], [...translations]);
+  }
 });
 
 test('structured translations accept string, wrapped string, and parsed object responses', () => {

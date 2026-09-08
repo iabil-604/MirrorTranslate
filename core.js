@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.12.3';
+} from './prompts.js?v=0.12.5';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.12.3';
+export const APP_VERSION = '0.12.5';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -63,6 +63,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   segmentSuffix: '',
   translationPrefix: '{',
   translationSuffix: '}',
+  affixPerLine: false,
   includeWorldbook: true,
   includeCharacterCard: true,
   includeRecentContext: true,
@@ -339,6 +340,7 @@ export function mergeSettings(value = {}) {
     : merged.promptProfiles[0].id;
   merged.segmentPrefix = typeof merged.segmentPrefix === 'string' ? merged.segmentPrefix : '';
   merged.segmentSuffix = typeof merged.segmentSuffix === 'string' ? merged.segmentSuffix : '';
+  merged.affixPerLine = Boolean(merged.affixPerLine);
   merged.translationPrefix = typeof merged.translationPrefix === 'string' ? merged.translationPrefix : '';
   merged.translationSuffix = typeof merged.translationSuffix === 'string' ? merged.translationSuffix : '';
   // Older versions added their braces outside the user's fields. Preserve that appearance once.
@@ -562,6 +564,7 @@ function scanTagGroups(source, tagName, options = {}) {
   const tokenPattern = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
   const stack = [];
   const groups = [];
+  let strayCloses = 0;
   for (const match of source.matchAll(tokenPattern)) {
     if (String(match[1]).toLowerCase() !== target) continue;
     const raw = match[0];
@@ -587,7 +590,10 @@ function scanTagGroups(source, tagName, options = {}) {
       continue;
     }
     const open = stack.pop();
-    if (!open) throw new Error(`发现没有对应开始标签的 </${tag}>。`);
+    if (!open) {
+      strayCloses += 1;
+      continue;
+    }
     groups.push({
       tagName: tag,
       openStart: open.start,
@@ -598,8 +604,11 @@ function scanTagGroups(source, tagName, options = {}) {
       closeTag: raw,
     });
   }
-  if (stack.length) throw new Error(`最后一组 <${tag}> 没有对应的结束标签。`);
-  return groups.sort((left, right) => left.openStart - right.openStart);
+  groups.sort((left, right) => left.openStart - right.openStart);
+  groups.unclosedOpens = stack.length;
+  groups.unclosedStack = stack.slice();
+  groups.strayCloses = strayCloses;
+  return groups;
 }
 
 // True when the tag opens but never closes, which is what a half-streamed floor looks like.
@@ -624,8 +633,27 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags)
   const tags = parseTagNames(tagNames, DEFAULT_SETTINGS.bodyTags);
   const regions = [];
   const missingTags = [];
+  let unbalanced = 0;
+  let assumedCloses = 0;
   for (const tag of tags) {
     const groups = scanTagGroups(source, tag);
+    unbalanced += (groups.unclosedOpens || 0) + (groups.strayCloses || 0);
+    // Some presets never emit the closing tag at all. A hard failure helps nobody, so an opener with
+    // no partner is read as running to the end of the message. Complete groups always win over this.
+    if (!groups.length && groups.unclosedStack?.length) {
+      const open = groups.unclosedStack.at(-1);
+      groups.push({
+        tagName: tag,
+        openStart: open.start,
+        contentStart: open.end,
+        closeStart: source.length,
+        closeEnd: source.length,
+        openTag: open.raw,
+        closeTag: '',
+        assumedClose: true,
+      });
+      assumedCloses += 1;
+    }
     if (!groups.length) {
       missingTags.push(tag);
       continue;
@@ -637,15 +665,20 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags)
     });
   }
   if (!regions.length) {
+    if (unbalanced) {
+      throw new Error(`正文标签没有成对闭合：${tags.map(tag => `<${tag}>`).join('、')}。这一楼可能还在生成，或预设输出的标签不完整。`);
+    }
     throw new Error(`当前 AI 回复中没有找到正文标签：${tags.map(tag => `<${tag}>`).join('、')}。`);
   }
   regions.sort((left, right) => left.openStart - right.openStart);
+  regions.unbalanced = unbalanced;
+  regions.assumedCloses = assumedCloses;
   for (let index = 1; index < regions.length; index += 1) {
     if (regions[index].openStart < regions[index - 1].closeEnd) {
       throw new Error(`正文提取标签发生嵌套：<${regions[index - 1].tagName}> 与 <${regions[index].tagName}>。请只保留外层正文标签。`);
     }
   }
-  return { source, regions, missingTags };
+  return { source, regions, missingTags, unbalanced, assumedCloses };
 }
 
 export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOptions = {}) {
@@ -656,7 +689,23 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   const bodyResults = body.map(tag => {
     try {
       const groups = scanTagGroups(source, tag);
-      return { tag, count: groups.length, selected: groups.length ? groups.length : null };
+      const unclosedOpens = groups.unclosedOpens || 0;
+      const strayCloses = groups.strayCloses || 0;
+      // Still reported, but no longer fatal: the complete groups above remain usable.
+      if (unclosedOpens) {
+        errors.push(groups.length
+          ? `最后一组 <${tag}> 没有对应的结束标签，已改用前面 ${groups.length} 组完整内容。`
+          : `<${tag}> 没有结束标签，已把开标签之后到楼层末尾的内容当作正文。`);
+      }
+      if (strayCloses) errors.push(`发现 ${strayCloses} 个没有对应开始标签的 </${tag}>，已忽略。`);
+      return {
+        tag,
+        count: groups.length,
+        selected: groups.length ? groups.length : null,
+        // Only present when something is actually unbalanced, so the common shape stays clean.
+        ...(unclosedOpens ? { unclosedOpens } : {}),
+        ...(strayCloses ? { strayCloses } : {}),
+      };
     } catch (error) {
       errors.push(error.message);
       // A tag that opens but has not closed yet is a floor still being written, not a wrong setting.
@@ -1209,13 +1258,27 @@ function markedAffix(value) {
   return value ? `${AFFIX_START}${value}${AFFIX_END}` : '';
 }
 
+// Per-line mode only changes where the affixes sit inside the block. The outer boundaries stay put,
+// so stripping, re-parsing and the generation filter keep working exactly as before.
+function wrapWithAffixes(text, prefix, suffix, perLine) {
+  const open = markedAffix(prefix);
+  const close = markedAffix(suffix);
+  if (!perLine) return `${open}${text}${close}`;
+  return normalizeNewlines(String(text ?? ''))
+    .split('\n')
+    .map(line => (line.trim() ? `${open}${line}${close}` : line))
+    .join('\n');
+}
+
 export function renderSourceBlock(source, options = {}) {
-  return `${SOURCE_START}${markedAffix(options.segmentPrefix ?? '')}${source}${markedAffix(options.segmentSuffix ?? '')}${SOURCE_END}`;
+  const body = wrapWithAffixes(source, options.segmentPrefix ?? '', options.segmentSuffix ?? '', options.affixPerLine === true);
+  return `${SOURCE_START}${body}${SOURCE_END}`;
 }
 
 export function renderTranslationBlock(translation, options = {}) {
   const { prefix, suffix } = translationAffixes(options);
-  return `${TRANSLATION_START}${markedAffix(prefix)}${translation}${markedAffix(suffix)}${TRANSLATION_END}`;
+  const body = wrapWithAffixes(translation, prefix, suffix, options.affixPerLine === true);
+  return `${TRANSLATION_START}${body}${TRANSLATION_END}`;
 }
 
 // Upgrade only source paragraphs proven by saved metadata AND an adjacent legacy translation.

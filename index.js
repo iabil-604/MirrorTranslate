@@ -32,13 +32,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.12.3';
+} from './core.js?v=0.12.5';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.12.3';
+} from './processing.js?v=0.12.5';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -54,8 +54,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.12.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.3';
+} from './prompts.js?v=0.12.5';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.5';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -64,7 +64,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.12.3';
+} from './diagnostics.js?v=0.12.5';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -199,7 +199,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位。</p></div>
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 匹配整行。纯边框、纯符号与标签行自动保留。</p></details>
-<details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><p class="jy-muted">留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。</p></details>
+<details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="affixPerLine">对每一行分别添加前后缀</label><p class="jy-muted">留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，一段整体加一次前后缀。勾选后改为每行各加一次，分段逻辑不变。</p></details>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label></div>
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
 <details class="jy-advanced"><summary>内置美化</summary><div class="jy-processing-toolbar"><select aria-label="内置美化" data-jy-reading-style><option value="cute">可爱风</option><option value="minimal">极简风</option><option value="fold">原文折叠</option></select><button type="button" class="jy-button" data-jy-action="builtin-processing">使用</button></div></details>
@@ -527,6 +527,7 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     segmentSuffix: metadata?.segment_suffix ?? settings.segmentSuffix,
     translationPrefix: metadata?.translation_prefix ?? settings.translationPrefix,
     translationSuffix: metadata?.translation_suffix ?? settings.translationSuffix,
+    affixPerLine: metadata?.affix_per_line ?? settings.affixPerLine,
     excludedTags: settings.excludedTags,
     preserveLineRules: settings.preserveLineRules,
   };
@@ -875,6 +876,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
     segment_suffix: settings.segmentSuffix,
     translation_prefix: settings.translationPrefix,
     translation_suffix: settings.translationSuffix,
+    affix_per_line: settings.affixPerLine,
     body_tags: settings.bodyTags,
     excluded_tags: settings.excludedTags,
     preserve_line_rules: settings.preserveLineRules,
@@ -1523,6 +1525,7 @@ function collectSettings(root) {
     'autoSwipe',
     'autoEdit',
     'showFloatingButton',
+    'affixPerLine',
     'includeWorldbook',
     'includeCharacterCard',
     'includeRecentContext',
