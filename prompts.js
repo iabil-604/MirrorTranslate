@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.12.9';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.13.0';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 
@@ -542,6 +542,8 @@ export const DEFAULT_PROMPT_PROFILE = Object.freeze({
   glossary: '',
   examples: '',
   customSections: [],
+  postscript: '',
+  postscriptRole: 'user',
 });
 
 function selectedRule(presets, mode, custom) {

@@ -1,10 +1,10 @@
 import {
-  DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END,
+  DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END,
   deepClone, mergeSettings, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors,
-} from './core.js?v=0.12.9';
+} from './core.js?v=0.13.0';
 
 export const PROCESSING_FIELDS = Object.freeze([
-  'bodyTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
+  'bodyTags', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
   'translationPrefix', 'translationSuffix', 'autoEdit', 'showFloatingButton', 'floatingStyle',
 ]);
 export const VISUAL_FIELDS = Object.freeze(['segmentPrefix', 'segmentSuffix', 'translationPrefix', 'translationSuffix']);
@@ -26,7 +26,7 @@ function normalizeProcessingValues(value = {}, strict = false) {
   const values = {};
   for (const key of PROCESSING_FIELDS) {
     if (!Object.hasOwn(value, key)) continue;
-    if (key === 'bodyTags' || key === 'excludedTags') {
+    if (key === 'bodyTags' || key === 'replaceTags' || key === 'excludedTags') {
       const parsed = parseTagNamesWithErrors(value[key]);
       if (strict && (parsed.invalid.length || (key === 'bodyTags' && !parsed.tags.length))) throw new Error(`方案的 ${key} 需要有效标签名。`);
       values[key] = parsed.tags;
@@ -159,6 +159,13 @@ export function syncNativeRegex(existing, profile) {
   if (profile) kept.unshift({
     id: `${MODULE_ID}:display-boundaries`, scriptName: '镜译 · 显示边界清理',
     findRegex: `/${[SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END].join('|')}/g`,
+    replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
+    runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
+    [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
+  }, {
+    // Replace-tag regions: the hidden original vanishes from the rendered floor but stays in mes.
+    id: `${MODULE_ID}:hidden-source`, scriptName: '镜译 · 隐藏原文块',
+    findRegex: `/\\n?${HIDDEN_START}[\\s\\S]*?${HIDDEN_END}/g`,
     replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
     runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
     [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },

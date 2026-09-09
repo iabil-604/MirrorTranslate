@@ -224,6 +224,13 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-affix-group > .jy-label { margin-bottom: 0; }
 .jy-affix-group .jy-form-grid { padding-top: 8px; }
 .jy-log-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* The drawer rides a 0fr -> 1fr grid row so it animates to natural height without measuring. */
+.jy-export-drawer { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 260ms cubic-bezier(0.22, 0.72, 0.2, 1); }
+.jy-export-drawer[data-open="true"] { grid-template-rows: 1fr; margin: 12px 0; }
+.jy-export-body { overflow: hidden; min-height: 0; opacity: 0; transition: opacity 180ms ease; display: flex; flex-direction: column; gap: 10px; }
+.jy-export-drawer[data-open="true"] .jy-export-body { opacity: 1; transition-delay: 120ms; }
+.jy-export-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.jy-export-scope input { width: 92px; }
 .jy-log-tools { margin-left: auto; display: flex; gap: 8px; }
 .jy-log-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; padding-bottom: 24px; }
 .jy-log-entry { position: relative; padding: 12px 16px 12px 30px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
@@ -235,6 +242,9 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-log-entry strong { font: 11px/1.6 Consolas,monospace; overflow-wrap: anywhere; }
 .jy-log-entry time { color: var(--jy-muted); font-size: 10px; }
 .jy-log-entry p { font-size: 12px; margin-top: 6px; overflow-wrap: anywhere; }
+.jy-log-tokens { font-weight: 650; color: var(--jy-accent-ink); margin-top: 4px !important; }
+.jy-wi-list { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; scrollbar-width: thin; padding-right: 4px; }
+.jy-wi-entry span { overflow-wrap: anywhere; }
 .jy-log-entry pre { background: var(--jy-accent-soft); padding: 12px; border-radius: 4px; max-height: 280px; overflow: auto; font: 11px/1.8 Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .jy-log-full-response { margin: 10px 0; }
 .jy-log-full-response > pre { max-height: 430px; }

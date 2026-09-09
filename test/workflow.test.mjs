@@ -121,3 +121,44 @@ test('style repair carries only the draft and phrases needed for one correction'
   assert.deepEqual(input.draft_translations, [{ id: 2, text: '她眸光一闪。' }]);
   assert.deepEqual(input.triggered_phrases, ['眸光']);
 });
+
+test('postscript rides as the final message when set and stays absent when empty', () => {
+  const quiet = buildTranslationMessages([{ id: 1, text: '雨。' }], mergeSettings());
+  assert.equal(quiet.at(-1).role, 'user');
+  assert.doesNotMatch(quiet.at(-1).content, /记住这些写法/);
+
+  const settings = mergeSettings({
+    promptProfiles: [{ ...DEFAULT_PROMPT_PROFILE, postscript: '记住这些写法，译名保持统一。', postscriptRole: 'system' }],
+  });
+  const messages = buildTranslationMessages([{ id: 1, text: '雨。' }], settings);
+  assert.equal(messages.length, 4);
+  assert.equal(messages.at(-1).role, 'system');
+  assert.equal(messages.at(-1).content, '记住这些写法，译名保持统一。');
+});
+
+test('token-saving mode injects only the whitelist and caps recent context at two floors', async () => {
+  const context = {
+    name1: '玩家', name2: '樱井', characterId: 0, groupId: null,
+    characters: [{ name: '樱井', description: '旅行者。' }],
+    substituteParams: value => value,
+    chat: [
+      { is_user: false, name: '樱井', mes: '一楼层。' },
+      { is_user: false, name: '樱井', mes: '二楼层。' },
+      { is_user: false, name: '樱井', mes: '三楼层。' },
+      { is_user: false, name: '樱井', mes: '四楼层。' },
+    ],
+    async getWorldInfoPrompt() { throw new Error('不应在世界书扫描中出现'); },
+  };
+  const snapshot = { context, messageId: 4 };
+  const settings = mergeSettings({
+    ...DEFAULT_SETTINGS,
+    channels: [{ id: 'c1', url: 'https://example.com/v1', key: 'k', model: 'm', tokenSaving: true }],
+    selectedChannelId: 'c1',
+    contextMessages: 6,
+  });
+  const packet = await collectTranslationContext(snapshot, settings, '白名单世界书内容。');
+  assert.equal(packet.worldbook, '白名单世界书内容。');
+  assert.doesNotMatch(packet.recent, /一楼层/);
+  assert.match(packet.recent, /三楼层/);
+  assert.match(packet.recent, /四楼层/);
+});

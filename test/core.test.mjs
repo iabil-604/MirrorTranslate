@@ -9,6 +9,9 @@ import {
   DEFAULT_SETTINGS,
   INVISIBLE_MARKER,
   assembleBilingual,
+  assembleReplace,
+  estimateRequestTokens,
+  extractReplaceTranslations,
   createTranslationSignature,
   createGenerationGate,
   createIndependentRequest,
@@ -89,6 +92,7 @@ test('channel output budget scales with the raised default and no longer flatten
   assert.equal(getActiveChannel(mergeSettings({})).maxTokens, 60000);
   assert.equal(getActiveChannel(mergeSettings({})).timeoutSec, 240);
   assert.equal(mergeSettings({ retries: 9 }).retries, 5);
+  assert.equal(DEFAULT_SETTINGS.contextMessages, 2);
   const wide = mergeSettings({
     channels: [{ id: 'c1', url: 'https://example.com/v1', key: 'k', model: 'm', maxTokens: 120000 }],
     selectedChannelId: 'c1',
@@ -607,7 +611,10 @@ test('manifest and entry describe a native extension without TavernHelper calls'
   assert.match(entry, /parsePreserveLineRulesWithErrors/);
   assert.doesNotMatch(entry, /<datalist[^>]*jy-model-list/);
   assert.doesNotMatch(entry, /channel\.model\s*=\s*models\[0\]/);
-  assert.match(entry, /copy-full-logs/);
+  assert.match(entry, /toggle-export-drawer/);
+  assert.match(entry, /export-recent/);
+  assert.match(entry, /export-all/);
+  assert.match(entry, /requestTokens/);
   assert.match(entry, /translation\.raw-response/);
   assert.match(entry, /extensionsMenu/);
   assert.match(entry, /extensions_settings2/);
@@ -642,4 +649,55 @@ test('manifest files, lifecycle exports, and capability snapshot are self-consis
   for (const requirement of contract.requirements.filter(item => item.required)) {
     assert.ok(snapshot.symbols.includes(requirement.symbol), `${requirement.symbol} must be observed`);
   }
+});
+
+test('replace-tag regions swap translations in and keep originals recoverable', () => {
+  const segmented = segmentSource('雨が降っている。\n\n少女は笑った。');
+  const map = new Map([[1, '下雨了。'], [2, '少女笑了。']]);
+  const swapped = assembleReplace(segmented.layout, map);
+  assert.equal(stripGeneratedTranslationLines(swapped, undefined, 'prompt'), '下雨了。\n\n少女笑了。');
+  assert.equal(stripGeneratedTranslationLines(swapped, undefined, 'source'), '雨が降っている。\n\n少女は笑った。');
+  assert.equal(extractReplaceTranslations(swapped).get(1), '下雨了。');
+  assert.equal(extractReplaceTranslations(swapped).get(2), '少女笑了。');
+  // A pair next to a bilingual block must never be confused with one.
+  const mixed = `${assembleBilingual(segmented.layout, map)}${assembleReplace(segmented.layout, map)}`;
+  assert.ok(stripGeneratedTranslationLines(mixed, undefined, 'prompt').includes('下雨了。'));
+  const partial = assembleReplace(segmented.layout, new Map([[1, '下雨了。']]), { allowMissing: true });
+  assert.ok(partial.includes('少女は笑った。'), '缺译的替换段保持原文原样');
+});
+
+test('token-saving channels carry the switch, a reasoning effort and a per-character whitelist', () => {
+  const settings = mergeSettings({
+    channels: [{
+      id: 'c1', url: 'https://example.com/v1', key: 'k', model: 'm',
+      maxTokens: 65535, tokenSaving: true, reasoningEffort: 'high',
+    }],
+    selectedChannelId: 'c1',
+    worldInfoWhitelist: {
+      'avatar.png': [{ world: '设定集', uid: 3 }, { world: '', uid: 9 }, 'junk'],
+    },
+  });
+  const channel = getActiveChannel(settings);
+  assert.equal(channel.tokenSaving, true);
+  assert.equal(channel.reasoningEffort, 'high');
+  assert.deepEqual(settings.worldInfoWhitelist['avatar.png'], [{ world: '设定集', uid: 3 }]);
+  const payload = createIndependentRequest(settings, [{ role: 'user', content: '雨。' }]);
+  assert.equal(payload.reasoning_effort, 'high');
+  assert.equal(payload.stream, false);
+  const withoutEffort = createIndependentRequest({
+    apiUrl: 'https://example.com', apiModel: 'translator',
+  }, [{ role: 'user', content: '雨。' }]);
+  assert.equal('reasoning_effort' in withoutEffort, false);
+  const excluded = createIndependentRequest({
+    apiUrl: 'https://example.com', apiModel: 'translator', reasoningEffort: 'low',
+    excludeParams: ['reasoning_effort'],
+  }, [{ role: 'user', content: '雨。' }]);
+  assert.equal('reasoning_effort' in excluded, false);
+});
+
+test('request tokens are estimated from CJK and non-CJK characters separately', () => {
+  const cjk = estimateRequestTokens([{ role: 'user', content: 'あ'.repeat(1000) }]);
+  assert.ok(cjk >= 1000 && cjk <= 1100, `纯假名估算应在每字一 token 附近：${cjk}`);
+  const latin = estimateRequestTokens([{ role: 'user', content: 'a'.repeat(400) }]);
+  assert.ok(latin >= 90 && latin <= 120, `纯拉丁估算应接近四字符一 token：${latin}`);
 });

@@ -1,5 +1,5 @@
-import { getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.12.9';
-import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.12.9';
+import { getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.13.0';
+import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.13.0';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -97,17 +97,29 @@ async function buildWorldbookContext(snapshot, settings) {
   }
 }
 
-export async function collectTranslationContext(snapshot, settings) {
+export async function collectTranslationContext(snapshot, settings, whitelistWorldbook = null) {
+  const tokenSaving = getActiveChannel(settings).tokenSaving === true;
   const [worldbook, character] = await Promise.all([
-    buildWorldbookContext(snapshot, settings),
+    tokenSaving
+      ? Promise.resolve(settings.includeWorldbook ? String(whitelistWorldbook ?? '') : '')
+      : buildWorldbookContext(snapshot, settings),
     Promise.resolve(buildCharacterContext(snapshot.context, settings.includeCharacterCard)),
   ]);
+  // The token-saving mode caps recent-context floors at two; lower user values stay untouched.
+  const contextSettings = tokenSaving
+    ? { ...settings, contextMessages: Math.min(clampRecentFloors(settings.contextMessages), 2) }
+    : settings;
   return {
     glossary: cleanReferenceText(getActivePromptProfile(settings).glossary),
     character: cleanReferenceText(character),
     worldbook: cleanReferenceText(worldbook),
-    recent: cleanReferenceText(buildRecentContext(snapshot, settings)),
+    recent: cleanReferenceText(buildRecentContext(snapshot, contextSettings)),
   };
+}
+
+function clampRecentFloors(value) {
+  const count = Number.parseInt(value, 10);
+  return Number.isFinite(count) ? count : 2;
 }
 
 export function buildTranslationMessages(segments, settings, packet = {}, phase = 'primary', requestMeta = {}) {
@@ -139,6 +151,14 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
     role: 'user',
     content: JSON.stringify(input),
   });
+  // The optional postscript rides after every other entry; empty means it is never sent.
+  const postscript = resolvePromptVariables(String(profile.postscript ?? '').trim(), profile);
+  if (postscript) {
+    messages.push({
+      role: ['system', 'user', 'assistant'].includes(profile.postscriptRole) ? profile.postscriptRole : 'user',
+      content: postscript,
+    });
+  }
   return messages;
 }
 

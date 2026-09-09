@@ -130,7 +130,8 @@ test('native registration is isolated, stable across saves and switches, and rea
   const unrelated = { id: 'user-rule', scriptName: 'User rule', findRegex: 'x', replaceString: 'y', placement: [2] };
   const first = syncNativeRegex([unrelated], cute);
   assert.deepEqual(syncNativeRegex(first, cute), first);
-  assert.equal(first[1], unrelated);
+  // Two internal display rules (boundary cleanup + hidden replace originals) sit ahead of it.
+  assert.equal(first[2], unrelated);
   const nativeRule = first.find(rule => rule.jingyi_managed?.profileId === cute.id);
   nativeRule.replaceString = '<p>edited in native manager</p>';
   assert.equal(readNativeRegexEdits(first, cute)[0].replaceString, nativeRule.replaceString);

@@ -6,11 +6,16 @@ import {
   MESSAGE_META_KEY,
   MODULE_ID,
   assembleBilingual,
+  assembleReplace,
+  extractReplaceTranslations,
   createTranslationSignature,
   createGenerationGate,
   createIndependentRequest,
+  clampInteger,
+  estimateRequestTokens,
   extractGeneratedTranslations,
   extractTaggedRegions,
+  extractTranslationBlockText,
   getActiveChannel,
   getActivePromptProfile,
   hashText,
@@ -24,6 +29,7 @@ import {
   normalizeOpenAiBaseUrl,
   normalizePromptProfile,
   parseModelListResponse,
+  parseTagNames,
   parsePreserveLineRulesWithErrors,
   parseTagNamesWithErrors,
   recoverStructuredTranslations,
@@ -32,13 +38,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.12.9';
+} from './core.js?v=0.13.0';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.12.9';
+} from './processing.js?v=0.13.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -54,17 +60,15 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.12.9';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.9';
+} from './prompts.js?v=0.13.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.13.0';
 import {
   addDiagnostic,
   clearDiagnostics,
-  formatDiagnosticReport,
-  filterDiagnosticsByFloor,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.12.9';
+} from './diagnostics.js?v=0.13.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -104,6 +108,7 @@ const runtime = {
   inflight: new Map(),
   generationGate: createGenerationGate(),
   eventBindings: [],
+  wiEntries: null,
   timers: new Set(),
   autoTimers: new Set(),
   menuCleanup: null,
@@ -136,7 +141,7 @@ const CONTROL_CENTER_MARKUP = `
   <div class="jy-progress" aria-hidden="true"><span data-jy-progress></span></div>
   <p class="jy-muted" data-jy-task-message>打开一段故事，从这里开始翻译。</p>
   <dl class="jy-desk-facts"><div><dt>当前楼层</dt><dd data-jy-floor>—</dd></div><div><dt>滑动页</dt><dd data-jy-swipe>—</dd></div><div><dt>正文规模</dt><dd data-jy-segments>—</dd></div><div><dt>目标语言</dt><dd data-jy-desk-target>—</dd></div></dl>
-  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button></div>
+  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button><button type="button" class="jy-button" data-jy-action="translate-stream">流式翻译</button></div>
  </div>
  <aside class="jy-desk-side">
   <div class="jy-brief"><span class="jy-overline">翻译方案</span><h3 data-jy-active-profile>待读取</h3><button type="button" class="jy-button" data-jy-action="open-prompt">编辑规则 →</button></div>
@@ -160,6 +165,7 @@ const CONTROL_CENTER_MARKUP = `
 <aside class="jy-rule-directory"><div class="jy-rule-directory-title">标准条目 <span data-jy-modified-count>全部默认</span></div><div data-jy-standard-prompt-list></div><div class="jy-rule-directory-title">自定义条目<button type="button" class="jy-icon-button" data-jy-action="add-prompt-section" aria-label="添加自定义条目">＋</button></div><div data-jy-custom-prompt-list></div><p class="jy-muted jy-empty-small" data-jy-custom-empty>按 ＋ 添加你的规则</p></aside>
 <div class="jy-editor-stage" data-jy-editor-stage><div class="jy-editor-placeholder" data-jy-editor-placeholder><span aria-hidden="true">Aa</span><h2>从左侧选择一项规则</h2><p>文风、译名与措辞，都由你决定。</p></div></div>
 </div>
+<details class="jy-advanced"><summary>后置提示词（附在请求最末尾）</summary><div class="jy-reference-body"><label><span class="jy-label">身份</span><select data-jy-profile-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label><p class="jy-muted">留空时不发送；填写后作为最后一条消息附在全部条目之后，身份可选。</p></div><label><span class="jy-label">内容</span><textarea rows="4" data-jy-profile-field="postscript" placeholder="留空即不发送"></textarea></label></details>
 <details class="jy-reference-settings"><summary>参考资料与上下文</summary><div class="jy-reference-body"><label class="jy-check"><input type="checkbox" data-jy-field="includeWorldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-field="includeCharacterCard">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-field="includeRecentContext">近期对话</label><label><span class="jy-label">近期对话条数</span><input type="number" data-jy-field="contextMessages" min="1" max="20" step="1"></label></div></details>
 <footer class="jy-footer"><span class="jy-save-note" data-jy-prompt-save-note>修改后保存方案</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-prompt">保存方案</button></footer>
 </section>
@@ -179,8 +185,8 @@ const CONTROL_CENTER_MARKUP = `
  <p id="jy-api-model-help" class="jy-muted" data-jy-model-help></p>
  </div></div>
  <details class="jy-advanced"><summary>请求参数</summary><div class="jy-form-grid">
- <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label>
- </div></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
+ <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
+ </div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">列出全局挂载与当前角色卡激活的世界书条目；勾选后节约模式下仅注入这些内容，白名单跟随当前角色卡保存。一个都不勾则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
 </div>
 <div class="jy-retry-setting"><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-field="retries" min="0" max="5" step="1"></label><p class="jy-muted">适用于当前翻译通道。</p></div>
 <footer class="jy-footer"><span class="jy-save-note">修改后保存设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-settings">保存设置</button></footer>
@@ -195,7 +201,7 @@ const CONTROL_CENTER_MARKUP = `
 <input type="file" accept=".json,application/json" data-jy-processing-import hidden>
 </div>
 <div class="jy-processing-columns">
-<div class="jy-text-scope"><span class="jy-overline">送去翻译</span><h2>提取正文</h2><label><span class="jy-label">提取标签</span><textarea rows="4" data-jy-field="bodyTags" placeholder="story_scene" spellcheck="false"></textarea></label><p class="jy-muted">每行一个标签名，只取每种标签的最后一组完整内容。</p></div>
+<div class="jy-text-scope"><span class="jy-overline">送去翻译</span><h2>提取正文</h2><label><span class="jy-label">提取标签</span><textarea rows="4" data-jy-field="bodyTags" placeholder="story_scene" spellcheck="false"></textarea></label><p class="jy-muted">每行一个标签名，只取每种标签的最后一组完整内容。</p><label><span class="jy-label">替换标签（译文直接替换原文）</span><textarea rows="3" data-jy-field="replaceTags" placeholder="replace_scene" spellcheck="false"></textarea></label><p class="jy-muted">该标签内的内容照常翻译，但写回时译文直接顶替原文：显示与主模型都只看到译文，原文隐藏保留在楼层里，点小铅笔可见，重新翻译时自动还原。</p></div>
 <div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位。</p></div>
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 匹配整行。纯边框、纯符号与标签行自动保留。</p></details>
@@ -209,7 +215,17 @@ const CONTROL_CENTER_MARKUP = `
 
 <section class="jy-page" data-jy-page="logs" role="tabpanel" hidden>
 <header class="jy-page-heading"><div><h1>运行记录</h1><span class="jy-page-context" data-jy-log-count>0 条</span></div></header>
-<div class="jy-log-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="copy-logs">复制报错摘要</button><button type="button" class="jy-button" data-jy-action="copy-full-logs">复制完整日志</button><button type="button" class="jy-button" data-jy-action="copy-floor-logs">复制本楼日志</button><button type="button" class="jy-button" data-jy-action="export-logs">导出 TXT</button><div class="jy-log-tools"><button type="button" class="jy-button" data-jy-action="refresh-logs">刷新</button><button type="button" class="jy-button" data-jy-action="clear-logs">清空</button></div></div>
+<div class="jy-log-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="toggle-export-drawer">导出日志</button><div class="jy-log-tools"><button type="button" class="jy-button" data-jy-action="refresh-logs">刷新</button><button type="button" class="jy-button" data-jy-action="clear-logs">清空</button></div></div>
+<div class="jy-export-drawer" data-jy-export-drawer>
+  <div class="jy-export-body">
+    <p class="jy-muted">导出完整日志（含副 API 请求与返回正文，凭据特征已隐藏）。文件为 TXT，分享前请检查隐私内容。</p>
+    <div class="jy-export-controls">
+      <label class="jy-export-scope"><span class="jy-label">最近楼数</span><input type="number" data-jy-export-floors min="1" max="999" step="1" value="1"></label>
+      <button type="button" class="jy-button jy-button-primary" data-jy-action="export-recent">导出最近楼层</button>
+      <button type="button" class="jy-button" data-jy-action="export-all">导出全部日志</button>
+    </div>
+  </div>
+</div>
 <p class="jy-muted">展开记录可查看模型完整回复。完整日志含正文，分享前请检查。</p><div class="jy-log-list" data-jy-log-list></div>
 </section>
 <p class="jy-sr-only" aria-live="polite" data-jy-live></p>
@@ -508,6 +524,29 @@ function latestAssistantMessageId(context) {
   return null;
 }
 
+// Body-tag regions translate into bilingual mirrors; replace-tag regions swap in the translation
+// and hide the original. One floor can carry both kinds, so both extractions merge by position.
+function extractAllRegions(text, settings) {
+  const body = extractTaggedRegions(text, settings.bodyTags);
+  const replaceTagList = parseTagNames(settings.replaceTags);
+  const replace = replaceTagList.length
+    ? extractTaggedRegions(text, replaceTagList, { mode: 'replace' })
+    : { regions: [], missingTags: [], unbalanced: 0, assumedCloses: 0 };
+  const regions = [...body.regions, ...replace.regions].sort((left, right) => left.openStart - right.openStart);
+  for (let index = 1; index < regions.length; index += 1) {
+    if (regions[index].openStart < regions[index - 1].closeEnd) {
+      throw new Error(`<${regions[index - 1].tagName}> 与 <${regions[index].tagName}> 的区域交叉重叠，请检查提取标签与替换标签的嵌套。`);
+    }
+  }
+  return {
+    source: body.source,
+    regions,
+    missingTags: [...body.missingTags, ...(replace.missingTags ?? [])],
+    unbalanced: (body.unbalanced || 0) + (replace.unbalanced || 0),
+    assumedCloses: (body.assumedCloses || 0) + (replace.assumedCloses || 0),
+  };
+}
+
 async function readMessageSnapshot(messageId = null, settings = runtime.settings) {
   const context = getContext();
   const id = messageId === null ? latestAssistantMessageId(context) : Number(messageId);
@@ -519,9 +558,9 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   const swipeId = Number(message.swipe_id ?? 0);
   const metadata = message.extra?.[MESSAGE_META_KEY];
   const upgraded = upgradeLegacyBilingual(message.mes, metadata);
-  const originalExtraction = extractTaggedRegions(upgraded, settings.bodyTags);
+  const originalExtraction = extractAllRegions(upgraded, settings);
   const cleanMessage = stripGeneratedTranslationLines(upgraded);
-  const extraction = extractTaggedRegions(cleanMessage, settings.bodyTags);
+  const extraction = extractAllRegions(cleanMessage, settings);
   const segmentOptions = {
     segmentPrefix: metadata?.segment_prefix ?? settings.segmentPrefix,
     segmentSuffix: metadata?.segment_suffix ?? settings.segmentSuffix,
@@ -554,11 +593,13 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   if (metadataMatches) {
     nextId = 1;
     for (const region of extraction.regions) {
-      const originalRegion = originalExtraction.regions.find(candidate => candidate.tagName.toLowerCase() === region.tagName.toLowerCase());
+      const originalRegion = originalExtraction.regions.find(candidate =>
+        candidate.tagName.toLowerCase() === region.tagName.toLowerCase() && candidate.mode === region.mode);
       if (originalRegion) {
-        for (const [id, translation] of extractGeneratedTranslations(originalRegion.inner, { ...segmentOptions, startId: nextId })) {
-          existingTranslations.set(id, translation);
-        }
+        const seeds = region.mode === 'replace'
+          ? extractReplaceTranslations(originalRegion.inner, { ...segmentOptions, startId: nextId })
+          : extractGeneratedTranslations(originalRegion.inner, { ...segmentOptions, startId: nextId });
+        for (const [id, translation] of seeds) existingTranslations.set(id, translation);
       }
       nextId += region.segments.length;
     }
@@ -628,9 +669,73 @@ function enrichRequestError(error) {
   const raw = safeError(error);
   const opaque = !raw || raw.length <= 24 || /^[<\[(（【][^\s]{0,20}[>\])）】]$/.test(raw.trim());
   if (!opaque) return error;
-  const wrapped = new Error(`副 API 没有返回可用内容（${raw || '空响应'}）。完整请求与返回已记入运行记录，可在「运行记录」页用「复制本楼日志」导出排查。`);
+  const wrapped = new Error(`副 API 没有返回可用内容（${raw || '空响应'}）。完整请求与返回已记入运行记录，可在「运行记录」页用「导出日志」导出排查。`);
   wrapped.cause = error instanceof Error ? error : new Error(raw);
   return wrapped;
+}
+
+// Prefer the API's own usage numbers when the channel returns them; otherwise estimate by characters.
+function describeRequestTokens(messages, raw) {
+  const usage = raw && typeof raw === 'object' ? raw.usage : null;
+  const prompt = Number(usage?.prompt_tokens ?? usage?.input_tokens);
+  if (Number.isFinite(prompt) && prompt >= 0) {
+    return { promptTokens: prompt, basis: 'usage' };
+  }
+  return { promptTokens: estimateRequestTokens(messages), basis: 'estimated' };
+}
+
+// The whitelist follows the character card: avatar is the stable key SillyTavern keeps per card.
+function worldInfoCharacterKey() {
+  const context = getContext();
+  const character = context.characters?.[Number(context.characterId)];
+  return String(character?.avatar || character?.name || 'default');
+}
+
+function readableWorldInfoEntries() {
+  const lore = runtime.wiEntries;
+  if (!lore || !Array.isArray(lore.globalLore)) return [];
+  return [...lore.globalLore, ...(Array.isArray(lore.characterLore) ? lore.characterLore : [])];
+}
+
+function whitelistedWorldbookContent() {
+  const picks = runtime.settings.worldInfoWhitelist?.[worldInfoCharacterKey()];
+  if (!picks?.length) return '';
+  const wanted = new Set(picks.map(pick => `${pick.world}.${pick.uid}`));
+  return readableWorldInfoEntries()
+    .filter(entry => wanted.has(`${entry.world}.${entry.uid}`))
+    .map(entry => String(entry.content ?? '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function renderWorldInfoList(root) {
+  const list = root.querySelector('[data-jy-wi-list]');
+  if (!list) return;
+  const entries = readableWorldInfoEntries();
+  const picks = new Set((runtime.settings.worldInfoWhitelist?.[worldInfoCharacterKey()] ?? [])
+    .map(pick => `${pick.world}.${pick.uid}`));
+  list.replaceChildren();
+  if (!entries.length) {
+    const note = document.createElement('p');
+    note.className = 'jy-muted';
+    note.textContent = '还没有读到世界书条目。点「刷新可读条目」试一次；仍为空就先让酒馆加载完当前聊天再回来。';
+    list.appendChild(note);
+    return;
+  }
+  for (const entry of entries) {
+    const label = document.createElement('label');
+    label.className = 'jy-check jy-wi-entry';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.jyWiPick = '';
+    box.dataset.jyWorld = String(entry.world ?? '');
+    box.dataset.jyUid = String(entry.uid ?? '');
+    box.checked = picks.has(`${entry.world}.${entry.uid}`);
+    const text = document.createElement('span');
+    text.textContent = `${String(entry.comment || `条目 ${entry.uid}`).trim()}（${entry.world}）`;
+    label.append(box, text);
+    list.appendChild(label);
+  }
 }
 
 async function invokeTranslationBatch(segments, settings, signal, packet = {}, phase = 'primary', requestMeta = {}) {
@@ -676,6 +781,7 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
     requestedIds: segments.map(segment => segment.id),
     apiMode: settings.apiMode,
     model: channel.model || 'follow-current',
+    requestTokens: describeRequestTokens(messages, raw),
   }, raw, { fullRequest: messages });
   signal?.throwIfAborted?.();
   const recovered = recoverStructuredTranslations(raw, segments);
@@ -860,11 +966,13 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
 
   const missingIds = latest.segments.filter(segment => !effectiveTranslations.has(segment.id)).map(segment => segment.id);
   const complete = missingIds.length === 0;
-  const bilingual = rebuildTaggedRegions(latest.extraction, region => assembleBilingual(
-    region.layout,
-    effectiveTranslations,
-    { ...settings, allowMissing: !complete },
-  ));
+  const bilingual = rebuildTaggedRegions(latest.extraction, region => region.mode === 'replace'
+    ? assembleReplace(region.layout, effectiveTranslations, { allowMissing: !complete })
+    : assembleBilingual(
+      region.layout,
+      effectiveTranslations,
+      { ...settings, allowMissing: !complete },
+    ));
   const message = latest.message;
   const metadata = {
     schema_version: 4,
@@ -878,6 +986,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
     translation_suffix: settings.translationSuffix,
     paragraph_per_line: settings.paragraphPerLine,
     body_tags: settings.bodyTags,
+    replace_tags: settings.replaceTags,
     excluded_tags: settings.excludedTags,
     preserve_line_rules: settings.preserveLineRules,
     complete,
@@ -974,7 +1083,11 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     let result;
     let written;
     while (true) {
-      const packet = await collectTranslationContext(snapshot, settings);
+      const packet = await collectTranslationContext(
+        snapshot,
+        settings,
+        getActiveChannel(settings).tokenSaving ? whitelistedWorldbookContent() : null,
+      );
       updateTask({ status: 'running', message: '副 API 正在翻译完整正文…', progress: 18 });
       const seedTranslations = force ? new Map() : snapshot.existingTranslations;
       result = await invokeWithRetries(snapshot.segments, settings, controller.signal, packet, seedTranslations, retryBudget);
@@ -1039,6 +1152,184 @@ async function translateMessage(messageId = null, { force = false, quiet = false
       apiMode: settings.apiMode,
       model: getActiveChannel(settings).model || 'follow-current',
     });
+    if (!quiet) toast('error', message);
+    throw error;
+  }).finally(() => {
+    if (runtime.inflight.get(lockKey)?.promise === work) runtime.inflight.delete(lockKey);
+  });
+
+  runtime.inflight.set(lockKey, { promise: work, controller });
+  return work;
+}
+
+// Streaming beta: same request content as the one-shot path, but the SSE deltas are folded into
+// the floor as completed JSON items arrive. The final pass reuses the ordinary write pipeline, so
+// the finished floor is byte-identical to a non-streaming run.
+async function streamTranslationBatch(messages, settings, signal) {
+  const payload = { ...createIndependentRequest(settings, messages), stream: true };
+  const response = await fetch('/api/backends/chat-completions/generate', {
+    method: 'POST',
+    headers: getContext().getRequestHeaders(),
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`流式请求失败（HTTP ${response.status}）${detail.slice(0, 160) ? `：${detail.slice(0, 160)}` : ''}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      const data = line.trim();
+      if (!data.startsWith('data:')) continue;
+      const body = data.slice(5).trim();
+      if (body === '[DONE]') continue;
+      try {
+        const chunk = JSON.parse(body);
+        const choice = chunk.choices?.[0];
+        const delta = choice?.delta?.content ?? choice?.text ?? '';
+        if (delta) text += delta;
+      } catch { /* keep partial JSON in the buffer for the next frame */ }
+    }
+  }
+  return text;
+}
+
+async function translateMessageStreaming(messageId = null, { quiet = false } = {}) {
+  if (runtime.settings.apiMode !== 'independent') throw new Error('流式翻译只在独立模式下可用：跟随模式借用的接口拿不到增量返回。');
+  runtime.activeFloor = Number.isInteger(Number(messageId)) ? Number(messageId) : null;
+  const epoch = runtime.epoch;
+  const settings = runtime.settings;
+  const targetLanguage = normalizeTargetLanguage(getActivePromptProfile(settings).targetLanguage);
+  let snapshot = await readMessageSnapshot(messageId, settings);
+  runtime.activeFloor = snapshot.messageId;
+  if (!snapshot.segments.length) throw new Error('当前 AI 回复没有可翻译的正文段落。');
+
+  const lockKey = `${snapshot.chatId}|${snapshot.messageId}|${snapshot.swipeId}`;
+  const existing = runtime.inflight.get(lockKey);
+  if (existing) existing.controller.abort();
+  const controller = new AbortController();
+
+  const work = (async () => {
+    updateTask({
+      status: 'running',
+      title: `正在流式翻译第 ${snapshot.messageId} 楼`,
+      message: `共 ${snapshot.paragraphs} 段、${snapshot.segments.length} 行，目标语言为${targetLanguage}。`,
+      progress: 7,
+    });
+    recordDiagnostic('info', 'translation.start', '开始流式翻译当前楼层。', {
+      messageId: snapshot.messageId,
+      segments: snapshot.segments.length,
+      paragraphs: snapshot.paragraphs,
+      requestMode: 'stream',
+      apiMode: settings.apiMode,
+      model: getActiveChannel(settings).model || 'follow-current',
+    });
+    const channel = getActiveChannel(settings);
+    const packet = await collectTranslationContext(
+      snapshot,
+      settings,
+      channel.tokenSaving ? whitelistedWorldbookContent() : null,
+    );
+    const batches = planTranslationBatches(snapshot.segments, { maxChars: translationCharBudget(channel.maxTokens) });
+    const translations = new Map(snapshot.existingTranslations);
+    const total = snapshot.segments.length;
+
+    const writeProgress = async () => {
+      const latest = await readMessageSnapshot(snapshot.messageId, settings).catch(() => null);
+      if (!latest) return;
+      await writeTranslation(latest, translations, epoch, settings);
+    };
+    // Rewriting the floor is not free, so throttle progressive updates while items stream in.
+    let lastWrite = 0;
+    const maybeProgress = () => {
+      const now = Date.now();
+      if (now - lastWrite < 700) return;
+      lastWrite = now;
+      writeProgress().catch(() => {});
+    };
+
+    for (const [batchIndex, batch] of batches.entries()) {
+      const pending = batch.filter(segment => !translations.has(segment.id));
+      if (!pending.length) continue;
+      const phase = translations.size ? 'repair' : 'primary';
+      const messages = buildTranslationMessages(pending, settings, packet, phase);
+      let raw = '';
+      try {
+        raw = await streamTranslationBatch(messages, settings, controller.signal);
+      } catch (error) {
+        if (controller.signal.aborted || isAbortError(error)) throw error;
+        recordDiagnostic('warn', 'translation.stream-fallback', '流式请求中断，自动改用整包请求重试本批。', {
+          batch: batchIndex + 1,
+          segments: pending.length,
+          error: safeError(error),
+        });
+        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase);
+        for (const [id, value] of recovered.translations) translations.set(id, value);
+        updateTask({
+          status: 'running',
+          message: `已恢复 ${translations.size} / ${total} 段。`,
+          progress: 10 + Math.round(80 * translations.size / total),
+        });
+        maybeProgress();
+        continue;
+      }
+      const recovered = recoverStructuredTranslations(raw, pending);
+      for (const [id, value] of recovered.translations) translations.set(id, value);
+      recordDiagnostic('info', 'translation.raw-response', '已收到副 API 流式返回。', {
+        phase,
+        requestedSegments: pending.length,
+        requestedIds: pending.map(segment => segment.id),
+        apiMode: settings.apiMode,
+        model: channel.model || 'follow-current',
+        requestTokens: describeRequestTokens(messages, raw),
+        stream: true,
+      }, raw, { fullRequest: messages });
+      updateTask({
+        status: 'running',
+        message: `已恢复 ${translations.size} / ${total} 段。`,
+        progress: 10 + Math.round(80 * translations.size / total),
+      });
+      maybeProgress();
+    }
+
+    await repairForbiddenPhrases(snapshot.segments, translations, settings, controller.signal, packet);
+    updateTask({ status: 'running', message: '正在写回楼层…', progress: 95 });
+    const written = await writeTranslation(snapshot, translations, epoch, settings);
+    if (!written.complete) {
+      updateTask({
+        status: 'success',
+        title: '已写回部分译文',
+        message: `第 ${snapshot.messageId} 楼已写回 ${translations.size} / ${total} 段；缺的部分可用「补译缺失段落」继续。`,
+        progress: 100,
+      });
+      if (!quiet) toast('warning', `已写回 ${translations.size} / ${total} 段，其余保留原文。`);
+      return { skipped: false, partial: true, messageId: snapshot.messageId, segments: translations.size };
+    }
+    updateTask({
+      status: 'success',
+      title: '流式翻译完成',
+      message: `第 ${snapshot.messageId} 楼已追加 ${snapshot.paragraphs} 段${targetLanguage}镜像。`,
+      progress: 100,
+    });
+    if (!quiet) toast('success', `第 ${snapshot.messageId} 楼流式翻译完成。`);
+    return { skipped: false, messageId: snapshot.messageId, segments: translations.size };
+  })().catch(error => {
+    if (isAbortError(error)) {
+      updateTask({ status: 'idle', title: '翻译已取消', message: '聊天已切换或任务已停止。', progress: 0 });
+      return { skipped: true, reason: 'cancelled' };
+    }
+    const message = safeError(error);
+    updateTask({ status: 'error', title: '翻译未写回', message, progress: 0 });
+    recordDiagnostic('error', 'translation.failed', message, { messageId: snapshot?.messageId ?? null, requestMode: 'stream' });
     if (!quiet) toast('error', message);
     throw error;
   }).finally(() => {
@@ -1396,6 +1687,10 @@ function syncPromptFields(root, settings) {
   if (name) name.value = profile.name;
   const targetLanguage = root.querySelector('[data-jy-profile-field="targetLanguage"]');
   if (targetLanguage) targetLanguage.value = profile.targetLanguage;
+  const postscript = root.querySelector('[data-jy-profile-field="postscript"]');
+  if (postscript) postscript.value = profile.postscript ?? '';
+  const postscriptRole = root.querySelector('[data-jy-profile-field="postscriptRole"]');
+  if (postscriptRole) postscriptRole.value = profile.postscriptRole || 'user';
   renderStandardPromptItems(root, profile);
   renderCustomPromptItems(root, profile);
   const stage = root.querySelector('[data-jy-editor-stage]');
@@ -1449,7 +1744,8 @@ function syncChannelFields(root, settings) {
   root.dataset.jyEditingChannelId = channel.id;
   for (const element of root.querySelectorAll('[data-jy-channel-field]')) {
     const key = element.dataset.jyChannelField;
-    element.value = key === 'excludeParams' ? channel.excludeParams.join(', ') : channel[key] ?? '';
+    if (element.type === 'checkbox') element.checked = channel[key] === true;
+    else element.value = key === 'excludeParams' ? channel.excludeParams.join(', ') : channel[key] ?? '';
   }
   const modelSelect = root.querySelector('[data-jy-model-select]');
   if (modelSelect) {
@@ -1507,6 +1803,7 @@ function syncFields(root, settings) {
 
   for (const [name, value] of Object.entries(settings)) setField(root, name, value);
   syncChannelFields(root, settings);
+  renderWorldInfoList(root);
   syncPromptFields(root, settings);
   syncProcessingFields(root, settings);
   updateApiPanels(root);
@@ -1545,6 +1842,12 @@ function collectSettings(root) {
   }
   const bodyTags = root.querySelector('[data-jy-field="bodyTags"]');
   const excludedTags = root.querySelector('[data-jy-field="excludedTags"]');
+  const replaceTags = root.querySelector('[data-jy-field="replaceTags"]');
+  if (replaceTags) {
+    const parsed = parseTagNamesWithErrors(replaceTags.value);
+    if (parsed.invalid.length) throw new Error(`无法识别替换标签：${parsed.invalid.join('、')}。请填写标签名称或完整尖括号标签。`);
+    current.replaceTags = parsed.tags;
+  }
   if (bodyTags) {
     const parsed = parseTagNamesWithErrors(bodyTags.value);
     if (parsed.invalid.length) throw new Error(`无法识别正文标签：${parsed.invalid.join('、')}。请填写标签名称或完整尖括号标签。`);
@@ -1567,10 +1870,20 @@ function collectSettings(root) {
   if (editing) {
     for (const element of root.querySelectorAll('[data-jy-channel-field]')) {
       const key = element.dataset.jyChannelField;
-      if (['timeoutSec', 'maxTokens', 'temperature'].includes(key)) editing[key] = Number(element.value);
+      if (element.type === 'checkbox') editing[key] = element.checked;
+      else if (['timeoutSec', 'maxTokens', 'temperature'].includes(key)) editing[key] = Number(element.value);
       else if (key === 'excludeParams') editing[key] = element.value;
       else editing[key] = element.value;
     }
+  }
+  const wiPicks = [...root.querySelectorAll('[data-jy-wi-pick]:checked')]
+    .map(element => ({ world: String(element.dataset.jyWorld || ''), uid: Number(element.dataset.jyUid) }))
+    .filter(pick => pick.world && Number.isInteger(pick.uid));
+  if (root.querySelector('[data-jy-wi-list]')) {
+    current.worldInfoWhitelist = { ...(current.worldInfoWhitelist || {}) };
+    const characterKey = worldInfoCharacterKey();
+    if (wiPicks.length) current.worldInfoWhitelist[characterKey] = wiPicks;
+    else delete current.worldInfoWhitelist[characterKey];
   }
   const selected = root.querySelector('[data-jy-field="selectedChannelId"]')?.value;
   if (selected && current.channels.some(channel => channel.id === selected)) current.selectedChannelId = selected;
@@ -1692,6 +2005,22 @@ function diagnosticReportMetadata() {
   };
 }
 
+function downloadLogTxt(entries, scopeLabel) {
+  if (!entries.length) throw new Error('所选范围内没有日志。');
+  const report = formatFullDiagnosticReport(entries, diagnosticReportMetadata());
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  // The BOM keeps Windows Notepad from reading the UTF-8 text as mojibake.
+  const file = new Blob([`\ufeff${report}`], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `jingyi-log-${stamp}.txt`;
+  document.body.appendChild(link); link.click(); link.remove();
+  const timer = setTimeout(() => { URL.revokeObjectURL(url); runtime.timers.delete(timer); }, 30000);
+  runtime.timers.add(timer);
+  toast('success', `已导出${scopeLabel}日志（含请求与返回正文），分享前请检查隐私内容。`);
+}
+
 function renderDiagnosticLog(root, entries = readDiagnostics()) {
   setText(root, '[data-jy-log-count]', `${entries.length} 条`);
   const list = root.querySelector('[data-jy-log-list]');
@@ -1719,6 +2048,15 @@ function renderDiagnosticLog(root, entries = readDiagnostics()) {
     const message = document.createElement('p');
     message.textContent = entry.message;
     item.append(header, message);
+    if (entry.details?.requestTokens && Number.isFinite(Number(entry.details.requestTokens.promptTokens))) {
+      const tokens = document.createElement('p');
+      tokens.className = 'jy-log-tokens';
+      const info = entry.details.requestTokens;
+      tokens.textContent = info.basis === 'usage'
+        ? `请求 ${Number(info.promptTokens).toLocaleString()} tokens（接口实测）`
+        : `请求 ≈ ${Number(info.promptTokens).toLocaleString()} tokens（字符估算）`;
+      item.appendChild(tokens);
+    }
     if (entry.details && Object.keys(entry.details).length) {
       const details = document.createElement('pre');
       details.textContent = JSON.stringify(entry.details, null, 2);
@@ -1991,6 +2329,9 @@ function createControlCenter(rootDocument = document) {
         // Seeds with whatever is already written back, so only the gaps go to the API.
         saveSettings(collectSettings(root));
         await translateMessage(null, { force: false });
+      } else if (action === 'translate-stream') {
+        saveSettings(collectSettings(root));
+        await translateMessageStreaming(null);
       } else if (action === 'test-api') {
         saveSettings(collectSettings(root));
         await testTranslationChannel();
@@ -2115,42 +2456,26 @@ function createControlCenter(rootDocument = document) {
         clearDiagnostics();
         renderDiagnosticLog(root, []);
         toast('success', '本机诊断日志已清空。');
-      } else if (action === 'copy-logs') {
-        const report = formatDiagnosticReport(readDiagnostics(), diagnosticReportMetadata());
-        await copyText(report);
-        toast('success', '安全诊断摘要已复制。');
-      } else if (action === 'copy-full-logs') {
-        const report = formatFullDiagnosticReport(readDiagnostics(), diagnosticReportMetadata());
-        await copyText(report);
-        toast('success', '包含完整副 API 返回的日志已复制，请在发送前检查隐私内容。');
-      } else if (action === 'copy-floor-logs') {
+      } else if (action === 'refresh-wi-entries') {
+        // A dry scan forces SillyTavern to re-sort lore, which re-emits WORLDINFO_ENTRIES_LOADED.
+        try { await getContext().getWorldInfoPrompt([''], 8, true); } catch { /* best-effort cache refresh */ }
+        renderWorldInfoList(root);
+      } else if (action === 'toggle-export-drawer') {
+        const drawer = root.querySelector('[data-jy-export-drawer]');
+        if (drawer) drawer.dataset.open = drawer.dataset.open === 'true' ? 'false' : 'true';
+      } else if (action === 'export-recent') {
+        const input = root.querySelector('[data-jy-export-floors]');
+        const count = clampInteger(Number(input?.value), 1, 999, 1);
         const entries = readDiagnostics();
         const floors = listDiagnosticFloors(entries);
-        const target = Number.isInteger(runtime.activeFloor) && floors.includes(runtime.activeFloor)
-          ? runtime.activeFloor
-          : floors.at(-1);
-        if (!Number.isInteger(target)) throw new Error('日志里还没有带楼层的翻译记录。');
-        const scoped = filterDiagnosticsByFloor(entries, target);
-        const report = formatFullDiagnosticReport(scoped, { ...diagnosticReportMetadata(), floor: target });
-        await copyText(report);
-        toast('success', `第 ${target} 楼的完整日志已复制（含请求与返回），发送前请检查隐私内容。`);
-      } else if (action === 'export-logs') {
-        const entries = readDiagnostics();
-        if (!entries.length) throw new Error('运行记录是空的，没有可导出的内容。');
-        const report = formatFullDiagnosticReport(entries, diagnosticReportMetadata());
-        const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-        // The BOM keeps Windows Notepad from reading the UTF-8 text as mojibake.
-        const file = new Blob([`\ufeff${report}`], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(file);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `jingyi-log-${stamp}.txt`;
-        document.body.appendChild(link); link.click(); link.remove();
-        const timer = setTimeout(() => { URL.revokeObjectURL(url); runtime.timers.delete(timer); }, 30000);
-        runtime.timers.add(timer);
-        toast('success', '完整日志已导出为 TXT，文件含请求与返回正文，分享前请检查隐私内容。');
+        if (!floors.length) throw new Error('日志里还没有带楼层的翻译记录。');
+        const selected = new Set(floors.slice(-count));
+        const scoped = entries.filter(entry => selected.has(entry.floor));
+        downloadLogTxt(scoped, `最近 ${count} 楼`);
+      } else if (action === 'export-all') {
+        downloadLogTxt(readDiagnostics(), '全部');
       }
-      if (['translate', 'translate-missing', 'test-api'].includes(action)) await refreshCurrentCard(root);
+      if (['translate', 'translate-missing', 'translate-stream', 'test-api'].includes(action)) await refreshCurrentCard(root);
     } catch (error) {
       setText(root, '[data-jy-live]', safeError(error));
       toast('error', safeError(error));
@@ -3156,7 +3481,7 @@ function stripPromptPayload(payload) {
     }
   }
   if (typeof payload.prompt === 'string') {
-    const clean = stripGeneratedTranslationLines(payload.prompt);
+    const clean = stripGeneratedTranslationLines(payload.prompt, undefined, 'prompt');
     if (clean !== payload.prompt) {
       payload.prompt = clean;
       stripped += 1;
@@ -3200,6 +3525,13 @@ function registerRuntimeEvents() {
   bindEvent(eventTypes.GENERATION_STOPPED, () => { runtime.mainGenerationActive = false; runtime.generationGate.clear(); });
   bindEvent(eventTypes.MESSAGE_SWIPED, messageId => scheduleAuto(messageId, 'swipe'));
   bindEvent(eventTypes.MESSAGE_EDITED, messageId => scheduleAuto(messageId, 'edit'));
+  // The readable-entry cache for the token-saving whitelist and the force-activation matcher.
+  // SillyTavern emits this whenever it re-sorts lore (chat switch, editor change, every scan).
+  if (eventTypes.WORLDINFO_ENTRIES_LOADED) {
+    bindEvent(eventTypes.WORLDINFO_ENTRIES_LOADED, lore => {
+      if (lore && Array.isArray(lore.globalLore)) runtime.wiEntries = lore;
+    });
+  }
   bindEvent(eventTypes.CHAT_CHANGED, () => {
     runtime.mainGenerationActive = false;
     cancelPendingWork();
@@ -3232,7 +3564,37 @@ function cleanupRuntime() {
 
 export function interceptGeneration(chat) {
   runtime.interceptorSeen = true;
+  // The host scans worldinfo AFTER interceptors, using the stripped text, so translated names can
+  // never fire entries on their own. Force-activate the entries our translations DO match so the
+  // main prompt keeps reacting to translated terms; the one-shot list clears after each scan.
+  const translations = Array.isArray(chat)
+    ? chat.map(item => extractTranslationBlockText(item?.mes)).filter(Boolean).join('\n')
+    : '';
+  if (translations) forceActivateWorldInfoFromText(translations);
   return interceptGenerationChat(chat);
+}
+
+function forceActivateWorldInfoFromText(text) {
+  const entries = readableWorldInfoEntries();
+  if (!entries.length) return;
+  const context = getContext();
+  const eventType = context.eventTypes?.WORLDINFO_FORCE_ACTIVATE;
+  if (!eventType || typeof context.eventSource?.emit !== 'function') return;
+  const haystack = text.toLowerCase();
+  const hits = [];
+  for (const entry of entries) {
+    const keys = (Array.isArray(entry.key) ? entry.key.flat() : [])
+      .map(key => String(key ?? '').trim().replace(/^\/+|\/+$/g, ''))
+      .filter(Boolean);
+    if (keys.some(key => haystack.includes(key.toLowerCase()))) {
+      hits.push({ world: entry.world, uid: entry.uid });
+    }
+  }
+  if (hits.length) {
+    try { context.eventSource.emit(eventType, hits); } catch (error) {
+      console.warn(`[${APP_NAME}] 译名强制激活世界书条目失败。`, error);
+    }
+  }
 }
 
 globalThis[INTERCEPTOR_NAME] = interceptGeneration;

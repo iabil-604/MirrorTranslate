@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.12.9';
+} from './prompts.js?v=0.13.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.12.9';
+export const APP_VERSION = '0.13.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -20,9 +20,18 @@ export const TRANSLATION_START = '\u2063\u2062\u2063';
 export const TRANSLATION_END = '\u2063\u2064\u2063';
 export const AFFIX_START = '\u2063\u200b\u2063';
 export const AFFIX_END = '\u2063\u200c\u2063';
+// Replace-tag regions keep the original inside a hidden block: prompts drop it, display hides it,
+// and re-translation restores it, so the swap is reversible without touching swipes.
+export const HIDDEN_START = '\u2063\u200d\u2063';
+export const HIDDEN_END = '\u2063\ufeff\u2063';
 const SOURCE_BLOCK_RE = new RegExp(`${SOURCE_START}([\\s\\S]*?)${SOURCE_END}`, 'g');
 const TRANSLATION_BLOCK_RE = new RegExp(`\\n?${TRANSLATION_START}([\\s\\S]*?)${TRANSLATION_END}`, 'g');
 const AFFIX_RE = new RegExp(`${AFFIX_START}[\\s\\S]*?${AFFIX_END}`, 'g');
+const HIDDEN_BLOCK_RE = new RegExp(`\\n?${HIDDEN_START}[\\s\\S]*?${HIDDEN_END}`, 'g');
+// Tempered patterns: the pair's translation payload may not cross a boundary, so a bilingual
+// source block can never falsely pair up with a later replace pair's hidden original.
+const REPLACE_PAIR_RE = new RegExp(`${SOURCE_START}(?:(?!${SOURCE_START}|${SOURCE_END})[\\s\\S])*?${SOURCE_END}\\n?${HIDDEN_START}([\\s\\S]*?)${HIDDEN_END}`, 'g');
+const REPLACE_PAIR_TEXT_RE = new RegExp(`${SOURCE_START}((?:(?!${SOURCE_END})[\\s\\S])*)${SOURCE_END}\\n?${HIDDEN_START}(?:(?!${HIDDEN_END})[\\s\\S])*${HIDDEN_END}`, 'g');
 
 const GENERATED_BLOCK_RE = new RegExp(`(?:^|\\n)\\{${INVISIBLE_MARKER}([\\s\\S]*?)${INVISIBLE_MARKER}\\}[ \\t]*(?=\\n|$)`, 'g');
 const LEGACY_GENERATED_LINE_RE = new RegExp(`^\\{${INVISIBLE_MARKER}[^\\r\\n]*\\}[ \\t]*$`);
@@ -43,6 +52,8 @@ export const DEFAULT_CHANNEL = Object.freeze({
   timeoutSec: 240,
   maxTokens: 60000,
   temperature: 0.15,
+  tokenSaving: false,
+  reasoningEffort: '',
   excludeParams: [],
 });
 
@@ -59,6 +70,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   floatingStyle: 'auto',
   retries: 1,
   bodyTags: Object.freeze(['story_scene']),
+  replaceTags: Object.freeze([]),
   excludedTags: Object.freeze([]),
   preserveLineRules: '',
   segmentPrefix: '',
@@ -69,7 +81,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   includeWorldbook: true,
   includeCharacterCard: true,
   includeRecentContext: true,
-  contextMessages: 6,
+  contextMessages: 2,
   selectedPromptProfileId: DEFAULT_PROMPT_PROFILE.id,
   promptProfiles: [DEFAULT_PROMPT_PROFILE],
 });
@@ -176,6 +188,8 @@ export function matchesPreserveLine(line, rules) {
   });
 }
 
+const REASONING_EFFORTS = Object.freeze(['', 'minimal', 'low', 'medium', 'high']);
+
 export function normalizeChannel(value = {}, fallbackId = DEFAULT_CHANNEL.id) {
   const source = value && typeof value === 'object' ? value : {};
   const id = String(source.id || fallbackId).trim() || fallbackId;
@@ -192,6 +206,8 @@ export function normalizeChannel(value = {}, fallbackId = DEFAULT_CHANNEL.id) {
     timeoutSec: clampInteger(source.timeoutSec, 10, 600, DEFAULT_CHANNEL.timeoutSec),
     maxTokens: clampInteger(source.maxTokens, 256, MAX_OUTPUT_TOKENS_LIMIT, DEFAULT_CHANNEL.maxTokens),
     temperature: clampNumber(source.temperature, 0, 2, DEFAULT_CHANNEL.temperature),
+    tokenSaving: source.tokenSaving === true,
+    reasoningEffort: REASONING_EFFORTS.includes(source.reasoningEffort) ? source.reasoningEffort : '',
     excludeParams: parseExcludedParams(source.excludeParams),
   };
 }
@@ -248,7 +264,11 @@ export function normalizePromptProfile(value = {}, fallbackId = DEFAULT_PROMPT_P
     'forbiddenPhrases',
     'glossary',
     'examples',
+    'postscript',
   ]) profile[key] = String(source[key] ?? base[key] ?? '');
+  profile.postscriptRole = ['system', 'user', 'assistant'].includes(source.postscriptRole)
+    ? source.postscriptRole
+    : 'user';
   const rawSections = Array.isArray(source.customSections) ? source.customSections.slice(0, 30) : [];
   const usedIds = new Set();
   profile.customSections = rawSections.map((section, index) => {
@@ -306,6 +326,7 @@ export function mergeSettings(value = {}) {
     DEFAULT_SETTINGS.bodyTags,
   );
   merged.excludedTags = parseTagNames(source.excludedTags);
+  merged.replaceTags = parseTagNames(source.replaceTags);
   merged.preserveLineRules = typeof source.preserveLineRules === 'string'
     ? normalizeNewlines(source.preserveLineRules)
     : '';
@@ -353,6 +374,16 @@ export function mergeSettings(value = {}) {
     merged.translationSuffix = `${typeof source.translationSuffix === 'string' ? source.translationSuffix : ''}}`;
   }
   merged.contextMessages = clampInteger(merged.contextMessages, 1, 20, DEFAULT_SETTINGS.contextMessages);
+  // Worldbook whitelist for the token-saving mode, stored per character card so switching
+  // characters switches the selection with it.
+  merged.worldInfoWhitelist = {};
+  const rawWhitelist = source.worldInfoWhitelist && typeof source.worldInfoWhitelist === 'object' ? source.worldInfoWhitelist : {};
+  for (const [characterKey, list] of Object.entries(rawWhitelist)) {
+    const picks = (Array.isArray(list) ? list : [])
+      .filter(item => item && typeof item === 'object' && item.world && Number.isInteger(Number(item.uid)))
+      .map(item => ({ world: String(item.world), uid: Number(item.uid) }));
+    if (picks.length) merged.worldInfoWhitelist[characterKey] = picks;
+  }
   merged.includeWorldbook = Boolean(merged.includeWorldbook);
   merged.includeCharacterCard = Boolean(merged.includeCharacterCard);
   merged.includeRecentContext = Boolean(merged.includeRecentContext);
@@ -385,6 +416,21 @@ export function mergeSettings(value = {}) {
 
 export function normalizeNewlines(text) {
   return String(text ?? '').replace(/\r\n?/g, '\n');
+}
+
+// No tokenizer ships with the extension, so request size is estimated: CJK-heavy prompt text runs
+// close to one token per character while JSON scaffolding and Latin text average roughly four
+// characters per token under common vocabularies.
+const CJK_CHAR_RE = /[\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/g;
+
+export function estimateRequestTokens(messages) {
+  let text = '';
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const content = message?.content;
+    text += typeof content === 'string' ? content : JSON.stringify(content ?? '');
+  }
+  const cjk = (text.match(CJK_CHAR_RE) || []).length;
+  return Math.round(cjk * 1.05 + (text.length - cjk) / 3.8);
 }
 
 export function normalizeOpenAiBaseUrl(value) {
@@ -423,6 +469,8 @@ export function createIndependentRequest(settings, messages) {
     presence_penalty: 0,
     frequency_penalty: 0,
   };
+  // Sent only when the channel picks one; stays excludable like the numeric knobs above.
+  if (channel.reasoningEffort) payload.reasoning_effort = channel.reasoningEffort;
   const protectedFields = new Set(['stream', 'messages', 'model', 'chat_completion_source', 'reverse_proxy', 'proxy_password']);
   for (const parameter of channel.excludeParams) {
     if (!protectedFields.has(parameter)) delete payload[parameter];
@@ -461,8 +509,14 @@ export function createGenerationGate() {
   });
 }
 
-export function stripGeneratedTranslationLines(text, metadata) {
-  return upgradeLegacyBilingual(text, metadata)
+// The source view (default) restores replace-tag regions to their original language for
+// re-translation; the prompt view keeps the visible translation and drops the hidden original.
+export function stripGeneratedTranslationLines(text, metadata, view = 'source') {
+  const upgraded = upgradeLegacyBilingual(text, metadata);
+  const collapsed = view === 'prompt'
+    ? upgraded.replace(HIDDEN_BLOCK_RE, '')
+    : upgraded.replace(REPLACE_PAIR_RE, (_match, original) => original);
+  return collapsed
     .replace(TRANSLATION_BLOCK_RE, '')
     .replace(SOURCE_BLOCK_RE, (_match, source) => source.replace(AFFIX_RE, ''))
     .replace(GENERATED_BLOCK_RE, '')
@@ -551,7 +605,7 @@ export function interceptGenerationChat(chat) {
   let changed = 0;
   for (const [index, item] of chat.entries()) {
     if (!item || typeof item.mes !== 'string') continue;
-    const stripped = stripGeneratedTranslationLines(item.mes, item.extra?.[MESSAGE_META_KEY]);
+    const stripped = stripGeneratedTranslationLines(item.mes, item.extra?.[MESSAGE_META_KEY], 'prompt');
     if (stripped !== item.mes) {
       // Some hosts pass shallow prompt copies. Never mutate the canonical message object.
       chat[index] = { ...item, mes: stripped };
@@ -559,6 +613,14 @@ export function interceptGenerationChat(chat) {
     }
   }
   return changed;
+}
+
+// The plain translated text of a floor, used to trigger the host's worldinfo from translations.
+export function extractTranslationBlockText(text) {
+  const source = normalizeNewlines(String(text ?? ''));
+  const chunks = [];
+  for (const match of source.matchAll(TRANSLATION_BLOCK_RE)) chunks.push(match[1].replace(AFFIX_RE, ''));
+  return chunks.join('\n');
 }
 
 function scanTagGroups(source, tagName, options = {}) {
@@ -632,9 +694,10 @@ export function hasUnclosedTag(text, tagName) {
   return depth > 0;
 }
 
-export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags) {
+export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags, options = {}) {
   const source = normalizeNewlines(text);
   const tags = parseTagNames(tagNames, DEFAULT_SETTINGS.bodyTags);
+  const mode = options.mode === 'replace' ? 'replace' : 'bilingual';
   const regions = [];
   const missingTags = [];
   let unbalanced = 0;
@@ -665,10 +728,14 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags)
     const selected = groups.at(-1);
     regions.push({
       ...selected,
+      mode,
       inner: source.slice(selected.contentStart, selected.closeStart),
     });
   }
   if (!regions.length) {
+    if (mode === 'replace') {
+      return { source, regions, missingTags, unbalanced, assumedCloses };
+    }
     if (unbalanced) {
       throw new Error(`正文标签没有成对闭合：${tags.map(tag => `<${tag}>`).join('、')}。这一楼可能还在生成，或预设输出的标签不完整。`);
     }
@@ -1300,6 +1367,57 @@ function markedAffix(value) {
 
 export function renderSourceBlock(source, options = {}) {
   return `${SOURCE_START}${markedAffix(options.segmentPrefix ?? '')}${source}${markedAffix(options.segmentSuffix ?? '')}${SOURCE_END}`;
+}
+
+// A replace-tag pair: the translation rides in the source-block position so the host prompt keeps
+// it as plain floor text, while the original hides in the trailing block for re-translation.
+export function renderReplacePair(translation, source) {
+  return `${SOURCE_START}${String(translation ?? '')}${SOURCE_END}\n${HIDDEN_START}${String(source ?? '')}${HIDDEN_END}`;
+}
+
+export function assembleReplace(layout, translationMap, options = {}) {
+  const allowMissing = options.allowMissing === true;
+  const pieces = [];
+  for (const part of layout) {
+    if (part.type === 'raw' || part.type === 'blank') {
+      pieces.push(part.text);
+      continue;
+    }
+    const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
+    const translations = ids.map(id => translationMap.get(id)).filter(Boolean);
+    const sourceText = part.sourceText ?? part.text;
+    if (!translations.length) {
+      if (!allowMissing) throw new Error(`缺少第 ${ids.join('、')} 段译文。`);
+      // Untranslated replace segments stay as their original plain text, ready for 补译.
+      pieces.push(sourceText);
+      continue;
+    }
+    pieces.push(renderReplacePair(translations.join('\n'), sourceText));
+  }
+  return pieces.join('');
+}
+
+// Seeds for 补译: each replace pair's source block holds that part's translation.
+export function extractReplaceTranslations(text, options = {}) {
+  const segmented = segmentSource(stripGeneratedTranslationLines(text), { ...options, legacyWrappers: false });
+  const found = [];
+  for (const match of String(text ?? '').matchAll(REPLACE_PAIR_TEXT_RE)) found.push(match[1].replace(AFFIX_RE, ''));
+  const translations = new Map();
+  segmented.layout.filter(part => part.type === 'segment').forEach((part, index) => {
+    const body = found[index];
+    if (typeof body !== 'string' || !body.trim()) return;
+    const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
+    const lines = normalizeNewlines(body).split('\n');
+    if (ids.length === lines.length) {
+      ids.forEach((id, line) => {
+        const translation = lines[line].trim();
+        if (translation) translations.set(id, translation);
+      });
+    } else if (ids.length === 1) {
+      translations.set(ids[0], normalizeNewlines(body).replace(/\n+/g, ' ').trim());
+    }
+  });
+  return translations;
 }
 
 // The blank line that separates one pair from the next lives INSIDE the boundaries, so stripping the
