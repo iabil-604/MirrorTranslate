@@ -32,13 +32,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.12.8';
+} from './core.js?v=0.12.9';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.12.8';
+} from './processing.js?v=0.12.9';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -54,8 +54,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.12.8';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.8';
+} from './prompts.js?v=0.12.9';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.9';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -64,7 +64,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.12.8';
+} from './diagnostics.js?v=0.12.9';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -209,7 +209,7 @@ const CONTROL_CENTER_MARKUP = `
 
 <section class="jy-page" data-jy-page="logs" role="tabpanel" hidden>
 <header class="jy-page-heading"><div><h1>运行记录</h1><span class="jy-page-context" data-jy-log-count>0 条</span></div></header>
-<div class="jy-log-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="copy-logs">复制报错摘要</button><button type="button" class="jy-button" data-jy-action="copy-full-logs">复制完整日志</button><button type="button" class="jy-button" data-jy-action="copy-floor-logs">复制本楼日志</button><div class="jy-log-tools"><button type="button" class="jy-button" data-jy-action="refresh-logs">刷新</button><button type="button" class="jy-button" data-jy-action="clear-logs">清空</button></div></div>
+<div class="jy-log-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="copy-logs">复制报错摘要</button><button type="button" class="jy-button" data-jy-action="copy-full-logs">复制完整日志</button><button type="button" class="jy-button" data-jy-action="copy-floor-logs">复制本楼日志</button><button type="button" class="jy-button" data-jy-action="export-logs">导出 TXT</button><div class="jy-log-tools"><button type="button" class="jy-button" data-jy-action="refresh-logs">刷新</button><button type="button" class="jy-button" data-jy-action="clear-logs">清空</button></div></div>
 <p class="jy-muted">展开记录可查看模型完整回复。完整日志含正文，分享前请检查。</p><div class="jy-log-list" data-jy-log-list></div>
 </section>
 <p class="jy-sr-only" aria-live="polite" data-jy-live></p>
@@ -2134,6 +2134,21 @@ function createControlCenter(rootDocument = document) {
         const report = formatFullDiagnosticReport(scoped, { ...diagnosticReportMetadata(), floor: target });
         await copyText(report);
         toast('success', `第 ${target} 楼的完整日志已复制（含请求与返回），发送前请检查隐私内容。`);
+      } else if (action === 'export-logs') {
+        const entries = readDiagnostics();
+        if (!entries.length) throw new Error('运行记录是空的，没有可导出的内容。');
+        const report = formatFullDiagnosticReport(entries, diagnosticReportMetadata());
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+        // The BOM keeps Windows Notepad from reading the UTF-8 text as mojibake.
+        const file = new Blob([`\ufeff${report}`], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(file);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `jingyi-log-${stamp}.txt`;
+        document.body.appendChild(link); link.click(); link.remove();
+        const timer = setTimeout(() => { URL.revokeObjectURL(url); runtime.timers.delete(timer); }, 30000);
+        runtime.timers.add(timer);
+        toast('success', '完整日志已导出为 TXT，文件含请求与返回正文，分享前请检查隐私内容。');
       }
       if (['translate', 'translate-missing', 'test-api'].includes(action)) await refreshCurrentCard(root);
     } catch (error) {
