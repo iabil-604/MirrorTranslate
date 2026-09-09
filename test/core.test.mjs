@@ -66,6 +66,8 @@ test('default settings use story_scene and migrate the legacy single tag', () =>
   assert.deepEqual(parseTagNames('</story_scene>\n<status/>'), ['story_scene', 'status']);
   assert.deepEqual(parseTagNamesWithErrors('story_scene\n<bad tag>').invalid, ['<bad', 'tag>']);
   assert.equal(DEFAULT_SETTINGS.retries, 1);
+  assert.equal(DEFAULT_SETTINGS.streamingWriteback, false);
+  assert.equal(DEFAULT_SETTINGS.contextMessages, 2);
   assert.equal(DEFAULT_SETTINGS.preserveLineRules, '');
 });
 

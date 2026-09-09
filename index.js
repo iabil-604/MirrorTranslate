@@ -38,13 +38,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.13.0';
+} from './core.js?v=0.13.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.13.0';
+} from './processing.js?v=0.13.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -60,15 +60,15 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.13.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.13.0';
+} from './prompts.js?v=0.13.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.13.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.13.0';
+} from './diagnostics.js?v=0.13.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -141,7 +141,7 @@ const CONTROL_CENTER_MARKUP = `
   <div class="jy-progress" aria-hidden="true"><span data-jy-progress></span></div>
   <p class="jy-muted" data-jy-task-message>打开一段故事，从这里开始翻译。</p>
   <dl class="jy-desk-facts"><div><dt>当前楼层</dt><dd data-jy-floor>—</dd></div><div><dt>滑动页</dt><dd data-jy-swipe>—</dd></div><div><dt>正文规模</dt><dd data-jy-segments>—</dd></div><div><dt>目标语言</dt><dd data-jy-desk-target>—</dd></div></dl>
-  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button><button type="button" class="jy-button" data-jy-action="translate-stream">流式翻译</button></div>
+  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button></div>
  </div>
  <aside class="jy-desk-side">
   <div class="jy-brief"><span class="jy-overline">翻译方案</span><h3 data-jy-active-profile>待读取</h3><button type="button" class="jy-button" data-jy-action="open-prompt">编辑规则 →</button></div>
@@ -149,7 +149,7 @@ const CONTROL_CENTER_MARKUP = `
   <div class="jy-brief"><span class="jy-overline">参考资料</span><p class="jy-muted" data-jy-context-summary></p></div>
  </aside>
 </div>
-<div class="jy-automation"><div><h3>自动接续翻译</h3><p class="jy-muted">主回复完成后，自动补上译文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label></div>
+<div class="jy-automation"><div><h3>自动接续翻译</h3><p class="jy-muted">主回复完成后，自动补上译文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label><label class="jy-check"><input type="checkbox" data-jy-field="streamingWriteback">流式写回（beta，勾选后所有翻译走流式；仅独立模式，跟随模式自动回退整包）</label></div>
 </section>
 
 <section class="jy-page" data-jy-page="prompt" role="tabpanel" hidden>
@@ -1204,7 +1204,11 @@ async function streamTranslationBatch(messages, settings, signal) {
 }
 
 async function translateMessageStreaming(messageId = null, { quiet = false } = {}) {
-  if (runtime.settings.apiMode !== 'independent') throw new Error('流式翻译只在独立模式下可用：跟随模式借用的接口拿不到增量返回。');
+  if (runtime.settings.apiMode !== 'independent') {
+    // The follow mode borrows the host generation API, which only returns whole responses.
+    recordDiagnostic('warn', 'translation.stream-skip', '跟随模式拿不到流式返回，本次改用整包翻译。', {});
+    return translateMessage(messageId, options);
+  }
   runtime.activeFloor = Number.isInteger(Number(messageId)) ? Number(messageId) : null;
   const epoch = runtime.epoch;
   const settings = runtime.settings;
@@ -1827,6 +1831,7 @@ function collectSettings(root) {
     'autoGeneration',
     'autoSwipe',
     'autoEdit',
+    'streamingWriteback',
     'showFloatingButton',
     'paragraphPerLine',
     'includeWorldbook',
@@ -2324,14 +2329,13 @@ function createControlCenter(rootDocument = document) {
         await persistProcessing(root, next);
       } else if (action === 'translate') {
         saveSettings(collectSettings(root));
-        await translateMessage(null, { force: true });
+        if (runtime.settings.streamingWriteback) await translateMessageStreaming(null);
+        else await translateMessage(null, { force: true });
       } else if (action === 'translate-missing') {
         // Seeds with whatever is already written back, so only the gaps go to the API.
         saveSettings(collectSettings(root));
-        await translateMessage(null, { force: false });
-      } else if (action === 'translate-stream') {
-        saveSettings(collectSettings(root));
-        await translateMessageStreaming(null);
+        if (runtime.settings.streamingWriteback) await translateMessageStreaming(null);
+        else await translateMessage(null, { force: false });
       } else if (action === 'test-api') {
         saveSettings(collectSettings(root));
         await testTranslationChannel();
@@ -2475,7 +2479,7 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'export-all') {
         downloadLogTxt(readDiagnostics(), '全部');
       }
-      if (['translate', 'translate-missing', 'translate-stream', 'test-api'].includes(action)) await refreshCurrentCard(root);
+      if (['translate', 'translate-missing', 'test-api'].includes(action)) await refreshCurrentCard(root);
     } catch (error) {
       setText(root, '[data-jy-live]', safeError(error));
       toast('error', safeError(error));
@@ -3413,7 +3417,8 @@ function scheduleAuto(messageId, reason) {
       if (reason === 'generation' && !settings.autoGeneration) return;
       if (reason === 'swipe' && !settings.autoSwipe) return;
       if (reason === 'edit' && !settings.autoEdit) return;
-      await translateMessage(Number(messageId), { force: reason === 'edit', quiet: true });
+      if (settings.streamingWriteback) await translateMessageStreaming(Number(messageId), { quiet: true });
+      else await translateMessage(Number(messageId), { force: reason === 'edit', quiet: true });
     } catch (error) {
       if (isAbortError(error)) return;
       const message = safeError(error);

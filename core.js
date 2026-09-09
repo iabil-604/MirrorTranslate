@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.13.0';
+} from './prompts.js?v=0.13.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.13.0';
+export const APP_VERSION = '0.13.1';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -63,6 +63,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   autoGeneration: true,
   autoSwipe: true,
   autoEdit: false,
+  streamingWriteback: false,
   apiMode: 'follow',
   selectedChannelId: DEFAULT_CHANNEL.id,
   channels: [DEFAULT_CHANNEL],
@@ -390,6 +391,7 @@ export function mergeSettings(value = {}) {
   merged.autoGeneration = Boolean(merged.autoGeneration);
   merged.autoSwipe = Boolean(merged.autoSwipe);
   merged.autoEdit = Boolean(merged.autoEdit);
+  merged.streamingWriteback = Boolean(merged.streamingWriteback);
   merged.showFloatingButton = Boolean(merged.showFloatingButton);
   merged.floatingStyle = FLOATING_STYLES.includes(merged.floatingStyle) ? merged.floatingStyle : DEFAULT_SETTINGS.floatingStyle;
   for (const key of [

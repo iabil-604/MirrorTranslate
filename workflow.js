@@ -1,5 +1,5 @@
-import { getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.13.0';
-import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.13.0';
+import { getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.13.1';
+import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.13.1';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
