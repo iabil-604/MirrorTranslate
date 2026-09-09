@@ -32,13 +32,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.12.7';
+} from './core.js?v=0.12.8';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.12.7';
+} from './processing.js?v=0.12.8';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -54,8 +54,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.12.7';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.7';
+} from './prompts.js?v=0.12.8';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.12.8';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -64,7 +64,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.12.7';
+} from './diagnostics.js?v=0.12.8';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -136,7 +136,7 @@ const CONTROL_CENTER_MARKUP = `
   <div class="jy-progress" aria-hidden="true"><span data-jy-progress></span></div>
   <p class="jy-muted" data-jy-task-message>打开一段故事，从这里开始翻译。</p>
   <dl class="jy-desk-facts"><div><dt>当前楼层</dt><dd data-jy-floor>—</dd></div><div><dt>滑动页</dt><dd data-jy-swipe>—</dd></div><div><dt>正文规模</dt><dd data-jy-segments>—</dd></div><div><dt>目标语言</dt><dd data-jy-desk-target>—</dd></div></dl>
-  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button></div>
+  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button></div>
  </div>
  <aside class="jy-desk-side">
   <div class="jy-brief"><span class="jy-overline">翻译方案</span><h3 data-jy-active-profile>待读取</h3><button type="button" class="jy-button" data-jy-action="open-prompt">编辑规则 →</button></div>
@@ -182,7 +182,7 @@ const CONTROL_CENTER_MARKUP = `
  <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label>
  </div></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
 </div>
-<div class="jy-retry-setting"><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-field="retries" min="0" max="3" step="1"></label><p class="jy-muted">适用于当前翻译通道。</p></div>
+<div class="jy-retry-setting"><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-field="retries" min="0" max="5" step="1"></label><p class="jy-muted">适用于当前翻译通道。</p></div>
 <footer class="jy-footer"><span class="jy-save-note">修改后保存设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-settings">保存设置</button></footer>
 </section>
 
@@ -945,7 +945,13 @@ async function translateMessage(messageId = null, { force = false, quiet = false
   if (snapshot.translated && !force) return { skipped: true, reason: 'already-translated', snapshot };
 
   const lockKey = `${snapshot.chatId}|${snapshot.messageId}|${snapshot.swipeId}`;
-  if (runtime.inflight.has(lockKey)) return runtime.inflight.get(lockKey).promise;
+  const existing = runtime.inflight.get(lockKey);
+  if (existing && !force) {
+    if (!quiet) toast('info', '该楼层翻译正在进行，已沿用本次任务。');
+    return existing.promise;
+  }
+  // A forced re-translate supersedes the in-flight run so the new settings take effect at once.
+  if (existing) existing.controller.abort();
   const controller = new AbortController();
 
   const work = (async () => {
@@ -2682,7 +2688,7 @@ async function translateScratchText(text, settings, signal) {
   const source = String(text ?? '').trim();
   if (!source) throw new Error('先粘一段原文进来。');
   const profile = getActivePromptProfile(settings);
-  const packet = { glossary: String(profile.glossary ?? '').slice(0, 5000), character: '', worldbook: '', recent: '' };
+  const packet = { glossary: String(profile.glossary ?? ''), character: '', worldbook: '', recent: '' };
   const recovered = await invokeTranslationBatch([{ id: 1, text: source }], settings, signal, packet);
   const result = recovered.translations.get(1);
   if (!result) throw new Error('副模型没有返回可用译文。');

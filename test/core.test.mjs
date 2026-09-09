@@ -87,6 +87,8 @@ test('legacy single-channel settings migrate into a saved channel', () => {
 
 test('channel output budget scales with the raised default and no longer flattens above 32768', () => {
   assert.equal(getActiveChannel(mergeSettings({})).maxTokens, 60000);
+  assert.equal(getActiveChannel(mergeSettings({})).timeoutSec, 240);
+  assert.equal(mergeSettings({ retries: 9 }).retries, 5);
   const wide = mergeSettings({
     channels: [{ id: 'c1', url: 'https://example.com/v1', key: 'k', model: 'm', maxTokens: 120000 }],
     selectedChannelId: 'c1',
@@ -186,20 +188,25 @@ test('logs can be exported per floor and carry the request without leaking it in
 });
 
 test('long floors are split into batches that fit the channel output budget', () => {
-  assert.equal(translationCharBudget(4096), 1434);
+  assert.equal(translationCharBudget(4096), 3277);
   assert.equal(translationCharBudget(256), 400);
-  assert.equal(translationCharBudget(32768), 11469);
-  assert.equal(translationCharBudget(60000), 21000);
-  assert.equal(translationCharBudget(200000), 70000);
+  assert.equal(translationCharBudget(32768), 26214);
+  assert.equal(translationCharBudget(60000), 48000);
+  assert.equal(translationCharBudget(200000), 160000);
+  assert.equal(translationCharBudget(1000000), 160000);
 
   const segments = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
   const batches = planTranslationBatches(segments, { maxChars: translationCharBudget(4096) });
   assert.ok(batches.length > 1, '40 段长正文必须拆批');
   assert.deepEqual(batches.flat().map(item => item.id), segments.map(item => item.id));
   for (const batch of batches) {
-    assert.ok(batch.length <= 20);
-    assert.ok(batch.reduce((sum, item) => sum + item.text.length, 0) <= 1434 || batch.length === 1);
+    assert.ok(batch.reduce((sum, item) => sum + item.text.length, 0) <= 3277 || batch.length === 1);
   }
+
+  const manySmall = Array.from({ length: 300 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(10) }));
+  const singleBatch = planTranslationBatches(manySmall, { maxChars: 5000 });
+  assert.equal(singleBatch.length, 1, '300 段小正文在字符预算内必须单批，段数不再设限');
+  assert.equal(singleBatch[0].length, 300);
 
   const short = planTranslationBatches([{ id: 1, text: '短い。' }], { maxChars: 1434 });
   assert.equal(short.length, 1);

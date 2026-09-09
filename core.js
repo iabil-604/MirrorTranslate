@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.12.7';
+} from './prompts.js?v=0.12.8';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.12.7';
+export const APP_VERSION = '0.12.8';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -40,7 +40,7 @@ export const DEFAULT_CHANNEL = Object.freeze({
   key: '',
   model: '',
   models: [],
-  timeoutSec: 180,
+  timeoutSec: 240,
   maxTokens: 60000,
   temperature: 0.15,
   excludeParams: [],
@@ -275,7 +275,7 @@ export function mergeSettings(value = {}) {
   merged.theme = ['day', 'night', 'fresh', 'vampire', 'glass'].includes(source.theme) ? source.theme : 'day';
   delete merged.chunkChars;
   delete merged.chunkSegments;
-  merged.retries = clampInteger(merged.retries, 0, 3, DEFAULT_SETTINGS.retries);
+  merged.retries = clampInteger(merged.retries, 0, 5, DEFAULT_SETTINGS.retries);
   merged.apiMode = ['follow', 'independent'].includes(merged.apiMode) ? merged.apiMode : DEFAULT_SETTINGS.apiMode;
   const hasLegacyChannel = ['apiUrl', 'apiKey', 'apiModel'].some(key => String(source[key] ?? '').trim());
   const legacyChannel = normalizeChannel({
@@ -1167,19 +1167,17 @@ function lineProtocolItems(raw) {
 
 // A whole floor sent as one request is capped by the channel's own output budget, so a long floor
 // truncates the JSON and comes back missing most of its ids. Batches are sized from that budget:
-// CJK output runs close to one token per character, plus JSON overhead and the model's own thinking.
+// 0.8 chars per token leaves headroom for JSON overhead and thinking; a truncating channel is
+// recovered by the repair loop rather than by shrinking every batch up front.
 export function translationCharBudget(maxTokens) {
   const tokens = clampInteger(maxTokens, 256, MAX_OUTPUT_TOKENS_LIMIT, DEFAULT_CHANNEL.maxTokens);
-  return clampInteger(Math.round(tokens * 0.35), 400, 70000, 1400);
+  return clampInteger(Math.round(tokens * 0.8), 400, 160000, 1400);
 }
 
 export function planTranslationBatches(segments, options = {}) {
   const list = Array.isArray(segments) ? segments.filter(Boolean) : [];
   if (!list.length) return [];
-  // The character budget is the real constraint; a fixed segment cap would otherwise split a floor
-  // into needless requests whenever the channel allows a large output.
-  const maxChars0 = clampInteger(options.maxChars, 200, 200000, 1400);
-  const maxSegments = clampInteger(options.maxSegments, 1, 500, clampInteger(Math.round(maxChars0 / 55), 12, 100, 20));
+  // The character budget is the only constraint; segment counts never split a batch.
   const maxChars = clampInteger(options.maxChars, 200, 200000, 1400);
   const batches = [];
   let current = [];
@@ -1187,7 +1185,7 @@ export function planTranslationBatches(segments, options = {}) {
   for (const segment of list) {
     const length = String(segment?.text ?? '').length;
     // A single oversized segment still travels alone rather than being dropped or split.
-    if (current.length && (current.length >= maxSegments || chars + length > maxChars)) {
+    if (current.length && chars + length > maxChars) {
       batches.push(current);
       current = [];
       chars = 0;

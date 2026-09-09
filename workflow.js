@@ -1,7 +1,6 @@
-import { getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.12.7';
-import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.12.7';
+import { getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.12.8';
+import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.12.8';
 
-const CONTEXT_CHAR_LIMIT = 14000;
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
 function cleanReferenceText(value, metadata) {
@@ -11,12 +10,6 @@ function cleanReferenceText(value, metadata) {
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-}
-
-function clipText(value, limit = CONTEXT_CHAR_LIMIT) {
-  const text = cleanReferenceText(value);
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit)}\n[参考资料已按长度截断]`;
 }
 
 function uniqueChunks(chunks) {
@@ -110,10 +103,10 @@ export async function collectTranslationContext(snapshot, settings) {
     Promise.resolve(buildCharacterContext(snapshot.context, settings.includeCharacterCard)),
   ]);
   return {
-    glossary: clipText(getActivePromptProfile(settings).glossary, 5000),
-    character: clipText(character, 7000),
-    worldbook: clipText(worldbook),
-    recent: clipText(buildRecentContext(snapshot, settings), 10000),
+    glossary: cleanReferenceText(getActivePromptProfile(settings).glossary),
+    character: cleanReferenceText(character),
+    worldbook: cleanReferenceText(worldbook),
+    recent: cleanReferenceText(buildRecentContext(snapshot, settings)),
   };
 }
 
