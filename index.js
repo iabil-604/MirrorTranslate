@@ -38,13 +38,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.13.1';
+} from './core.js?v=0.13.2';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.13.1';
+} from './processing.js?v=0.13.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -60,15 +60,15 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.13.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.13.1';
+} from './prompts.js?v=0.13.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.13.2';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.13.1';
+} from './diagnostics.js?v=0.13.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -1165,7 +1165,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
 // Streaming beta: same request content as the one-shot path, but the SSE deltas are folded into
 // the floor as completed JSON items arrive. The final pass reuses the ordinary write pipeline, so
 // the finished floor is byte-identical to a non-streaming run.
-async function streamTranslationBatch(messages, settings, signal) {
+async function streamTranslationBatch(messages, settings, signal, onDelta = null) {
   const payload = { ...createIndependentRequest(settings, messages), stream: true };
   const response = await fetch('/api/backends/chat-completions/generate', {
     method: 'POST',
@@ -1196,7 +1196,10 @@ async function streamTranslationBatch(messages, settings, signal) {
         const chunk = JSON.parse(body);
         const choice = chunk.choices?.[0];
         const delta = choice?.delta?.content ?? choice?.text ?? '';
-        if (delta) text += delta;
+        if (delta) {
+          text += delta;
+          if (onDelta) onDelta(text);
+        }
       } catch { /* keep partial JSON in the buffer for the next frame */ }
     }
   }
@@ -1260,6 +1263,33 @@ async function translateMessageStreaming(messageId = null, { quiet = false } = {
       lastWrite = now;
       writeProgress().catch(() => {});
     };
+    // Chunk-level progress: pull completed JSON items out of the partial stream text so the
+    // floor fills in while the model is still generating. The end-of-batch pass stays
+    // authoritative, so a messy partial read can never corrupt the final floor.
+    let lastDelta = 0;
+    const foldStreamedItems = pending => accumulated => {
+      const now = Date.now();
+      if (now - lastDelta < 600) return;
+      lastDelta = now;
+      try {
+        const partial = recoverStructuredTranslations(accumulated, pending);
+        let changed = false;
+        for (const [id, value] of partial.translations) {
+          if (!translations.has(id)) {
+            translations.set(id, value);
+            changed = true;
+          }
+        }
+        if (changed) {
+          updateTask({
+            status: 'running',
+            message: `已恢复 ${translations.size} / ${total} 段。`,
+            progress: 10 + Math.round(80 * translations.size / total),
+          });
+          maybeProgress();
+        }
+      } catch { /* partial text may not parse yet */ }
+    };
 
     for (const [batchIndex, batch] of batches.entries()) {
       const pending = batch.filter(segment => !translations.has(segment.id));
@@ -1268,7 +1298,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false } = {
       const messages = buildTranslationMessages(pending, settings, packet, phase);
       let raw = '';
       try {
-        raw = await streamTranslationBatch(messages, settings, controller.signal);
+        raw = await streamTranslationBatch(messages, settings, controller.signal, foldStreamedItems(pending));
       } catch (error) {
         if (controller.signal.aborted || isAbortError(error)) throw error;
         recordDiagnostic('warn', 'translation.stream-fallback', '流式请求中断，自动改用整包请求重试本批。', {
