@@ -38,13 +38,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.13.2';
+} from './core.js?v=0.13.3';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.13.2';
+} from './processing.js?v=0.13.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -60,15 +60,15 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.13.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.13.2';
+} from './prompts.js?v=0.13.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.13.3';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.13.2';
+} from './diagnostics.js?v=0.13.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -2610,7 +2610,7 @@ function createControlCenter(rootDocument = document) {
       syncFloatingEntry();
       return;
     }
-    if (event.target.matches('[data-jy-field="autoGeneration"], [data-jy-field="autoSwipe"], [data-jy-field="showFloatingButton"], [data-jy-field="includeWorldbook"], [data-jy-field="includeCharacterCard"], [data-jy-field="includeRecentContext"]')) {
+    if (event.target.matches('[data-jy-field="autoGeneration"], [data-jy-field="autoSwipe"], [data-jy-field="streamingWriteback"], [data-jy-field="showFloatingButton"], [data-jy-field="includeWorldbook"], [data-jy-field="includeCharacterCard"], [data-jy-field="includeRecentContext"]')) {
       const name = event.target.dataset.jyField;
       for (const twin of fieldElements(root, name)) twin.checked = event.target.checked;
       saveSettings(collectSettings(root));

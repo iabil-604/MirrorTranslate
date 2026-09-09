@@ -613,6 +613,7 @@ test('manifest and entry describe a native extension without TavernHelper calls'
   assert.match(entry, /parsePreserveLineRulesWithErrors/);
   assert.doesNotMatch(entry, /<datalist[^>]*jy-model-list/);
   assert.doesNotMatch(entry, /channel\.model\s*=\s*models\[0\]/);
+  assert.match(entry, /autoSwipe"\], \[data-jy-field="streamingWriteback"/);
   assert.match(entry, /toggle-export-drawer/);
   assert.match(entry, /export-recent/);
   assert.match(entry, /export-all/);
