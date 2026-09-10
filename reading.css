@@ -63,3 +63,42 @@
   :is(.jy-reading-cute, .custom-jy-reading-cute) { padding: 13px 15px 14px 18px; }
   :is(.jy-reading-minimal, .custom-jy-reading-minimal) { padding-left: 13px; }
 }
+
+/* Speaker colouring and emotion typography.
+
+   Two carriers, on purpose. Each span gets an inline style with the fully resolved colour, and the
+   same information again as class names. If the host ever strips style attributes from message HTML
+   the classes still carry it, and a re-run of 取色 repaints every existing floor through the
+   generated palette sheet without touching a single stored message.
+
+   Both class spellings are listed because SillyTavern prefixes message classes with custom-. */
+:is(.jy-spk, .custom-jy-spk) { transition: color 120ms ease; }
+:is(.jy-spk, .custom-jy-spk)[title] { cursor: help; }
+
+:is(.jy-emo-happy, .custom-jy-emo-happy) { font-weight: 560; }
+:is(.jy-emo-happy, .custom-jy-emo-happy):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 620; }
+:is(.jy-emo-tender, .custom-jy-emo-tender) { font-style: italic; }
+:is(.jy-emo-tender, .custom-jy-emo-tender):is(.jy-emo-l2, .custom-jy-emo-l2) { font-style: italic; font-weight: 360; }
+:is(.jy-emo-sad, .custom-jy-emo-sad) { font-style: italic; font-weight: 360; }
+:is(.jy-emo-sad, .custom-jy-emo-sad):is(.jy-emo-l2, .custom-jy-emo-l2) { font-style: italic; font-weight: 320; }
+:is(.jy-emo-angry, .custom-jy-emo-angry) { font-weight: 640; }
+:is(.jy-emo-angry, .custom-jy-emo-angry):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 760; letter-spacing: -.01em; }
+:is(.jy-emo-fear, .custom-jy-emo-fear) { font-style: italic; letter-spacing: .03em; }
+:is(.jy-emo-fear, .custom-jy-emo-fear):is(.jy-emo-l2, .custom-jy-emo-l2) { font-style: italic; letter-spacing: .06em; font-size: .94em; }
+:is(.jy-emo-shy, .custom-jy-emo-shy) { letter-spacing: .01em; font-size: .98em; }
+:is(.jy-emo-shy, .custom-jy-emo-shy):is(.jy-emo-l2, .custom-jy-emo-l2) { letter-spacing: .02em; font-size: .96em; }
+:is(.jy-emo-surprise, .custom-jy-emo-surprise) { font-weight: 620; }
+:is(.jy-emo-surprise, .custom-jy-emo-surprise):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 700; font-size: 1.06em; }
+:is(.jy-emo-serious, .custom-jy-emo-serious) { font-weight: 540; }
+:is(.jy-emo-serious, .custom-jy-emo-serious):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 620; letter-spacing: -.02em; }
+:is(.jy-emo-resolute, .custom-jy-emo-resolute) { font-weight: 600; }
+:is(.jy-emo-resolute, .custom-jy-emo-resolute):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 700; }
+:is(.jy-emo-whisper, .custom-jy-emo-whisper) { font-style: italic; font-weight: 340; font-size: .95em; }
+:is(.jy-emo-whisper, .custom-jy-emo-whisper):is(.jy-emo-l2, .custom-jy-emo-l2) { font-style: italic; font-weight: 280; font-size: .9em; letter-spacing: .04em; }
+:is(.jy-emo-shout, .custom-jy-emo-shout) { font-weight: 700; font-size: 1.06em; }
+:is(.jy-emo-shout, .custom-jy-emo-shout):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 820; font-size: 1.12em; }
+
+/* Motion is opt-out for anyone who asked the system not to animate. */
+@media (prefers-reduced-motion: reduce) {
+  :is(.jy-spk, .custom-jy-spk) { transition: none; }
+}

@@ -9,6 +9,11 @@ import {
   assembleReplace,
   extractReplaceTranslations,
   createTranslationSignature,
+  detectUnmarkedAffixes,
+  DEFAULT_COLORING,
+  normalizeColoring,
+  normalizeSpeakerList,
+  SPEAKER_CLASS,
   createGenerationGate,
   createIndependentRequest,
   clampInteger,
@@ -24,6 +29,7 @@ import {
   remapTranslationsBySource,
   translationCharBudget,
   inspectTagConfiguration,
+  mergeExtractedRegions,
   mergeSettings,
   normalizeChannel,
   normalizeOpenAiBaseUrl,
@@ -38,13 +44,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.13.3';
+} from './core.js?v=0.14.0';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.13.3';
+} from './processing.js?v=0.14.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -60,15 +66,29 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.13.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.13.3';
+} from './prompts.js?v=0.14.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.0';
+import {
+  DEFAULT_MIN_CONTRAST,
+  EMOTION_STYLES,
+  adaptColorToBand,
+  computeSafeBand,
+  isNeutralColor,
+  oklchToSrgb,
+  parseCssColor,
+  resolveSegmentStyle,
+  spreadHues,
+  srgbToOklch,
+  toHex,
+} from './palette.js?v=0.14.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.14.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.13.3';
+} from './diagnostics.js?v=0.14.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -109,6 +129,11 @@ const runtime = {
   generationGate: createGenerationGate(),
   eventBindings: [],
   wiEntries: null,
+  // Set by 取色 and folded into the settings on the next save, so a measurement is never lost by
+  // saving some unrelated field first.
+  probedBand: null,
+  probedBandAt: '',
+  probeReport: null,
   timers: new Set(),
   autoTimers: new Set(),
   menuCleanup: null,
@@ -208,6 +233,15 @@ const CONTROL_CENTER_MARKUP = `
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><p class="jy-muted">留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label></div>
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
+<details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
+<p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。</p>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label></div>
+<div class="jy-form-grid"><label><span class="jy-label">对比度目标</span><input type="number" data-jy-field="coloringContrast" min="1.5" max="12" step="0.1"></label><label><span class="jy-label">彩度 <span data-jy-vividness-value></span></span><input type="range" data-jy-field="coloringVividness" min="0" max="100" step="5"></label></div>
+<div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="probe-theme">读取当前主题与壁纸</button><button type="button" class="jy-button" data-jy-action="add-speaker">添加角色</button></div>
+<div class="jy-band-report" data-jy-band-report></div>
+<div class="jy-speaker-list" data-jy-speaker-list></div>
+<p class="jy-muted">黑、白、银不参与着色：这三种是主题自己的文字颜色，认不出说话人。发色是黑白银的角色会按名字分到一个固定色相，同一个名字永远是同一个颜色。改主题或换壁纸后重新点一次「读取当前主题」即可，已翻译楼层重翻或补译后会用新颜色。</p>
+</details>
 <details class="jy-advanced"><summary>内置美化</summary><div class="jy-processing-toolbar"><select aria-label="内置美化" data-jy-reading-style><option value="cute">可爱风</option><option value="minimal">极简风</option><option value="fold">原文折叠</option></select><button type="button" class="jy-button" data-jy-action="builtin-processing">使用</button></div></details>
 <pre class="jy-inspection" data-jy-tag-inspection hidden></pre>
 <footer class="jy-footer"><span class="jy-save-note">修改后保存设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-settings">保存设置</button></footer>
@@ -447,6 +481,7 @@ function saveSettings(next) {
   context.extensionSettings[MODULE_ID] = runtime.settings;
   context.saveSettingsDebounced?.();
   syncFloatingButton();
+  syncSpeakerStylesheet(runtime.settings);
   if (runtime.panel?.host) runtime.panel.host.dataset.theme = runtime.settings.theme || 'day';
   if (runtime.mini?.host) {
     runtime.mini.host.dataset.theme = runtime.settings.theme || 'day';
@@ -527,24 +562,11 @@ function latestAssistantMessageId(context) {
 // Body-tag regions translate into bilingual mirrors; replace-tag regions swap in the translation
 // and hide the original. One floor can carry both kinds, so both extractions merge by position.
 function extractAllRegions(text, settings) {
-  const body = extractTaggedRegions(text, settings.bodyTags);
   const replaceTagList = parseTagNames(settings.replaceTags);
-  const replace = replaceTagList.length
-    ? extractTaggedRegions(text, replaceTagList, { mode: 'replace' })
-    : { regions: [], missingTags: [], unbalanced: 0, assumedCloses: 0 };
-  const regions = [...body.regions, ...replace.regions].sort((left, right) => left.openStart - right.openStart);
-  for (let index = 1; index < regions.length; index += 1) {
-    if (regions[index].openStart < regions[index - 1].closeEnd) {
-      throw new Error(`<${regions[index - 1].tagName}> 与 <${regions[index].tagName}> 的区域交叉重叠，请检查提取标签与替换标签的嵌套。`);
-    }
-  }
-  return {
-    source: body.source,
-    regions,
-    missingTags: [...body.missingTags, ...(replace.missingTags ?? [])],
-    unbalanced: (body.unbalanced || 0) + (replace.unbalanced || 0),
-    assumedCloses: (body.assumedCloses || 0) + (replace.assumedCloses || 0),
-  };
+  return mergeExtractedRegions(
+    extractTaggedRegions(text, settings.bodyTags),
+    replaceTagList.length ? extractTaggedRegions(text, replaceTagList, { mode: 'replace' }) : null,
+  );
 }
 
 async function readMessageSnapshot(messageId = null, settings = runtime.settings) {
@@ -559,7 +581,16 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   const metadata = message.extra?.[MESSAGE_META_KEY];
   const upgraded = upgradeLegacyBilingual(message.mes, metadata);
   const originalExtraction = extractAllRegions(upgraded, settings);
-  const cleanMessage = stripGeneratedTranslationLines(upgraded);
+  // Metadata carries the affixes this floor was written with, so a wrapper that lost its invisible
+  // boundaries is removed here instead of being re-wrapped on the next write.
+  const cleanMessage = stripGeneratedTranslationLines(upgraded, metadata);
+  if (metadata && detectUnmarkedAffixes(cleanMessage, metadata)) {
+    recordDiagnostic('warn', 'translation.affix-leftover', '楼层里发现失去不可见边界的前后缀文本，重新翻译前请先清理，否则可能出现重复前后缀。', {
+      messageId: id,
+      segmentPrefix: metadata.segment_prefix ?? '',
+      translationPrefix: metadata.translation_prefix ?? '',
+    });
+  }
   const extraction = extractAllRegions(cleanMessage, settings);
   const segmentOptions = {
     segmentPrefix: metadata?.segment_prefix ?? settings.segmentPrefix,
@@ -623,6 +654,9 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     segments,
     paragraphs,
     existingTranslations,
+    // Only trusted while the segmentation still matches, which is the same condition that makes the
+    // stored translations reusable.
+    existingAnnotations: metadataMatches ? readStoredAnnotations(metadata) : new Map(),
     translated,
   };
 }
@@ -691,21 +725,248 @@ function worldInfoCharacterKey() {
   return String(character?.avatar || character?.name || 'default');
 }
 
+// All four lore sources the host reports. Chat-scoped and persona books used to be invisible to both
+// the whitelist and the translated-name activation, which is surprising for anyone who keeps their
+// per-chat notes there.
+const WORLD_INFO_SOURCES = Object.freeze(['globalLore', 'characterLore', 'chatLore', 'personaLore']);
+
 function readableWorldInfoEntries() {
   const lore = runtime.wiEntries;
-  if (!lore || !Array.isArray(lore.globalLore)) return [];
-  return [...lore.globalLore, ...(Array.isArray(lore.characterLore) ? lore.characterLore : [])];
+  if (!lore || typeof lore !== 'object') return [];
+  const seen = new Set();
+  const entries = [];
+  for (const source of WORLD_INFO_SOURCES) {
+    for (const entry of Array.isArray(lore[source]) ? lore[source] : []) {
+      if (!entry || typeof entry !== 'object') continue;
+      const key = `${entry.world}.${entry.uid}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push(entry);
+    }
+  }
+  return entries;
 }
 
 function whitelistedWorldbookContent() {
   const picks = runtime.settings.worldInfoWhitelist?.[worldInfoCharacterKey()];
   if (!picks?.length) return '';
   const wanted = new Set(picks.map(pick => `${pick.world}.${pick.uid}`));
+  const context = getContext();
+  // The host expands macros before a worldbook entry reaches the main model. Sending {{char}} and
+  // friends verbatim to the translator loses exactly the names it needs most.
+  const substitute = typeof context.substituteParams === 'function'
+    ? value => String(context.substituteParams(value) ?? value)
+    : value => value;
   return readableWorldInfoEntries()
     .filter(entry => wanted.has(`${entry.world}.${entry.uid}`))
-    .map(entry => String(entry.content ?? '').trim())
+    .map(entry => substitute(String(entry.content ?? '')).trim())
     .filter(Boolean)
     .join('\n\n');
+}
+
+// ---------------------------------------------------------------------------------------------
+// Speaker colouring and emotion typography.
+//
+// The secondary model returns labels; everything visual is decided here. See palette.js for why.
+// ---------------------------------------------------------------------------------------------
+
+function activeColoring(settings = runtime.settings) {
+  return normalizeColoring(settings?.coloring ?? DEFAULT_COLORING);
+}
+
+function coloringEnabled(settings = runtime.settings) {
+  const coloring = activeColoring(settings);
+  return (coloring.speakers || coloring.emotions) && Boolean(coloring.band);
+}
+
+function speakerPaletteFor(settings = runtime.settings) {
+  return normalizeSpeakerList(settings?.speakerPalette?.[worldInfoCharacterKey()]);
+}
+
+// The roster handed to the model. A closed list turns "who is speaking" from an open-ended naming
+// problem into a multiple-choice question, which is the whole reason this stays reliable.
+function speakerRoster(settings = runtime.settings) {
+  const names = speakerPaletteFor(settings).flatMap(speaker => [speaker.name, ...speaker.aliases]);
+  return [...new Set(names.filter(Boolean))];
+}
+
+// Hair colours cluster: two blondes in one cast would otherwise get near-identical speech. Hues are
+// pushed apart once, in palette order, so adding a character never reshuffles the existing ones.
+function resolvedSpeakerColors(settings = runtime.settings) {
+  const palette = speakerPaletteFor(settings);
+  const coloring = activeColoring(settings);
+  const band = coloring.band;
+  if (!band || !palette.length) return new Map();
+  const hues = palette.map(speaker => {
+    const rgb = speaker.source ? parseCssColor(speaker.source) : null;
+    const oklch = rgb ? srgbToOklch(rgb) : null;
+    return oklch && !isNeutralColor(oklch) ? oklch.h : null;
+  });
+  const known = hues.map((hue, index) => (hue === null ? null : { hue, index })).filter(Boolean);
+  const spread = spreadHues(known.map(item => item.hue));
+  known.forEach((item, position) => { hues[item.index] = spread[position]; });
+
+  const resolved = new Map();
+  palette.forEach((speaker, index) => {
+    const hue = hues[index];
+    const adapted = adaptColorToBand(
+      hue === null ? '' : toHex(oklchToSrgbSafe(hue, band)),
+      band,
+      { name: speaker.name, vividness: coloring.vividness },
+    );
+    const entry = { name: speaker.name, base: adapted.hex, source: speaker.source, derived: hue === null };
+    resolved.set(speaker.name, entry);
+    for (const alias of speaker.aliases) if (!resolved.has(alias)) resolved.set(alias, entry);
+  });
+  return resolved;
+}
+
+// A hue on its own is not a colour; give it the band's own lightness so adaptColorToBand has
+// something well-formed to read the hue back out of.
+function oklchToSrgbSafe(hue, band) {
+  return oklchToSrgb({ l: band.lightness ?? 0.6, c: Math.max(0.06, band.chromaMax * 0.8), h: hue });
+}
+
+/**
+ * Builds the per-segment decorator handed to assembleBilingual / assembleReplace.
+ *
+ * Returns null when nothing would be painted, so a floor translated with colouring off is written
+ * byte-for-byte the way it always was.
+ */
+function buildSegmentStyler(settings, annotations) {
+  const coloring = activeColoring(settings);
+  const band = coloring.band;
+  if (!band || (!coloring.speakers && !coloring.emotions) || !(annotations instanceof Map) || !annotations.size) return null;
+  const speakers = coloring.speakers ? resolvedSpeakerColors(settings) : new Map();
+  return ids => {
+    // A multi-line unit only gets a colour when the whole unit agrees; mixed speakers in one block
+    // cannot be painted separately without splitting the block, so it stays neutral.
+    const marks = ids.map(id => annotations.get(id)).filter(Boolean);
+    if (marks.length !== ids.length || !marks.length) return null;
+    const first = marks[0];
+    if (marks.some(mark => mark.speaker !== first.speaker || mark.emotion !== first.emotion)) return null;
+    const speaker = coloring.speakers ? speakers.get(String(first.speaker ?? '')) : null;
+    const emotion = coloring.emotions ? first.emotion : '';
+    if (!speaker && !emotion) return null;
+    const style = resolveSegmentStyle({
+      speakerColor: speaker?.source || speaker?.base || '',
+      name: speaker?.name ?? '',
+      emotion,
+      intensity: first.intensity,
+      band,
+      vividness: coloring.vividness,
+    });
+    // Emotion-only mode leaves the colour alone and changes weight and shape instead.
+    const declarations = speaker ? style.declarations : style.declarations.filter(item => !item.startsWith('color:'));
+    if (!declarations.length) return null;
+    // Two carriers on purpose. The inline style holds the fully resolved colour, including whatever
+    // the emotion did to it. The classes carry the same information through the host's own
+    // stylesheet, so a sanitiser that drops style attributes still leaves speakers distinguishable.
+    const classes = [SPEAKER_CLASS];
+    if (speaker) classes.push(`${SPEAKER_CLASS}-${speakerSlug(speaker.name)}`);
+    if (style.emotion && style.emotion !== 'neutral' && style.intensity) {
+      classes.push(`jy-emo-${style.emotion}`, `jy-emo-l${style.intensity}`);
+    }
+    const label = [speaker?.name, style.emotion && EMOTION_STYLES[style.emotion]?.label].filter(Boolean).join(' · ');
+    return {
+      open: `<span class="${classes.join(' ')}"${label ? ` title="${escapeAttribute(label)}"` : ''} style="${escapeAttribute(declarations.join(';'))}">`,
+      close: '</span>',
+    };
+  };
+}
+
+// Speaker names are free text and often CJK; a short stable hash keeps the class name predictable
+// and safe to write into both markup and a stylesheet selector.
+function speakerSlug(name) {
+  let hash = 2166136261;
+  for (const character of String(name ?? '')) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+const SPEAKER_STYLE_ID = `${MODULE_ID}-speaker-palette`;
+
+/**
+ * Publishes the speaker colours as a real stylesheet.
+ *
+ * The inline style on each span is the primary carrier; this is the fallback that keeps working if
+ * the host ever strips style attributes from message HTML. It also means a theme change repaints
+ * every already-written floor the moment 取色 runs again, without rewriting a single message.
+ */
+function syncSpeakerStylesheet(settings = runtime.settings) {
+  if (typeof document === 'undefined') return;
+  const existing = document.getElementById(SPEAKER_STYLE_ID);
+  const coloring = activeColoring(settings);
+  const resolved = coloring.speakers && coloring.band ? resolvedSpeakerColors(settings) : new Map();
+  if (!resolved.size) {
+    existing?.remove();
+    return;
+  }
+  const seen = new Set();
+  const rules = [];
+  for (const entry of resolved.values()) {
+    const slug = speakerSlug(entry.name);
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    rules.push(`:is(.${SPEAKER_CLASS}-${slug}, .custom-${SPEAKER_CLASS}-${slug}){color:${entry.base}}`);
+  }
+  const element = existing ?? document.createElement('style');
+  element.id = SPEAKER_STYLE_ID;
+  element.textContent = rules.join('\n');
+  if (!existing) document.head.appendChild(element);
+}
+
+function escapeAttribute(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Annotations survive a reload, a 补译 and a restyle by living in the floor's own metadata, keyed by
+// segment id. That key is only meaningful while the source hash matches, which is exactly the
+// condition under which the host reads them back.
+function readStoredAnnotations(metadata) {
+  const stored = metadata?.annotations;
+  const map = new Map();
+  if (!stored || typeof stored !== 'object') return map;
+  for (const [id, value] of Object.entries(stored)) {
+    const key = Number(id);
+    if (!Number.isInteger(key) || !value || typeof value !== 'object') continue;
+    const annotation = {};
+    if (value.speaker) annotation.speaker = String(value.speaker).slice(0, 60);
+    if (value.emotion) annotation.emotion = String(value.emotion).slice(0, 40);
+    if (Number.isFinite(Number(value.intensity))) annotation.intensity = Math.min(2, Math.max(0, Math.round(Number(value.intensity))));
+    if (annotation.speaker || annotation.emotion) map.set(key, annotation);
+  }
+  return map;
+}
+
+function storedAnnotations(annotations) {
+  if (!(annotations instanceof Map) || !annotations.size) return undefined;
+  return Object.fromEntries([...annotations].map(([id, value]) => [String(id), value]));
+}
+
+/**
+ * Reads the background the reader actually has behind the chat and turns it into a usable band.
+ *
+ * This is the answer to "每个人的主题及壁纸不一样": the palette is not authored against a theme, it
+ * is solved against whatever this browser is currently painting.
+ */
+async function probeThemeBand(settings = runtime.settings) {
+  const coloring = activeColoring(settings);
+  const probe = await sampleThemeBackground({ document, window: globalThis });
+  const band = computeSafeBand(probe.samples, { minContrast: coloring.minContrast || DEFAULT_MIN_CONTRAST });
+  recordDiagnostic(band.feasible ? 'info' : 'warn', 'coloring.probe', band.feasible ? '已按当前主题与壁纸算出安全色域。' : '当前主题与壁纸下没有可用的安全色域。', {
+    backgrounds: probe.hexes,
+    wallpaper: probe.wallpaper ? '有' : '无',
+    layers: probe.layers,
+    direction: band.direction,
+    chromaMax: Number(band.chromaMax.toFixed(4)),
+    minContrast: band.minContrast,
+    reachableContrast: band.reachableContrast,
+    warnings: probe.warnings,
+  });
+  return { band, probe };
 }
 
 function renderWorldInfoList(root) {
@@ -811,7 +1072,7 @@ const MAX_TRANSLATION_REQUESTS = 16;
 
 // Repeating an identical request that already truncated truncates again, so a batch that comes back
 // with nothing new is halved instead of being resent as-is.
-async function translateOneBatch(batch, settings, signal, packet, translations, budget, state) {
+async function translateOneBatch(batch, settings, signal, packet, translations, budget, state, annotations = new Map()) {
   let pending = batch;
   let lastError = null;
   while (pending.length) {
@@ -832,8 +1093,10 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
         signal,
         packet,
         translations.size ? 'repair' : 'primary',
+        { roster: state.roster ?? [] },
       );
       for (const [id, text] of recovered.translations) translations.set(id, text);
+      for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
       const progressed = translations.size > before;
       pending = pending.filter(segment => !translations.has(segment.id));
       recordDiagnostic(pending.length ? 'warn' : 'info', 'translation.response', pending.length ? '本批返回不完整，准备补译。' : '本批译文返回完整。', {
@@ -862,12 +1125,13 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
   return null;
 }
 
-async function invokeWithRetries(segments, settings, signal, packet = {}, seedTranslations = new Map(), retryBudget = null) {
+async function invokeWithRetries(segments, settings, signal, packet = {}, seedTranslations = new Map(), retryBudget = null, seedAnnotations = new Map()) {
   const budget = retryBudget || { remaining: settings.retries };
   const translations = new Map(seedTranslations);
+  const annotations = new Map(seedAnnotations);
   const channel = getActiveChannel(settings);
   const batches = planTranslationBatches(segments, { maxChars: translationCharBudget(channel.maxTokens) });
-  const state = { requests: 0 };
+  const state = { requests: 0, roster: speakerRoster(settings) };
   let lastError;
   recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
     segments: segments.length,
@@ -876,12 +1140,12 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
     maxTokens: channel.maxTokens,
   });
   for (const batch of batches) {
-    const failure = await translateOneBatch(batch, settings, signal, packet, translations, budget, state);
+    const failure = await translateOneBatch(batch, settings, signal, packet, translations, budget, state, annotations);
     if (failure) lastError = failure;
   }
   {
     const pending = segments.filter(segment => !translations.has(segment.id));
-    if (!pending.length) return { translations, missingIds: [], complete: true };
+    if (!pending.length) return { translations, annotations, missingIds: [], complete: true };
   }
   if (translations.size) {
     const missingIds = segments.filter(segment => !translations.has(segment.id)).map(segment => segment.id);
@@ -891,7 +1155,7 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
       missingIds,
       lastError: safeError(lastError),
     });
-    return { translations, missingIds, complete: false };
+    return { translations, annotations, missingIds, complete: false };
   }
   throw lastError || new Error('副模型没有返回可恢复的译文。');
 }
@@ -938,7 +1202,7 @@ async function repairForbiddenPhrases(segments, translations, settings, signal, 
   return translations;
 }
 
-async function writeTranslation(snapshot, translationMap, epoch, settings) {
+async function writeTranslation(snapshot, translationMap, epoch, settings, annotations = new Map()) {
   if (!runtime.initialized || runtime.epoch !== epoch) throw new Error('扩展已停用，旧翻译结果没有写回。');
   const latest = await readMessageSnapshot(snapshot.messageId, settings);
   if (latest.chatId !== snapshot.chatId || latest.swipeId !== snapshot.swipeId) {
@@ -966,12 +1230,16 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
 
   const missingIds = latest.segments.filter(segment => !effectiveTranslations.has(segment.id)).map(segment => segment.id);
   const complete = missingIds.length === 0;
+  // Labels the model returned this run win over the ones already stored on the floor.
+  const effectiveAnnotations = new Map([...latest.existingAnnotations, ...(annotations instanceof Map ? annotations : [])]);
+  for (const id of effectiveAnnotations.keys()) if (!effectiveTranslations.has(id)) effectiveAnnotations.delete(id);
+  const styleFor = buildSegmentStyler(settings, effectiveAnnotations);
   const bilingual = rebuildTaggedRegions(latest.extraction, region => region.mode === 'replace'
-    ? assembleReplace(region.layout, effectiveTranslations, { allowMissing: !complete })
+    ? assembleReplace(region.layout, effectiveTranslations, { allowMissing: !complete, styleFor })
     : assembleBilingual(
       region.layout,
       effectiveTranslations,
-      { ...settings, allowMissing: !complete },
+      { ...settings, allowMissing: !complete, styleFor },
     ));
   const message = latest.message;
   const metadata = {
@@ -994,6 +1262,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings) {
     total_segments: latest.segments.length,
     total_paragraphs: latest.paragraphs,
     missing_ids: missingIds,
+    annotations: storedAnnotations(effectiveAnnotations),
   };
 
   const previous = {
@@ -1090,12 +1359,13 @@ async function translateMessage(messageId = null, { force = false, quiet = false
       );
       updateTask({ status: 'running', message: '副 API 正在翻译完整正文…', progress: 18 });
       const seedTranslations = force ? new Map() : snapshot.existingTranslations;
-      result = await invokeWithRetries(snapshot.segments, settings, controller.signal, packet, seedTranslations, retryBudget);
+      const seedAnnotations = force ? new Map() : snapshot.existingAnnotations;
+      result = await invokeWithRetries(snapshot.segments, settings, controller.signal, packet, seedTranslations, retryBudget, seedAnnotations);
       await repairForbiddenPhrases(snapshot.segments, result.translations, settings, controller.signal, packet);
 
       updateTask({ status: 'running', message: '正在核对楼层与滑动页…', progress: 95 });
       try {
-        written = await writeTranslation(snapshot, result.translations, epoch, settings);
+        written = await writeTranslation(snapshot, result.translations, epoch, settings, result.annotations);
         break;
       } catch (error) {
         if (error?.code === 'JY_SOURCE_CHANGED') {
@@ -1107,7 +1377,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
         }
         if (!consumeRetry(retryBudget, 'write-error', { messageId: snapshot.messageId, error: safeError(error) })) throw error;
         updateTask({ status: 'running', message: '写回失败，正在重试保存…', progress: 95 });
-        written = await writeTranslation(snapshot, result.translations, epoch, settings);
+        written = await writeTranslation(snapshot, result.translations, epoch, settings, result.annotations);
         break;
       }
     }
@@ -1166,62 +1436,102 @@ async function translateMessage(messageId = null, { force = false, quiet = false
 // the floor as completed JSON items arrive. The final pass reuses the ordinary write pipeline, so
 // the finished floor is byte-identical to a non-streaming run.
 async function streamTranslationBatch(messages, settings, signal, onDelta = null) {
+  const channel = getActiveChannel(settings);
   const payload = { ...createIndependentRequest(settings, messages), stream: true };
-  const response = await fetch('/api/backends/chat-completions/generate', {
-    method: 'POST',
-    headers: getContext().getRequestHeaders(),
-    body: JSON.stringify(payload),
-    signal,
-  });
-  if (!response.ok || !response.body) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`流式请求失败（HTTP ${response.status}）${detail.slice(0, 160) ? `：${detail.slice(0, 160)}` : ''}`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let text = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      const data = line.trim();
-      if (!data.startsWith('data:')) continue;
-      const body = data.slice(5).trim();
-      if (body === '[DONE]') continue;
-      try {
-        const chunk = JSON.parse(body);
-        const choice = chunk.choices?.[0];
-        const delta = choice?.delta?.content ?? choice?.text ?? '';
-        if (delta) {
-          text += delta;
-          if (onDelta) onDelta(text);
-        }
-      } catch { /* keep partial JSON in the buffer for the next frame */ }
+  // The whole-request path has always honoured the channel timeout. Without the same wrapper a
+  // stalled upstream kept the task "running" forever once the response headers had arrived.
+  return withAbortTimeout(signal, channel.timeoutSec, async streamSignal => {
+    const response = await fetch('/api/backends/chat-completions/generate', {
+      method: 'POST',
+      headers: getContext().getRequestHeaders(),
+      body: JSON.stringify(payload),
+      signal: streamSignal,
+    });
+    if (!response.ok || !response.body) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`流式请求失败（HTTP ${response.status}）${detail.slice(0, 160) ? `：${detail.slice(0, 160)}` : ''}`);
     }
-  }
-  return text;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let frames = 0;
+    let whole = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const decoded = decoder.decode(value, { stream: true });
+      // Kept only until the first SSE frame proves this really is a stream.
+      if (!frames && whole.length < 200000) whole += decoded;
+      buffer += decoded;
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const data = line.trim();
+        if (!data.startsWith('data:')) continue;
+        frames += 1;
+        const body = data.slice(5).trim();
+        if (body === '[DONE]') continue;
+        try {
+          const chunk = JSON.parse(body);
+          const choice = chunk.choices?.[0];
+          const delta = choice?.delta?.content ?? choice?.text ?? '';
+          if (delta) {
+            text += delta;
+            if (onDelta) onDelta(text);
+          }
+        } catch { /* keep partial JSON in the buffer for the next frame */ }
+      }
+    }
+    // Relays that quietly ignore `stream: true` answer with one ordinary JSON body. Returning the
+    // empty accumulator here read as "the model translated nothing": no error, no fallback, and a
+    // floor that keeps its original text. Hand the whole body back so the batch still lands.
+    if (!frames) {
+      const oneShot = (() => { try { return JSON.parse(whole); } catch { return null; } })();
+      if (oneShot !== null) {
+        recordDiagnostic('warn', 'translation.stream-not-supported', '副 API 忽略了 stream 参数，本批按整包结果解析。', {
+          characters: whole.length,
+        });
+        const choice = oneShot?.choices?.[0];
+        const content = choice?.message?.content ?? choice?.text ?? oneShot?.content;
+        return typeof content === 'string' ? content : oneShot;
+      }
+      throw new Error('副 API 没有返回 SSE 流，也无法按整包解析（可能是反代忽略了 stream 参数）。');
+    }
+    if (!text.trim()) throw new Error('流式连接建立成功，但没有收到任何正文增量。');
+    return text;
+  });
 }
 
-async function translateMessageStreaming(messageId = null, { quiet = false } = {}) {
+async function translateMessageStreaming(messageId = null, { quiet = false, force = false } = {}) {
   if (runtime.settings.apiMode !== 'independent') {
     // The follow mode borrows the host generation API, which only returns whole responses.
     recordDiagnostic('warn', 'translation.stream-skip', '跟随模式拿不到流式返回，本次改用整包翻译。', {});
-    return translateMessage(messageId, options);
+    return translateMessage(messageId, { quiet, force });
   }
   runtime.activeFloor = Number.isInteger(Number(messageId)) ? Number(messageId) : null;
   const epoch = runtime.epoch;
   const settings = runtime.settings;
   const targetLanguage = normalizeTargetLanguage(getActivePromptProfile(settings).targetLanguage);
-  let snapshot = await readMessageSnapshot(messageId, settings);
+  let snapshot;
+  try {
+    snapshot = await readMessageSnapshot(messageId, settings);
+  } catch (error) {
+    if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable' };
+    throw error;
+  }
   runtime.activeFloor = snapshot.messageId;
   if (!snapshot.segments.length) throw new Error('当前 AI 回复没有可翻译的正文段落。');
+  // Same gate as the whole-request path: without it a finished floor streams nothing and still
+  // reports success, which reads as "流式写回没有生效".
+  if (snapshot.translated && !force) return { skipped: true, reason: 'already-translated', snapshot };
 
   const lockKey = `${snapshot.chatId}|${snapshot.messageId}|${snapshot.swipeId}`;
   const existing = runtime.inflight.get(lockKey);
+  if (existing && !force) {
+    if (!quiet) toast('info', '该楼层翻译正在进行，已沿用本次任务。');
+    return existing.promise;
+  }
   if (existing) existing.controller.abort();
   const controller = new AbortController();
 
@@ -1247,20 +1557,35 @@ async function translateMessageStreaming(messageId = null, { quiet = false } = {
       channel.tokenSaving ? whitelistedWorldbookContent() : null,
     );
     const batches = planTranslationBatches(snapshot.segments, { maxChars: translationCharBudget(channel.maxTokens) });
-    const translations = new Map(snapshot.existingTranslations);
+    // A forced run re-requests every segment; 补译 seeds with what is already written back.
+    const translations = force ? new Map() : new Map(snapshot.existingTranslations);
+    const annotations = force ? new Map() : new Map(snapshot.existingAnnotations);
+    const roster = speakerRoster(settings);
     const total = snapshot.segments.length;
 
-    const writeProgress = async () => {
-      const latest = await readMessageSnapshot(snapshot.messageId, settings).catch(() => null);
-      if (!latest) return;
-      await writeTranslation(latest, translations, epoch, settings);
+    // One progressive write at a time. Overlapping runs each snapshot the floor before the other
+    // has assigned, so a failing saveChat could roll the floor back over a newer write.
+    let progressChain = Promise.resolve();
+    const writeProgress = () => {
+      progressChain = progressChain.catch(() => {}).then(async () => {
+        if (controller.signal.aborted || runtime.epoch !== epoch) return;
+        const latest = await readMessageSnapshot(snapshot.messageId, settings).catch(() => null);
+        if (!latest) return;
+        await writeTranslation(latest, translations, epoch, settings, annotations);
+      });
+      return progressChain;
     };
-    // Rewriting the floor is not free, so throttle progressive updates while items stream in.
+    // Rewriting the floor is not free: every progressive write is a saveChat plus a MESSAGE_UPDATED
+    // that other extensions listen to. The first updates stay quick so the floor visibly fills in,
+    // then the interval backs off, which keeps a 100-segment floor to a handful of writes instead of
+    // one every 700ms for the whole run. The end-of-run write is unconditional either way.
     let lastWrite = 0;
+    let writes = 0;
     const maybeProgress = () => {
       const now = Date.now();
-      if (now - lastWrite < 700) return;
+      if (now - lastWrite < Math.min(4000, 700 * (1 + writes))) return;
       lastWrite = now;
+      writes += 1;
       writeProgress().catch(() => {});
     };
     // Chunk-level progress: pull completed JSON items out of the partial stream text so the
@@ -1277,6 +1602,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false } = {
         for (const [id, value] of partial.translations) {
           if (!translations.has(id)) {
             translations.set(id, value);
+            if (partial.annotations.has(id)) annotations.set(id, partial.annotations.get(id));
             changed = true;
           }
         }
@@ -1295,7 +1621,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false } = {
       const pending = batch.filter(segment => !translations.has(segment.id));
       if (!pending.length) continue;
       const phase = translations.size ? 'repair' : 'primary';
-      const messages = buildTranslationMessages(pending, settings, packet, phase);
+      const messages = buildTranslationMessages(pending, settings, packet, phase, { roster });
       let raw = '';
       try {
         raw = await streamTranslationBatch(messages, settings, controller.signal, foldStreamedItems(pending));
@@ -1306,8 +1632,9 @@ async function translateMessageStreaming(messageId = null, { quiet = false } = {
           segments: pending.length,
           error: safeError(error),
         });
-        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase);
+        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster });
         for (const [id, value] of recovered.translations) translations.set(id, value);
+        for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
         updateTask({
           status: 'running',
           message: `已恢复 ${translations.size} / ${total} 段。`,
@@ -1318,6 +1645,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false } = {
       }
       const recovered = recoverStructuredTranslations(raw, pending);
       for (const [id, value] of recovered.translations) translations.set(id, value);
+      for (const [id, mark] of recovered.annotations) annotations.set(id, mark);
       recordDiagnostic('info', 'translation.raw-response', '已收到副 API 流式返回。', {
         phase,
         requestedSegments: pending.length,
@@ -1337,7 +1665,8 @@ async function translateMessageStreaming(messageId = null, { quiet = false } = {
 
     await repairForbiddenPhrases(snapshot.segments, translations, settings, controller.signal, packet);
     updateTask({ status: 'running', message: '正在写回楼层…', progress: 95 });
-    const written = await writeTranslation(snapshot, translations, epoch, settings);
+    await progressChain.catch(() => {});
+    const written = await writeTranslation(snapshot, translations, epoch, settings, annotations);
     if (!written.complete) {
       updateTask({
         status: 'success',
@@ -1372,6 +1701,14 @@ async function translateMessageStreaming(messageId = null, { quiet = false } = {
 
   runtime.inflight.set(lockKey, { promise: work, controller });
   return work;
+}
+
+// Single entry point for every translation trigger, so the streaming toggle and the force/quiet
+// semantics can never drift apart between the control centre, the mini window and the auto hooks.
+function startTranslation(messageId = null, { force = false, quiet = false } = {}) {
+  return runtime.settings.streamingWriteback
+    ? translateMessageStreaming(messageId, { force, quiet })
+    : translateMessage(messageId, { force, quiet });
 }
 
 async function testTranslationChannel() {
@@ -1840,6 +2177,7 @@ function syncFields(root, settings) {
   renderWorldInfoList(root);
   syncPromptFields(root, settings);
   syncProcessingFields(root, settings);
+  syncColoringFields(root, settings);
   updateApiPanels(root);
   updateSummary(root, settings);
 }
@@ -1922,7 +2260,228 @@ function collectSettings(root) {
   }
   const selected = root.querySelector('[data-jy-field="selectedChannelId"]')?.value;
   if (selected && current.channels.some(channel => channel.id === selected)) current.selectedChannelId = selected;
+  collectColoringFields(root, current);
   return captureProcessingProfile(normalizeProcessingSettings(current));
+}
+
+
+// The colouring page. The band itself is never typed by hand: it is whatever 取色 measured, and it
+// is carried through every save so a settings change does not silently discard the measurement.
+function collectColoringFields(root, current) {
+  if (!root.querySelector('[data-jy-coloring]')) return;
+  const coloring = { ...normalizeColoring(current.coloring), band: normalizeColoring(current.coloring).band };
+  const speakers = root.querySelector('[data-jy-field="coloringSpeakers"]');
+  const emotions = root.querySelector('[data-jy-field="coloringEmotions"]');
+  const contrast = root.querySelector('[data-jy-field="coloringContrast"]');
+  const vividness = root.querySelector('[data-jy-field="coloringVividness"]');
+  if (speakers) coloring.speakers = speakers.checked;
+  if (emotions) coloring.emotions = emotions.checked;
+  if (contrast) coloring.minContrast = Number(contrast.value);
+  if (vividness) coloring.vividness = Number(vividness.value) / 100;
+  if (runtime.probedBand) {
+    coloring.band = runtime.probedBand;
+    coloring.bandProbedAt = runtime.probedBandAt || coloring.bandProbedAt;
+  }
+  current.coloring = coloring;
+
+  const rows = [...root.querySelectorAll('[data-jy-speaker-row]')].map(row => ({
+    name: row.querySelector('[data-jy-speaker-name]')?.value ?? '',
+    aliases: row.querySelector('[data-jy-speaker-aliases]')?.value ?? '',
+    source: row.querySelector('[data-jy-speaker-color]')?.value ?? '',
+    from: row.querySelector('[data-jy-speaker-from]')?.value ?? 'hair',
+  }));
+  const palette = normalizeSpeakerList(rows);
+  current.speakerPalette = { ...(current.speakerPalette || {}) };
+  const characterKey = worldInfoCharacterKey();
+  if (palette.length) current.speakerPalette[characterKey] = palette;
+  else delete current.speakerPalette[characterKey];
+}
+
+function speakerRowElement(doc, speaker) {
+  const row = doc.createElement('div');
+  row.className = 'jy-speaker-row';
+  row.dataset.jySpeakerRow = '';
+  const name = doc.createElement('input');
+  name.type = 'text';
+  name.maxLength = 60;
+  name.placeholder = '角色名（与译文中的写法一致）';
+  name.dataset.jySpeakerName = '';
+  name.value = speaker.name ?? '';
+  const aliases = doc.createElement('input');
+  aliases.type = 'text';
+  aliases.placeholder = '别名，逗号分隔（可留空）';
+  aliases.dataset.jySpeakerAliases = '';
+  aliases.value = (speaker.aliases ?? []).join('、');
+  const from = doc.createElement('select');
+  from.dataset.jySpeakerFrom = '';
+  for (const [value, label] of [['hair', '发色'], ['eye', '瞳色'], ['manual', '指定']]) {
+    const option = doc.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    from.appendChild(option);
+  }
+  from.value = speaker.from ?? 'hair';
+  const color = doc.createElement('input');
+  color.type = 'color';
+  color.dataset.jySpeakerColor = '';
+  color.value = /^#[0-9a-f]{6}$/i.test(speaker.source ?? '') ? speaker.source : '#808080';
+  const preview = doc.createElement('span');
+  preview.className = 'jy-speaker-preview';
+  preview.dataset.jySpeakerPreview = '';
+  const remove = doc.createElement('button');
+  remove.type = 'button';
+  remove.className = 'jy-text-button';
+  remove.dataset.jyAction = 'remove-speaker';
+  remove.textContent = '移除';
+  row.append(name, aliases, from, color, preview, remove);
+  return row;
+}
+
+function renderSpeakerList(root, settings = runtime.settings) {
+  const list = root.querySelector('[data-jy-speaker-list]');
+  if (!list) return;
+  const doc = list.ownerDocument;
+  const palette = normalizeSpeakerList(settings.speakerPalette?.[worldInfoCharacterKey()]);
+  list.replaceChildren();
+  if (!palette.length) {
+    const note = doc.createElement('p');
+    note.className = 'jy-muted';
+    note.textContent = '还没有登记角色。点「添加角色」，填上译文里用的名字和发色即可。';
+    list.appendChild(note);
+    return;
+  }
+  for (const speaker of palette) list.appendChild(speakerRowElement(doc, speaker));
+  refreshSpeakerPreviews(root, settings);
+}
+
+// Every preview is the real colour the floor would be painted with, resolved against the measured
+// band — not an approximation of it, so what the swatch shows is what the chat gets.
+function refreshSpeakerPreviews(root, settings = runtime.settings) {
+  const coloring = activeColoring(settings);
+  const band = runtime.probedBand ?? coloring.band;
+  const rows = [...root.querySelectorAll('[data-jy-speaker-row]')];
+  if (!rows.length) return;
+  const draft = {
+    ...settings,
+    coloring: { ...coloring, band },
+    speakerPalette: {
+      ...(settings.speakerPalette || {}),
+      [worldInfoCharacterKey()]: normalizeSpeakerList(rows.map(row => ({
+        name: row.querySelector('[data-jy-speaker-name]')?.value ?? '',
+        aliases: row.querySelector('[data-jy-speaker-aliases]')?.value ?? '',
+        source: row.querySelector('[data-jy-speaker-color]')?.value ?? '',
+        from: row.querySelector('[data-jy-speaker-from]')?.value ?? 'hair',
+      }))),
+    },
+  };
+  const resolved = band ? resolvedSpeakerColors(draft) : new Map();
+  const backdrop = band?.backgrounds?.[Math.floor((band.backgrounds.length - 1) / 2)];
+  for (const row of rows) {
+    const preview = row.querySelector('[data-jy-speaker-preview]');
+    if (!preview) continue;
+    const name = row.querySelector('[data-jy-speaker-name]')?.value.trim() ?? '';
+    const entry = resolved.get(name);
+    if (!band) {
+      preview.textContent = '先读取主题';
+      preview.removeAttribute('style');
+      continue;
+    }
+    if (!entry) {
+      preview.textContent = '填个名字';
+      preview.removeAttribute('style');
+      continue;
+    }
+    preview.textContent = entry.derived ? '示例（按名字取色）' : '示例文字';
+    preview.style.color = entry.base;
+    if (backdrop) preview.style.background = toHex(backdrop);
+  }
+}
+
+function renderBandReport(root, settings = runtime.settings) {
+  const target = root.querySelector('[data-jy-band-report]');
+  if (!target) return;
+  const doc = target.ownerDocument;
+  const coloring = activeColoring(settings);
+  const band = runtime.probedBand ?? coloring.band;
+  target.replaceChildren();
+  if (!band) {
+    const note = doc.createElement('p');
+    note.className = 'jy-muted';
+    note.textContent = '还没有读取过主题。着色需要知道文字后面到底是什么颜色，否则在深色主题上算出来的颜色到浅色主题就看不清了。';
+    target.appendChild(note);
+    return;
+  }
+  const line = doc.createElement('p');
+  line.className = 'jy-muted';
+  const report = runtime.probeReport;
+  line.textContent = [
+    band.direction === 'light' ? '当前背景偏暗，文字取亮色。' : '当前背景偏亮，文字取暗色。',
+    `对比度不低于 ${band.minContrast}。`,
+    report?.wallpaper ? '已按壁纸实际像素取样。' : '未检测到壁纸，按主题声明的颜色取样。',
+    coloring.bandProbedAt ? `上次读取：${coloring.bandProbedAt}` : '',
+  ].filter(Boolean).join(' ');
+  target.appendChild(line);
+  const strip = doc.createElement('div');
+  strip.className = 'jy-band-swatches';
+  for (const background of band.backgrounds) {
+    const chip = doc.createElement('span');
+    chip.className = 'jy-band-swatch';
+    chip.style.background = toHex(background);
+    chip.textContent = toHex(background);
+    strip.appendChild(chip);
+  }
+  target.appendChild(strip);
+  for (const warning of runtime.probeReport?.warnings ?? []) {
+    const note = doc.createElement('p');
+    note.className = 'jy-muted';
+    note.textContent = warning;
+    target.appendChild(note);
+  }
+}
+
+function syncColoringFields(root, settings = runtime.settings) {
+  if (!root.querySelector('[data-jy-coloring]')) return;
+  const coloring = activeColoring(settings);
+  setField(root, 'coloringSpeakers', coloring.speakers);
+  setField(root, 'coloringEmotions', coloring.emotions);
+  setField(root, 'coloringContrast', coloring.minContrast);
+  setField(root, 'coloringVividness', Math.round(coloring.vividness * 100));
+  const value = root.querySelector('[data-jy-vividness-value]');
+  if (value) value.textContent = `${Math.round(coloring.vividness * 100)}%`;
+  renderBandReport(root, settings);
+  renderSpeakerList(root, settings);
+}
+
+async function runThemeProbe(root) {
+  updateTask({ status: 'running', title: '正在读取当前主题', message: '取样聊天区背景与壁纸…', progress: 40 });
+  const { band, probe } = await probeThemeBand(collectSettings(root));
+  runtime.probeReport = probe;
+  if (!band.feasible) {
+    runtime.probedBand = null;
+    updateTask({ status: 'error', title: '当前背景无法着色', message: band.note, progress: 0 });
+    toast('error', band.note);
+    renderBandReport(root, runtime.settings);
+    return band;
+  }
+  runtime.probedBand = {
+    direction: band.direction,
+    luminance: band.luminance,
+    chromaMax: band.chromaMax,
+    minContrast: band.minContrast,
+    lightness: band.lightness,
+    backgrounds: band.backgrounds,
+  };
+  runtime.probedBandAt = new Date().toLocaleString('zh-CN', { hour12: false });
+  saveSettings(collectSettings(root));
+  syncColoringFields(root, runtime.settings);
+  updateTask({
+    status: 'success',
+    title: '已读取当前主题',
+    message: `背景取样 ${band.backgrounds.length} 处，文字取${band.direction === 'light' ? '亮' : '暗'}色，对比度不低于 ${band.minContrast}。`,
+    progress: 100,
+  });
+  toast('success', '已按当前主题与壁纸定下可用颜色范围。');
+  return band;
 }
 
 function syncProcessingFields(root, settings) {
@@ -2159,6 +2718,8 @@ async function inspectCurrentFloor(root) {
       segmentPrefix: settings.segmentPrefix,
       segmentSuffix: settings.segmentSuffix,
       preserveLineRules: settings.preserveLineRules,
+      paragraphPerLine: settings.paragraphPerLine,
+      replaceTags: settings.replaceTags,
     },
   );
   const lines = ['正文标签：'];
@@ -2167,6 +2728,9 @@ async function inspectCurrentFloor(root) {
     else if (item.streaming) lines.push(`  <${item.tag}>：标签已出现但尚未闭合，这一楼可能还在生成`);
     else lines.push(`  <${item.tag}>：未找到`);
   }
+  lines.push('替换标签：');
+  if (!report.replaceTags.length) lines.push('  未设置');
+  for (const item of report.replaceTags) lines.push(`  <${item.tag}>：${item.count} 组`);
   lines.push('排除标签：');
   if (!report.excludedTags.length) lines.push('  未设置');
   for (const item of report.excludedTags) lines.push(`  <${item.tag}>：${item.count} 组`);
@@ -2187,6 +2751,7 @@ async function inspectCurrentFloor(root) {
   recordDiagnostic(report.errors.length ? 'warn' : 'info', 'tags.inspect', report.errors.length ? '当前楼层标签检查发现问题。' : '当前楼层标签检查完成。', {
     messageId,
     bodyTags: report.bodyTags,
+    replaceTags: report.replaceTags,
     excludedTags: report.excludedTags,
     paragraphs: report.paragraphs,
     translationUnits: report.translationUnits,
@@ -2343,6 +2908,21 @@ function createControlCenter(rootDocument = document) {
         selected.processingProfiles = selected.processingProfiles.filter(item => item.id !== removed);
         await persistProcessing(root, selected);
         toast('success', '正文方案已删除。');
+      } else if (action === 'probe-theme') {
+        await runThemeProbe(root);
+      } else if (action === 'add-speaker') {
+        const list = root.querySelector('[data-jy-speaker-list]');
+        if (list) {
+          // A blank row is dropped by normalizeSpeakerList until a name is typed, so an accidental
+          // click leaves nothing behind.
+          if (list.querySelector('.jy-muted')) list.replaceChildren();
+          list.appendChild(speakerRowElement(list.ownerDocument, { name: '', aliases: [], source: '', from: 'hair' }));
+          list.querySelector('[data-jy-speaker-row]:last-child [data-jy-speaker-name]')?.focus();
+        }
+      } else if (action === 'remove-speaker') {
+        button.closest('[data-jy-speaker-row]')?.remove();
+        saveSettings(collectSettings(root));
+        refreshSpeakerPreviews(root, runtime.settings);
       } else if (action === 'builtin-processing') {
         const next = collectSettings(root);
         await persistProcessing(root, addProcessingProfile(next, makeBuiltinReadingProfile(next, root.querySelector('[data-jy-reading-style]').value)));
@@ -2359,13 +2939,11 @@ function createControlCenter(rootDocument = document) {
         await persistProcessing(root, next);
       } else if (action === 'translate') {
         saveSettings(collectSettings(root));
-        if (runtime.settings.streamingWriteback) await translateMessageStreaming(null);
-        else await translateMessage(null, { force: true });
+        await startTranslation(null, { force: true });
       } else if (action === 'translate-missing') {
         // Seeds with whatever is already written back, so only the gaps go to the API.
         saveSettings(collectSettings(root));
-        if (runtime.settings.streamingWriteback) await translateMessageStreaming(null);
-        else await translateMessage(null, { force: false });
+        await startTranslation(null, { force: false });
       } else if (action === 'test-api') {
         saveSettings(collectSettings(root));
         await testTranslationChannel();
@@ -2616,9 +3194,31 @@ function createControlCenter(rootDocument = document) {
       saveSettings(collectSettings(root));
       syncFields(root, runtime.settings);
     }
+    if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringContrast"]')) {
+      saveSettings(collectSettings(root));
+      syncColoringFields(root, runtime.settings);
+    }
+    // Picking a colour must not rebuild the list: a row the user has not named yet would be dropped
+    // out from under them mid-edit.
+    if (event.target.matches('[data-jy-speaker-color], [data-jy-speaker-from]')) {
+      saveSettings(collectSettings(root));
+      refreshSpeakerPreviews(root, runtime.settings);
+    }
   };
 
   const onInput = event => {
+    if (event.target.matches('[data-jy-field="coloringVividness"]')) {
+      const percent = Number(event.target.value);
+      setText(root, '[data-jy-vividness-value]', `${percent}%`);
+      // Live preview only; the value is persisted on the next save like every other field.
+      runtime.settings = { ...runtime.settings, coloring: { ...activeColoring(), vividness: percent / 100 } };
+      refreshSpeakerPreviews(root, runtime.settings);
+      return;
+    }
+    if (event.target.matches('[data-jy-speaker-name], [data-jy-speaker-aliases]')) {
+      refreshSpeakerPreviews(root, runtime.settings);
+      return;
+    }
     if (event.target.matches('[data-jy-model-search]')) {
       const query = event.target.value.trim().toLowerCase();
       const select = root.querySelector('[data-jy-model-select]');
@@ -2848,7 +3448,7 @@ function resolveFloatingForm(status) {
 }
 
 function syncFloatingEntry() {
-  const button = document.getElementById(FLOATING_ID);
+  const button = typeof document === 'undefined' ? null : document.getElementById(FLOATING_ID);
   if (!button) return;
   const task = runtime.task;
   const percent = Math.max(0, Math.min(100, Number(task.progress) || 0));
@@ -2867,7 +3467,7 @@ function syncFloatingEntry() {
 // Keeps the pill open long enough to read, then lets it settle back to the ring. An idle entry has
 // nothing to report, so it never expands — an empty pill reads as a broken control.
 function holdFloatingPill(duration = FLOATING_HOLD_MS) {
-  if (!document.getElementById(FLOATING_ID)) return;
+  if (typeof document === 'undefined' || !document.getElementById(FLOATING_ID)) return;
   if (runtime.task.status === 'idle') {
     runtime.floatingHold = false;
     syncFloatingEntry();
@@ -3349,8 +3949,10 @@ async function openMiniWindow() {
     const original = button.textContent;
     button.disabled = true;
     try {
-      if (action === 'mini-translate') await translateMessage(null, { force: true });
-      else if (action === 'mini-repair') await translateMessage(null, { force: false });
+      // The mini window used to bypass streaming entirely, so the writeback toggle looked dead
+      // whenever a translation was started from the floating entry instead of the control centre.
+      if (action === 'mini-translate') await startTranslation(null, { force: true });
+      else if (action === 'mini-repair') await startTranslation(null, { force: false });
       else if (action === 'mini-refresh') await refreshFloor();
       else if (action === 'mini-stop') {
         for (const entry of runtime.inflight.values()) entry.controller.abort();
@@ -3447,8 +4049,7 @@ function scheduleAuto(messageId, reason) {
       if (reason === 'generation' && !settings.autoGeneration) return;
       if (reason === 'swipe' && !settings.autoSwipe) return;
       if (reason === 'edit' && !settings.autoEdit) return;
-      if (settings.streamingWriteback) await translateMessageStreaming(Number(messageId), { quiet: true });
-      else await translateMessage(Number(messageId), { force: reason === 'edit', quiet: true });
+      await startTranslation(Number(messageId), { force: reason === 'edit', quiet: true });
     } catch (error) {
       if (isAbortError(error)) return;
       const message = safeError(error);
@@ -3509,7 +4110,9 @@ function stripPromptPayload(payload) {
   const entries = Array.isArray(payload.chat) ? payload.chat : [];
   for (const item of entries) {
     if (typeof item?.content !== 'string') continue;
-    const clean = stripGeneratedTranslationLines(item.content);
+    // Prompt view, matching the generation interceptor: replace-tag floors keep their visible
+    // translation instead of silently reverting to the original on this fallback path only.
+    const clean = stripGeneratedTranslationLines(item.content, undefined, 'prompt');
     if (clean !== item.content) {
       item.content = clean;
       stripped += 1;
@@ -3571,6 +4174,8 @@ function registerRuntimeEvents() {
     runtime.mainGenerationActive = false;
     cancelPendingWork();
     scheduleEntries();
+    // The speaker palette is per character card, so a different chat may need a different sheet.
+    syncSpeakerStylesheet(runtime.settings);
     if (runtime.panel?.controller?.root) refreshCurrentCard(runtime.panel.controller.root);
   });
 }
@@ -3592,21 +4197,51 @@ function cleanupRuntime() {
   runtime.floatingCleanup = null;
   closeControlCenter();
   closeMiniWindow();
+  if (typeof document !== 'undefined') document.getElementById(SPEAKER_STYLE_ID)?.remove();
   runtime.subscribers.clear();
   runtime.diagnosticSubscribers.clear();
   runtime.initialized = false;
 }
 
-export function interceptGeneration(chat) {
+export function interceptGeneration(chat, _contextSize, _abort, type) {
   runtime.interceptorSeen = true;
   // The host scans worldinfo AFTER interceptors, using the stripped text, so translated names can
   // never fire entries on their own. Force-activate the entries our translations DO match so the
   // main prompt keeps reacting to translated terms; the one-shot list clears after each scan.
-  const translations = Array.isArray(chat)
+  //
+  // Side generations (summaries, impersonation, /gen) are skipped: the host clears the pending list
+  // during its own scan, so an activation queued for a run that never scans would surface in the
+  // next real reply as an entry nothing in that reply asked for.
+  const sideGeneration = typeof type === 'string' && ['quiet', 'impersonate'].includes(type);
+  const translations = Array.isArray(chat) && !sideGeneration
     ? chat.map(item => extractTranslationBlockText(item?.mes)).filter(Boolean).join('\n')
     : '';
   if (translations) forceActivateWorldInfoFromText(translations);
   return interceptGenerationChat(chat);
+}
+
+// A close-enough rebuild of the host's own key matcher. Forcing an entry the host would never have
+// activated is worse than missing one, so regex keys, case sensitivity and whole-word matching are
+// honoured, and entries whose activation depends on secondary logic are left to the host entirely.
+function worldInfoKeyMatches(key, text, entry) {
+  const raw = String(key ?? '').trim();
+  if (!raw) return false;
+  const literal = raw.match(/^\/(.+)\/([dgimsuvy]*)$/s);
+  if (literal) {
+    try {
+      return new RegExp(literal[1], literal[2].replace(/[gy]/g, '')).test(text);
+    } catch {
+      return false; // An invalid pattern is the host's problem to report, not ours to guess around.
+    }
+  }
+  const caseSensitive = entry?.caseSensitive === true;
+  const haystack = caseSensitive ? text : text.toLowerCase();
+  const needle = caseSensitive ? raw : raw.toLowerCase();
+  if (entry?.matchWholeWords === true && /^\w[\w\s]*\w$|^\w$/.test(needle)) {
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|\\W)${escaped}(?:$|\\W)`, caseSensitive ? '' : 'i').test(haystack);
+  }
+  return haystack.includes(needle);
 }
 
 function forceActivateWorldInfoFromText(text) {
@@ -3615,15 +4250,23 @@ function forceActivateWorldInfoFromText(text) {
   const context = getContext();
   const eventType = context.eventTypes?.WORLDINFO_FORCE_ACTIVATE;
   if (!eventType || typeof context.eventSource?.emit !== 'function') return;
-  const haystack = text.toLowerCase();
   const hits = [];
+  let skippedSelective = 0;
   for (const entry of entries) {
-    const keys = (Array.isArray(entry.key) ? entry.key.flat() : [])
-      .map(key => String(key ?? '').trim().replace(/^\/+|\/+$/g, ''))
-      .filter(Boolean);
-    if (keys.some(key => haystack.includes(key.toLowerCase()))) {
+    if (entry?.disable === true || entry?.constant === true || entry?.vectorized === true) continue;
+    if (entry?.selective === true && (Array.isArray(entry.keysecondary) ? entry.keysecondary.filter(Boolean).length : 0)) {
+      skippedSelective += 1;
+      continue;
+    }
+    const keys = Array.isArray(entry.key) ? entry.key.flat() : [];
+    if (keys.some(key => worldInfoKeyMatches(key, text, entry))) {
       hits.push({ world: entry.world, uid: entry.uid });
     }
+  }
+  if (skippedSelective) {
+    recordDiagnostic('info', 'worldinfo.selective-skipped', '带有次要关键词的条目交给酒馆自行判定，译名不强制激活。', {
+      skipped: skippedSelective,
+    });
   }
   if (hits.length) {
     try { context.eventSource.emit(eventType, hits); } catch (error) {
@@ -3640,6 +4283,7 @@ export async function onActivate() {
   globalThis[INTERCEPTOR_NAME] = interceptGeneration;
   initializeSettings();
   runtime.initialized = true;
+  syncSpeakerStylesheet(runtime.settings);
   scheduleEntries();
   registerRuntimeEvents();
   recordDiagnostic('info', 'lifecycle', `镜译 v${APP_VERSION} 已启动。`);
@@ -3693,4 +4337,26 @@ if (typeof document !== 'undefined') {
   runtime.timers.add(timer);
 }
 
-export const __testing = Object.freeze({ buildTranslationMessages, latestAssistantMessageId, readMessageSnapshot, restyleCurrentChat });
+// A test-only seam. `saveSettings` reaches into the DOM for the floating entry and the panel, which
+// a headless run has none of, so tests place settings and the lore cache directly.
+function configureForTest({ settings, worldInfoEntries, initialized } = {}) {
+  if (settings) runtime.settings = { ...runtime.settings, ...settings };
+  if (worldInfoEntries !== undefined) runtime.wiEntries = worldInfoEntries;
+  if (initialized !== undefined) runtime.initialized = initialized === true;
+  return runtime.settings;
+}
+
+export const __testing = Object.freeze({
+  buildTranslationMessages,
+  latestAssistantMessageId,
+  readMessageSnapshot,
+  restyleCurrentChat,
+  initializeSettings,
+  configureForTest,
+  startTranslation,
+  translateMessageStreaming,
+  worldInfoKeyMatches,
+  readableWorldInfoEntries,
+  whitelistedWorldbookContent,
+  forceActivateWorldInfoFromText,
+});

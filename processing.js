@@ -1,7 +1,7 @@
 import {
   DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END,
   deepClone, mergeSettings, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors,
-} from './core.js?v=0.13.3';
+} from './core.js?v=0.14.0';
 
 export const PROCESSING_FIELDS = Object.freeze([
   'bodyTags', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
@@ -169,9 +169,45 @@ export function syncNativeRegex(existing, profile) {
     replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
     runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
     [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
-  });
+  }, ...PROMPT_GUARD_RULES);
   return kept;
 }
+
+// Third line of defence for the prompt. The generation interceptor is the primary path and the
+// prompt events are the fallback, but both are extension hooks that a host can fail to call. These
+// are ordinary native prompt rules, so anything the host routes through its own regex layer — the
+// main request included — loses the mirror blocks even when no hook of ours ever fires.
+// Order matters: the host applies scripts in list order, so whole blocks go before bare boundaries.
+const PROMPT_GUARD_RULES = Object.freeze([
+  {
+    id: `${MODULE_ID}:prompt-translation`, scriptName: '镜译 · 提示词清理 · 译文块',
+    findRegex: `/\\n?${TRANSLATION_START}[\\s\\S]*?${TRANSLATION_END}/g`,
+    replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: true,
+    runOnEdit: false, substituteRegex: 0, minDepth: null, maxDepth: null,
+    [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
+  },
+  {
+    id: `${MODULE_ID}:prompt-hidden`, scriptName: '镜译 · 提示词清理 · 隐藏原文块',
+    findRegex: `/\\n?${HIDDEN_START}[\\s\\S]*?${HIDDEN_END}/g`,
+    replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: true,
+    runOnEdit: false, substituteRegex: 0, minDepth: null, maxDepth: null,
+    [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
+  },
+  {
+    id: `${MODULE_ID}:prompt-affix`, scriptName: '镜译 · 提示词清理 · 装饰前后缀',
+    findRegex: `/${AFFIX_START}[\\s\\S]*?${AFFIX_END}/g`,
+    replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: true,
+    runOnEdit: false, substituteRegex: 0, minDepth: null, maxDepth: null,
+    [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
+  },
+  {
+    id: `${MODULE_ID}:prompt-boundaries`, scriptName: '镜译 · 提示词清理 · 边界字符',
+    findRegex: `/${[SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END].join('|')}/g`,
+    replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: true,
+    runOnEdit: false, substituteRegex: 0, minDepth: null, maxDepth: null,
+    [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
+  },
+]);
 
 export function readNativeRegexEdits(existing, profile) {
   return (Array.isArray(existing) ? existing : [])

@@ -130,8 +130,11 @@ test('native registration is isolated, stable across saves and switches, and rea
   const unrelated = { id: 'user-rule', scriptName: 'User rule', findRegex: 'x', replaceString: 'y', placement: [2] };
   const first = syncNativeRegex([unrelated], cute);
   assert.deepEqual(syncNativeRegex(first, cute), first);
-  // Two internal display rules (boundary cleanup + hidden replace originals) sit ahead of it.
-  assert.equal(first[2], unrelated);
+  // Internal rules sit ahead of everything else: two display rules (boundary cleanup + hidden
+  // replace originals) and four prompt guards.
+  const internal = first.filter(rule => rule.jingyi_managed?.internal);
+  assert.equal(internal.length, 6);
+  assert.equal(first[internal.length], unrelated);
   const nativeRule = first.find(rule => rule.jingyi_managed?.profileId === cute.id);
   nativeRule.replaceString = '<p>edited in native manager</p>';
   assert.equal(readNativeRegexEdits(first, cute)[0].replaceString, nativeRule.replaceString);
@@ -153,6 +156,8 @@ test('built-in styles preserve extraction settings and use display-only native r
     let display = assembleBilingual(segmentSource('Original.').layout, new Map([[1, '译文。']]), settings);
     assert.equal(stripGeneratedTranslationLines(display), 'Original.');
     for (const rule of syncNativeRegex([], profile)) {
+      // Prompt guards never touch the rendered floor; display rules never touch the prompt.
+      if (rule.promptOnly) { assert.equal(rule.markdownOnly, false); continue; }
       assert.equal(rule.markdownOnly, true); assert.equal(rule.promptOnly, false);
       display = display.replace(compileNativeRegex(rule.findRegex), rule.replaceString);
     }

@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.13.3';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.14.0';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 
@@ -640,4 +640,38 @@ export function findForbiddenPhraseHits(translations, profile) {
     if (matched.length) hits.push({ id: Number(id), phrases: matched });
   }
   return hits;
+}
+
+/**
+ * The extra instruction sent only when speaker colouring or emotion typography is on.
+ *
+ * It lives outside the editable prompt profile on purpose. This is a display feature: it must not
+ * appear in, or be lost by, a user's own translation rules, and turning colouring off has to remove
+ * every trace of it from the request.
+ *
+ * The whole design of this section is to keep the job small. The model is not asked to choose a
+ * colour, invent a vocabulary or emit markup — only to pick a name off a list it is given and a
+ * label out of a closed set, with an explicit "leave it out if unsure" escape.
+ */
+export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], emotionLabels = [] } = {}) {
+  if (!speakers && !emotions) return '';
+  const fields = [];
+  const rules = [];
+  if (speakers) {
+    fields.push('speaker：这一段的说话者');
+    rules.push(roster.length
+      ? `speaker 只能取以下名单中的一个，逐字照抄，不要改写、不要加敬称：${roster.join('、')}。名单外的人物、旁白、心理描写和无法确定的段落一律省略 speaker 字段。`
+      : 'speaker 写这一段说话者在译文中使用的名字。旁白、心理描写和无法确定的段落省略 speaker 字段。');
+  }
+  if (emotions) {
+    fields.push('emotion：这一段的情绪；intensity：情绪强度，0 弱、1 中、2 强');
+    rules.push(`emotion 只能取以下之一，逐字照抄：${emotionLabels.join('、')}。判断依据是这一段本身写出来的内容，不是你对剧情的推测。看不出明显情绪就写 neutral 或直接省略；不要为了填满字段而猜。`);
+    rules.push('intensity 只在 emotion 不是 neutral 时才有意义，默认 1。只有原文明确用了加强或减弱的写法（惊叹、破折号、省略号、气声、重复、加粗）才写 2 或 0。');
+  }
+  return [
+    '# 附加标注',
+    `除 id 和 text 之外，为每条译文再给出：${fields.join('；')}。`,
+    ...rules,
+    '这些字段只影响译文在界面上的显示，不进入正文，也不影响翻译本身。字段缺失、拼错或不在允许取值内时会被忽略，界面按普通样式显示，因此拿不准时省略比猜测更好。绝对不要把标注写进 text，也不要因为要标注而改动译文措辞。',
+  ].join('\n');
 }

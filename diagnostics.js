@@ -2,6 +2,13 @@ const STORAGE_KEY = 'jingyi-translator.diagnostics.v1';
 const MAX_ENTRIES = 100;
 const MAX_STORAGE_CHARACTERS = 1_800_000;
 const SECRET_KEY_RE = /(?:api.?key|secret|password|authorization|proxy_password|token)/i;
+// "token" also names ordinary usage counters. Redacting those hid the request-size numbers the log
+// page renders, so the statistics keys are named explicitly and everything else stays redacted.
+const TOKEN_STAT_KEY_RE = /^(?:requestTokens|promptTokens|completionTokens|totalTokens|inputTokens|outputTokens|maxTokens|max_tokens|prompt_tokens|completion_tokens|total_tokens|tokenSaving|estimatedTokens)$/;
+
+function isSecretKey(key) {
+  return !TOKEN_STAT_KEY_RE.test(String(key ?? '')) && SECRET_KEY_RE.test(String(key ?? ''));
+}
 
 let memoryEntries = [];
 let memoryFallbackActive = false;
@@ -32,7 +39,7 @@ function cleanFullString(value) {
 }
 
 export function sanitizeDiagnostic(value, key = '') {
-  if (SECRET_KEY_RE.test(key)) return '[已隐藏]';
+  if (isSecretKey(key)) return '[已隐藏]';
   if (value === null || value === undefined) return value;
   if (typeof value === 'string') return cleanString(value);
   if (typeof value === 'number' || typeof value === 'boolean') return value;
@@ -48,7 +55,7 @@ export function sanitizeDiagnostic(value, key = '') {
 }
 
 export function sanitizeFullResponse(value, key = '', seen = new WeakSet()) {
-  if (SECRET_KEY_RE.test(key)) return '[已隐藏]';
+  if (isSecretKey(key)) return '[已隐藏]';
   if (value === null || value === undefined) return value;
   if (typeof value === 'string') return cleanFullString(value);
   if (typeof value === 'number' || typeof value === 'boolean') return value;

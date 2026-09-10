@@ -162,3 +162,35 @@ test('token-saving mode injects only the whitelist and caps recent context at tw
   assert.match(packet.recent, /三楼层/);
   assert.match(packet.recent, /四楼层/);
 });
+
+test('the annotation request appears only when colouring is on and never during style repair', () => {
+  const base = mergeSettings({});
+  const segments = [{ id: 1, text: '雨が降っている。' }];
+  const off = buildTranslationMessages(segments, base, {}, 'primary');
+  assert.equal(off.some(message => message.content.includes('附加标注')), false);
+  assert.equal(JSON.parse(off.at(-1).content).annotate, undefined);
+
+  const on = mergeSettings({ coloring: { speakers: true, emotions: true } });
+  const messages = buildTranslationMessages(segments, on, {}, 'primary', { roster: ['英梨梨', '加藤'] });
+  const section = messages.find(message => message.content.includes('附加标注'));
+  assert.ok(section, '开启后必须带上标注说明');
+  assert.match(section.content, /英梨梨、加藤/);
+  assert.match(section.content, /neutral/);
+  assert.match(section.content, /拿不准时省略比猜测更好/);
+  const input = JSON.parse(messages.find(message => message.role === 'user').content);
+  assert.deepEqual(input.annotate.roster, ['英梨梨', '加藤']);
+  assert.equal(input.annotate.speaker, true);
+  assert.equal(input.annotate.emotion, true);
+  assert.ok(input.annotate.emotions.includes('angry'));
+
+  // Style repair rewrites a finished draft; re-asking for labels there only invites churn.
+  const repair = buildTranslationMessages(segments, on, {}, 'style_repair', { roster: ['英梨梨'] });
+  assert.equal(repair.some(message => message.content.includes('附加标注')), false);
+  assert.equal(JSON.parse(repair.find(message => message.role === 'user').content).annotate, undefined);
+
+  // Speaker-only mode must not ask for emotions, and vice versa.
+  const speakerOnly = buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true } }), {}, 'primary', {});
+  const speakerSection = speakerOnly.find(message => message.content.includes('附加标注'));
+  assert.match(speakerSection.content, /speaker/);
+  assert.doesNotMatch(speakerSection.content, /emotion：/);
+});

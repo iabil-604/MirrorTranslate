@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.13.3';
+} from './prompts.js?v=0.14.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.13.3';
+export const APP_VERSION = '0.14.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -31,10 +31,18 @@ const HIDDEN_BLOCK_RE = new RegExp(`\\n?${HIDDEN_START}[\\s\\S]*?${HIDDEN_END}`,
 // Tempered patterns: the pair's translation payload may not cross a boundary, so a bilingual
 // source block can never falsely pair up with a later replace pair's hidden original.
 const REPLACE_PAIR_RE = new RegExp(`${SOURCE_START}(?:(?!${SOURCE_START}|${SOURCE_END})[\\s\\S])*?${SOURCE_END}\\n?${HIDDEN_START}([\\s\\S]*?)${HIDDEN_END}`, 'g');
-const REPLACE_PAIR_TEXT_RE = new RegExp(`${SOURCE_START}((?:(?!${SOURCE_END})[\\s\\S])*)${SOURCE_END}\\n?${HIDDEN_START}(?:(?!${HIDDEN_END})[\\s\\S])*${HIDDEN_END}`, 'g');
+// Both halves at once. Pairing 补译 seeds by the hidden original keeps a partly translated floor from
+// handing an untranslated segment the translation that belongs to the next one.
+const REPLACE_PAIR_BOTH_RE = new RegExp(`${SOURCE_START}((?:(?!${SOURCE_END})[\\s\\S])*)${SOURCE_END}\\n?${HIDDEN_START}((?:(?!${HIDDEN_END})[\\s\\S])*)${HIDDEN_END}`, 'g');
 
 const GENERATED_BLOCK_RE = new RegExp(`(?:^|\\n)\\{${INVISIBLE_MARKER}([\\s\\S]*?)${INVISIBLE_MARKER}\\}[ \\t]*(?=\\n|$)`, 'g');
 const LEGACY_GENERATED_LINE_RE = new RegExp(`^\\{${INVISIBLE_MARKER}[^\\r\\n]*\\}[ \\t]*$`);
+// The wrapper speaker/emotion styling is rendered into. Kept here so the restyle pass can recognise
+// and carry over a wrapper it did not generate.
+export const SPEAKER_CLASS = 'jy-spk';
+// SillyTavern rewrites message class names with a custom- prefix when it renders, and an edited
+// floor can be saved back in that form, so both spellings have to be recognised here.
+const SPEAKER_OPEN_RE = new RegExp(`<span class="(?:custom-)?${SPEAKER_CLASS}(?:[ "][^>]*)?>`);
 const VALID_TAG_RE = /^[A-Za-z][A-Za-z0-9_:-]*$/;
 const STRUCTURAL_TAG_RE = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
 const HTML_ENTITY_RE = /&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi;
@@ -57,8 +65,24 @@ export const DEFAULT_CHANNEL = Object.freeze({
   excludeParams: [],
 });
 
+// Speaker colouring and emotion typography. The secondary model only ever returns a label; the
+// palette, the contrast maths and the typography all live on this side. See palette.js.
+export const DEFAULT_COLORING = Object.freeze({
+  speakers: false,
+  emotions: false,
+  // WCAG AA for body text. The theme probe reports what a background can actually reach.
+  minContrast: 4.5,
+  // 0 keeps a character's own hair colour faithfully, 1 paints everyone at full strength.
+  vividness: 0.65,
+  // Filled in by 取色: { direction, luminance, chromaMax, minContrast, backgrounds }.
+  band: null,
+  bandProbedAt: '',
+});
+
 export const DEFAULT_SETTINGS = Object.freeze({
-  schemaVersion: 11,
+  schemaVersion: 12,
+  coloring: DEFAULT_COLORING,
+  speakerPalette: {},
   theme: 'day',
   autoGeneration: true,
   autoSwipe: true,
@@ -288,11 +312,71 @@ export function getActivePromptProfile(settings) {
     || normalizePromptProfile();
 }
 
+// A saved band is data the probe wrote, but it also comes back from an imported profile, so every
+// field is re-checked rather than trusted.
+function normalizeColorBand(value) {
+  if (!value || typeof value !== 'object') return null;
+  const backgrounds = (Array.isArray(value.backgrounds) ? value.backgrounds : [])
+    .map(item => (item && typeof item === 'object'
+      ? { r: clampNumber(item.r, 0, 1, 0), g: clampNumber(item.g, 0, 1, 0), b: clampNumber(item.b, 0, 1, 0), a: 1 }
+      : null))
+    .filter(Boolean);
+  if (!backgrounds.length) return null;
+  const chromaMax = clampNumber(value.chromaMax, 0, 0.4, 0);
+  if (!chromaMax) return null;
+  return {
+    direction: value.direction === 'dark' ? 'dark' : 'light',
+    luminance: clampNumber(value.luminance, 0, 1, 0.5),
+    chromaMax,
+    minContrast: clampNumber(value.minContrast, 1, 21, 4.5),
+    backgrounds,
+  };
+}
+
+export function normalizeColoring(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    speakers: Boolean(source.speakers),
+    emotions: Boolean(source.emotions),
+    minContrast: clampNumber(source.minContrast, 1.5, 21, DEFAULT_COLORING.minContrast),
+    vividness: clampNumber(source.vividness, 0, 1, DEFAULT_COLORING.vividness),
+    band: normalizeColorBand(source.band),
+    bandProbedAt: typeof source.bandProbedAt === 'string' ? source.bandProbedAt.slice(0, 40) : '',
+  };
+}
+
+// One entry per character whose speech gets its own colour. `source` is the declared hair or eye
+// colour; the displayed colour is derived from it and the current band, never stored.
+export function normalizeSpeakerList(value) {
+  const seen = new Set();
+  return (Array.isArray(value) ? value : [])
+    .map(item => {
+      if (!item || typeof item !== 'object') return null;
+      const name = String(item.name ?? '').trim().slice(0, 60);
+      if (!name) return null;
+      const aliases = [...new Set((Array.isArray(item.aliases) ? item.aliases : String(item.aliases ?? '').split(/[\s,，、;；]+/))
+        .map(alias => String(alias ?? '').trim().slice(0, 60))
+        .filter(alias => alias && alias !== name))].slice(0, 8);
+      return {
+        name,
+        aliases,
+        source: /^#[0-9a-fA-F]{3,8}$/.test(String(item.source ?? '').trim()) ? String(item.source).trim().toLowerCase() : '',
+        from: ['hair', 'eye', 'manual'].includes(item.from) ? item.from : 'hair',
+      };
+    })
+    .filter(item => {
+      if (!item || seen.has(item.name)) return false;
+      seen.add(item.name);
+      return true;
+    })
+    .slice(0, 40);
+}
+
 export function mergeSettings(value = {}) {
   const source = value && typeof value === 'object' ? value : {};
   const merged = { ...deepClone(DEFAULT_SETTINGS), ...source };
   const sourceSchemaVersion = clampInteger(source.schemaVersion, 0, 999, 0);
-  merged.schemaVersion = 11;
+  merged.schemaVersion = 12;
   merged.theme = ['day', 'night', 'fresh', 'vampire', 'glass'].includes(source.theme) ? source.theme : 'day';
   delete merged.chunkChars;
   delete merged.chunkSegments;
@@ -384,6 +468,14 @@ export function mergeSettings(value = {}) {
       .filter(item => item && typeof item === 'object' && item.world && Number.isInteger(Number(item.uid)))
       .map(item => ({ world: String(item.world), uid: Number(item.uid) }));
     if (picks.length) merged.worldInfoWhitelist[characterKey] = picks;
+  }
+  merged.coloring = normalizeColoring(source.coloring);
+  // The speaker palette follows the character card, like the worldbook whitelist above.
+  merged.speakerPalette = {};
+  const rawPalette = source.speakerPalette && typeof source.speakerPalette === 'object' ? source.speakerPalette : {};
+  for (const [characterKey, list] of Object.entries(rawPalette)) {
+    const speakers = normalizeSpeakerList(list);
+    if (speakers.length) merged.speakerPalette[characterKey] = speakers;
   }
   merged.includeWorldbook = Boolean(merged.includeWorldbook);
   merged.includeCharacterCard = Boolean(merged.includeCharacterCard);
@@ -511,16 +603,57 @@ export function createGenerationGate() {
   });
 }
 
+// Affixes normally travel inside AFFIX_START/AFFIX_END so they can be removed exactly. Editors,
+// clipboards and third-party regex rules do sometimes drop the invisible pair while leaving the
+// visible text behind; re-rendering then nested a second copy inside the first, which is what
+// "双重前后缀标签" looks like.
+//
+// Only a matching open/close tag pair is repaired. Symbol affixes such as ☆{ … } are indistinguishable
+// from ordinary punctuation a scene may legitimately open and close with, and guessing there would
+// eat real source text, so those are reported rather than rewritten.
+const AFFIX_OPEN_TAG_RE = /^<[A-Za-z][A-Za-z0-9_:-]*(?:\s[^<>]*)?>$/;
+const AFFIX_CLOSE_TAG_RE = /^<\/[A-Za-z][A-Za-z0-9_:-]*\s*>$/;
+
+function repairableAffixPair(prefix, suffix) {
+  return AFFIX_OPEN_TAG_RE.test(String(prefix ?? '')) && AFFIX_CLOSE_TAG_RE.test(String(suffix ?? ''));
+}
+
+function affixLeftoverStripper(metadata) {
+  const prefix = String(metadata?.segment_prefix ?? '');
+  const suffix = String(metadata?.segment_suffix ?? '');
+  if (!repairableAffixPair(prefix, suffix)) return value => value;
+  return value => {
+    const text = String(value ?? '');
+    return text.startsWith(prefix) && text.endsWith(suffix) && text.length >= prefix.length + suffix.length
+      ? text.slice(prefix.length, text.length - suffix.length)
+      : text;
+  };
+}
+
+// True when a floor still carries visible tag affixes that have lost their invisible boundaries.
+export function detectUnmarkedAffixes(text, metadata) {
+  const stripped = normalizeNewlines(String(text ?? ''))
+    .replace(TRANSLATION_BLOCK_RE, '')
+    .replace(SOURCE_BLOCK_RE, (_match, inner) => inner.replace(AFFIX_RE, ''))
+    .replace(HIDDEN_BLOCK_RE, '');
+  return [
+    [metadata?.segment_prefix, metadata?.segment_suffix],
+    [metadata?.translation_prefix, metadata?.translation_suffix],
+  ].some(([prefix, suffix]) => repairableAffixPair(prefix, suffix)
+    && stripped.includes(String(prefix)) && stripped.includes(String(suffix)));
+}
+
 // The source view (default) restores replace-tag regions to their original language for
 // re-translation; the prompt view keeps the visible translation and drops the hidden original.
 export function stripGeneratedTranslationLines(text, metadata, view = 'source') {
   const upgraded = upgradeLegacyBilingual(text, metadata);
+  const stripLeftoverAffix = affixLeftoverStripper(metadata);
   const collapsed = view === 'prompt'
     ? upgraded.replace(HIDDEN_BLOCK_RE, '')
     : upgraded.replace(REPLACE_PAIR_RE, (_match, original) => original);
   return collapsed
     .replace(TRANSLATION_BLOCK_RE, '')
-    .replace(SOURCE_BLOCK_RE, (_match, source) => source.replace(AFFIX_RE, ''))
+    .replace(SOURCE_BLOCK_RE, (_match, source) => stripLeftoverAffix(source.replace(AFFIX_RE, '')))
     .replace(GENERATED_BLOCK_RE, '')
     .split('\n')
     .filter(line => !LEGACY_GENERATED_LINE_RE.test(line))
@@ -754,6 +887,26 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags,
   return { source, regions, missingTags, unbalanced, assumedCloses };
 }
 
+// Body and replace regions live in one floor and are rebuilt in a single pass, so they may sit side
+// by side but never overlap. Both the runtime path and the tag inspector go through here, which is
+// what lets the inspector warn about a nesting the translation would otherwise only hit at run time.
+export function mergeExtractedRegions(body, replace) {
+  const regions = [...(body?.regions ?? []), ...(replace?.regions ?? [])]
+    .sort((left, right) => left.openStart - right.openStart);
+  for (let index = 1; index < regions.length; index += 1) {
+    if (regions[index].openStart < regions[index - 1].closeEnd) {
+      throw new Error(`<${regions[index - 1].tagName}> 与 <${regions[index].tagName}> 的区域交叉重叠，请检查提取标签与替换标签的嵌套。镜译不支持标签嵌套。`);
+    }
+  }
+  return {
+    source: String(body?.source ?? replace?.source ?? ''),
+    regions,
+    missingTags: [...(body?.missingTags ?? []), ...(replace?.missingTags ?? [])],
+    unbalanced: (body?.unbalanced || 0) + (replace?.unbalanced || 0),
+    assumedCloses: (body?.assumedCloses || 0) + (replace?.assumedCloses || 0),
+  };
+}
+
 export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOptions = {}) {
   const source = normalizeNewlines(text);
   const body = parseTagNames(bodyTags, DEFAULT_SETTINGS.bodyTags);
@@ -795,6 +948,19 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
       return { tag, count: 0, error: error.message };
     }
   });
+  // Replace tags used to be absent from this report, so the common
+  // <story_scene><status>…</status></story_scene> shape passed the check and only failed once a
+  // translation was actually running.
+  const replace = parseTagNames(segmentOptions.replaceTags);
+  const replaceResults = replace.map(tag => {
+    try {
+      const groups = scanTagGroups(source, tag);
+      return { tag, count: groups.length };
+    } catch (error) {
+      errors.push(error.message);
+      return { tag, count: 0, error: error.message };
+    }
+  });
   let paragraphs = 0;
   let translationUnits = 0;
   let customPreservedLines = 0;
@@ -802,7 +968,10 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   const structuralTags = new Set();
   if (!errors.length && bodyResults.some(result => result.count)) {
     try {
-      const extraction = extractTaggedRegions(source, body);
+      const extraction = mergeExtractedRegions(
+        extractTaggedRegions(source, body),
+        replace.length ? extractTaggedRegions(source, replace, { mode: 'replace' }) : null,
+      );
       let nextId = 1;
       for (const region of extraction.regions) {
         const segmented = segmentSource(region.inner, { ...segmentOptions, excludedTags: excluded, startId: nextId });
@@ -820,6 +989,7 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   return {
     bodyTags: bodyResults,
     excludedTags: excludedResults,
+    replaceTags: replaceResults,
     paragraphs,
     translationUnits,
     customPreservedLines,
@@ -1225,6 +1395,23 @@ function normalizeTranslationText(value) {
   return text;
 }
 
+// The optional speaker/emotion labels. They are display metadata: a value that is missing, wrong or
+// nonsense costs the line its colour and nothing else, so nothing here is allowed to throw or to
+// reach the translated text itself.
+function readAnnotation(object) {
+  if (!object) return null;
+  const speaker = String(object.speaker ?? object.who ?? object.name ?? object.character ?? '').trim().slice(0, 60);
+  const emotion = String(object.emotion ?? object.emo ?? object.mood ?? object.tone ?? '').trim().slice(0, 40);
+  if (!speaker && !emotion) return null;
+  const rawIntensity = object.intensity ?? object.level ?? object.strength;
+  const intensity = Number(rawIntensity);
+  const annotation = {};
+  if (speaker) annotation.speaker = speaker;
+  if (emotion) annotation.emotion = emotion;
+  if (Number.isFinite(intensity)) annotation.intensity = Math.min(2, Math.max(0, Math.round(intensity)));
+  return annotation;
+}
+
 function lineProtocolItems(raw) {
   const value = unwrapResponseContent(raw);
   if (typeof value !== 'string') return [];
@@ -1283,6 +1470,7 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
   }
   if (!items.length) items.push(...lineProtocolItems(raw));
   const translations = new Map();
+  const annotations = new Map();
   const warnings = [];
   const unresolved = [];
 
@@ -1294,16 +1482,19 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
     const text = normalizeTranslationText(rawText);
     const rawId = object?.id ?? object?.segment_id ?? object?.segmentId ?? object?.index;
     const id = Number(rawId);
+    const annotation = readAnnotation(object);
     if (!text) {
       warnings.push(`第 ${Number.isInteger(id) ? id : index + 1} 项为空，已留待补译。`);
       return;
     }
     if (Number.isInteger(id) && expectedIds.has(id)) {
-      if (!translations.has(id)) translations.set(id, text);
-      else warnings.push(`第 ${id} 项重复，已保留第一条。`);
+      if (!translations.has(id)) {
+        translations.set(id, text);
+        if (annotation) annotations.set(id, annotation);
+      } else warnings.push(`第 ${id} 项重复，已保留第一条。`);
       return;
     }
-    unresolved.push({ index, text });
+    unresolved.push({ index, text, annotation });
   });
 
   if (items.length === expected.length) {
@@ -1311,6 +1502,7 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
       const fallbackId = Number(expected[item.index]?.id);
       if (expectedIds.has(fallbackId) && !translations.has(fallbackId)) {
         translations.set(fallbackId, item.text);
+        if (item.annotation) annotations.set(fallbackId, item.annotation);
         warnings.push(`第 ${fallbackId} 项缺少有效 id，已按位置恢复。`);
       }
     }
@@ -1334,8 +1526,9 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
     contentCharacters,
     parsedCandidates: parsedCandidates.length,
     recoveredItems: items.length,
+    annotatedItems: annotations.size,
   };
-  return { translations, missingIds, warnings, parsed: parsedCandidates.length > 0, response };
+  return { translations, annotations, missingIds, warnings, parsed: parsedCandidates.length > 0, response };
 }
 
 export function parseStructuredTranslations(raw, expectedSegments) {
@@ -1358,7 +1551,13 @@ export function assembleBilingual(layout, translationMap, options = {}) {
     if (missingIds.length && !allowMissing) throw new Error(`缺少第 ${missingIds.join('、')} 段译文。`);
     pieces.push(renderSourceBlock(part.sourceText ?? part.text, options));
     const translations = ids.map(id => translationMap.get(id)).filter(Boolean);
-    if (translations.length) pieces.push(`\n${renderTranslationBlock(translations.join('\n'), { ...options, padAfter: part.padAfter === true })}`);
+    if (translations.length) {
+      pieces.push(`\n${renderTranslationBlock(translations.join('\n'), {
+        ...options,
+        padAfter: part.padAfter === true,
+        ...segmentDecoration(options.styleFor, ids),
+      })}`);
+    }
   }
   return pieces.join('');
 }
@@ -1367,14 +1566,31 @@ function markedAffix(value) {
   return value ? `${AFFIX_START}${value}${AFFIX_END}` : '';
 }
 
+// Speaker and emotion styling rides inside the same invisible affix markers the visible prefixes
+// use. That is the whole trick: nothing new has to learn how to strip it, the main model's prompt
+// never sees it, and a floor written with colouring on reads back identically with it off.
+function segmentDecoration(styleFor, ids) {
+  if (typeof styleFor !== 'function') return {};
+  let decoration;
+  try {
+    decoration = styleFor(ids);
+  } catch {
+    return {}; // A palette problem must never cost the reader their translation.
+  }
+  if (!decoration?.open) return {};
+  return { stylePrefix: String(decoration.open), styleSuffix: String(decoration.close ?? '') };
+}
+
 export function renderSourceBlock(source, options = {}) {
   return `${SOURCE_START}${markedAffix(options.segmentPrefix ?? '')}${source}${markedAffix(options.segmentSuffix ?? '')}${SOURCE_END}`;
 }
 
 // A replace-tag pair: the translation rides in the source-block position so the host prompt keeps
 // it as plain floor text, while the original hides in the trailing block for re-translation.
-export function renderReplacePair(translation, source) {
-  return `${SOURCE_START}${String(translation ?? '')}${SOURCE_END}\n${HIDDEN_START}${String(source ?? '')}${HIDDEN_END}`;
+export function renderReplacePair(translation, source, decoration = {}) {
+  const open = markedAffix(decoration.stylePrefix ?? '');
+  const close = markedAffix(decoration.styleSuffix ?? '');
+  return `${SOURCE_START}${open}${String(translation ?? '')}${close}${SOURCE_END}\n${HIDDEN_START}${String(source ?? '')}${HIDDEN_END}`;
 }
 
 export function assembleReplace(layout, translationMap, options = {}) {
@@ -1394,20 +1610,31 @@ export function assembleReplace(layout, translationMap, options = {}) {
       pieces.push(sourceText);
       continue;
     }
-    pieces.push(renderReplacePair(translations.join('\n'), sourceText));
+    pieces.push(renderReplacePair(translations.join('\n'), sourceText, segmentDecoration(options.styleFor, ids)));
   }
   return pieces.join('');
 }
 
 // Seeds for 补译: each replace pair's source block holds that part's translation.
+// A partly translated floor has fewer pairs than segments, so the pairs are matched against the
+// hidden original rather than consumed by position. Getting that wrong silently shifted every
+// remaining translation one segment earlier and overwrote good paragraphs on the next run.
 export function extractReplaceTranslations(text, options = {}) {
   const segmented = segmentSource(stripGeneratedTranslationLines(text), { ...options, legacyWrappers: false });
-  const found = [];
-  for (const match of String(text ?? '').matchAll(REPLACE_PAIR_TEXT_RE)) found.push(match[1].replace(AFFIX_RE, ''));
+  const pairs = [];
+  for (const match of String(text ?? '').matchAll(REPLACE_PAIR_BOTH_RE)) {
+    pairs.push({ translation: match[1].replace(AFFIX_RE, ''), original: match[2].replace(AFFIX_RE, '') });
+  }
   const translations = new Map();
-  segmented.layout.filter(part => part.type === 'segment').forEach((part, index) => {
-    const body = found[index];
-    if (typeof body !== 'string' || !body.trim()) return;
+  let cursor = 0;
+  for (const part of segmented.layout.filter(item => item.type === 'segment')) {
+    const sourceText = String(part.sourceText ?? part.text ?? '');
+    const pair = pairs[cursor];
+    // An untranslated segment has no pair of its own; leave the queue where it is for the next one.
+    if (!pair || pair.original !== sourceText) continue;
+    cursor += 1;
+    const body = pair.translation;
+    if (typeof body !== 'string' || !body.trim()) continue;
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
     const lines = normalizeNewlines(body).split('\n');
     if (ids.length === lines.length) {
@@ -1418,7 +1645,7 @@ export function extractReplaceTranslations(text, options = {}) {
     } else if (ids.length === 1) {
       translations.set(ids[0], normalizeNewlines(body).replace(/\n+/g, ' ').trim());
     }
-  });
+  }
   return translations;
 }
 
@@ -1427,7 +1654,11 @@ export function extractReplaceTranslations(text, options = {}) {
 export function renderTranslationBlock(translation, options = {}) {
   const { prefix, suffix } = translationAffixes(options);
   const padding = options.padAfter === true ? '\n' : '';
-  return `${TRANSLATION_START}${markedAffix(prefix)}${translation}${markedAffix(suffix)}${padding}${TRANSLATION_END}`;
+  // The speaker/emotion wrapper sits inside the visible affixes, so a beautify regex written against
+  // <jy-source>…</jy-translation> keeps matching whether or not colouring is on.
+  const open = markedAffix(`${prefix}${options.stylePrefix ?? ''}`);
+  const close = markedAffix(`${options.styleSuffix ?? ''}${suffix}`);
+  return `${TRANSLATION_START}${open}${translation}${close}${padding}${TRANSLATION_END}`;
 }
 
 // Upgrade only source paragraphs proven by saved metadata AND an adjacent legacy translation.
@@ -1470,7 +1701,20 @@ export function upgradeLegacyBilingual(text, metadata) {
 export function restyleBilingual(text, options = {}, metadata) {
   return upgradeLegacyBilingual(text, metadata)
     .replace(SOURCE_BLOCK_RE, (_match, source) => renderSourceBlock(source.replace(AFFIX_RE, ''), options))
-    .replace(TRANSLATION_BLOCK_RE, (match, translation) => `${match.startsWith('\n') ? '\n' : ''}${renderTranslationBlock(translation.replace(AFFIX_RE, ''), options)}`);
+    .replace(TRANSLATION_BLOCK_RE, (match, translation) => {
+      // The 每行单独成段 separator is a newline stored after the suffix affix. Reading it back as
+      // part of the translation moved the closing affix onto its own line, so it is recovered here
+      // and re-applied as padding, keeping a restyle byte-identical when nothing else changed.
+      const body = translation.replace(AFFIX_RE, '');
+      const padAfter = body.endsWith('\n');
+      const inner = padAfter ? body.slice(0, -1) : body;
+      // Changing the visible affixes must not silently drop a floor's speaker colours; the wrapper
+      // is carried across rather than regenerated, because a restyle has no annotations to work from.
+      const stylePrefix = translation.match(SPEAKER_OPEN_RE)?.[0] ?? '';
+      return `${match.startsWith('\n') ? '\n' : ''}${renderTranslationBlock(inner, {
+        ...options, padAfter, stylePrefix, styleSuffix: stylePrefix ? '</span>' : '',
+      })}`;
+    });
 }
 
 export async function hashText(text) {

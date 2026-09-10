@@ -6,6 +6,12 @@ import { fileURLToPath } from 'node:url';
 
 import {
   APP_VERSION,
+  TRANSLATION_END,
+  TRANSLATION_START,
+  SOURCE_END,
+  SOURCE_START,
+  AFFIX_END,
+  AFFIX_START,
   DEFAULT_SETTINGS,
   INVISIBLE_MARKER,
   assembleBilingual,
@@ -13,6 +19,7 @@ import {
   estimateRequestTokens,
   extractReplaceTranslations,
   createTranslationSignature,
+  detectUnmarkedAffixes,
   createGenerationGate,
   createIndependentRequest,
   extractGeneratedTranslations,
@@ -35,6 +42,7 @@ import {
   rebuildTaggedRegion,
   rebuildTaggedRegions,
   segmentSource,
+  restyleBilingual,
   stripGeneratedTranslationLines,
 } from '../core.js';
 import {
@@ -87,7 +95,7 @@ test('legacy single-channel settings migrate into a saved channel', () => {
   assert.equal(channel.key, 'secret');
   assert.equal(channel.model, 'model-x');
   assert.equal(channel.timeoutSec, 600);
-  assert.equal(independent.schemaVersion, 11);
+  assert.equal(independent.schemaVersion, 12);
 });
 
 test('channel output budget scales with the raised default and no longer flattens above 32768', () => {
@@ -703,4 +711,187 @@ test('request tokens are estimated from CJK and non-CJK characters separately', 
   assert.ok(cjk >= 1000 && cjk <= 1100, `纯假名估算应在每字一 token 附近：${cjk}`);
   const latin = estimateRequestTokens([{ role: 'user', content: 'a'.repeat(400) }]);
   assert.ok(latin >= 90 && latin <= 120, `纯拉丁估算应接近四字符一 token：${latin}`);
+});
+
+// --- v0.13.4 regressions: the four field reports and the review findings they map to. ---
+
+test('a partly translated replace-tag floor seeds 补译 by hidden original, not by position', () => {
+  const options = { segmentPrefix: '', segmentSuffix: '', translationPrefix: '', translationSuffix: '' };
+  const layout = segmentSource('第一段。\n\n第二段。\n\n第三段。', options).layout;
+  const partial = new Map([[2, 'Second.'], [3, 'Third.']]);
+  const floor = assembleReplace(layout, partial, { ...options, allowMissing: true });
+  // The untranslated first paragraph used to consume the second paragraph's pair, which then
+  // overwrote 第一段 with Second. on the next run and left 第三段 unseeded.
+  assert.deepEqual([...extractReplaceTranslations(floor, options)], [[2, 'Second.'], [3, 'Third.']]);
+  const complete = assembleReplace(layout, new Map([[1, 'First.'], ...partial]), options);
+  assert.deepEqual([...extractReplaceTranslations(complete, options)], [[1, 'First.'], [2, 'Second.'], [3, 'Third.']]);
+});
+
+test('a tag affix that lost its invisible boundaries is repaired instead of nested twice', () => {
+  const style = {
+    segmentPrefix: '<jy-source>', segmentSuffix: '</jy-source>',
+    translationPrefix: '<jy-translation>', translationSuffix: '</jy-translation>',
+  };
+  const metadata = {
+    schema_version: 4,
+    segment_prefix: style.segmentPrefix, segment_suffix: style.segmentSuffix,
+    translation_prefix: style.translationPrefix, translation_suffix: style.translationSuffix,
+  };
+  const source = '雨が降っている。\n\n彼は黙って歩いた。';
+  const layout = segmentSource(source, style).layout;
+  const floor = assembleBilingual(layout, new Map([[1, '下雨了。'], [2, '他默默地走着。']]), style);
+  const damaged = floor.split(AFFIX_START).join('').split(AFFIX_END).join('');
+  assert.equal(stripGeneratedTranslationLines(damaged, metadata), source);
+  const rewritten = assembleBilingual(
+    segmentSource(stripGeneratedTranslationLines(damaged, metadata), style).layout,
+    new Map([[1, '下雨了。'], [2, '他默默地走着。']]),
+    style,
+  );
+  assert.equal(rewritten, floor);
+  // No second opener before the matching close, i.e. no nested copy of the affix.
+  assert.doesNotMatch(rewritten, /<jy-source>(?:(?!<\/jy-source>)[\s\S])*<jy-source>/);
+  // The detector runs on the repaired text, so a wrapper this pass already healed is not reported.
+  assert.equal(detectUnmarkedAffixes(stripGeneratedTranslationLines(damaged, metadata), metadata), false);
+});
+
+test('symbol affixes stay untouched because a scene may legitimately open and close with them', () => {
+  const style = { segmentPrefix: '☆{', segmentSuffix: '}', translationPrefix: '{', translationSuffix: '}' };
+  const metadata = { schema_version: 4, segment_prefix: '☆{', segment_suffix: '}', translation_prefix: '{', translation_suffix: '}' };
+  const source = '☆{原文自带}';
+  const floor = assembleBilingual(segmentSource(source, style).layout, new Map([[1, '译文。']]), style);
+  assert.equal(stripGeneratedTranslationLines(floor, metadata), source);
+  assert.equal(detectUnmarkedAffixes(floor, metadata), false);
+});
+
+test('a floor whose mirror boundaries are gone entirely is reported rather than silently re-wrapped', () => {
+  const style = {
+    segmentPrefix: '<jy-source>', segmentSuffix: '</jy-source>',
+    translationPrefix: '<jy-translation>', translationSuffix: '</jy-translation>',
+  };
+  const metadata = {
+    schema_version: 4,
+    segment_prefix: style.segmentPrefix, segment_suffix: style.segmentSuffix,
+    translation_prefix: style.translationPrefix, translation_suffix: style.translationSuffix,
+  };
+  const floor = assembleBilingual(segmentSource('雨が降っている。', style).layout, new Map([[1, '下雨了。']]), style);
+  const flattened = [AFFIX_START, AFFIX_END, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END]
+    .reduce((text, marker) => text.split(marker).join(''), floor);
+  assert.equal(detectUnmarkedAffixes(flattened, metadata), true);
+});
+
+test('每行单独成段 survives a restyle without moving the closing affix onto its own line', () => {
+  const style = { paragraphPerLine: true, translationPrefix: '{', translationSuffix: '}' };
+  const layout = segmentSource('第一行。\n第二行。\n第三行。', style).layout;
+  const floor = assembleBilingual(layout, new Map([[1, 'One.'], [2, 'Two.'], [3, 'Three.']]), style);
+  assert.equal(restyleBilingual(floor, style, { schema_version: 4 }), floor);
+  assert.equal(stripGeneratedTranslationLines(floor), '第一行。\n第二行。\n第三行。');
+});
+
+test('every layout shape round-trips back to the exact original, fully or partly translated', () => {
+  const pieces = ['台词一。', '「引用行」', '', '   ', '---', '<i>斜体</i>', '</status>', '★', '　', '第二句。', '<br>'];
+  let seed = 20260911;
+  const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (const paragraphPerLine of [false, true]) {
+    for (const allowMissing of [false, true]) {
+      const options = { paragraphPerLine, allowMissing, translationPrefix: '{', translationSuffix: '}' };
+      for (let round = 0; round < 500; round += 1) {
+        const source = Array.from({ length: 1 + Math.floor(random() * 6) },
+          () => pieces[Math.floor(random() * pieces.length)]).join(random() > 0.5 ? '\n' : '\n\n');
+        const segmented = segmentSource(source, options);
+        if (!segmented.segments.length) continue;
+        const translations = new Map(segmented.segments
+          .filter(() => !allowMissing || random() > 0.4)
+          .map(segment => [segment.id, `T${segment.id}`]));
+        if (!allowMissing && !translations.size) continue;
+        const floor = assembleBilingual(segmented.layout, translations, options);
+        assert.equal(stripGeneratedTranslationLines(floor), source, JSON.stringify({ source, paragraphPerLine, allowMissing }));
+      }
+    }
+  }
+});
+
+test('usage counters survive log redaction while real credentials do not', () => {
+  const entry = sanitizeDiagnostic({
+    requestTokens: { promptTokens: 1234, basis: 'usage' },
+    maxTokens: 60000,
+    tokenSaving: true,
+    token: 'secret-value',
+    access_token: 'secret-value',
+    apiKey: 'secret-value',
+    proxy_password: 'secret-value',
+  });
+  assert.equal(entry.requestTokens.promptTokens, 1234);
+  assert.equal(entry.requestTokens.basis, 'usage');
+  assert.equal(entry.maxTokens, 60000);
+  assert.equal(entry.tokenSaving, true);
+  assert.equal(entry.token, '[已隐藏]');
+  assert.equal(entry.access_token, '[已隐藏]');
+  assert.equal(entry.apiKey, '[已隐藏]');
+  assert.equal(entry.proxy_password, '[已隐藏]');
+});
+
+test('the tag inspector reports replace tags and catches a nesting the run would only hit later', () => {
+  const floor = '<story_scene>\n叙事一行。\n<status>HP 100</status>\n</story_scene>';
+  const nested = inspectTagConfiguration(floor, ['story_scene'], [], { replaceTags: ['status'] });
+  assert.deepEqual(nested.replaceTags, [{ tag: 'status', count: 1 }]);
+  assert.ok(nested.errors.some(error => /交叉重叠|嵌套/.test(error)), nested.errors.join(' | '));
+
+  const sibling = '<story_scene>\n叙事一行。\n</story_scene>\n<status>HP 100</status>';
+  const flat = inspectTagConfiguration(sibling, ['story_scene'], [], { replaceTags: ['status'] });
+  assert.deepEqual(flat.errors, []);
+  assert.equal(flat.translationUnits, 2);
+});
+
+test('speaker and emotion labels ride alongside the translation without touching it', () => {
+  const raw = JSON.stringify({ translations: [
+    { id: 1, text: '「你到底在想什么！」', speaker: '英梨梨', emotion: 'angry', intensity: 2 },
+    { id: 2, text: '……我不知道。', who: '加藤', mood: 'hesitant' },
+    { id: 3, text: '窗外还在下雨。' },
+  ] });
+  const recovered = recoverStructuredTranslations(raw, [{ id: 1 }, { id: 2 }, { id: 3 }]);
+  assert.deepEqual([...recovered.translations.values()], ['「你到底在想什么！」', '……我不知道。', '窗外还在下雨。']);
+  assert.deepEqual(recovered.annotations.get(1), { speaker: '英梨梨', emotion: 'angry', intensity: 2 });
+  assert.deepEqual(recovered.annotations.get(2), { speaker: '加藤', emotion: 'hesitant' });
+  assert.equal(recovered.annotations.has(3), false, '没有标注的段落不该凭空得到一条');
+  assert.equal(recovered.response.annotatedItems, 2);
+  // A model that answers with nothing but text still parses; annotation is strictly optional.
+  const plain = recoverStructuredTranslations(JSON.stringify([{ id: 1, text: '只有译文。' }]), [{ id: 1 }]);
+  assert.equal(plain.annotations.size, 0);
+  assert.equal(plain.translations.get(1), '只有译文。');
+});
+
+test('a coloured floor still hands the main model nothing but the original', () => {
+  const source = '「你到底在想什么！」\n\n……我不知道。';
+  const styleFor = ids => ({ open: `<span class="jy-spk jy-spk-${ids[0]}" style="color:#e2a148">`, close: '</span>' });
+  const options = { translationPrefix: '{', translationSuffix: '}', styleFor };
+  const floor = assembleBilingual(
+    segmentSource(source, options).layout,
+    new Map([[1, '「你到底在想什么！」'], [2, '……我不知道。']]),
+    options,
+  );
+  assert.match(floor, /<span class="jy-spk/);
+  assert.equal(stripGeneratedTranslationLines(floor), source, '剥离后必须逐字还原原文');
+  assert.equal(stripGeneratedTranslationLines(floor, undefined, 'prompt'), source);
+  const prompt = [{ mes: floor }];
+  interceptGenerationChat(prompt);
+  assert.doesNotMatch(prompt[0].mes, /span|jy-spk|color/);
+
+  // Replace-tag regions put the translation where the main model reads it, so the wrapper has to be
+  // marked there too, or the markup itself would leak into the prompt.
+  const replaced = assembleReplace(segmentSource(source, options).layout, new Map([[1, '译一'], [2, '译二']]), options);
+  assert.match(replaced, /<span class="jy-spk/);
+  assert.doesNotMatch(stripGeneratedTranslationLines(replaced, undefined, 'prompt'), /span|jy-spk/);
+  assert.equal(stripGeneratedTranslationLines(replaced), source);
+  assert.deepEqual([...extractReplaceTranslations(replaced, options).values()], ['译一', '译二']);
+});
+
+test('changing the visible affixes keeps a floor and its speaker colours intact', () => {
+  const styleFor = () => ({ open: '<span class="jy-spk jy-spk-abc" style="color:#84adff">', close: '</span>' });
+  const options = { translationPrefix: '{', translationSuffix: '}', styleFor };
+  const floor = assembleBilingual(segmentSource('原文一行。', options).layout, new Map([[1, '译文一行。']]), options);
+  const restyled = restyleBilingual(floor, { translationPrefix: '【', translationSuffix: '】' }, { schema_version: 4 });
+  assert.match(restyled, /<span class="jy-spk jy-spk-abc" style="color:#84adff">/);
+  assert.match(restyled, /【/);
+  assert.equal(stripGeneratedTranslationLines(restyled), '原文一行。');
+  assert.equal(restyleBilingual(restyled, { translationPrefix: '【', translationSuffix: '】' }, { schema_version: 4 }), restyled);
 });

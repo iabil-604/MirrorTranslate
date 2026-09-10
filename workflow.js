@@ -1,5 +1,6 @@
-import { getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.13.3';
-import { composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.13.3';
+import { getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.14.0';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.14.0';
+import { EMOTION_KEYS } from './palette.js?v=0.14.0';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -130,6 +131,12 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
   if (jailbreak) messages.push({ role: 'system', content: jailbreak });
   messages.push({ role: 'system', content: composeTranslationSpecification(profile) });
   messages.push({ role: 'system', content: resolvePromptVariables(String(profile.checklistPrompt ?? '').trim(), profile) });
+  // Speaker and emotion labelling is a display feature, so it rides as its own message rather than
+  // being edited into the user's translation spec. Turning it off removes it from the request whole.
+  const annotate = annotationRequest(settings, phase, requestMeta);
+  if (annotate) {
+    messages.push({ role: 'system', content: composeAnnotationSection(annotate) });
+  }
   const input = {
     task: 'translate_story_to_target_language',
     source_language: 'auto-detect-per-segment',
@@ -143,6 +150,14 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
     },
     segments,
   };
+  if (annotate) {
+    input.annotate = {
+      speaker: annotate.speakers,
+      emotion: annotate.emotions,
+      ...(annotate.speakers && annotate.roster.length ? { roster: annotate.roster } : {}),
+      ...(annotate.emotions ? { emotions: annotate.emotionLabels } : {}),
+    };
+  }
   if (phase === 'style_repair') {
     input.draft_translations = requestMeta.draftTranslations || [];
     input.triggered_phrases = requestMeta.triggeredPhrases || [];
@@ -160,6 +175,22 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
     });
   }
   return messages;
+}
+
+// The style-repair pass rewrites a finished draft; asking for labels again there would only invite
+// the model to change them, so annotation is limited to the passes that actually produce text.
+function annotationRequest(settings, phase, requestMeta) {
+  const coloring = settings?.coloring;
+  if (!coloring || phase === 'style_repair') return null;
+  const speakers = coloring.speakers === true;
+  const emotions = coloring.emotions === true;
+  if (!speakers && !emotions) return null;
+  return {
+    speakers,
+    emotions,
+    roster: Array.isArray(requestMeta?.roster) ? requestMeta.roster.filter(Boolean).slice(0, 40) : [],
+    emotionLabels: EMOTION_KEYS,
+  };
 }
 
 export const __workflowTesting = Object.freeze({ cleanReferenceText, worldInfoChunks });
