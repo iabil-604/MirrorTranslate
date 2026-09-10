@@ -7,9 +7,11 @@ import {
   createTranslationSignature,
   hashText,
   interceptGenerationChat,
+  mergeSettings,
   segmentSource,
   stripGeneratedTranslationLines,
 } from '../core.js';
+import { compileNativeRegex, makeBuiltinReadingProfile, syncNativeRegex } from '../processing.js';
 import { __testing } from '../index.js';
 
 // A headless stand-in for the parts of the host these paths actually touch.
@@ -325,4 +327,32 @@ test('a floor whose band was never measured is written plain rather than guessed
   await __testing.startTranslation(0, { quiet: true, force: true });
   assert.doesNotMatch(message.mes, /jy-spk|color:/);
   assert.match(message.mes, /下雨了。/);
+});
+
+// The colour is written into the floor, but what the reader sees is the floor after the host has run
+// the built-in beautify regexes over it. Those are generated code too, and the wrapper sits between
+// the visible affixes the reading pattern anchors on — so the two have to be checked together.
+test('the built-in reading style renders the speaker wrapper instead of eating it', () => {
+  const base = mergeSettings({ paragraphPerLine: true });
+  const profile = makeBuiltinReadingProfile(base, 'cute');
+  const settings = mergeSettings({ ...base, ...profile.settings });
+  const display = syncNativeRegex([], profile).filter(rule => !rule.promptOnly && rule.placement.includes(2));
+
+  const doc = segmentSource('坂本竜司であった。\n\n「――っはぁぁぁ！」', settings);
+  const translations = new Map(doc.segments.map((segment, index) => [segment.id, index ? '「——哈啊啊！」' : '声音来自坂本龙司。']));
+  const styleFor = ids => (ids.includes(2)
+    ? { open: '<span class="jy-spk jy-emo-shout" style="color:#cac256;font-weight:800">', close: '</span>' }
+    : null);
+
+  const floor = assembleBilingual(doc.layout, translations, { ...settings, styleFor });
+  const rendered = display.reduce((text, rule) => text.replace(compileNativeRegex(rule.findRegex), rule.replaceString), floor);
+
+  // The boundary-cleanup rule must run first, or the reading pattern never matches at all.
+  assert.equal(display[0].scriptName, '镜译 · 显示边界清理');
+  assert.match(rendered, /<div class="jy-reading jy-reading-cute">/);
+  assert.match(rendered, /<span class="jy-spk jy-emo-shout" style="color:#cac256;font-weight:800">「——哈啊啊！」<\/span>/);
+  // The unlabelled segment keeps the plain shape, so an absent label costs nothing but its colour.
+  assert.match(rendered, /<div class="jy-reading-translation">\n\n声音来自坂本龙司。\n\n<\/div>/);
+  // And the floor still strips back to the original for the main model.
+  assert.equal(stripGeneratedTranslationLines(floor), doc.source);
 });

@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.14.0';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.14.1';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 
@@ -657,20 +657,31 @@ export function composeAnnotationSection({ speakers = false, emotions = false, r
   if (!speakers && !emotions) return '';
   const fields = [];
   const rules = [];
+  // The spec's §9 shows a literal {id, text} object, and a model copies the shape it was shown far
+  // more readily than it follows a later instruction to add fields. So this section restates the
+  // shape with the annotation fields present and says outright that it supersedes that example.
+  const example = { id: 7, text: '对应的译文' };
   if (speakers) {
+    example.speaker = '名单中的名字';
     fields.push('speaker：这一段的说话者');
     rules.push(roster.length
       ? `speaker 只能取以下名单中的一个，逐字照抄，不要改写、不要加敬称：${roster.join('、')}。名单外的人物、旁白、心理描写和无法确定的段落一律省略 speaker 字段。`
       : 'speaker 写这一段说话者在译文中使用的名字。旁白、心理描写和无法确定的段落省略 speaker 字段。');
   }
   if (emotions) {
+    // A placeholder rather than a real label: naming one here biases every segment towards it, and
+    // naming `neutral` would contradict the intensity rule two lines below.
+    example.emotion = '下列标签之一';
+    example.intensity = 1;
     fields.push('emotion：这一段的情绪；intensity：情绪强度，0 弱、1 中、2 强');
     rules.push(`emotion 只能取以下之一，逐字照抄：${emotionLabels.join('、')}。判断依据是这一段本身写出来的内容，不是你对剧情的推测。看不出明显情绪就写 neutral 或直接省略；不要为了填满字段而猜。`);
     rules.push('intensity 只在 emotion 不是 neutral 时才有意义，默认 1。只有原文明确用了加强或减弱的写法（惊叹、破折号、省略号、气声、重复、加粗）才写 2 或 0。');
   }
   return [
-    '# 附加标注',
-    `除 id 和 text 之外，为每条译文再给出：${fields.join('；')}。`,
+    '# 附加标注（本节替换输出协议里的 JSON 示例）',
+    `本次请求中，translations 数组的每一项除 id 和 text 之外还要给出：${fields.join('；')}。`,
+    '输出协议的其余要求全部不变，只有每项的字段变多。以本节的示例为准：',
+    JSON.stringify({ translations: [example] }),
     ...rules,
     '这些字段只影响译文在界面上的显示，不进入正文，也不影响翻译本身。字段缺失、拼错或不在允许取值内时会被忽略，界面按普通样式显示，因此拿不准时省略比猜测更好。绝对不要把标注写进 text，也不要因为要标注而改动译文措辞。',
   ].join('\n');

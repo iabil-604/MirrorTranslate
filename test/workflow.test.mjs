@@ -194,3 +194,26 @@ test('the annotation request appears only when colouring is on and never during 
   assert.match(speakerSection.content, /speaker/);
   assert.doesNotMatch(speakerSection.content, /emotion：/);
 });
+
+test('the annotation section restates the output shape, because §9 shows an id/text-only example', () => {
+  const on = mergeSettings({ coloring: { speakers: true, emotions: true } });
+  const messages = buildTranslationMessages([{ id: 1, text: '雨が降っている。' }], on, {}, 'primary', { roster: ['英梨梨'] });
+  const spec = messages.find(message => message.content.includes('# 9. 输出协议'));
+  const section = messages.find(message => message.content.includes('附加标注'));
+
+  // The spec the user can edit still shows the plain shape; that is exactly why the section has to
+  // carry its own, or the model copies the example it was shown and answers without any labels.
+  assert.match(spec.content, /\{"translations":\[\{"id":\d+,"text":"[^"]*"\}/);
+  const shape = section.content.match(/\{"translations":\[[\s\S]*?\]\}/);
+  assert.ok(shape, '标注说明必须自带 JSON 示例');
+  const [item] = JSON.parse(shape[0]).translations;
+  assert.deepEqual(Object.keys(item), ['id', 'text', 'speaker', 'emotion', 'intensity']);
+  assert.match(section.content, /替换输出协议里的 JSON 示例/);
+
+  // Naming a real label in the example biases every segment towards it.
+  assert.equal(item.emotion, '下列标签之一');
+
+  const speakerOnly = buildTranslationMessages([{ id: 1, text: '雨' }], mergeSettings({ coloring: { speakers: true } }), {}, 'primary', {});
+  const speakerShape = speakerOnly.find(message => message.content.includes('附加标注')).content.match(/\{"translations":\[[\s\S]*?\]\}/);
+  assert.deepEqual(Object.keys(JSON.parse(speakerShape[0]).translations[0]), ['id', 'text', 'speaker']);
+});

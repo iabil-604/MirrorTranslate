@@ -44,13 +44,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.14.0';
+} from './core.js?v=0.14.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.14.0';
+} from './processing.js?v=0.14.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -66,8 +66,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.14.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.0';
+} from './prompts.js?v=0.14.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -80,15 +80,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.14.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.14.0';
+} from './palette.js?v=0.14.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.14.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.14.0';
+} from './diagnostics.js?v=0.14.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -1107,6 +1107,16 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
         parserWarnings: recovered.warnings,
         response: recovered.response,
       });
+      // Colouring fails silently by design — a bad label costs a line its colour and nothing else.
+      // That silence is wrong when every label is missing at once, which means the model ignored the
+      // annotation request entirely. Without this the reader sees plain text and no reason for it.
+      if (coloringEnabled(settings) && !annotations.size) {
+        recordDiagnostic('warn', 'translation.no-annotations', '副模型没有返回任何说话人或情绪标注，这一批按普通样式显示。', {
+          request: state.requests,
+          returned: translations.size,
+          roster: state.roster ?? [],
+        });
+      }
       if (!pending.length) return null;
       lastError = new Error(`仍缺少第 ${pending.map(item => item.id).join('、')} 段译文。`);
       if (!progressed && pending.length > 1) {
