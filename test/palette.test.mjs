@@ -228,3 +228,16 @@ test('a loud emotion reads louder and a quiet one reads quieter', () => {
   assert.match(whisper.css, /font-size:0\.\d+em/);
   assert.ok(Number(whisper.css.match(/font-weight:(\d+)/)[1]) < 400);
 });
+
+test('one speaker’s emotional range stays inside the gap that separates two speakers', () => {
+  const band = computeSafeBand(['#1a1520', '#2a2438', '#3a3050']);
+  const hues = EMOTION_KEYS.map(emotion => {
+    const style = resolveSegmentStyle({ speakerColor: '#f2e750', emotion, intensity: 2, band, name: '坂本竜司' });
+    const hex = style.css.match(/color:(#[0-9a-f]{6})/)[1];
+    return srgbToOklch(parseCssColor(hex)).h;
+  });
+  const span = Math.max(...hues) - Math.min(...hues);
+  // Unclamped, angry (-10/step) and shy (+12/step) at intensity 2 swung this to 44 degrees — wider
+  // than the guaranteed distance to a different character, so the colour identified nobody.
+  assert.ok(span < MIN_HUE_SEPARATION, `同一角色的色相跨度 ${span.toFixed(0)} 度，必须小于角色间隔 ${MIN_HUE_SEPARATION} 度`);
+});

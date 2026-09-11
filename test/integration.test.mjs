@@ -278,6 +278,15 @@ test('a coloured run paints the floor, keeps the prompt clean and stores the lab
   assert.match(message.mes, /class="jy-spk jy-spk-[a-z0-9]+ jy-emo-whisper jy-emo-l1"/);
   assert.match(message.mes, /title="英梨梨 · 愤怒"/);
 
+  // Host themes set message text colour with !important. Without it here the colour sits in the
+  // floor and never renders, while font-weight — which themes rarely force — does, so the feature
+  // looks like it only half works. Every declaration the wrapper writes has to outrank the theme.
+  for (const declaration of message.mes.matchAll(/style="([^"]*)"/g)) {
+    for (const item of declaration[1].split(';')) {
+      assert.match(item, /!important$/, `样式没有盖过主题：${item}`);
+    }
+  }
+
   // The main model sees the Japanese original and no markup at all.
   const prompt = [{ mes: message.mes, extra: message.extra }];
   interceptGenerationChat(prompt);

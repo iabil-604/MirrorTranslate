@@ -20,6 +20,10 @@ export const MAX_CHROMA = 0.37;
 export const DEFAULT_MIN_CONTRAST = 4.5;
 // Two speakers whose hues sit closer than this are hard to tell apart mid-sentence.
 export const MIN_HUE_SEPARATION = 24;
+// An emotion tints a speaker's colour; it must not walk it into another speaker's hue. Speakers are
+// only guaranteed MIN_HUE_SEPARATION apart, so one speaker's whole emotional range has to stay well
+// inside that gap — otherwise the colour stops identifying anyone, which is its only job.
+export const MAX_EMOTION_HUE_SHIFT = MIN_HUE_SEPARATION / 3;
 
 const CSS_NAMED_COLORS = Object.freeze({
   black: '#000000', silver: '#c0c0c0', gray: '#808080', grey: '#808080', white: '#ffffff',
@@ -441,7 +445,7 @@ export function resolveSegmentStyle({ speakerColor, emotion, intensity = 1, band
     const adapted = adaptColorToBand(speakerColor, band, {
       chromaScale: 1 + shape.chromaScale * scale,
       lightnessDelta: shape.lightnessDelta * scale,
-      hueShift: shape.hueShift * scale,
+      hueShift: clamp(shape.hueShift * scale, -MAX_EMOTION_HUE_SHIFT, MAX_EMOTION_HUE_SHIFT),
       name,
       vividness,
     });

@@ -44,13 +44,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.14.1';
+} from './core.js?v=0.14.2';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.14.1';
+} from './processing.js?v=0.14.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -66,8 +66,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.14.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.1';
+} from './prompts.js?v=0.14.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -80,15 +80,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.14.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.14.1';
+} from './palette.js?v=0.14.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.14.2';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.14.1';
+} from './diagnostics.js?v=0.14.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -868,8 +868,12 @@ function buildSegmentStyler(settings, annotations) {
       classes.push(`jy-emo-${style.emotion}`, `jy-emo-l${style.intensity}`);
     }
     const label = [speaker?.name, style.emotion && EMOTION_STYLES[style.emotion]?.label].filter(Boolean).join(' · ');
+    // Themes set message text colour with !important, which beats a plain inline style. Without this
+    // the colour is in the floor and simply never visible, while font-weight and font-size — which
+    // themes rarely force — come through, so the feature looks half-broken rather than overridden.
+    const inline = declarations.map(item => `${item} !important`).join(';');
     return {
-      open: `<span class="${classes.join(' ')}"${label ? ` title="${escapeAttribute(label)}"` : ''} style="${escapeAttribute(declarations.join(';'))}">`,
+      open: `<span class="${classes.join(' ')}"${label ? ` title="${escapeAttribute(label)}"` : ''} style="${escapeAttribute(inline)}">`,
       close: '</span>',
     };
   };
@@ -910,7 +914,7 @@ function syncSpeakerStylesheet(settings = runtime.settings) {
     const slug = speakerSlug(entry.name);
     if (seen.has(slug)) continue;
     seen.add(slug);
-    rules.push(`:is(.${SPEAKER_CLASS}-${slug}, .custom-${SPEAKER_CLASS}-${slug}){color:${entry.base}}`);
+    rules.push(`:is(.${SPEAKER_CLASS}-${slug}, .custom-${SPEAKER_CLASS}-${slug}){color:${entry.base} !important}`);
   }
   const element = existing ?? document.createElement('style');
   element.id = SPEAKER_STYLE_ID;

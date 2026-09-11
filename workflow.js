@@ -1,6 +1,6 @@
-import { getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.14.1';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.14.1';
-import { EMOTION_KEYS } from './palette.js?v=0.14.1';
+import { getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.14.2';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.14.2';
+import { EMOTION_KEYS } from './palette.js?v=0.14.2';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
