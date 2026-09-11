@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   MESSAGE_META_KEY,
   assembleBilingual,
+  extractGeneratedTranslations,
   createTranslationSignature,
   hashText,
   interceptGenerationChat,
@@ -11,6 +12,7 @@ import {
   segmentSource,
   stripGeneratedTranslationLines,
 } from '../core.js';
+import { emphasisContour } from '../palette.js';
 import { compileNativeRegex, makeBuiltinReadingProfile, syncNativeRegex } from '../processing.js';
 import { __testing } from '../index.js';
 
@@ -374,4 +376,40 @@ test('the built-in reading style renders the speaker wrapper instead of eating i
   assert.match(rendered, /<div class="jy-reading-translation">\n\n声音来自坂本龙司。\n\n<\/div>/);
   // And the floor still strips back to the original for the main model.
   assert.equal(stripGeneratedTranslationLines(floor), doc.source);
+});
+
+// The rhythm writes extra tags *inside* the translation rather than around it, which is the one
+// place a display feature could corrupt the text. Each tag is its own marked affix, so the three
+// invariants that protect the floor have to still hold exactly.
+test('句内节奏 writes inside the translation without disturbing what reads back out', () => {
+  const line = '「那个男人是死是活也好，与贝蒂都没有半点瓜葛呀！贝蒂仅仅是为了守护这座禁书库才留守的呢！」';
+  const doc = segmentSource(line, {});
+  const translations = new Map([[1, line]]);
+  const styleFor = () => ({
+    open: '<span class="jy-spk" style="color:#c8a2c8 !important">',
+    close: '</span>',
+    emphasis: text => emphasisContour(text, { emotion: 'angry', intensity: 2 })
+      ?.map(piece => ({ text: piece.text, css: `font-size:${piece.scale.toFixed(3)}em !important` })) ?? null,
+  });
+
+  const floor = assembleBilingual(doc.layout, translations, { styleFor });
+  const plain = assembleBilingual(doc.layout, translations, {});
+  assert.ok(floor.match(/font-size:[\d.]+em !important/g).length >= 3, '节奏没有写进楼层');
+
+  // 1. The main model still sees the untouched original.
+  assert.equal(stripGeneratedTranslationLines(floor), doc.source);
+  assert.equal(stripGeneratedTranslationLines(floor), stripGeneratedTranslationLines(plain));
+
+  // 2. 补译 reads the translation back without a trace of the markup, or the next repair would send
+  //    span tags to the model as if they were the draft.
+  assert.equal([...extractGeneratedTranslations(floor, {}).values()][0], line);
+
+  // 3. A split that does not reassemble into the exact translation is refused outright, so a broken
+  //    contour costs the rhythm and never rewrites a single character of the text.
+  const mangled = assembleBilingual(doc.layout, translations, {
+    styleFor: () => ({ open: '<span>', close: '</span>', emphasis: () => [{ text: '改写了', css: 'font-size:2em' }, { text: '文本', css: '' }] }),
+  });
+  assert.equal(stripGeneratedTranslationLines(mangled), doc.source);
+  assert.ok(!mangled.includes('改写了'), '拒绝校验失败的拆分');
+  assert.ok(mangled.includes(line), '译文必须原样保留');
 });

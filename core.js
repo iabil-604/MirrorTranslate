@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.14.4';
+} from './prompts.js?v=0.15.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.14.4';
+export const APP_VERSION = '0.15.1';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -74,6 +74,9 @@ export const DEFAULT_COLORING = Object.freeze({
   minContrast: 4.5,
   // 0 keeps a character's own hair colour faithfully, 1 paints everyone at full strength.
   vividness: 0.65,
+  // The size contour inside one spoken line, computed from punctuation and the emotion label that
+  // already came back. It costs the secondary model nothing, so it rides with 情绪排版.
+  rhythm: true,
   // Filled in by 取色: { direction, luminance, chromaMax, minContrast, backgrounds }.
   band: null,
   bandProbedAt: '',
@@ -340,6 +343,7 @@ export function normalizeColoring(value) {
     emotions: Boolean(source.emotions),
     minContrast: clampNumber(source.minContrast, 1.5, 21, DEFAULT_COLORING.minContrast),
     vividness: clampNumber(source.vividness, 0, 1, DEFAULT_COLORING.vividness),
+    rhythm: source.rhythm === undefined ? DEFAULT_COLORING.rhythm : Boolean(source.rhythm),
     band: normalizeColorBand(source.band),
     bandProbedAt: typeof source.bandProbedAt === 'string' ? source.bandProbedAt.slice(0, 40) : '',
   };
@@ -1578,7 +1582,38 @@ function segmentDecoration(styleFor, ids) {
     return {}; // A palette problem must never cost the reader their translation.
   }
   if (!decoration?.open) return {};
-  return { stylePrefix: String(decoration.open), styleSuffix: String(decoration.close ?? '') };
+  return {
+    stylePrefix: String(decoration.open),
+    styleSuffix: String(decoration.close ?? ''),
+    styleBody: typeof decoration.emphasis === 'function' ? decoration.emphasis : null,
+  };
+}
+
+/**
+ * Applies the per-clause rhythm inside one translation.
+ *
+ * Every tag goes in wrapped as its own marked affix, which is what makes this safe: `AFFIX_RE` is
+ * global, so the same read-back that already strips the outer wrapper strips these too. A floor with
+ * rhythm therefore still yields the exact translation for 补译 and the exact original for the main
+ * model — the invariant is unchanged, there are just more markers inside the block.
+ */
+function styledBody(translation, styleBody) {
+  if (typeof styleBody !== 'function') return translation;
+  let pieces;
+  try {
+    pieces = styleBody(translation);
+  } catch {
+    return translation; // Rhythm is decoration; it never costs the reader their translation.
+  }
+  if (!Array.isArray(pieces) || pieces.length < 2) return translation;
+  // Refuse anything that does not reassemble into the exact translation, so a bad split is inert
+  // rather than a silent rewrite of the text.
+  if (pieces.map(piece => piece?.text ?? '').join('') !== translation) return translation;
+  return pieces
+    .map(piece => (piece.css
+      ? `${markedAffix(`<span style="${piece.css}">`)}${piece.text}${markedAffix('</span>')}`
+      : piece.text))
+    .join('');
 }
 
 export function renderSourceBlock(source, options = {}) {
@@ -1590,7 +1625,8 @@ export function renderSourceBlock(source, options = {}) {
 export function renderReplacePair(translation, source, decoration = {}) {
   const open = markedAffix(decoration.stylePrefix ?? '');
   const close = markedAffix(decoration.styleSuffix ?? '');
-  return `${SOURCE_START}${open}${String(translation ?? '')}${close}${SOURCE_END}\n${HIDDEN_START}${String(source ?? '')}${HIDDEN_END}`;
+  const body = styledBody(String(translation ?? ''), decoration.styleBody);
+  return `${SOURCE_START}${open}${body}${close}${SOURCE_END}\n${HIDDEN_START}${String(source ?? '')}${HIDDEN_END}`;
 }
 
 export function assembleReplace(layout, translationMap, options = {}) {
@@ -1658,7 +1694,8 @@ export function renderTranslationBlock(translation, options = {}) {
   // <jy-source>…</jy-translation> keeps matching whether or not colouring is on.
   const open = markedAffix(`${prefix}${options.stylePrefix ?? ''}`);
   const close = markedAffix(`${options.styleSuffix ?? ''}${suffix}`);
-  return `${TRANSLATION_START}${open}${translation}${close}${padding}${TRANSLATION_END}`;
+  const body = styledBody(String(translation ?? ''), options.styleBody);
+  return `${TRANSLATION_START}${open}${body}${close}${padding}${TRANSLATION_END}`;
 }
 
 // Upgrade only source paragraphs proven by saved metadata AND an adjacent legacy translation.

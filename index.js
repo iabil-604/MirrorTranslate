@@ -44,13 +44,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.14.4';
+} from './core.js?v=0.15.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.14.4';
+} from './processing.js?v=0.15.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -66,13 +66,14 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.14.4';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.4';
+} from './prompts.js?v=0.15.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
   adaptColorToBand,
   computeSafeBand,
+  emphasisContour,
   isNeutralColor,
   oklchToSrgb,
   parseCssColor,
@@ -80,15 +81,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.14.4';
-import { sampleThemeBackground } from './theme-probe.js?v=0.14.4';
+} from './palette.js?v=0.15.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.15.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.14.4';
+} from './diagnostics.js?v=0.15.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -235,7 +236,7 @@ const CONTROL_CENTER_MARKUP = `
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
 <details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
 <p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。</p>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label></div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringRhythm">情绪起伏（句内轻重变化）</label></div>
 <div class="jy-form-grid"><label><span class="jy-label">对比度目标</span><input type="number" data-jy-field="coloringContrast" min="1.5" max="12" step="0.1"></label><label><span class="jy-label">彩度 <span data-jy-vividness-value></span></span><input type="range" data-jy-field="coloringVividness" min="0" max="100" step="5"></label></div>
 <div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="probe-theme">读取当前主题与壁纸</button><button type="button" class="jy-button" data-jy-action="add-speaker">添加角色</button></div>
 <div class="jy-band-report" data-jy-band-report></div>
@@ -878,9 +879,20 @@ function buildSegmentStyler(settings, annotations) {
       .flatMap(item => (item.startsWith('color:') ? [item, `-webkit-text-fill-${item}`] : [item]))
       .map(item => `${item} !important`)
       .join(';');
+    // The rhythm rides on inner spans so the outer one keeps the colour and the classes: a size step
+    // inherits the speaker's colour instead of restating it, and a sanitiser that drops the inner
+    // tags leaves the line whole and coloured.
+    const emphasis = coloring.rhythm === false ? null : translation => {
+      const contour = emphasisContour(translation, { emotion, intensity: first.intensity });
+      return contour?.map(piece => ({
+        text: piece.text,
+        css: piece.scale === 1 ? '' : `font-size:${piece.scale.toFixed(3)}em !important`,
+      })) ?? null;
+    };
     return {
       open: `<span class="${classes.join(' ')}"${label ? ` title="${escapeAttribute(label)}"` : ''} style="${escapeAttribute(inline)}">`,
       close: '</span>',
+      emphasis,
     };
   };
 }
@@ -2294,8 +2306,10 @@ function collectColoringFields(root, current) {
   const emotions = root.querySelector('[data-jy-field="coloringEmotions"]');
   const contrast = root.querySelector('[data-jy-field="coloringContrast"]');
   const vividness = root.querySelector('[data-jy-field="coloringVividness"]');
+  const rhythm = root.querySelector('[data-jy-field="coloringRhythm"]');
   if (speakers) coloring.speakers = speakers.checked;
   if (emotions) coloring.emotions = emotions.checked;
+  if (rhythm) coloring.rhythm = rhythm.checked;
   if (contrast) coloring.minContrast = Number(contrast.value);
   if (vividness) coloring.vividness = Number(vividness.value) / 100;
   if (runtime.probedBand) {
@@ -2464,6 +2478,7 @@ function syncColoringFields(root, settings = runtime.settings) {
   const coloring = activeColoring(settings);
   setField(root, 'coloringSpeakers', coloring.speakers);
   setField(root, 'coloringEmotions', coloring.emotions);
+  setField(root, 'coloringRhythm', coloring.rhythm);
   setField(root, 'coloringContrast', coloring.minContrast);
   setField(root, 'coloringVividness', Math.round(coloring.vividness * 100));
   const value = root.querySelector('[data-jy-vividness-value]');
@@ -3214,7 +3229,7 @@ function createControlCenter(rootDocument = document) {
       saveSettings(collectSettings(root));
       syncFields(root, runtime.settings);
     }
-    if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringContrast"]')) {
+    if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringContrast"]')) {
       saveSettings(collectSettings(root));
       syncColoringFields(root, runtime.settings);
     }

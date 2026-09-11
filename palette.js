@@ -436,21 +436,90 @@ export function spreadHues(hues, minSeparation = MIN_HUE_SEPARATION) {
 // far more reliably than it invents a description, and every label maps to typography a reader can
 // actually perceive at body-text size. Deltas are per intensity step, so intensity 0 is neutral.
 export const EMOTION_STYLES = Object.freeze({
-  neutral: { label: '平静', weight: 0, size: 0, italic: false, letterSpacing: 0, chromaScale: 0, lightnessDelta: 0, hueShift: 0 },
-  happy: { label: '喜悦', weight: 60, size: 0, italic: false, letterSpacing: 0, chromaScale: 0.12, lightnessDelta: 0.02, hueShift: 4 },
-  tender: { label: '温柔', weight: -40, size: 0, italic: true, letterSpacing: 0.01, chromaScale: -0.15, lightnessDelta: 0.01, hueShift: 0 },
-  sad: { label: '低落', weight: -40, size: 0, italic: true, letterSpacing: 0, chromaScale: -0.25, lightnessDelta: -0.02, hueShift: -6 },
-  angry: { label: '愤怒', weight: 160, size: 0.02, italic: false, letterSpacing: -0.005, chromaScale: 0.2, lightnessDelta: 0, hueShift: -10 },
-  fear: { label: '恐惧', weight: -20, size: -0.03, italic: true, letterSpacing: 0.03, chromaScale: -0.2, lightnessDelta: -0.02, hueShift: 0 },
-  shy: { label: '害羞', weight: 0, size: -0.02, italic: false, letterSpacing: 0.01, chromaScale: 0.1, lightnessDelta: 0.02, hueShift: 12 },
-  surprise: { label: '惊讶', weight: 140, size: 0.03, italic: false, letterSpacing: 0, chromaScale: 0.15, lightnessDelta: 0.02, hueShift: 0 },
-  serious: { label: '严肃', weight: 100, size: 0, italic: false, letterSpacing: -0.01, chromaScale: -0.1, lightnessDelta: -0.01, hueShift: 0 },
-  resolute: { label: '坚定', weight: 140, size: 0, italic: false, letterSpacing: 0, chromaScale: 0.05, lightnessDelta: 0.01, hueShift: 0 },
-  whisper: { label: '低语', weight: -60, size: -0.05, italic: true, letterSpacing: 0.02, chromaScale: -0.3, lightnessDelta: -0.03, hueShift: 0 },
-  shout: { label: '呼喊', weight: 200, size: 0.06, italic: false, letterSpacing: 0.005, chromaScale: 0.25, lightnessDelta: 0.03, hueShift: 0 },
+  neutral: { label: '平静', rhythm: 0, weight: 0, size: 0, italic: false, letterSpacing: 0, chromaScale: 0, lightnessDelta: 0, hueShift: 0 },
+  happy: { label: '喜悦', rhythm: 0.035, weight: 60, size: 0, italic: false, letterSpacing: 0, chromaScale: 0.12, lightnessDelta: 0.02, hueShift: 4 },
+  tender: { label: '温柔', rhythm: 0.02, weight: -40, size: 0, italic: true, letterSpacing: 0.01, chromaScale: -0.15, lightnessDelta: 0.01, hueShift: 0 },
+  sad: { label: '低落', rhythm: 0.02, weight: -40, size: 0, italic: true, letterSpacing: 0, chromaScale: -0.25, lightnessDelta: -0.02, hueShift: -6 },
+  angry: { label: '愤怒', rhythm: 0.05, weight: 160, size: 0.02, italic: false, letterSpacing: -0.005, chromaScale: 0.2, lightnessDelta: 0, hueShift: -10 },
+  fear: { label: '恐惧', rhythm: 0.035, weight: -20, size: -0.03, italic: true, letterSpacing: 0.03, chromaScale: -0.2, lightnessDelta: -0.02, hueShift: 0 },
+  shy: { label: '害羞', rhythm: 0.02, weight: 0, size: -0.02, italic: false, letterSpacing: 0.01, chromaScale: 0.1, lightnessDelta: 0.02, hueShift: 12 },
+  surprise: { label: '惊讶', rhythm: 0.055, weight: 140, size: 0.03, italic: false, letterSpacing: 0, chromaScale: 0.15, lightnessDelta: 0.02, hueShift: 0 },
+  serious: { label: '严肃', rhythm: 0.02, weight: 100, size: 0, italic: false, letterSpacing: -0.01, chromaScale: -0.1, lightnessDelta: -0.01, hueShift: 0 },
+  resolute: { label: '坚定', rhythm: 0.035, weight: 140, size: 0, italic: false, letterSpacing: 0, chromaScale: 0.05, lightnessDelta: 0.01, hueShift: 0 },
+  whisper: { label: '低语', rhythm: 0.03, weight: -60, size: -0.05, italic: true, letterSpacing: 0.02, chromaScale: -0.3, lightnessDelta: -0.03, hueShift: 0 },
+  shout: { label: '呼喊', rhythm: 0.075, weight: 200, size: 0.06, italic: false, letterSpacing: 0.005, chromaScale: 0.25, lightnessDelta: 0.03, hueShift: 0 },
 });
 
 export const EMOTION_KEYS = Object.freeze(Object.keys(EMOTION_STYLES));
+
+// ---------------------------------------------------------------------------------------------
+// Rhythm: the size contour inside one spoken line.
+//
+// A line of dialogue is not delivered at one volume. The obvious way to reproduce that is to ask the
+// model for the line broken into emphasised pieces — and that is exactly the thing not to do, because
+// a model that re-emits the translation in chunks can drop a character or change a mark, and nothing
+// downstream can tell a deliberate edit from corruption. So the split happens here instead, from the
+// punctuation already in the finished translation, and the loudness comes from the emotion label the
+// model already gave. No extra tokens, no extra failure mode, and a wrong guess costs a size step.
+// ---------------------------------------------------------------------------------------------
+
+// A clause keeps the punctuation it ends on: the mark is what tells the reader the clause landed.
+// The first alternative also matches an empty head, so a line opening on 「…… keeps that run instead
+// of dropping it — losing it would fail the reassembly check and cost the line its rhythm entirely.
+const CLAUSE_RE = /[^、，,。．.！!？?；;：:…—～~\n]*[、，,。．.！!？?；;：:…—～~\n]+|[^、，,。．.！!？?；;：:…—～~\n]+/g;
+const CLOSERS = /^[」』"'）)\]】〕》、，,。．.！!？?；;：:…—～~\s]*$/;
+const LOUD_END = /[！!]{1,}[」』"'）)\]】〕》]*$/;
+const ASKING_END = /[？?]{1,}[」』"'）)\]】〕》]*$/;
+const TRAILING_OFF = /(?:…|\.\.\.|—|～|~)[」』"'）)\]】〕》]*$/;
+
+export function splitClauses(text) {
+  const raw = String(text ?? '').match(CLAUSE_RE) ?? [];
+  const clauses = [];
+  for (const piece of raw) {
+    // A lone run of closing marks belongs to the clause it closes, not to a beat of its own.
+    if (clauses.length && CLOSERS.test(piece)) clauses[clauses.length - 1] += piece;
+    else clauses.push(piece);
+  }
+  return clauses.filter(Boolean);
+}
+
+/**
+ * How loud each clause of one line is, relative to the line's own size.
+ *
+ * Returns null when the line should be left alone — a flat emotion, a single clause, or a block long
+ * enough that it is narration rather than speech, where a size contour just makes the page jitter.
+ */
+export function emphasisContour(text, { emotion, intensity = 1, limit = 200 } = {}) {
+  const key = normalizeEmotion(emotion);
+  const level = key && key !== 'neutral' ? normalizeIntensity(intensity) : 0;
+  const shape = key ? EMOTION_STYLES[key] : null;
+  const amplitude = (shape?.rhythm ?? 0) * level;
+  const body = String(text ?? '');
+  if (!amplitude || body.length > limit) return null;
+  const clauses = splitClauses(body);
+  if (clauses.length < 2) return null;
+
+  const weights = clauses.map((clause, index) => {
+    const last = index === clauses.length - 1;
+    let weight = 0;
+    if (LOUD_END.test(clause)) weight += 1;
+    else if (ASKING_END.test(clause)) weight += 0.6;
+    else if (TRAILING_OFF.test(clause)) weight -= 0.8;
+    // The final clause is where a spoken line lands, so it carries weight even without a mark.
+    if (last) weight += 0.4;
+    // A short clause between longer ones reads as a beat, not as a lull.
+    else if (clause.length <= 5) weight += 0.25;
+    return clamp(weight, -1, 1);
+  });
+
+  // Centre the contour so the line keeps its own average size: the rhythm is relative loudness
+  // within the line, and must not quietly become a second way of making the whole line bigger.
+  const mean = weights.reduce((sum, value) => sum + value, 0) / weights.length;
+  return clauses.map((clause, index) => ({
+    text: clause,
+    scale: Number((1 + amplitude * (weights[index] - mean)).toFixed(3)),
+  }));
+}
 
 // Models answer in whatever language the prompt is in, and they abbreviate. Map the obvious
 // synonyms rather than throwing the label away and losing the whole annotation.

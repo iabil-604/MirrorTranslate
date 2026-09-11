@@ -9,6 +9,7 @@ import {
   adaptColorToBand,
   blendOver,
   computeSafeBand,
+  emphasisContour,
   contrastRatio,
   fallbackHue,
   isNeutralColor,
@@ -19,6 +20,7 @@ import {
   parseCssColor,
   relativeLuminance,
   resolveSegmentStyle,
+  splitClauses,
   spreadHues,
   srgbToOklch,
   toHex,
@@ -260,4 +262,42 @@ test('a hue whose chroma peaks away from the shared band lightness keeps its own
   const onLight = adaptColorToBand('#f2e750', computeSafeBand(LIGHT_THEME), { name: '坂本竜司' });
   assert.ok(onLight.oklch.l < 0.65, `浅色主题上黄色没有压暗：l=${onLight.oklch.l.toFixed(2)}`);
   assert.ok(hueDelta(onLight.oklch.h, yellow.oklch.h) < 2, '换主题后色相跑了');
+});
+
+test('the rhythm contour peaks where the line does, and leaves flat lines alone', () => {
+  const shout = emphasisContour('「话说回来！喂，你们看刚才，全员都没受伤！」', { emotion: 'shout', intensity: 2 });
+  assert.equal(shout.length, 4);
+  assert.equal(shout.map(piece => piece.text).join(''), '「话说回来！喂，你们看刚才，全员都没受伤！」');
+  // The exclamatory clauses are the loud ones; the connective beats sit below them.
+  assert.ok(shout[0].scale > shout[1].scale, '感叹子句没有比连接子句响');
+  assert.ok(shout[3].scale > shout[2].scale);
+
+  // Nothing at all for a flat line, a single clause, or a block long enough to be narration.
+  assert.equal(emphasisContour('最先打破沉默的是龙司。他笑了。', { emotion: 'neutral', intensity: 2 }), null);
+  assert.equal(emphasisContour('一句话', { emotion: 'shout', intensity: 2 }), null);
+  assert.equal(emphasisContour('啊！'.repeat(120), { emotion: 'shout', intensity: 2 }), null, '整段叙述不加节奏');
+  assert.equal(emphasisContour('啊！啊！', { emotion: 'shout', intensity: 0 }), null, '强度 0 等同没标注');
+
+  // The contour is relative loudness inside the line, so it must not enlarge the line on average.
+  const mean = shout.reduce((sum, piece) => sum + piece.scale, 0) / shout.length;
+  assert.ok(Math.abs(mean - 1) < 0.01, `节奏把整行放大了：${mean}`);
+
+  // Whispering has a contour too, but a far shallower one than shouting.
+  const spread = list => Math.max(...list.map(p => p.scale)) - Math.min(...list.map(p => p.scale));
+  const quiet = emphasisContour('别理那个笨蛋。他一兴奋，就收不住。', { emotion: 'whisper', intensity: 2 });
+  const loud = emphasisContour('别理那个笨蛋。他一兴奋，就收不住。', { emotion: 'shout', intensity: 2 });
+  assert.ok(spread(quiet) < spread(loud));
+});
+
+test('clauses keep their punctuation and reassemble into the exact line', () => {
+  for (const line of [
+    '「你到底在想什么！」',
+    '……我不知道。真的。',
+    'a, b. c!',
+    '没有任何标点',
+  ]) {
+    assert.equal(splitClauses(line).join(''), line, line);
+  }
+  // A run of closing marks joins the clause it closes rather than becoming a beat of its own.
+  assert.deepEqual(splitClauses('啊！」'), ['啊！」']);
 });
