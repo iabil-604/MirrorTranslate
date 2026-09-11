@@ -271,20 +271,30 @@ test('a coloured run paints the floor, keeps the prompt clean and stores the lab
   assert.match(annotation.content, /英梨梨、泽村、诗羽/);
 
   // Two speakers, two different colours, and the black-haired one still got one of her own.
-  const colors = [...message.mes.matchAll(/color:(#[0-9a-f]{6})/g)].map(match => match[1]);
+  const colors = [...message.mes.matchAll(/["';]color:(#[0-9a-f]{6})/g)].map(match => match[1]);
   assert.equal(colors.length, 2);
   assert.notEqual(colors[0], colors[1]);
   assert.match(message.mes, /class="jy-spk jy-spk-[a-z0-9]+ jy-emo-angry jy-emo-l2"/);
   assert.match(message.mes, /class="jy-spk jy-spk-[a-z0-9]+ jy-emo-whisper jy-emo-l1"/);
   assert.match(message.mes, /title="英梨梨 · 愤怒"/);
 
-  // Host themes set message text colour with !important. Without it here the colour sits in the
-  // floor and never renders, while font-weight — which themes rarely force — does, so the feature
-  // looks like it only half works. Every declaration the wrapper writes has to outrank the theme.
+  // Host themes set message text colour with !important, so every declaration has to outrank them.
   for (const declaration of message.mes.matchAll(/style="([^"]*)"/g)) {
     for (const item of declaration[1].split(';')) {
       assert.match(item, /!important$/, `样式没有盖过主题：${item}`);
     }
+  }
+
+  // And the colour has to be written twice. `-webkit-text-fill-color` decides the painted glyph in
+  // Blink and beats `color` outright, so a theme that sets it for gradient text leaves the text in
+  // the theme's colour while getComputedStyle('color') still reports ours — the colour reads as
+  // applied and never appears. Verified against a theme rule doing exactly that.
+  for (const declaration of message.mes.matchAll(/style="([^"]*)"/g)) {
+    const items = declaration[1].split(';');
+    const painted = items.filter(item => item.startsWith('color:'));
+    const filled = items.filter(item => item.startsWith('-webkit-text-fill-color:'));
+    assert.equal(filled.length, painted.length, `颜色只写了一种拼法：${declaration[1]}`);
+    if (painted.length) assert.equal(filled[0], `-webkit-text-fill-${painted[0]}`);
   }
 
   // The main model sees the Japanese original and no markup at all.

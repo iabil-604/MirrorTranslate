@@ -44,13 +44,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.14.3';
+} from './core.js?v=0.14.4';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.14.3';
+} from './processing.js?v=0.14.4';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -66,8 +66,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.14.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.3';
+} from './prompts.js?v=0.14.4';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.4';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -80,15 +80,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.14.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.14.3';
+} from './palette.js?v=0.14.4';
+import { sampleThemeBackground } from './theme-probe.js?v=0.14.4';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.14.3';
+} from './diagnostics.js?v=0.14.4';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -868,10 +868,16 @@ function buildSegmentStyler(settings, annotations) {
       classes.push(`jy-emo-${style.emotion}`, `jy-emo-l${style.intensity}`);
     }
     const label = [speaker?.name, style.emotion && EMOTION_STYLES[style.emotion]?.label].filter(Boolean).join(' · ');
-    // Themes set message text colour with !important, which beats a plain inline style. Without this
-    // the colour is in the floor and simply never visible, while font-weight and font-size — which
-    // themes rarely force — come through, so the feature looks half-broken rather than overridden.
-    const inline = declarations.map(item => `${item} !important`).join(';');
+    // Both spellings of the colour, and both marked important.
+    //
+    // `-webkit-text-fill-color` decides the painted glyph in every WebKit and Blink browser and wins
+    // over `color` outright — themes set it for gradient text. When they do, the glyphs take the
+    // theme's colour while getComputedStyle still reports ours, so the colour looks like it is being
+    // applied and simply never appears. Writing both is a harmless duplicate when no theme does it.
+    const inline = declarations
+      .flatMap(item => (item.startsWith('color:') ? [item, `-webkit-text-fill-${item}`] : [item]))
+      .map(item => `${item} !important`)
+      .join(';');
     return {
       open: `<span class="${classes.join(' ')}"${label ? ` title="${escapeAttribute(label)}"` : ''} style="${escapeAttribute(inline)}">`,
       close: '</span>',
@@ -914,7 +920,7 @@ function syncSpeakerStylesheet(settings = runtime.settings) {
     const slug = speakerSlug(entry.name);
     if (seen.has(slug)) continue;
     seen.add(slug);
-    rules.push(`:is(.${SPEAKER_CLASS}-${slug}, .custom-${SPEAKER_CLASS}-${slug}){color:${entry.base} !important}`);
+    rules.push(`:is(.${SPEAKER_CLASS}-${slug}, .custom-${SPEAKER_CLASS}-${slug}){color:${entry.base} !important;-webkit-text-fill-color:${entry.base} !important}`);
   }
   const element = existing ?? document.createElement('style');
   element.id = SPEAKER_STYLE_ID;

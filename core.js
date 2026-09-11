@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.14.3';
+} from './prompts.js?v=0.14.4';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.14.3';
+export const APP_VERSION = '0.14.4';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
