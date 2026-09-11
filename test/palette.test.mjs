@@ -241,3 +241,23 @@ test('one speaker’s emotional range stays inside the gap that separates two sp
   // than the guaranteed distance to a different character, so the colour identified nobody.
   assert.ok(span < MIN_HUE_SEPARATION, `同一角色的色相跨度 ${span.toFixed(0)} 度，必须小于角色间隔 ${MIN_HUE_SEPARATION} 度`);
 });
+
+test('a hue whose chroma peaks away from the shared band lightness keeps its own colour', () => {
+  const band = computeSafeBand(DARK_THEME);
+  const yellow = adaptColorToBand('#f2e750', band, { name: '坂本竜司', vividness: 0.65 });
+
+  // sRGB holds yellow near L=0.94 and blue near L=0.45. `band.chromaMax` is the chroma every hue on
+  // the circle can manage at one shared lightness, so pinning yellow there produced khaki (c=0.130)
+  // out of a source that already cleared the floor by 3x. Each hue solves its own lightness now.
+  assert.ok(yellow.oklch.c > band.chromaMax, `黄色被压回共享彩度 ${yellow.oklch.c.toFixed(3)} <= ${band.chromaMax.toFixed(3)}`);
+  assert.ok(yellow.oklch.l > 0.85, `黄色被压暗到 l=${yellow.oklch.l.toFixed(2)}`);
+  assert.ok(contrastRatio(parseCssColor(yellow.hex), parseCssColor(DARK_THEME[0])) >= DEFAULT_MIN_CONTRAST);
+
+  // The source hue still survives the whole solve; only lightness and chroma are re-decided.
+  assert.ok(hueDelta(yellow.oklch.h, srgbToOklch(parseCssColor('#f2e750')).h) < 2);
+
+  // And the same hue inverts rather than drifts when the theme flips.
+  const onLight = adaptColorToBand('#f2e750', computeSafeBand(LIGHT_THEME), { name: '坂本竜司' });
+  assert.ok(onLight.oklch.l < 0.65, `浅色主题上黄色没有压暗：l=${onLight.oklch.l.toFixed(2)}`);
+  assert.ok(hueDelta(onLight.oklch.h, yellow.oklch.h) < 2, '换主题后色相跑了');
+});

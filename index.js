@@ -44,13 +44,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.14.2';
+} from './core.js?v=0.14.3';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.14.2';
+} from './processing.js?v=0.14.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -66,8 +66,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.14.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.2';
+} from './prompts.js?v=0.14.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.14.3';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -80,15 +80,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.14.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.14.2';
+} from './palette.js?v=0.14.3';
+import { sampleThemeBackground } from './theme-probe.js?v=0.14.3';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.14.2';
+} from './diagnostics.js?v=0.14.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;

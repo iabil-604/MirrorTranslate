@@ -305,6 +305,55 @@ function unusableNote(samples, minContrast, hueSteps, steps) {
 }
 
 /**
+ * The most saturated readable point for one hue: the lightness at which this hue carries the most
+ * chroma while still clearing the contrast floor on every background sample.
+ *
+ * `band.luminance` is deliberately not used here. That figure is the one lightness the whole hue
+ * circle can share, and sharing it is what ruins a hue whose chroma peaks somewhere else — sRGB
+ * holds yellow at L≈0.94 and blue at L≈0.45, so a single shared point crushes yellow into khaki
+ * even when the raw hair colour already cleared the floor three times over. The floor is the
+ * constraint; a common lightness never was one.
+ */
+function bestPointForHue(hue, band) {
+  const luminances = band.backgrounds.map(relativeLuminance);
+  // Keep every speaker on the same side of the background as the band decided, so a mid-grey
+  // theme does not end up with some names in light text and others in dark.
+  const admissible = candidate => (band.direction === 'light'
+    ? relativeLuminance(candidate) > Math.max(...luminances)
+    : relativeLuminance(candidate) < Math.min(...luminances));
+  let best = { l: band.lightness ?? 0.6, c: 0 };
+  for (let step = 0; step <= 48; step += 1) {
+    const l = 0.08 + (0.9 * step) / 48;
+    let low = 0;
+    let high = MAX_CHROMA;
+    for (let iteration = 0; iteration < 14; iteration += 1) {
+      const middle = (low + high) / 2;
+      const candidate = { l, c: middle, h: hue };
+      const rgb = oklchToSrgb(candidate);
+      if (inSrgbGamut(candidate) && admissible(rgb) && meetsContrast(rgb, band.backgrounds, band.minContrast)) low = middle;
+      else high = middle;
+    }
+    if (low > best.c) best = { l, c: low };
+  }
+  return best;
+}
+
+// Solving a hue costs a few hundred gamut probes, and a floor asks for the same handful of speakers
+// over and over, so the answer is remembered per hue and per band.
+const huePointCache = new Map();
+
+function cachedBestPointForHue(hue, band) {
+  const key = `${Math.round(hue)}|${band.direction}|${band.minContrast}|${band.backgrounds.map(toHex).join(',')}`;
+  let point = huePointCache.get(key);
+  if (!point) {
+    point = bestPointForHue(hue, band);
+    if (huePointCache.size > 512) huePointCache.clear();
+    huePointCache.set(key, point);
+  }
+  return point;
+}
+
+/**
  * Turns a character's declared hair or eye colour into the colour their speech is painted in.
  *
  * Only the hue survives from the source colour: lightness is re-solved against the reader's own
@@ -318,16 +367,24 @@ export function adaptColorToBand(source, band, { chromaScale = 1, lightnessDelta
   // A brown or a muted teal is a legitimate hair colour but carries so little chroma that it lands
   // back in grey territory once the lightness is re-solved. `vividness` lifts source chroma towards
   // the band ceiling — 0 keeps the source faithful, 1 paints every speaker at full strength.
-  const sourceChroma = neutral ? band.chromaMax : Math.min(oklch.c, band.chromaMax);
+  const peak = cachedBestPointForHue(hue, band);
+  const ceiling = Math.max(peak.c, NEUTRAL_CHROMA);
+  const sourceChroma = neutral ? ceiling : Math.min(oklch.c, ceiling);
   const lift = clamp01(vividness);
-  const requested = sourceChroma + (band.chromaMax - sourceChroma) * lift;
-  let chroma = clamp(requested * chromaScale, Math.min(NEUTRAL_CHROMA, band.chromaMax), band.chromaMax);
-  let lightness = solveLightness(band.luminance, chroma, hue, band.direction);
-  // Reduce chroma rather than break either the gamut or the contrast floor.
-  while (chroma > 0 && (!inSrgbGamut({ l: lightness, c: chroma, h: hue })
-    || !meetsContrast(oklchToSrgb({ l: lightness, c: chroma, h: hue }), band.backgrounds, band.minContrast))) {
-    chroma = Math.max(0, chroma - 0.005);
-    lightness = solveLightness(band.luminance, chroma, hue, band.direction);
+  const requested = sourceChroma + (ceiling - sourceChroma) * lift;
+  let chroma = clamp(requested * chromaScale, Math.min(NEUTRAL_CHROMA, ceiling), ceiling);
+  let lightness = peak.l;
+  // The peak lightness is only the best point at full chroma. An emotion that cuts chroma pulls the
+  // colour towards the grey of that same lightness, and that grey can sit below the floor — so move
+  // away from the background first, and only give up chroma once lightness has nowhere left to go.
+  const away = band.direction === 'light' ? 0.01 : -0.01;
+  for (let guard = 0; guard < 240; guard += 1) {
+    const candidate = { l: lightness, c: chroma, h: hue };
+    if (inSrgbGamut(candidate) && meetsContrast(oklchToSrgb(candidate), band.backgrounds, band.minContrast)) break;
+    const moved = clamp01(lightness + away);
+    if (moved !== lightness && inSrgbGamut({ l: moved, c: chroma, h: hue })) lightness = moved;
+    else if (chroma > 0) chroma = Math.max(0, chroma - 0.005);
+    else break;
   }
   // An emotion may push lightness further away from the background, never towards it.
   if (lightnessDelta) {
