@@ -496,6 +496,11 @@ export function emphasisContour(text, { emotion, intensity = 1, limit = 200 } = 
   const amplitude = (shape?.rhythm ?? 0) * level;
   const body = String(text ?? '');
   if (!amplitude || body.length > limit) return null;
+  // A translation carrying its own markup is left alone. `:` and `;` are clause marks here and also
+  // the whole of a style attribute, so splitting `<span style="color:#7B4397;font-size:1.1em;">`
+  // lands a tag inside someone else's attribute and the rest of it leaks out as visible text. The
+  // main model does produce coloured dialogue, so this is the ordinary case, not a corner one.
+  if (body.includes('<')) return null;
   const clauses = splitClauses(body);
   if (clauses.length < 2) return null;
 

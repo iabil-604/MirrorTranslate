@@ -301,3 +301,15 @@ test('clauses keep their punctuation and reassemble into the exact line', () => 
   // A run of closing marks joins the clause it closes rather than becoming a beat of its own.
   assert.deepEqual(splitClauses('啊！」'), ['啊！」']);
 });
+
+test('a translation that carries its own markup is never cut apart', () => {
+  // The main model colours its own dialogue, so this line arrives with a style attribute already in
+  // it. `:` and `;` are clause marks here and also the whole of that attribute — splitting it put a
+  // <span> inside style="color:" and the remainder rendered as visible text in the floor.
+  const coloured = '<span style="color:#7B4397;font-size:1.1em;">明日香，等一下！先和初号机迎击！</span>';
+  assert.equal(emphasisContour(coloured, { emotion: 'shout', intensity: 2 }), null);
+  assert.equal(emphasisContour('一句话<br>下一句！再一句！', { emotion: 'shout', intensity: 2 }), null);
+
+  // The same line without markup still gets its rhythm, so the guard is about tags, not punctuation.
+  assert.ok(emphasisContour('明日香，等一下！先和初号机迎击！', { emotion: 'shout', intensity: 2 }));
+});

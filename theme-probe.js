@@ -6,7 +6,7 @@
 //
 // The DOM walking lives here; every decision made from the samples lives in palette.js.
 
-import { blendOver, parseCssColor, relativeLuminance, toHex } from './palette.js?v=0.15.1';
+import { blendOver, parseCssColor, relativeLuminance, toHex } from './palette.js?v=0.15.2';
 
 const CHAT_SELECTORS = Object.freeze(['#chat .mes_text', '#chat .mes', '#chat', '#sheld', 'body']);
 const BACKGROUND_SELECTORS = Object.freeze(['#bg_custom', '#bg1', '#background', 'body']);

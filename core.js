@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.15.1';
+} from './prompts.js?v=0.15.2';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.15.1';
+export const APP_VERSION = '0.15.2';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -1609,6 +1609,10 @@ function styledBody(translation, styleBody) {
   // Refuse anything that does not reassemble into the exact translation, so a bad split is inert
   // rather than a silent rewrite of the text.
   if (pieces.map(piece => piece?.text ?? '').join('') !== translation) return translation;
+  // Reassembly alone does not prove the split was safe: cutting a line that carries its own markup
+  // between `style="color:` and the rest still rejoins perfectly while nesting a tag inside another
+  // tag's attribute. Anything with markup in it keeps its own structure.
+  if (translation.includes('<')) return translation;
   return pieces
     .map(piece => (piece.css
       ? `${markedAffix(`<span style="${piece.css}">`)}${piece.text}${markedAffix('</span>')}`
