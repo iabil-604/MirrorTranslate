@@ -117,6 +117,11 @@ export function addDiagnostic(entry, storage) {
   if (entry && Object.hasOwn(entry, 'fullRequest')) {
     normalized.fullRequest = sanitizeFullResponse(entry.fullRequest);
   }
+  // A reasoning model can spend more characters thinking than translating. It is not the answer and
+  // it is not part of the request, so it gets its own tier rather than being folded into either.
+  if (entry && typeof entry.reasoning === 'string' && entry.reasoning.trim()) {
+    normalized.reasoning = sanitizeFullResponse(entry.reasoning);
+  }
   if (Number.isInteger(entry?.floor)) normalized.floor = entry.floor;
   const fitted = fitEntriesForStorage([...readDiagnostics(target), normalized]);
   memoryEntries = fitted.entries;
@@ -160,6 +165,10 @@ function formatReport(entries, metadata = {}, includeFullResponses = false) {
       lines.push(typeof entry.fullRequest === 'string'
         ? entry.fullRequest
         : JSON.stringify(entry.fullRequest, null, 2));
+    }
+    if (includeFullResponses && typeof entry.reasoning === 'string' && entry.reasoning) {
+      lines.push(`--- 副 API 的思考过程（${entry.reasoning.length} 字）---`);
+      lines.push(entry.reasoning);
     }
     if (includeFullResponses && Object.hasOwn(entry, 'fullResponse')) {
       lines.push('--- 完整副 API 返回（凭据特征已隐藏）---');

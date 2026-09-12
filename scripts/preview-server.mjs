@@ -20,6 +20,46 @@ http.createServer((request, response) => {
     response.end(JSON.stringify({ data: [{ id: 'translator-small' }, { id: 'translator-pro' }] }));
     return;
   }
+  // A reasoning model, mocked: it thinks for a while before a single character of translation
+  // appears. That gap is the only way to look at the thinking panel without a real slow model.
+  if (request.method === 'POST' && pathname === '/api/backends/chat-completions/generate') {
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+    });
+    const frame = delta => response.write(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`);
+    const thoughts = [
+      '先看这一批要译几段。',
+      '第 1 段是对话，说话人应该是女方，语气犹豫，句尾有省略号。',
+      '「手続き」这里指医院的各种手续，不是抽象的程序。',
+      '第 2 段是旁白，保持叙述距离。',
+      '第 3 段又回到对话，同一个说话人，情绪更低。',
+      '「吐きそう」是身体反应，不要写成「难受」，要留住那个具体。',
+      '专名没有新的，术语表里也没有冲突。',
+      '再确认一下编号，1 到 3 都在。',
+    ];
+    let step = 0;
+    const tick = setInterval(() => {
+      if (step < thoughts.length) {
+        frame({ reasoning_content: `${thoughts[step % thoughts.length]}\n` });
+        step += 1;
+        return;
+      }
+      clearInterval(tick);
+      const payload = JSON.stringify({
+        translations: [
+          { id: 1, text: '「我一个人大概搞不懂医院的手续怎么办。」', speaker: '陆玲', emotion: 'fear', intensity: 1 },
+          { id: 2, text: '她低下了头。' },
+          { id: 3, text: '「……一个人待着，就会像刚才那样想吐。」', speaker: '陆玲', emotion: 'whisper', intensity: 2 },
+        ],
+      });
+      frame({ content: payload });
+      response.write('data: [DONE]\n\n');
+      response.end();
+    }, 420);
+    request.on('close', () => clearInterval(tick));
+    return;
+  }
   if (request.method === 'GET' && pathname === '/api/extensions/discover') {
     response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     response.end(JSON.stringify([{ name: 'third-party/jingyi', type: 'local' }]));

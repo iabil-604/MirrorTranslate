@@ -23,12 +23,15 @@ import {
   createGenerationGate,
   createIndependentRequest,
   extractGeneratedTranslations,
+  extractReasoningText,
   extractTaggedRegion,
   extractTaggedRegions,
   interceptGenerationChat,
   planTranslationBatches,
   translationCharBudget,
   inspectTagConfiguration,
+  withoutCarriedColor,
+  lineFormatting,
   mergeSettings,
   getActiveChannel,
   getActivePromptProfile,
@@ -904,4 +907,103 @@ test('changing the visible affixes keeps a floor and its speaker colours intact'
   assert.match(restyled, /【/);
   assert.equal(stripGeneratedTranslationLines(restyled), '原文一行。');
   assert.equal(restyleBilingual(restyled, { translationPrefix: '【', translationSuffix: '】' }, { schema_version: 4 }), restyled);
+});
+
+test('a painted source line comes back painted instead of losing its colour in translation', () => {
+  const source = [
+    '<span style="color:#e79">「私、一人じゃたぶん、わかんないし。」</span>',
+    '彼女は俯いた。',
+    '<font color="#8cf"><b>「……吐きそうになるから」</b></font>',
+  ].join('\n');
+  const translations = new Map([[1, '「我一个人大概搞不懂。」'], [2, '她低下了头。'], [3, '「……就会想吐。」']]);
+  const options = { translationPrefix: '', translationSuffix: '' };
+  const floor = assembleBilingual(segmentSource(source, options).layout, translations, options);
+  const visible = floor.replace(/[​‌‍﻿⁠-⁤]/g, '');
+  // Each line keeps its own wrapper: only the dialogue was painted, so only the dialogue comes back
+  // painted, and the narration between them stays plain.
+  assert.match(visible, /<span style="color:#e79">「我一个人大概搞不懂。」<\/span>/);
+  assert.match(visible, /<font color="#8cf"><b>「……就会想吐。」<\/b><\/font>/);
+  assert.match(visible, /\n她低下了头。/);
+  assert.doesNotMatch(visible, /<span[^>]*>她低下了头/);
+  // The invariant is untouched: the main model still sees exactly the original.
+  assert.equal(stripGeneratedTranslationLines(floor), source);
+  assert.equal(stripGeneratedTranslationLines(floor, undefined, 'prompt'), source);
+  // And 补译 still reads plain translations back out, markup and all stripped.
+  assert.deepEqual([...extractGeneratedTranslations(floor, options).values()], [...translations.values()]);
+
+  const off = assembleBilingual(segmentSource(source, options).layout, translations, { ...options, carryFormatting: false });
+  assert.doesNotMatch(off.replace(/[​‌‍﻿⁠-⁤]/g, ''), /<span style="color:#e79">「我一个人/);
+  assert.equal(stripGeneratedTranslationLines(off), source);
+});
+
+test('only a real whole-line wrapper is carried, and only its presentation attributes', () => {
+  assert.equal(lineFormatting('普通一行'), null);
+  assert.equal(lineFormatting('<br>'), null);
+  // Two siblings have no single wrapper to speak of.
+  assert.equal(lineFormatting('<span style="color:#f00">甲</span><span style="color:#0f0">乙</span>'), null);
+  // Block tags would change the layout, and an anchor would invent a link.
+  assert.equal(lineFormatting('<div style="color:#f00">整段</div>'), null);
+  assert.equal(lineFormatting('<a href="http://example.com">链接</a>'), null);
+  // A wrapper with nothing inside has nothing to carry.
+  assert.equal(lineFormatting('<span style="color:#f00"></span>'), null);
+  assert.deepEqual(lineFormatting('<i>斜体<b>加粗</b>还有</i>'), { open: '<i>', close: '</i>' });
+  assert.deepEqual(lineFormatting('<font color="#8cf"><b>台词</b></font>'), { open: '<font color="#8cf"><b>', close: '</b></font>' });
+  // Behaviour and identity never travel; only how the line looks.
+  assert.deepEqual(
+    lineFormatting('<span onclick="evil()" id="x" data-y="1" style="color:#f0a">台词</span>'),
+    { open: '<span style="color:#f0a">', close: '</span>' },
+  );
+  assert.equal(withoutCarriedColor('<span style="color:#f0a;font-weight:700">'), '<span style="font-weight:700">');
+  assert.equal(withoutCarriedColor('<font color="#8cf">'), '<font>');
+});
+
+test('speaker colouring wins the colour but the carried weight and slant still apply', () => {
+  const source = '<b style="color:#e79">「台词」</b>';
+  const options = {
+    translationPrefix: '',
+    translationSuffix: '',
+    styleFor: () => ({ open: '<span class="jy-spk" style="color:#cbaa40 !important">', close: '</span>', paintsColor: true }),
+  };
+  const floor = assembleBilingual(segmentSource(source, options).layout, new Map([[1, '「译文」']]), options);
+  const visible = floor.replace(/[​‌‍﻿⁠-⁤]/g, '');
+  assert.match(visible, /<span class="jy-spk" style="color:#cbaa40 !important"><b>「译文」<\/b><\/span>/);
+  assert.doesNotMatch(visible, /<b style="color:#e79">「译文」/);
+  assert.equal(stripGeneratedTranslationLines(floor), source);
+});
+
+test('the model\'s thinking is found wherever a provider decided to put it', () => {
+  assert.equal(extractReasoningText({ choices: [{ delta: { reasoning_content: '先看这一批要译几段。' } }] }), '先看这一批要译几段。');
+  assert.equal(extractReasoningText({ choices: [{ message: { reasoning: '专名没有冲突。' } }] }), '专名没有冲突。');
+  assert.equal(extractReasoningText({ content: '译文', reasoning: '思考' }), '思考');
+  assert.equal(extractReasoningText({ thinking: '另一种拼法' }), '另一种拼法');
+  // Nothing to report is the common case and must not be confused with an answer.
+  assert.equal(extractReasoningText({ choices: [{ message: { content: '只有译文' } }] }), '');
+  assert.equal(extractReasoningText('纯字符串返回'), '');
+  assert.equal(extractReasoningText(null), '');
+  assert.equal(extractReasoningText({ reasoning: '   ' }), '', '空白不算思考');
+  // A response that points at itself must not hang the walk.
+  const loop = { choices: [] };
+  loop.choices.push({ message: loop });
+  assert.equal(extractReasoningText(loop), '');
+});
+
+test('carried formatting reaches replace-tag regions and stays out of the prompt', () => {
+  const source = '<span style="color:#e79">「台词一」</span>\n\n<b>「台词二」</b>';
+  const options = { translationPrefix: '', translationSuffix: '' };
+  const floor = assembleReplace(segmentSource(source, options).layout, new Map([[1, '「译一」'], [2, '「译二」']]), options);
+  const visible = floor.replace(/[​‌‍﻿⁠-⁤]/g, '');
+  assert.match(visible, /<span style="color:#e79">「译一」<\/span>/);
+  assert.match(visible, /<b>「译二」<\/b>/);
+  // Replace regions are what the main model reads, so the carried markup has to vanish there.
+  assert.doesNotMatch(stripGeneratedTranslationLines(floor, undefined, 'prompt'), /<span|<b>/);
+  assert.equal(stripGeneratedTranslationLines(floor), source);
+  assert.deepEqual([...extractReplaceTranslations(floor, options).values()], ['「译一」', '「译二」']);
+});
+
+test('carrying formatting is on by default and survives a settings round-trip', () => {
+  assert.equal(DEFAULT_SETTINGS.carryFormatting, true);
+  assert.equal(mergeSettings({}).carryFormatting, true);
+  assert.equal(mergeSettings({ carryFormatting: false }).carryFormatting, false);
+  // An older saved settings object has no such key and must not lose the fix by omission.
+  assert.equal(mergeSettings({ schemaVersion: 11 }).carryFormatting, true);
 });

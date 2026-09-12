@@ -9,6 +9,7 @@ import {
   assembleReplace,
   extractReplaceTranslations,
   createTranslationSignature,
+  extractReasoningText,
   detectUnmarkedAffixes,
   DEFAULT_COLORING,
   normalizeColoring,
@@ -44,13 +45,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.15.4';
+} from './core.js?v=0.15.5';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.15.4';
+} from './processing.js?v=0.15.5';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -66,8 +67,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.15.4';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.4';
+} from './prompts.js?v=0.15.5';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.5';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -81,15 +82,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.15.4';
-import { sampleThemeBackground } from './theme-probe.js?v=0.15.4';
+} from './palette.js?v=0.15.5';
+import { sampleThemeBackground } from './theme-probe.js?v=0.15.5';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.15.4';
+} from './diagnostics.js?v=0.15.5';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -123,6 +124,11 @@ const runtime = {
     message: '主回复结束后会自动检查当前 AI 楼层。',
     progress: 0,
   },
+  // What a reasoning model is currently thinking. `text` is the whole thing so the log and the
+  // expanded view can show it; the panel only paints the tail while it streams.
+  thinking: { text: '', characters: 0, live: false, batch: 0, revision: 0 },
+  // null means "follow the default for this phase"; a click pins it either way until the next batch.
+  thinkingOpen: null,
   subscribers: new Set(),
   diagnosticSubscribers: new Set(),
   update: { status: 'idle', installType: null, details: null },
@@ -166,6 +172,15 @@ const CONTROL_CENTER_MARKUP = `
   <div class="jy-run-state" aria-live="polite"><span class="jy-dot" data-jy-task-dot="idle"></span><h2 data-jy-task-title>等待正文</h2><span class="jy-run-count" data-jy-current-state>待读取</span></div>
   <div class="jy-progress" aria-hidden="true"><span data-jy-progress></span></div>
   <p class="jy-muted" data-jy-task-message>打开一段故事，从这里开始翻译。</p>
+  <section class="jy-thinking" data-jy-thinking hidden>
+   <button type="button" class="jy-thinking-head" data-jy-action="toggle-thinking" aria-expanded="false" aria-controls="jy-thinking-body">
+    <span class="jy-thinking-pulse" aria-hidden="true"></span>
+    <span class="jy-thinking-label" data-jy-thinking-label>模型正在思考</span>
+    <span class="jy-thinking-count" data-jy-thinking-count></span>
+    <span class="jy-thinking-caret" aria-hidden="true"></span>
+   </button>
+   <div class="jy-thinking-body" id="jy-thinking-body" data-jy-thinking-body hidden><pre data-jy-thinking-text></pre></div>
+  </section>
   <dl class="jy-desk-facts"><div><dt>当前楼层</dt><dd data-jy-floor>—</dd></div><div><dt>滑动页</dt><dd data-jy-swipe>—</dd></div><div><dt>正文规模</dt><dd data-jy-segments>—</dd></div><div><dt>目标语言</dt><dd data-jy-desk-target>—</dd></div></dl>
   <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button></div>
  </div>
@@ -231,7 +246,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位。</p></div>
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 匹配整行。纯边框、纯符号与标签行自动保留。</p></details>
-<details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><p class="jy-muted">留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
+<details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label></div>
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
 <details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
@@ -461,6 +476,17 @@ function updateTask(patch) {
   if (previous === 'running' && runtime.task.status !== 'running') holdFloatingPill();
   else syncFloatingEntry();
   for (const subscriber of runtime.subscribers) subscriber(runtime.task);
+}
+
+// 20000 characters of thinking is normal for these models and re-rendering all of it every second
+// is what would make the panel stutter, so the live view keeps a tail and the full text stays in
+// memory for the expanded view and the log.
+const THINKING_TAIL = 1400;
+
+function updateThinking(patch) {
+  runtime.thinking = { ...runtime.thinking, ...patch, revision: runtime.thinking.revision + 1 };
+  // Piggy-backs on the task channel: every surface that already redraws on task changes redraws.
+  updateTask({});
 }
 
 function subscribeTask(subscriber) {
@@ -955,6 +981,9 @@ function buildSegmentStyler(settings, annotations) {
       open: `<span class="${classes.join(' ')}"${label ? ` title="${escapeAttribute(label)}"` : ''} style="${escapeAttribute(inline)}">`,
       close: '</span>',
       emphasis,
+      // Tells the assembler to drop the colour out of any wrapper carried over from the original
+      // line: two colours on one line would only mean the outer one losing without saying so.
+      paintsColor: declarations.some(item => item.startsWith('color:')),
     };
   };
 }
@@ -1127,6 +1156,9 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
     stopTicker();
   }
 
+  // The whole-request path never streams, so this is the first and only moment its thinking exists.
+  const reasoning = extractReasoningText(raw);
+  if (reasoning) updateThinking({ text: reasoning, characters: reasoning.length, live: false });
   recordDiagnostic('info', 'translation.raw-response', '已收到副 API 完整返回。', {
     phase,
     requestedSegments: segments.length,
@@ -1135,7 +1167,8 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
     model: channel.model || 'follow-current',
     endpoint: describeChannelEndpoint(settings),
     requestTokens: describeRequestTokens(messages, raw),
-  }, raw, { fullRequest: messages });
+    reasoningCharacters: reasoning.length || undefined,
+  }, raw, { fullRequest: messages, reasoning });
   signal?.throwIfAborted?.();
   const recovered = recoverStructuredTranslations(raw, segments);
   if (!recovered.translations.size) {
@@ -1589,7 +1622,7 @@ async function streamTranslationBatch(messages, settings, signal, onDelta = null
           const thought = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning ?? '';
           if (thought) {
             reasoning += thought;
-            if (onThinking) onThinking(reasoning.length);
+            if (onThinking) onThinking(reasoning);
           }
           if (delta) {
             text += delta;
@@ -1626,7 +1659,9 @@ async function streamTranslationBatch(messages, settings, signal, onDelta = null
       }
       throw new Error('流式连接建立成功，但没有收到任何正文增量。');
     }
-    return text;
+    // `reasoning` rides along even when the content is fine: it is the only record of what the model
+    // spent its minutes on, and a reader who waited those minutes should be able to look.
+    return reasoning.trim() ? { content: text, reasoning } : text;
   });
 }
 
@@ -1721,13 +1756,15 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     // Thinking is not progress on the floor, so it gets its own line rather than moving the bar.
     // Without it a reasoning model looks identical to a hung request for as long as it thinks.
     let lastThinking = 0;
-    const reportThinking = characters => {
+    const reportThinking = reasoning => {
+      const text = String(reasoning ?? '');
       const now = Date.now();
       if (now - lastThinking < 1000) return;
       lastThinking = now;
+      updateThinking({ text, characters: text.length, live: true });
       updateTask({
         status: 'running',
-        message: `副 API 正在思考（已 ${characters} 字），还没有开始输出译文。`,
+        message: `副 API 正在思考（已 ${text.length} 字），还没有开始输出译文。`,
       });
     };
     let lastDelta = 0;
@@ -1761,6 +1798,10 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       if (!pending.length) continue;
       const phase = translations.size ? 'repair' : 'primary';
       const messages = buildTranslationMessages(pending, settings, packet, phase, { roster });
+      // Each batch thinks afresh; carrying the previous batch's thinking into this one would read as
+      // the model having already written what it has not started.
+      runtime.thinkingOpen = null;
+      updateThinking({ text: '', characters: 0, live: false, batch: batchIndex + 1 });
       let raw = '';
       try {
         raw = await streamTranslationBatch(messages, settings, controller.signal, foldStreamedItems(pending), reportThinking);
@@ -1785,6 +1826,10 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       const recovered = recoverStructuredTranslations(raw, pending);
       for (const [id, value] of recovered.translations) translations.set(id, value);
       for (const [id, mark] of recovered.annotations) annotations.set(id, mark);
+      const reasoning = extractReasoningText(raw);
+      // The thinking stops being a progress indicator here and becomes a record: the panel folds it
+      // away, and the log keeps the whole thing for anyone who wants to know where the minutes went.
+      updateThinking({ text: reasoning || runtime.thinking.text, live: false });
       recordDiagnostic('info', 'translation.raw-response', '已收到副 API 流式返回。', {
         phase,
         requestedSegments: pending.length,
@@ -1793,7 +1838,8 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
         model: channel.model || 'follow-current',
         requestTokens: describeRequestTokens(messages, raw),
         stream: true,
-      }, raw, { fullRequest: messages });
+        reasoningCharacters: (reasoning || runtime.thinking.text).length || undefined,
+      }, raw, { fullRequest: messages, reasoning: reasoning || runtime.thinking.text });
       updateTask({
         status: 'running',
         message: `已恢复 ${translations.size} / ${total} 段。`,
@@ -2350,6 +2396,7 @@ function collectSettings(root) {
     'streamingWriteback',
     'showFloatingButton',
     'paragraphPerLine',
+    'carryFormatting',
     'includeWorldbook',
     'includeCharacterCard',
     'includeRecentContext',
@@ -2726,6 +2773,42 @@ function updateTaskUi(root, task) {
   if (dot) dot.dataset.jyTaskDot = task.status;
   const progress = root.querySelector('[data-jy-progress]');
   if (progress) progress.style.transform = `scaleX(${Math.max(0, Math.min(1, (Number(task.progress) || 0) / 100))})`;
+  renderThinking(root);
+}
+
+/**
+ * The model's thinking, while it is happening and after.
+ *
+ * Open by default while it streams — waiting ten minutes at 7% with no idea whether anything is
+ * happening is the thing this exists to fix — and folded to one line once the translation starts, so
+ * a finished floor is not buried under twenty thousand characters of deliberation. An explicit click
+ * either way is remembered and overrides both defaults until the next batch.
+ */
+function renderThinking(root) {
+  const panel = root.querySelector('[data-jy-thinking]');
+  if (!panel) return;
+  const thinking = runtime.thinking;
+  const text = String(thinking.text ?? '');
+  panel.hidden = !text;
+  if (!text) return;
+  panel.dataset.live = thinking.live ? 'yes' : 'no';
+  const open = runtime.thinkingOpen ?? thinking.live;
+  setText(root, '[data-jy-thinking-label]', thinking.live ? '模型正在思考' : '本批思考过程');
+  setText(root, '[data-jy-thinking-count]', `${text.length.toLocaleString()} 字${thinking.batch ? ` · 第 ${thinking.batch} 批` : ''}`);
+  const head = panel.querySelector('[data-jy-thinking-head], .jy-thinking-head');
+  head?.setAttribute('aria-expanded', String(open));
+  const body = panel.querySelector('[data-jy-thinking-body]');
+  if (body) body.hidden = !open;
+  if (!open) return;
+  const target = panel.querySelector('[data-jy-thinking-text]');
+  if (!target) return;
+  // While it streams only the tail is painted: twenty thousand characters redrawn every second is
+  // what would make the panel stutter, and the tail is the part that is actually moving.
+  const tail = thinking.live && text.length > THINKING_TAIL ? `…${text.slice(-THINKING_TAIL)}` : text;
+  if (target.textContent !== tail) {
+    target.textContent = tail;
+    if (thinking.live) body.scrollTop = body.scrollHeight;
+  }
 }
 
 function stringifyFullResponse(value) {
@@ -2808,6 +2891,28 @@ function renderDiagnosticLog(root, entries = readDiagnostics()) {
       const details = document.createElement('pre');
       details.textContent = JSON.stringify(entry.details, null, 2);
       item.appendChild(details);
+    }
+    // The thinking gets its own disclosure ahead of the raw return: when a model spends twenty
+    // thousand characters deliberating, that is the thing a reader came to the log to read, and
+    // digging it out of a JSON envelope by hand is not reading it.
+    if (typeof entry.reasoning === 'string' && entry.reasoning.trim()) {
+      const thought = entry.reasoning;
+      const disclosure = document.createElement('details');
+      disclosure.className = 'jy-log-full-response jy-log-reasoning';
+      const summary = document.createElement('summary');
+      summary.textContent = `查看模型思考（${thought.length.toLocaleString()} 字）`;
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'jy-button jy-log-copy-button';
+      copy.textContent = '复制思考过程';
+      copy.addEventListener('click', async () => {
+        await copyText(thought);
+        toast('success', '思考过程已复制。');
+      });
+      const body = document.createElement('pre');
+      body.textContent = thought;
+      disclosure.append(summary, copy, body);
+      item.appendChild(disclosure);
     }
     if (Object.hasOwn(entry, 'fullResponse')) {
       const fullText = stringifyFullResponse(entry.fullResponse);
@@ -3061,6 +3166,9 @@ function createControlCenter(rootDocument = document) {
         selected.processingProfiles = selected.processingProfiles.filter(item => item.id !== removed);
         await persistProcessing(root, selected);
         toast('success', '正文方案已删除。');
+      } else if (action === 'toggle-thinking') {
+        runtime.thinkingOpen = !(runtime.thinkingOpen ?? runtime.thinking.live);
+        renderThinking(root);
       } else if (action === 'probe-theme') {
         await runThemeProbe(root);
       } else if (action === 'add-speaker') {

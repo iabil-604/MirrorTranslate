@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.15.4';
+} from './prompts.js?v=0.15.5';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.15.4';
+export const APP_VERSION = '0.15.5';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -106,6 +106,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   translationPrefix: '{',
   translationSuffix: '}',
   paragraphPerLine: false,
+  // Presentation tags around a source line come back around its translation. Default on: leaving it
+  // off is what made a preset that paints dialogue paint only half the floor.
+  carryFormatting: true,
   includeWorldbook: true,
   includeCharacterCard: true,
   includeRecentContext: true,
@@ -454,6 +457,7 @@ export function mergeSettings(value = {}) {
   merged.segmentSuffix = typeof merged.segmentSuffix === 'string' ? merged.segmentSuffix : '';
   // 0.12.4 shipped this as a pure affix switch; the intent was always one line per paragraph.
   merged.paragraphPerLine = Boolean(merged.paragraphPerLine ?? merged.affixPerLine);
+  merged.carryFormatting = merged.carryFormatting !== false;
   delete merged.affixPerLine;
   merged.translationPrefix = typeof merged.translationPrefix === 'string' ? merged.translationPrefix : '';
   merged.translationSuffix = typeof merged.translationSuffix === 'string' ? merged.translationSuffix : '';
@@ -1092,6 +1096,87 @@ function stripStructuralTags(value, structuralTags) {
   });
 }
 
+// Presentation tags a preset puts around a line of dialogue. The translation is sent to the model
+// with every tag stripped — it has to be, or the model starts translating markup — and for a long
+// time it came back and was written down bare. A preset that paints dialogue therefore painted the
+// original and left the translation grey, which reads as "翻译把对话的颜色弄掉了".
+//
+// Only a wrapper that encloses the whole line is carried, and only these tags: they change how the
+// line looks and nothing else. Block tags would change the layout and anchors would give the
+// translation a link the original's author never put there.
+const CARRYABLE_FORMAT_TAGS = new Set([
+  'span', 'font', 'b', 'strong', 'i', 'em', 'u', 's', 'del', 'ins',
+  'mark', 'small', 'big', 'sub', 'sup', 'q', 'cite', 'abbr', 'tt',
+]);
+// Presentation attributes only. Copying an event handler or an id onto a second element would be
+// this extension inventing behaviour the floor never had.
+const CARRYABLE_FORMAT_ATTRS = new Set(['style', 'color', 'class', 'size', 'face']);
+const COLOR_DECLARATION_RE = /^(?:-webkit-text-fill-)?color\s*:/i;
+
+function sanitizeFormatOpenTag(raw, tag) {
+  const attributes = [];
+  for (const match of raw.matchAll(/([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g)) {
+    const name = match[1].toLowerCase();
+    if (!CARRYABLE_FORMAT_ATTRS.has(name)) continue;
+    const value = match[2] ?? match[3] ?? match[4] ?? '';
+    if (/[<>]/.test(value)) continue;
+    attributes.push(`${name}="${value.replace(/"/g, '&quot;')}"`);
+  }
+  return `<${tag}${attributes.length ? ` ${attributes.join(' ')}` : ''}>`;
+}
+
+// Used when speaker colouring already painted the line: the carried bold and italic still apply, but
+// two colours on one line would just be the outer one losing silently.
+export function withoutCarriedColor(openTag) {
+  return String(openTag ?? '')
+    .replace(/\scolor\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\sstyle\s*=\s*"([^"]*)"/i, (_whole, css) => {
+      const kept = css.split(';').map(item => item.trim()).filter(item => item && !COLOR_DECLARATION_RE.test(item));
+      return kept.length ? ` style="${kept.join(';')}"` : '';
+    });
+}
+
+// True when the opening tag at the head of `rest`'s parent closes exactly at the end of the line,
+// i.e. it really wraps everything rather than being the first of several siblings.
+function wrapperClosesAtEnd(rest, tag) {
+  const pattern = new RegExp(`<(/?)${tag}(?:\\s[^<>]*?)?\\s*(/?)>`, 'gi');
+  let depth = 1;
+  for (const match of rest.matchAll(pattern)) {
+    if (match[2] === '/') continue;
+    depth += match[1] === '/' ? -1 : 1;
+    if (depth > 0) continue;
+    return rest.slice(match.index + match[0].length).trim() === ''
+      ? { inner: rest.slice(0, match.index) }
+      : null;
+  }
+  return null;
+}
+
+/**
+ * The presentation wrapper around a whole source line, ready to be re-applied to its translation.
+ *
+ * Returns null unless the line really is wrapped and really has text inside — a line that is only
+ * tags has nothing to carry, and a line with two sibling spans has no single wrapper to speak of.
+ */
+export function lineFormatting(line) {
+  let body = String(line ?? '');
+  const opens = [];
+  const closes = [];
+  for (let depth = 0; depth < 4; depth += 1) {
+    const match = body.match(/^\s*<([A-Za-z][A-Za-z0-9]*)(?:\s[^<>]*?)?\s*>/);
+    if (!match) break;
+    const tag = match[1].toLowerCase();
+    if (!CARRYABLE_FORMAT_TAGS.has(tag)) break;
+    const closed = wrapperClosesAtEnd(body.slice(match[0].length), tag);
+    if (!closed) break;
+    opens.push(sanitizeFormatOpenTag(match[0], tag));
+    closes.unshift(`</${tag}>`);
+    body = closed.inner;
+  }
+  if (!opens.length || !stripStructuralTags(body).trim()) return null;
+  return { open: opens.join(''), close: closes.join('') };
+}
+
 function isClosingTagOnlyLine(value) {
   const source = String(value ?? '');
   const tokens = [...source.matchAll(STRUCTURAL_TAG_RE)];
@@ -1156,6 +1241,9 @@ export function segmentSource(text, options = {}) {
         translationText,
         semantic: Boolean(translationText) && !customPreserved && !builtinPreserved,
         closingTagOnly: isClosingTagOnlyLine(withoutExcluded),
+        // Read from the masked text so an excluded block inside the line cannot be mistaken for
+        // part of the wrapper; the tokens that stand in for it carry no angle brackets.
+        format: lineFormatting(line.text),
       };
     });
     const firstSemantic = lines.findIndex(line => line.semantic);
@@ -1191,6 +1279,7 @@ export function segmentSource(text, options = {}) {
           ids: [segment.id],
           text: segment.text,
           sourceText: line.source,
+          formats: [line.format ?? null],
           padAfter: index !== lastSemantic,
         });
         paragraphs += 1;
@@ -1206,6 +1295,7 @@ export function segmentSource(text, options = {}) {
 
     const ids = [];
     const unitTexts = [];
+    const unitFormats = [];
     for (let index = firstSemantic; index <= lastIncluded; index += 1) {
       const line = lines[index];
       if (!line.semantic) continue;
@@ -1213,6 +1303,7 @@ export function segmentSource(text, options = {}) {
       segments.push(segment);
       ids.push(segment.id);
       unitTexts.push(segment.text);
+      unitFormats.push(line.format ?? null);
     }
     const sourceText = lines.slice(firstSemantic, lastIncluded + 1)
       .map((line, index, selected) => `${line.source}${index < selected.length - 1 ? line.separator : ''}`)
@@ -1223,6 +1314,7 @@ export function segmentSource(text, options = {}) {
       ids,
       text: unitTexts.join('\n'),
       sourceText,
+      formats: unitFormats,
     });
     paragraphs += 1;
 
@@ -1299,6 +1391,32 @@ function unwrapResponseContent(raw) {
     break;
   }
   return value;
+}
+
+/**
+ * The model's own thinking, wherever this provider decided to put it.
+ *
+ * Every provider spells it differently and buries it at a different depth, and none of it is part of
+ * the translation — it is only evidence of what the minutes went into. Pulled out separately so a
+ * reader who waited through them can see it without the parser ever confusing it with an answer.
+ */
+export function extractReasoningText(raw) {
+  const seen = new Set();
+  const walk = (value, depth) => {
+    if (!value || typeof value !== 'object' || depth > 4 || seen.has(value)) return '';
+    seen.add(value);
+    for (const key of ['reasoning_content', 'reasoning', 'thinking', 'thought']) {
+      const found = value[key];
+      if (typeof found === 'string' && found.trim()) return found;
+    }
+    for (const key of ['choices', 'message', 'delta', 'content', 'data', '0']) {
+      const child = Array.isArray(value) ? value[0] : value[key];
+      const found = walk(child, depth + 1);
+      if (found) return found;
+    }
+    return Array.isArray(value) ? walk(value[0], depth + 1) : '';
+  };
+  return walk(raw, 0);
 }
 
 function findJsonFragmentEnd(text, start) {
@@ -1554,12 +1672,15 @@ export function assembleBilingual(layout, translationMap, options = {}) {
     const missingIds = ids.filter(id => !translationMap.get(id));
     if (missingIds.length && !allowMissing) throw new Error(`缺少第 ${missingIds.join('、')} 段译文。`);
     pieces.push(renderSourceBlock(part.sourceText ?? part.text, options));
-    const translations = ids.map(id => translationMap.get(id)).filter(Boolean);
-    if (translations.length) {
-      pieces.push(`\n${renderTranslationBlock(translations.join('\n'), {
+    const decoration = segmentDecoration(options.styleFor, ids);
+    const body = translationUnitBody(part, ids, translationMap, options, decoration);
+    if (body) {
+      pieces.push(`\n${renderTranslationBlock(body, {
         ...options,
         padAfter: part.padAfter === true,
-        ...segmentDecoration(options.styleFor, ids),
+        ...decoration,
+        // The body is already shaped line by line above, rhythm and carried formatting included.
+        styleBody: null,
       })}`);
     }
   }
@@ -1568,6 +1689,37 @@ export function assembleBilingual(layout, translationMap, options = {}) {
 
 function markedAffix(value) {
   return value ? `${AFFIX_START}${value}${AFFIX_END}` : '';
+}
+
+/**
+ * Builds one unit's translated body, line by line.
+ *
+ * Two things happen per line rather than per block. The rhythm contour reads one line at a time, and
+ * the carried formatting belongs to the line it came from — a paragraph where only the dialogue line
+ * is painted has to come back with only that line painted.
+ *
+ * The carried tags go in as marked affixes, so `AFFIX_RE` strips them on read-back exactly like the
+ * speaker wrapper: 补译 still sees the plain translation and the main model still sees the original.
+ */
+function translationUnitBody(part, ids, translationMap, options, decoration = {}) {
+  const carry = options.carryFormatting !== false;
+  const formats = Array.isArray(part?.formats) ? part.formats : [];
+  const lines = [];
+  ids.forEach((id, index) => {
+    const translation = translationMap.get(id);
+    if (!translation) return;
+    const shaped = styledBody(String(translation), decoration.styleBody);
+    const format = carry ? formats[index] : null;
+    if (!format?.open) {
+      lines.push(shaped);
+      return;
+    }
+    // Speaker colouring is an explicit choice about this line's colour, so it wins; the carried
+    // weight and slant still apply underneath it.
+    const open = decoration.paintsColor ? withoutCarriedColor(format.open) : format.open;
+    lines.push(`${markedAffix(open)}${shaped}${markedAffix(format.close)}`);
+  });
+  return lines.join('\n');
 }
 
 // Speaker and emotion styling rides inside the same invisible affix markers the visible prefixes
@@ -1586,6 +1738,7 @@ function segmentDecoration(styleFor, ids) {
     stylePrefix: String(decoration.open),
     styleSuffix: String(decoration.close ?? ''),
     styleBody: typeof decoration.emphasis === 'function' ? decoration.emphasis : null,
+    paintsColor: decoration.paintsColor === true,
   };
 }
 
@@ -1642,15 +1795,16 @@ export function assembleReplace(layout, translationMap, options = {}) {
       continue;
     }
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
-    const translations = ids.map(id => translationMap.get(id)).filter(Boolean);
     const sourceText = part.sourceText ?? part.text;
-    if (!translations.length) {
+    const decoration = segmentDecoration(options.styleFor, ids);
+    const body = translationUnitBody(part, ids, translationMap, options, decoration);
+    if (!body) {
       if (!allowMissing) throw new Error(`缺少第 ${ids.join('、')} 段译文。`);
       // Untranslated replace segments stay as their original plain text, ready for 补译.
       pieces.push(sourceText);
       continue;
     }
-    pieces.push(renderReplacePair(translations.join('\n'), sourceText, segmentDecoration(options.styleFor, ids)));
+    pieces.push(renderReplacePair(body, sourceText, { ...decoration, styleBody: null }));
   }
   return pieces.join('');
 }

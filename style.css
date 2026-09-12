@@ -114,6 +114,25 @@ label { min-width: 0; }
 .jy-dot[data-jy-task-dot="error"] { background: var(--jy-error); }
 .jy-dot[data-jy-task-dot="success"] { background: var(--jy-ok); }
 .jy-progress { height: 5px; margin: 0; border-radius: 3px; background: var(--jy-accent-soft); overflow: hidden; }
+/* The model's thinking. Deliberately quieter than everything around it: it is evidence that work is
+   happening, not a result, so it reads as a margin note rather than a second column of prose. */
+.jy-thinking { margin-top: 10px; border: 1px solid var(--jy-line-soft); border-radius: var(--jy-radius-sm); background: var(--jy-band); overflow: hidden; }
+.jy-thinking-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; background: none; color: var(--jy-accent-ink); font-size: 11.5px; text-align: left; }
+.jy-thinking-head:hover { background: var(--jy-accent-soft); }
+.jy-thinking-head:focus-visible { outline: 2px solid var(--jy-focus); outline-offset: -2px; }
+.jy-thinking-label { font-weight: 600; }
+.jy-thinking-count { color: var(--jy-muted); font-variant-numeric: tabular-nums; }
+/* Pushes the caret to the right edge without a spacer element. */
+.jy-thinking-caret { margin-left: auto; border: 4px solid transparent; border-top-color: currentColor; border-bottom: 0; transition: transform var(--jy-hover); }
+.jy-thinking-head[aria-expanded="true"] .jy-thinking-caret { transform: rotate(180deg); }
+/* A slow breath while thinking, a still dot once it is a record. */
+.jy-thinking-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--jy-muted-soft); flex: none; }
+.jy-thinking[data-live="yes"] .jy-thinking-pulse { background: var(--jy-accent); animation: jy-thinking-breathe 1.6s ease-in-out infinite; }
+@keyframes jy-thinking-breathe { 0%, 100% { opacity: .3; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
+.jy-thinking-body { max-height: 168px; overflow-y: auto; scrollbar-width: thin; border-top: 1px solid var(--jy-band-line); padding: 8px 10px; }
+.jy-thinking-body pre { margin: 0; color: var(--jy-muted); font: 11.5px/1.85 "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The tail is what moves, so the top edge fades instead of ending on a hard cut mid-sentence. */
+.jy-thinking[data-live="yes"] .jy-thinking-body { mask-image: linear-gradient(#0000, #000 22px); -webkit-mask-image: linear-gradient(#0000, #000 22px); }
 .jy-progress span { display: block; height: 100%; width: 100%; background: var(--jy-accent); transform: scaleX(0); transform-origin: 0 50%; transition: transform 240ms linear; }
 .jy-launch { display: flex; gap: 10px; flex-wrap: wrap; }
 .jy-launch .jy-button { min-height: 38px; padding: 0 20px; font-size: 13px; }
@@ -255,6 +274,10 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-speaker-preview { padding: 4px 8px; border-radius: 3px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jy-log-entry pre { background: var(--jy-accent-soft); padding: 12px; border-radius: 4px; max-height: 280px; overflow: auto; font: 11px/1.8 Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .jy-log-full-response { margin: 10px 0; }
+/* Thinking is prose, not a payload: it gets reading line-height and the body typeface rather than
+   the monospace treatment the raw return needs. */
+.jy-log-reasoning > pre { max-height: 340px; background: var(--jy-band); color: var(--jy-text); font: 12px/1.9 "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif; }
+.jy-log-reasoning > summary { color: var(--jy-accent-ink); }
 .jy-log-full-response > pre { max-height: 430px; }
 .jy-log-copy-button { margin-top: 10px; }
 .jy-log-privacy-warning { color: var(--jy-focus); }
@@ -262,6 +285,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 @media (prefers-reduced-motion: reduce) {
   .jy-dialog, .jy-overlay, .jy-page:not([hidden]) { animation-duration: 1ms; }
   .jy-progress span, .jy-switch span::after { transition-duration: 1ms; }
+  .jy-thinking-pulse, .jy-thinking[data-live="yes"] .jy-thinking-pulse { animation: none; }
 }
 .jy-sr-only { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip-path: inset(50%) !important; white-space: nowrap !important; }
 @media (max-width: 900px) {

@@ -14,6 +14,12 @@ import {
 } from '../core.js';
 import { emphasisContour } from '../palette.js';
 import { compileNativeRegex, makeBuiltinReadingProfile, syncNativeRegex } from '../processing.js';
+import {
+  clearDiagnostics,
+  formatDiagnosticReport,
+  formatFullDiagnosticReport,
+  readDiagnostics,
+} from '../diagnostics.js';
 import { __testing } from '../index.js';
 
 // A headless stand-in for the parts of the host these paths actually touch.
@@ -510,4 +516,56 @@ test('the channel window is a total timeout by default and an idle timeout once 
     globalThis.setTimeout = realSetTimeout;
     globalThis.clearTimeout = realClearTimeout;
   }
+});
+
+// The extension imports diagnostics.js with a cache-busting query, so a test that imports it plainly
+// gets a second module instance with its own in-memory log. Browser storage is the one thing both
+// copies share, which is also the path the real panel reads through.
+function sharedLogStorage() {
+  const store = new Map();
+  return {
+    getItem: key => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, String(value)); },
+    removeItem: key => { store.delete(key); },
+  };
+}
+
+test('a batch keeps its thinking where the reader can find it afterwards', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  const previousStorage = globalThis.localStorage;
+  globalThis.localStorage = sharedLogStorage();
+  t.after(() => {
+    globalThis.SillyTavern = previousHost;
+    globalThis.fetch = previousFetch;
+    if (previousStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousStorage;
+  });
+  const message = { mes: '<story_scene>\n雨が降っている。\n</story_scene>', swipe_id: 0 };
+  mockHost([message]);
+  __testing.configureForTest({ settings: streamingSettings, initialized: true });
+  clearDiagnostics();
+  const payload = JSON.stringify([{ id: 1, text: '下雨了。' }]);
+  globalThis.fetch = async () => sseResponse([
+    `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '「雨が降っている」是旁白，' } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '保持叙述距离，不要加语气。' } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: payload } }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+
+  // Earlier tests in this file already logged responses of their own, so take the newest rather
+  // than the first.
+  const response = readDiagnostics().filter(entry => entry.scope === 'translation.raw-response').at(-1);
+  assert.ok(response, '没有记下返回');
+  assert.equal(response.reasoning, '「雨が降っている」是旁白，保持叙述距离，不要加语气。');
+  assert.equal(response.details.reasoningCharacters, response.reasoning.length);
+  // The safe summary is what gets shown without asking; the thinking carries story text, so it
+  // belongs in the same tier as the request and the response, not in the summary.
+  assert.doesNotMatch(JSON.stringify(response.details), /叙述距离/);
+  // The full export is where a reader goes to read it.
+  const report = formatFullDiagnosticReport([response]);
+  assert.match(report, /副 API 的思考过程（\d+ 字）/);
+  assert.match(report, /保持叙述距离/);
+  assert.doesNotMatch(formatDiagnosticReport([response]), /保持叙述距离/);
 });
