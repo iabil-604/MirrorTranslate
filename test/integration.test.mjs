@@ -190,6 +190,51 @@ test('an SSE stream writes the floor back through the ordinary pipeline', async 
   assert.equal(message.extra[MESSAGE_META_KEY].complete, true);
 });
 
+test('reasoning deltas keep the stream alive without ever reaching the floor', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n雨が降っている。\n</story_scene>', swipe_id: 0 };
+  mockHost([message]);
+  __testing.configureForTest({ settings: streamingSettings, initialized: true });
+  const payload = JSON.stringify([{ id: 1, text: '下雨了。' }]);
+  // What a reasoning model actually sends: frame after frame of reasoning_content with content
+  // still null, then the answer. Reading only `content` made every one of these invisible, so a
+  // model that thought for ten minutes was indistinguishable from a hung request.
+  globalThis.fetch = async () => sseResponse([
+    `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '先确认这段是旁白。', content: null } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '译名无需统一。' } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: payload } }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ]);
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  assert.equal(result.segments, 1);
+  assert.match(message.mes, /下雨了。/);
+  // Thinking is not translation and must never land anywhere near the floor.
+  assert.doesNotMatch(message.mes, /旁白/);
+  assert.doesNotMatch(message.mes, /译名无需统一/);
+});
+
+test('a batch that spends its whole budget thinking is parsed from the reasoning rather than failed', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n雨が降っている。\n</story_scene>', swipe_id: 0 };
+  mockHost([message]);
+  __testing.configureForTest({ settings: streamingSettings, initialized: true });
+  // content never arrives at all: the answer exists only inside the thinking, which is where an
+  // overspent max_tokens leaves it. The whole-request path has always recovered this shape.
+  globalThis.fetch = async () => sseResponse([
+    `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '先试一版：' } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: JSON.stringify({ translations: [{ id: 1, text: '下雨了。' }] }) } }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ]);
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  assert.match(message.mes, /下雨了。/);
+});
+
 test('a relay that ignores the stream flag still lands the batch instead of writing nothing', async t => {
   const previousHost = globalThis.SillyTavern;
   const previousFetch = globalThis.fetch;

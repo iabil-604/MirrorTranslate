@@ -44,13 +44,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.15.3';
+} from './core.js?v=0.15.4';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.15.3';
+} from './processing.js?v=0.15.4';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -66,8 +66,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.15.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.3';
+} from './prompts.js?v=0.15.4';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.4';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -81,15 +81,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.15.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.15.3';
+} from './palette.js?v=0.15.4';
+import { sampleThemeBackground } from './theme-probe.js?v=0.15.4';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.15.3';
+} from './diagnostics.js?v=0.15.4';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -1538,7 +1538,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
 // Streaming beta: same request content as the one-shot path, but the SSE deltas are folded into
 // the floor as completed JSON items arrive. The final pass reuses the ordinary write pipeline, so
 // the finished floor is byte-identical to a non-streaming run.
-async function streamTranslationBatch(messages, settings, signal, onDelta = null) {
+async function streamTranslationBatch(messages, settings, signal, onDelta = null, onThinking = null) {
   const channel = getActiveChannel(settings);
   const payload = { ...createIndependentRequest(settings, messages), stream: true };
   // The whole-request path has always honoured the channel timeout. Without the same wrapper a
@@ -1558,6 +1558,7 @@ async function streamTranslationBatch(messages, settings, signal, onDelta = null
     const decoder = new TextDecoder();
     let buffer = '';
     let text = '';
+    let reasoning = '';
     let frames = 0;
     let whole = '';
     while (true) {
@@ -1581,6 +1582,15 @@ async function streamTranslationBatch(messages, settings, signal, onDelta = null
           const chunk = JSON.parse(body);
           const choice = chunk.choices?.[0];
           const delta = choice?.delta?.content ?? choice?.text ?? '';
+          // A reasoning model spends its first minutes emitting reasoning_content and nothing else.
+          // Reading only content left the panel frozen for all of it: every frame proved the request
+          // was alive, and nothing on this side could tell. The thinking never becomes translation —
+          // it is only evidence that the model is still working.
+          const thought = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning ?? '';
+          if (thought) {
+            reasoning += thought;
+            if (onThinking) onThinking(reasoning.length);
+          }
           if (delta) {
             text += delta;
             if (onDelta) onDelta(text);
@@ -1603,7 +1613,19 @@ async function streamTranslationBatch(messages, settings, signal, onDelta = null
       }
       throw new Error('副 API 没有返回 SSE 流，也无法按整包解析（可能是反代忽略了 stream 参数）。');
     }
-    if (!text.trim()) throw new Error('流式连接建立成功，但没有收到任何正文增量。');
+    if (!text.trim()) {
+      // The whole-request path already unwraps a {content, reasoning} envelope and falls back to the
+      // reasoning field, which is where a model that overspent its budget on thinking leaves the only
+      // copy of its answer. Hand the parser the same shape instead of failing the batch outright.
+      if (reasoning.trim()) {
+        recordDiagnostic('warn', 'translation.stream-thinking-only', '副 API 本批只返回了思考内容，改按思考文本解析。', {
+          reasoningCharacters: reasoning.length,
+          frames,
+        });
+        return { content: '', reasoning };
+      }
+      throw new Error('流式连接建立成功，但没有收到任何正文增量。');
+    }
     return text;
   });
 }
@@ -1696,6 +1718,18 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     // Chunk-level progress: pull completed JSON items out of the partial stream text so the
     // floor fills in while the model is still generating. The end-of-batch pass stays
     // authoritative, so a messy partial read can never corrupt the final floor.
+    // Thinking is not progress on the floor, so it gets its own line rather than moving the bar.
+    // Without it a reasoning model looks identical to a hung request for as long as it thinks.
+    let lastThinking = 0;
+    const reportThinking = characters => {
+      const now = Date.now();
+      if (now - lastThinking < 1000) return;
+      lastThinking = now;
+      updateTask({
+        status: 'running',
+        message: `副 API 正在思考（已 ${characters} 字），还没有开始输出译文。`,
+      });
+    };
     let lastDelta = 0;
     const foldStreamedItems = pending => accumulated => {
       const now = Date.now();
@@ -1729,7 +1763,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       const messages = buildTranslationMessages(pending, settings, packet, phase, { roster });
       let raw = '';
       try {
-        raw = await streamTranslationBatch(messages, settings, controller.signal, foldStreamedItems(pending));
+        raw = await streamTranslationBatch(messages, settings, controller.signal, foldStreamedItems(pending), reportThinking);
       } catch (error) {
         if (controller.signal.aborted || isAbortError(error)) throw error;
         recordDiagnostic('warn', 'translation.stream-fallback', '流式请求中断，自动改用整包请求重试本批。', {
