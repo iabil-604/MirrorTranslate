@@ -48,9 +48,9 @@ http.createServer((request, response) => {
       clearInterval(tick);
       const payload = JSON.stringify({
         translations: [
-          { id: 1, text: '「我一个人大概搞不懂医院的手续怎么办。」', speaker: '陆玲', emotion: 'fear', intensity: 1 },
+          { id: 1, text: '「我一个人大概搞不懂医院的手续怎么办。」', speaker: '星野爱', emotion: 'fear', intensity: 1 },
           { id: 2, text: '她低下了头。' },
-          { id: 3, text: '「……一个人待着，就会像刚才那样想吐。」', speaker: '陆玲', emotion: 'whisper', intensity: 2 },
+          { id: 3, text: '「……一个人待着，就会像刚才那样想吐。」', speaker: '源律', emotion: 'whisper', intensity: 2 },
         ],
       });
       frame({ content: payload });

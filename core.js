@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.15.5';
+} from './prompts.js?v=0.15.6';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.15.5';
+export const APP_VERSION = '0.15.6';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -74,6 +74,11 @@ export const DEFAULT_COLORING = Object.freeze({
   minContrast: 4.5,
   // 0 keeps a character's own hair colour faithfully, 1 paints everyone at full strength.
   vividness: 0.65,
+  // A speaker the model named but the palette has never heard of still gets a colour, derived from
+  // the name the way a black-haired character already is. Without this the whole feature silently
+  // does nothing until every character has been registered by hand, which is indistinguishable from
+  // "翻译把对话的颜色弄掉了".
+  autoSpeakers: true,
   // The size contour inside one spoken line, computed from punctuation and the emotion label that
   // already came back. It costs the secondary model nothing, so it rides with 情绪排版.
   rhythm: true,
@@ -346,6 +351,7 @@ export function normalizeColoring(value) {
     emotions: Boolean(source.emotions),
     minContrast: clampNumber(source.minContrast, 1.5, 21, DEFAULT_COLORING.minContrast),
     vividness: clampNumber(source.vividness, 0, 1, DEFAULT_COLORING.vividness),
+    autoSpeakers: source.autoSpeakers === undefined ? DEFAULT_COLORING.autoSpeakers : Boolean(source.autoSpeakers),
     rhythm: source.rhythm === undefined ? DEFAULT_COLORING.rhythm : Boolean(source.rhythm),
     band: normalizeColorBand(source.band),
     bandProbedAt: typeof source.bandProbedAt === 'string' ? source.bandProbedAt.slice(0, 40) : '',

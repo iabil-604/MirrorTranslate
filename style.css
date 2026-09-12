@@ -267,6 +267,15 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-band-report { margin: 10px 0; }
 .jy-band-swatches { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .jy-band-swatch { padding: 4px 8px; border: 1px solid var(--jy-line); border-radius: 3px; font: 10px/1.6 Consolas,monospace; color: var(--jy-text); mix-blend-mode: normal; }
+/* Who the model reported, and what each name actually got. The swatch is the real colour the floor
+   was painted with, so a name that reads grey here is grey in the chat too. */
+.jy-speaker-report { margin: 8px 0; }
+.jy-speaker-report .jy-muted { margin-top: 4px; }
+.jy-speaker-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.jy-speaker-chip { padding: 3px 9px; border: 1px solid var(--jy-line); border-radius: 999px; background: var(--jy-band); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* Unpainted names are the ones the reader came here about: dashed and muted, so they read as the
+   exception rather than as one more chip. */
+.jy-speaker-chip[data-painted="no"] { border-style: dashed; border-color: var(--jy-line-strong); color: var(--jy-muted); }
 .jy-speaker-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .jy-speaker-row { display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,1.3fr) 84px 46px minmax(0,1fr) auto; align-items: center; gap: 6px; }
 .jy-speaker-row input[type="color"] { padding: 0; height: 30px; cursor: pointer; }

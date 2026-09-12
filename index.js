@@ -45,13 +45,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.15.5';
+} from './core.js?v=0.15.6';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.15.5';
+} from './processing.js?v=0.15.6';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -67,8 +67,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.15.5';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.5';
+} from './prompts.js?v=0.15.6';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.6';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -82,15 +82,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.15.5';
-import { sampleThemeBackground } from './theme-probe.js?v=0.15.5';
+} from './palette.js?v=0.15.6';
+import { sampleThemeBackground } from './theme-probe.js?v=0.15.6';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.15.5';
+} from './diagnostics.js?v=0.15.6';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -129,6 +129,10 @@ const runtime = {
   thinking: { text: '', characters: 0, live: false, batch: 0, revision: 0 },
   // null means "follow the default for this phase"; a click pins it either way until the next batch.
   thinkingOpen: null,
+  // Who the model reported on the last floor, and whether the palette could paint each of them.
+  speakerCoverage: null,
+  // Every auto-coloured name seen this session, so the generated stylesheet covers them too.
+  autoSpeakerNames: new Set(),
   subscribers: new Set(),
   diagnosticSubscribers: new Set(),
   update: { status: 'idle', installType: null, details: null },
@@ -251,12 +255,13 @@ const CONTROL_CENTER_MARKUP = `
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
 <details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
 <p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。</p>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringRhythm">情绪起伏（句内轻重变化）</label></div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringRhythm">情绪起伏（句内轻重变化）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringAutoSpeakers">名单外的说话人按名字自动取色</label></div>
 <div class="jy-form-grid"><label><span class="jy-label">对比度目标</span><input type="number" data-jy-field="coloringContrast" min="1.5" max="12" step="0.1"></label><label><span class="jy-label">彩度 <span data-jy-vividness-value></span></span><input type="range" data-jy-field="coloringVividness" min="0" max="100" step="5"></label></div>
 <div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="probe-theme">读取当前主题与壁纸</button><button type="button" class="jy-button" data-jy-action="add-speaker">添加角色</button></div>
 <div class="jy-band-report" data-jy-band-report></div>
+<div class="jy-speaker-report" data-jy-speaker-report hidden></div>
 <div class="jy-speaker-list" data-jy-speaker-list></div>
-<p class="jy-muted">黑、白、银不参与着色：这三种是主题自己的文字颜色，认不出说话人。发色是黑白银的角色会按名字分到一个固定色相，同一个名字永远是同一个颜色。改主题或换壁纸后重新点一次「读取当前主题」即可，已翻译楼层重翻或补译后会用新颜色。</p>
+<p class="jy-muted">名单外的说话人默认按名字哈希自动取色，同一个名字在任何设备任何聊天里都是同一个颜色；关掉这项，没登记的人就只有情绪排版、没有颜色。<br>黑、白、银不参与着色：这三种是主题自己的文字颜色，认不出说话人。发色是黑白银的角色会按名字分到一个固定色相，同一个名字永远是同一个颜色。改主题或换壁纸后重新点一次「读取当前主题」即可，已翻译楼层重翻或补译后会用新颜色。</p>
 </details>
 <details class="jy-advanced"><summary>内置美化</summary><div class="jy-processing-toolbar"><select aria-label="内置美化" data-jy-reading-style><option value="cute">可爱风</option><option value="minimal">极简风</option><option value="fold">原文折叠</option></select><button type="button" class="jy-button" data-jy-action="builtin-processing">使用</button></div></details>
 <pre class="jy-inspection" data-jy-tag-inspection hidden></pre>
@@ -881,11 +886,27 @@ function speakerRoster(settings = runtime.settings) {
 
 // Hair colours cluster: two blondes in one cast would otherwise get near-identical speech. Hues are
 // pushed apart once, in palette order, so adding a character never reshuffles the existing ones.
-function resolvedSpeakerColors(settings = runtime.settings) {
+/**
+ * Every speaker this floor can paint, registered or not.
+ *
+ * `extraNames` are the names the model actually returned. A name the palette has never heard of used
+ * to resolve to nothing, which stripped the colour out and left the line with emotion typography
+ * only — the feature looked broken until every character had been entered by hand. Those names now
+ * take the same name-derived hue a black-haired character already gets, so it is stable across
+ * chats and devices, and registering a real hair colour later simply overrides it.
+ *
+ * Registered speakers keep their own hue spread; unregistered ones are not folded into it, because
+ * a name arriving mid-chat must not repaint everyone who was already on screen.
+ */
+function resolvedSpeakerColors(settings = runtime.settings, extraNames = []) {
   const palette = speakerPaletteFor(settings);
   const coloring = activeColoring(settings);
   const band = coloring.band;
-  if (!band || !palette.length) return new Map();
+  if (!band) return new Map();
+  const auto = coloring.autoSpeakers !== false
+    ? [...new Set(extraNames.map(name => String(name ?? '').trim()).filter(Boolean))]
+    : [];
+  if (!palette.length && !auto.length) return new Map();
   const hues = palette.map(speaker => {
     const rgb = speaker.source ? parseCssColor(speaker.source) : null;
     const oklch = rgb ? srgbToOklch(rgb) : null;
@@ -907,6 +928,11 @@ function resolvedSpeakerColors(settings = runtime.settings) {
     resolved.set(speaker.name, entry);
     for (const alias of speaker.aliases) if (!resolved.has(alias)) resolved.set(alias, entry);
   });
+  for (const name of auto) {
+    if (resolved.has(name)) continue;
+    const adapted = adaptColorToBand('', band, { name, vividness: coloring.vividness });
+    resolved.set(name, { name, base: adapted.hex, source: '', derived: true, unregistered: true });
+  }
   return resolved;
 }
 
@@ -926,7 +952,11 @@ function buildSegmentStyler(settings, annotations) {
   const coloring = activeColoring(settings);
   const band = coloring.band;
   if (!band || (!coloring.speakers && !coloring.emotions) || !(annotations instanceof Map) || !annotations.size) return null;
-  const speakers = coloring.speakers ? resolvedSpeakerColors(settings) : new Map();
+  const named = [...annotations.values()].map(mark => mark?.speaker).filter(Boolean);
+  const speakers = coloring.speakers ? resolvedSpeakerColors(settings, named) : new Map();
+  // Say out loud who the model reported and who the palette recognised. A speaker that resolves to
+  // nothing costs the line its colour, and with nothing written down that is invisible.
+  reportSpeakerCoverage(named, speakers, coloring);
   return ids => {
     // A multi-line unit only gets a colour when the whole unit agrees; mixed speakers in one block
     // cannot be painted separately without splitting the block, so it stays neutral.
@@ -988,6 +1018,52 @@ function buildSegmentStyler(settings, annotations) {
   };
 }
 
+/**
+ * Records which reported speakers the palette could actually paint.
+ *
+ * The three interesting cases all look the same on screen — 说话人着色 switched off, a name the
+ * palette has never seen, auto-colouring switched off — and all three read as the dialogue having
+ * lost its colour. Writing them down is what turns that into something a reader can act on.
+ */
+function reportSpeakerCoverage(named, speakers, coloring) {
+  const counts = new Map();
+  for (const name of named) counts.set(name, (counts.get(name) ?? 0) + 1);
+  if (!counts.size) {
+    runtime.speakerCoverage = null;
+    return;
+  }
+  const registered = new Set(speakerPaletteFor().flatMap(item => [item.name, ...item.aliases]));
+  const coverage = {
+    reported: [...counts].map(([name, segments]) => ({
+      name,
+      segments,
+      registered: registered.has(name),
+      painted: Boolean(coloring.speakers && speakers.get(name)),
+    })),
+    speakersOff: !coloring.speakers,
+    autoOff: coloring.autoSpeakers === false,
+  };
+  runtime.speakerCoverage = coverage;
+  let discovered = false;
+  for (const item of coverage.reported) {
+    if (!item.painted || item.registered || runtime.autoSpeakerNames.has(item.name)) continue;
+    runtime.autoSpeakerNames.add(item.name);
+    discovered = true;
+  }
+  // A name first seen on this floor needs its rule before the floor is painted, or the class-based
+  // fallback would be the one thing missing exactly when it is needed.
+  if (discovered) syncSpeakerStylesheet();
+  const unpainted = coverage.reported.filter(item => !item.painted);
+  if (!unpainted.length) return;
+  recordDiagnostic('warn', 'coloring.speaker-unpainted', coverage.speakersOff
+    ? '副模型报出了说话人，但「说话人着色」没有勾选，本楼只套了情绪排版。'
+    : '副模型报出的说话人没有对应颜色，这几段只套了情绪排版。', {
+    unpainted: unpainted.map(item => `${item.name}（${item.segments} 段）`),
+    registeredPalette: [...registered],
+    autoSpeakers: coloring.autoSpeakers !== false,
+  });
+}
+
 // Speaker names are free text and often CJK; a short stable hash keeps the class name predictable
 // and safe to write into both markup and a stylesheet selector.
 function speakerSlug(name) {
@@ -1012,7 +1088,9 @@ function syncSpeakerStylesheet(settings = runtime.settings) {
   if (typeof document === 'undefined') return;
   const existing = document.getElementById(SPEAKER_STYLE_ID);
   const coloring = activeColoring(settings);
-  const resolved = coloring.speakers && coloring.band ? resolvedSpeakerColors(settings) : new Map();
+  const resolved = coloring.speakers && coloring.band
+    ? resolvedSpeakerColors(settings, [...runtime.autoSpeakerNames])
+    : new Map();
   if (!resolved.size) {
     existing?.remove();
     return;
@@ -2470,9 +2548,11 @@ function collectColoringFields(root, current) {
   const contrast = root.querySelector('[data-jy-field="coloringContrast"]');
   const vividness = root.querySelector('[data-jy-field="coloringVividness"]');
   const rhythm = root.querySelector('[data-jy-field="coloringRhythm"]');
+  const autoSpeakers = root.querySelector('[data-jy-field="coloringAutoSpeakers"]');
   if (speakers) coloring.speakers = speakers.checked;
   if (emotions) coloring.emotions = emotions.checked;
   if (rhythm) coloring.rhythm = rhythm.checked;
+  if (autoSpeakers) coloring.autoSpeakers = autoSpeakers.checked;
   if (contrast) coloring.minContrast = Number(contrast.value);
   if (vividness) coloring.vividness = Number(vividness.value) / 100;
   if (runtime.probedBand) {
@@ -2642,12 +2722,86 @@ function syncColoringFields(root, settings = runtime.settings) {
   setField(root, 'coloringSpeakers', coloring.speakers);
   setField(root, 'coloringEmotions', coloring.emotions);
   setField(root, 'coloringRhythm', coloring.rhythm);
+  setField(root, 'coloringAutoSpeakers', coloring.autoSpeakers);
   setField(root, 'coloringContrast', coloring.minContrast);
   setField(root, 'coloringVividness', Math.round(coloring.vividness * 100));
   const value = root.querySelector('[data-jy-vividness-value]');
   if (value) value.textContent = `${Math.round(coloring.vividness * 100)}%`;
   renderBandReport(root, settings);
+  renderSpeakerReport(root, settings, true);
   renderSpeakerList(root, settings);
+}
+
+/**
+ * Who the last translated floor reported, and what happened to each of them.
+ *
+ * This is the answer to "对话怎么没颜色". Three different causes produce the identical grey line —
+ * 说话人着色 off, the name absent from the palette, auto-colouring off — and none of them used to
+ * say anything. Naming each one, with the swatch it actually got, turns the guesswork into a click.
+ */
+// Solving a colour per speaker is not free, and the task channel ticks several times a second while
+// a floor streams. The report only needs redrawing when the coverage itself changed.
+let renderedCoverage = null;
+
+function renderSpeakerReport(root, settings = runtime.settings, force = false) {
+  const target = root.querySelector('[data-jy-speaker-report]');
+  if (!target) return;
+  const coverage = runtime.speakerCoverage;
+  if (!force && coverage === renderedCoverage) return;
+  renderedCoverage = coverage;
+  target.replaceChildren();
+  target.hidden = !coverage?.reported?.length;
+  if (target.hidden) return;
+  const doc = target.ownerDocument;
+  const band = runtime.probedBand ?? activeColoring(settings).band;
+  const resolved = band ? resolvedSpeakerColors(settings, coverage.reported.map(item => item.name)) : new Map();
+
+  const head = doc.createElement('p');
+  head.className = 'jy-muted';
+  head.textContent = '上一楼副模型报出的说话人：';
+  target.appendChild(head);
+
+  const list = doc.createElement('div');
+  list.className = 'jy-speaker-chips';
+  for (const item of coverage.reported) {
+    const chip = doc.createElement('span');
+    chip.className = 'jy-speaker-chip';
+    chip.dataset.painted = item.painted ? 'yes' : 'no';
+    const entry = resolved.get(item.name);
+    if (item.painted && entry) chip.style.color = entry.base;
+    const note = item.registered ? '名单内' : (item.painted ? '自动取色' : '未上色');
+    chip.textContent = `${item.name} · ${item.segments} 段 · ${note}`;
+    list.appendChild(chip);
+  }
+  target.appendChild(list);
+
+  const unpainted = coverage.reported.filter(item => !item.painted);
+  const unregistered = coverage.reported.filter(item => !item.registered);
+  if (unpainted.length) {
+    const why = doc.createElement('p');
+    why.className = 'jy-muted';
+    why.textContent = coverage.speakersOff
+      ? '这些段只套了情绪排版，没有颜色：「说话人着色」没有勾选。'
+      : coverage.autoOff
+        ? '这些段只套了情绪排版，没有颜色：名字不在名单里，而「名单外自动取色」是关的。'
+        : '这些段只套了情绪排版，没有颜色。先点一次「读取当前主题」再试。';
+    target.appendChild(why);
+  }
+  if (unregistered.length) {
+    const tools = doc.createElement('div');
+    tools.className = 'jy-processing-toolbar';
+    const add = doc.createElement('button');
+    add.type = 'button';
+    add.className = 'jy-button';
+    add.dataset.jyAction = 'adopt-speakers';
+    add.textContent = `把这 ${unregistered.length} 个名字加进名单`;
+    tools.appendChild(add);
+    target.appendChild(tools);
+    const hint = doc.createElement('p');
+    hint.className = 'jy-muted';
+    hint.textContent = '加进名单后可以填上真实发色或瞳色，颜色会从自动取色换成按发色取色；不填就沿用现在这个。';
+    target.appendChild(hint);
+  }
 }
 
 async function runThemeProbe(root) {
@@ -2774,6 +2928,7 @@ function updateTaskUi(root, task) {
   const progress = root.querySelector('[data-jy-progress]');
   if (progress) progress.style.transform = `scaleX(${Math.max(0, Math.min(1, (Number(task.progress) || 0) / 100))})`;
   renderThinking(root);
+  renderSpeakerReport(root);
 }
 
 /**
@@ -3166,6 +3321,22 @@ function createControlCenter(rootDocument = document) {
         selected.processingProfiles = selected.processingProfiles.filter(item => item.id !== removed);
         await persistProcessing(root, selected);
         toast('success', '正文方案已删除。');
+      } else if (action === 'adopt-speakers') {
+        // Every reported name the palette has not got yet, with no colour of its own. The hue each
+        // one already has is name-derived, so nothing on screen moves until a real hair colour is
+        // typed in — registering is about being able to edit them, not about changing them now.
+        const next = collectSettings(root);
+        const characterKey = worldInfoCharacterKey();
+        const existing = normalizeSpeakerList(next.speakerPalette?.[characterKey]);
+        const known = new Set(existing.flatMap(item => [item.name, ...item.aliases]));
+        const added = (runtime.speakerCoverage?.reported ?? [])
+          .filter(item => !known.has(item.name))
+          .map(item => ({ name: item.name, aliases: [], source: '', from: 'hair' }));
+        if (!added.length) throw new Error('报出的说话人都已经在名单里了。');
+        next.speakerPalette = { ...(next.speakerPalette || {}), [characterKey]: [...existing, ...added] };
+        saveSettings(next);
+        syncColoringFields(root, runtime.settings);
+        toast('success', `已加入 ${added.length} 个说话人，可以填上发色。`);
       } else if (action === 'toggle-thinking') {
         runtime.thinkingOpen = !(runtime.thinkingOpen ?? runtime.thinking.live);
         renderThinking(root);
@@ -3455,7 +3626,7 @@ function createControlCenter(rootDocument = document) {
       saveSettings(collectSettings(root));
       syncFields(root, runtime.settings);
     }
-    if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringContrast"]')) {
+    if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringAutoSpeakers"], [data-jy-field="coloringContrast"]')) {
       saveSettings(collectSettings(root));
       syncColoringFields(root, runtime.settings);
     }

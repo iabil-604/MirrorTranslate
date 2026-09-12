@@ -569,3 +569,125 @@ test('a batch keeps its thinking where the reader can find it afterwards', async
   assert.match(report, /保持叙述距离/);
   assert.doesNotMatch(formatDiagnosticReport([response]), /保持叙述距离/);
 });
+
+const speakerColoring = {
+  ...streamingSettings,
+  coloring: {
+    speakers: true,
+    emotions: true,
+    rhythm: false,
+    minContrast: 4.5,
+    vividness: 0.65,
+    autoSpeakers: true,
+    band: {
+      direction: 'light',
+      luminance: 0.42,
+      chromaMax: 0.13,
+      minContrast: 4.5,
+      lightness: 0.72,
+      backgrounds: [{ r: 0.106, g: 0.106, b: 0.133, a: 1 }],
+    },
+    bandProbedAt: '2026-09-12 18:00:00',
+  },
+};
+
+function spokenFloor() {
+  return { mes: '<story_scene>\n「あ、律？」\n\n「おっそーい！」\n</story_scene>', swipe_id: 0 };
+}
+
+function spokenReply(speaker) {
+  return sseResponse([
+    `data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ translations: [
+      { id: 1, text: '「啊，律？」', speaker, emotion: 'happy', intensity: 1 },
+      { id: 2, text: '「好慢！」', speaker, emotion: 'angry', intensity: 1 },
+    ] }) } }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ]);
+}
+
+test('a speaker the palette has never heard of is still painted, not silently left grey', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = spokenFloor();
+  mockHost([message]);
+  // No palette at all: this is the state every user is in before registering anyone, and it used to
+  // strip the colour off every line while leaving the emotion weight on, which reads as 掉色.
+  __testing.configureForTest({ settings: { ...speakerColoring, speakerPalette: {} }, initialized: true });
+  globalThis.fetch = async () => spokenReply('星野爱');
+  await __testing.startTranslation(0, { quiet: true, force: true });
+
+  assert.match(message.mes, /color:#[0-9a-f]{6} !important/, '名单外的说话人也要有颜色');
+  assert.match(message.mes, /class="jy-spk jy-spk-[a-z0-9]+ jy-emo-happy/);
+  assert.match(message.mes, /title="星野爱 · 喜悦"/);
+  // The main model still reads the original and nothing else.
+  const prompt = [{ mes: message.mes, extra: message.extra }];
+  interceptGenerationChat(prompt);
+  assert.equal(prompt[0].mes, '<story_scene>\n「あ、律？」\n\n「おっそーい！」\n</story_scene>');
+});
+
+test('the same name gets the same colour every time, and two names get different ones', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const paint = async speaker => {
+    const message = spokenFloor();
+    mockHost([message]);
+    __testing.configureForTest({ settings: { ...speakerColoring, speakerPalette: {} }, initialized: true });
+    globalThis.fetch = async () => spokenReply(speaker);
+    await __testing.startTranslation(0, { quiet: true, force: true });
+    return message.mes.match(/color:(#[0-9a-f]{6}) !important/)[1];
+  };
+  assert.equal(await paint('星野爱'), await paint('星野爱'), '同一个名字必须永远同一个颜色');
+  assert.notEqual(await paint('星野爱'), await paint('源律'));
+});
+
+test('turning auto-colouring off leaves the emotion but says why the colour is gone', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  const previousStorage = globalThis.localStorage;
+  globalThis.localStorage = sharedLogStorage();
+  t.after(() => {
+    globalThis.SillyTavern = previousHost;
+    globalThis.fetch = previousFetch;
+    if (previousStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousStorage;
+  });
+  const message = spokenFloor();
+  mockHost([message]);
+  __testing.configureForTest({
+    settings: { ...speakerColoring, coloring: { ...speakerColoring.coloring, autoSpeakers: false }, speakerPalette: {} },
+    initialized: true,
+  });
+  globalThis.fetch = async () => spokenReply('星野爱');
+  await __testing.startTranslation(0, { quiet: true, force: true });
+
+  // Emotion typography stays; the colour does not. That combination is exactly what the bug report
+  // looked like, so it has to be written down rather than left to be guessed at.
+  assert.match(message.mes, /jy-emo-happy/);
+  assert.doesNotMatch(message.mes, /color:#[0-9a-f]{6} !important/);
+  const warned = readDiagnostics().filter(entry => entry.scope === 'coloring.speaker-unpainted').at(-1);
+  assert.ok(warned, '没有报出未上色的说话人');
+  assert.deepEqual(warned.details.unpainted, ['星野爱（2 段）']);
+  assert.equal(warned.details.autoSpeakers, false);
+});
+
+test('a registered hair colour overrides the name-derived one', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const paint = async palette => {
+    const message = spokenFloor();
+    mockHost([message]);
+    __testing.configureForTest({ settings: { ...speakerColoring, speakerPalette: palette }, initialized: true });
+    globalThis.fetch = async () => spokenReply('星野爱');
+    await __testing.startTranslation(0, { quiet: true, force: true });
+    return message.mes.match(/color:(#[0-9a-f]{6}) !important/)[1];
+  };
+  const auto = await paint({});
+  const registered = await paint({ 'sakurai.png': [{ name: '星野爱', aliases: [], source: '#8b5ad6', from: 'hair' }] });
+  assert.notEqual(auto, registered, '填了发色就该按发色走');
+  // An alias resolves to the same entry as the registered name.
+  const byAlias = await paint({ 'sakurai.png': [{ name: '爱', aliases: ['星野爱'], source: '#8b5ad6', from: 'hair' }] });
+  assert.equal(byAlias, registered);
+});
