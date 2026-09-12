@@ -42,6 +42,7 @@ import {
   parseTagNamesWithErrors,
   splitSpeechParts,
   describeSpeechShape,
+  liftSplitQuotes,
   parseStructuredTranslations,
   recoverStructuredTranslations,
   rebuildTaggedRegion,
@@ -1035,4 +1036,36 @@ test('speech is separated from the narration wrapped around it', () => {
   assert.equal(describeSpeechShape(['雨下得很大。']), 'narration');
   // A unit is judged whole: one spoken line beside one narrated line is a mixed unit.
   assert.equal(describeSpeechShape(['「走吧。」', '她站了起来。']), 'mixed');
+});
+
+test('a run styled across a quotation mark keeps both marks out of the spans', () => {
+  // The rhythm splits on punctuation, so it cuts straight through a quoted line. Both marks have to
+  // come back out, or SillyTavern's dialogue tag opens in one span and closes in the next.
+  const cut = liftSplitQuotes([
+    { text: '「副院长已经去叫了！', css: 'font-size:1.06em' },
+    { text: '他现在正从家里开车赶过来，', css: 'font-size:0.985em' },
+    { text: '再过十五分钟就——」', css: 'font-size:0.955em' },
+  ]);
+  assert.deepEqual(cut.map(piece => piece.text), [
+    '「', '副院长已经去叫了！', '他现在正从家里开车赶过来，', '再过十五分钟就——', '」',
+  ]);
+  assert.equal(cut[0].css, undefined);
+  assert.equal(cut.at(-1).css, undefined);
+  assert.equal(cut[1].css, 'font-size:1.06em');
+
+  // A quoted run that already fits inside one piece keeps its marks styled with it, so a run painted
+  // in the speaker's colour does not lose its quotes to the narration colour.
+  const whole = [{ text: '「啊，这样。」', css: 'color:#ff00aa' }, { text: '律嘟囔了一句。' }];
+  assert.equal(liftSplitQuotes(whole), whole);
+
+  // An unterminated mark has no partner to be split from, so it stays where it is.
+  const dangling = [{ text: '「说到一半', css: 'font-size:1.1em' }, { text: '就断了', css: '' }];
+  assert.equal(liftSplitQuotes(dangling), dangling);
+
+  // Nested marks are judged by their own pair: the inner 『』 sits whole in one piece and stays.
+  const nested = liftSplitQuotes([
+    { text: '「他说『随便』，', css: 'font-size:1.05em' },
+    { text: '然后就走了」', css: 'font-size:0.95em' },
+  ]);
+  assert.deepEqual(nested.map(piece => piece.text), ['「', '他说『随便』，', '然后就走了', '」']);
 });

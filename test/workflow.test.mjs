@@ -142,10 +142,10 @@ test('token-saving mode injects only the whitelist and caps recent context at tw
     characters: [{ name: '樱井', description: '旅行者。' }],
     substituteParams: value => value,
     chat: [
-      { is_user: false, name: '樱井', mes: '一楼层。' },
-      { is_user: false, name: '樱井', mes: '二楼层。' },
-      { is_user: false, name: '樱井', mes: '三楼层。' },
-      { is_user: false, name: '樱井', mes: '四楼层。' },
+      { is_user: false, name: '樱井', mes: '<story_scene>\n一楼层。\n</story_scene>' },
+      { is_user: false, name: '樱井', mes: '<story_scene>\n二楼层。\n</story_scene>' },
+      { is_user: false, name: '樱井', mes: '<story_scene>\n三楼层。\n</story_scene>' },
+      { is_user: false, name: '樱井', mes: '<story_scene>\n四楼层。\n</story_scene>' },
     ],
     async getWorldInfoPrompt() { throw new Error('不应在世界书扫描中出现'); },
   };
@@ -216,4 +216,55 @@ test('the annotation section restates the output shape, because §9 shows an id/
   const speakerOnly = buildTranslationMessages([{ id: 1, text: '雨' }], mergeSettings({ coloring: { speakers: true } }), {}, 'primary', {});
   const speakerShape = speakerOnly.find(message => message.content.includes('附加标注')).content.match(/\{"translations":\[[\s\S]*?\]\}/);
   assert.deepEqual(Object.keys(JSON.parse(speakerShape[0]).translations[0]), ['id', 'text', 'speaker']);
+});
+
+test('recent context quotes the extracted body and leaves the surrounding panels behind', async () => {
+  // A floor as the presets that prompted this actually build one: the prose is a small part of it,
+  // wrapped in reasoning, a status panel and a choice list, all of which used to travel as context.
+  const floor = [
+    '<story_driver>',
+    '【現在の物語の雰囲気】：宴の余韻。',
+    '[本文の文字数要件]: 5500文字以上',
+    '</story_driver>',
+    '<story_scene>',
+    '雨が降っている。',
+    '</story_scene>',
+    '<status>',
+    '💰持有金钱: 0',
+    '</status>',
+    '<selection>',
+    'A. 问问希尔达。',
+    '</selection>',
+  ].join('\n');
+  const context = {
+    name1: '玩家', name2: '樱井', characterId: null, groupId: null,
+    substituteParams: value => value,
+    chat: [
+      { is_user: false, name: '樱井', mes: floor },
+      { is_user: true, name: '玩家', mes: '我抱起艾莉丝。' },
+      { is_user: false, name: '樱井', mes: '<story_scene>\n風が冷たい。\n</story_scene>' },
+      { is_user: false, name: '樱井', mes: '（这一楼没有正文标签）' },
+      { is_user: false, name: '樱井', mes: '<story_scene>\n目标楼层。\n</story_scene>' },
+    ],
+  };
+  const settings = mergeSettings({
+    ...DEFAULT_SETTINGS,
+    includeWorldbook: false,
+    includeCharacterCard: false,
+    contextMessages: 6,
+  });
+  const packet = await collectTranslationContext({ context, messageId: 4 }, settings);
+
+  // The prose from every tagged floor is there.
+  assert.match(packet.recent, /雨が降っている。/);
+  assert.match(packet.recent, /風が冷たい。/);
+  // Everything wrapped around it is not.
+  assert.doesNotMatch(packet.recent, /story_driver/);
+  assert.doesNotMatch(packet.recent, /5500文字/);
+  assert.doesNotMatch(packet.recent, /持有金钱/);
+  assert.doesNotMatch(packet.recent, /问问希尔达/);
+  // A user's own message is prose already and carries no tags, so it travels whole.
+  assert.match(packet.recent, /我抱起艾莉丝。/);
+  // An AI floor with no body to quote contributes nothing rather than its panels.
+  assert.doesNotMatch(packet.recent, /这一楼没有正文标签/);
 });

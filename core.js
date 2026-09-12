@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.15.7';
+} from './prompts.js?v=0.15.9';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.15.7';
+export const APP_VERSION = '0.15.9';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -1833,6 +1833,74 @@ function segmentDecoration(styleFor, ids, texts = []) {
  * rhythm therefore still yields the exact translation for 补译 and the exact original for the main
  * model — the invariant is unchanged, there are just more markers inside the block.
  */
+/**
+ * Keeps a quotation mark in the same span as its partner.
+ *
+ * SillyTavern wraps 「…」 in its own dialogue tag as the floor renders. A tag that opens inside one
+ * span and closes inside the next is not nesting the parser can keep — it truncates the tag at the
+ * first `</span>`, so the opening clause takes the dialogue colour and everything after it falls
+ * back to narration. That is what one line of dialogue reading half yellow and half white is.
+ *
+ * A mark whose partner ended up in another piece is lifted out as bare text, which leaves both tags
+ * properly nested: `「<span>…</span><span>…</span>」`. Marks that already sit whole inside one piece
+ * are left alone, so a quoted run painted in the speaker's colour keeps its quotes painted too.
+ */
+export function liftSplitQuotes(pieces) {
+  const characters = [];
+  const owners = [];
+  pieces.forEach((piece, index) => {
+    for (const character of String(piece?.text ?? '')) {
+      characters.push(character);
+      owners.push(index);
+    }
+  });
+  const lift = new Set();
+  let closer = '';
+  let depth = 0;
+  let openedAt = -1;
+  characters.forEach((character, position) => {
+    if (!closer) {
+      const pair = SPEECH_OPENERS.get(character);
+      if (!pair) return;
+      closer = pair;
+      depth = 1;
+      openedAt = position;
+      return;
+    }
+    if (character === closer) {
+      depth -= 1;
+      if (depth) return;
+      if (owners[openedAt] !== owners[position]) {
+        lift.add(openedAt);
+        lift.add(position);
+      }
+      closer = '';
+      openedAt = -1;
+      return;
+    }
+    if (SPEECH_OPENERS.get(character) === closer) depth += 1;
+  });
+  if (!lift.size) return pieces;
+
+  const lifted = [];
+  let cursor = 0;
+  for (const piece of pieces) {
+    let buffer = '';
+    for (const character of String(piece?.text ?? '')) {
+      if (lift.has(cursor)) {
+        if (buffer) lifted.push({ ...piece, text: buffer });
+        buffer = '';
+        lifted.push({ text: character });
+      } else {
+        buffer += character;
+      }
+      cursor += 1;
+    }
+    if (buffer) lifted.push({ ...piece, text: buffer });
+  }
+  return lifted;
+}
+
 function styledBody(translation, styleBody) {
   if (typeof styleBody !== 'function') return translation;
   let pieces;
@@ -1849,6 +1917,7 @@ function styledBody(translation, styleBody) {
   // between `style="color:` and the rest still rejoins perfectly while nesting a tag inside another
   // tag's attribute. Anything with markup in it keeps its own structure.
   if (translation.includes('<')) return translation;
+  pieces = liftSplitQuotes(pieces);
   // Nothing to carry means nothing to wrap: a line split into runs that all came back bare is the
   // line itself, and wrapping it would only add markers for a reader to strip later.
   if (!pieces.some(piece => piece?.css || piece?.className)) return translation;

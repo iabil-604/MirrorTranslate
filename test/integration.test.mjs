@@ -395,6 +395,49 @@ test('speaker colour stops at the quote marks and never reaches narration', asyn
   );
 });
 
+test('a quotation mark never ends up in a different span from its partner', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = {
+    mes: '<story_scene>\n「副院長を呼び出しました！　今、自宅から車で向かってますから、あと十五分で——」\n</story_scene>',
+    swipe_id: 0,
+  };
+  mockHost([message]);
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
+  globalThis.fetch = async () => completionResponse([
+    {
+      id: 1,
+      text: '「副院长已经去叫了！他现在正从家里开车赶过来，再过十五分钟就——」',
+      speaker: '英梨梨',
+      emotion: 'shout',
+      intensity: 1,
+    },
+  ]);
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+
+  // The rhythm has to have actually split this line, or the rest of the test proves nothing.
+  assert.ok((message.mes.match(/font-size:/g) ?? []).length >= 2, '句内节奏没有切分，这条断言没有意义');
+
+  // Every span inside a quoted run must open and close inside it. SillyTavern wraps 「…」 in its own
+  // dialogue tag, and a `</span>` that arrives before its opener truncates that tag in place — the
+  // line then renders half in the dialogue colour and half in the narration colour.
+  for (const run of message.mes.match(/「[\s\S]*?」/g) ?? []) {
+    let depth = 0;
+    for (const tag of run.matchAll(/<\/?span\b/g)) {
+      depth += tag[0].startsWith('</') ? -1 : 1;
+      assert.ok(depth >= 0, `酒馆的对话标签会在这里被截断：${run}`);
+    }
+    assert.equal(depth, 0, `引号对里的 span 没有闭合：${run}`);
+  }
+
+  assert.equal(
+    stripGeneratedTranslationLines(message.mes),
+    '<story_scene>\n「副院長を呼び出しました！　今、自宅から車で向かってますから、あと十五分で——」\n</story_scene>',
+  );
+});
+
 test('colouring off writes exactly the floor the extension has always written', async t => {
   const previousHost = globalThis.SillyTavern;
   const previousFetch = globalThis.fetch;
