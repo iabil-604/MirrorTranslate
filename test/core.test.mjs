@@ -40,6 +40,8 @@ import {
   parsePreserveLineRulesWithErrors,
   parseTagNames,
   parseTagNamesWithErrors,
+  splitSpeechParts,
+  describeSpeechShape,
   parseStructuredTranslations,
   recoverStructuredTranslations,
   rebuildTaggedRegion,
@@ -1006,4 +1008,31 @@ test('carrying formatting is on by default and survives a settings round-trip', 
   assert.equal(mergeSettings({ carryFormatting: false }).carryFormatting, false);
   // An older saved settings object has no such key and must not lose the fix by omission.
   assert.equal(mergeSettings({ schemaVersion: 11 }).carryFormatting, true);
+});
+
+test('speech is separated from the narration wrapped around it', () => {
+  // The reported line: narration with one quoted clause inside it. Speaker colour has to stop at
+  // the quote marks, or the narrator ends up wearing whoever was quoted.
+  const mixed = splitSpeechParts('「啊，这样。」律嘟囔了一句，没等说明念完就挂了电话。');
+  assert.deepEqual(mixed.map(part => part.spoken), [true, false]);
+  assert.equal(mixed[0].text, '「啊，这样。」');
+  assert.equal(describeSpeechShape(['「啊，这样。」律嘟囔了一句，没等说明念完就挂了电话。']), 'mixed');
+
+  // Nested quotes belong to the outer run: 『』 inside 「」 is still one person speaking.
+  const nested = splitSpeechParts('「他说『随便』，然后就走了」');
+  assert.equal(nested.length, 1);
+  assert.equal(nested[0].spoken, true);
+
+  // An unterminated quote is narration, not a guess: painting a run that never closed would spill
+  // the colour over everything after it.
+  const dangling = splitSpeechParts('「说到一半就断了');
+  assert.deepEqual(dangling.map(part => part.spoken), [false]);
+  assert.equal(describeSpeechShape(['「说到一半就断了']), 'narration');
+
+  // Whitespace and stray punctuation around a quoted line do not make it a mixed line.
+  assert.equal(describeSpeechShape(['　「我知道了。」 ']), 'spoken');
+  assert.equal(describeSpeechShape(['“Fine,” ']), 'spoken');
+  assert.equal(describeSpeechShape(['雨下得很大。']), 'narration');
+  // A unit is judged whole: one spoken line beside one narrated line is a mixed unit.
+  assert.equal(describeSpeechShape(['「走吧。」', '她站了起来。']), 'mixed');
 });

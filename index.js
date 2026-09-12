@@ -15,6 +15,8 @@ import {
   normalizeColoring,
   normalizeSpeakerList,
   SPEAKER_CLASS,
+  describeSpeechShape,
+  splitSpeechParts,
   createGenerationGate,
   createIndependentRequest,
   clampInteger,
@@ -45,13 +47,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.15.6';
+} from './core.js?v=0.15.7';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.15.6';
+} from './processing.js?v=0.15.7';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -67,8 +69,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.15.6';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.6';
+} from './prompts.js?v=0.15.7';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.7';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -82,15 +84,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.15.6';
-import { sampleThemeBackground } from './theme-probe.js?v=0.15.6';
+} from './palette.js?v=0.15.7';
+import { sampleThemeBackground } from './theme-probe.js?v=0.15.7';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.15.6';
+} from './diagnostics.js?v=0.15.7';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -957,7 +959,7 @@ function buildSegmentStyler(settings, annotations) {
   // Say out loud who the model reported and who the palette recognised. A speaker that resolves to
   // nothing costs the line its colour, and with nothing written down that is invisible.
   reportSpeakerCoverage(named, speakers, coloring);
-  return ids => {
+  return (ids, texts = []) => {
     // A multi-line unit only gets a colour when the whole unit agrees; mixed speakers in one block
     // cannot be painted separately without splitting the block, so it stays neutral.
     const marks = ids.map(id => annotations.get(id)).filter(Boolean);
@@ -975,14 +977,25 @@ function buildSegmentStyler(settings, annotations) {
       band,
       vividness: coloring.vividness,
     });
+    // Speaker colour belongs to the words someone actually said. A unit with no quoted span in it
+    // is narration and wears nobody's colour; a unit that mixes narration with a quoted line paints
+    // only the quoted runs. The colour used to cover the whole line, which is how 「あ、そう」と呟き、
+    // 通話を切った ended up with its narration in the speaker's pink.
+    const shape = speaker ? describeSpeechShape(texts) : 'narration';
+    // All-speech units keep the old shape exactly: colour on the wrapper, rhythm inside it.
+    const paintsOutside = Boolean(speaker) && shape === 'spoken';
+    const paintsInside = Boolean(speaker) && shape === 'mixed';
     // Emotion-only mode leaves the colour alone and changes weight and shape instead.
-    const declarations = speaker ? style.declarations : style.declarations.filter(item => !item.startsWith('color:'));
-    if (!declarations.length) return null;
+    const declarations = paintsOutside ? style.declarations : style.declarations.filter(item => !item.startsWith('color:'));
+    if (!declarations.length && !paintsInside) return null;
     // Two carriers on purpose. The inline style holds the fully resolved colour, including whatever
     // the emotion did to it. The classes carry the same information through the host's own
     // stylesheet, so a sanitiser that drops style attributes still leaves speakers distinguishable.
     const classes = [SPEAKER_CLASS];
-    if (speaker) classes.push(`${SPEAKER_CLASS}-${speakerSlug(speaker.name)}`);
+    // The slug class paints through the host stylesheet, so it travels with the colour: on the
+    // wrapper for an all-speech unit, on the quoted runs for a mixed one, nowhere for narration.
+    const speakerClass = speaker ? `${SPEAKER_CLASS}-${speakerSlug(speaker.name)}` : '';
+    if (paintsOutside) classes.push(speakerClass);
     if (style.emotion && style.emotion !== 'neutral' && style.intensity) {
       classes.push(`jy-emo-${style.emotion}`, `jy-emo-l${style.intensity}`);
     }
@@ -993,27 +1006,41 @@ function buildSegmentStyler(settings, annotations) {
     // over `color` outright — themes set it for gradient text. When they do, the glyphs take the
     // theme's colour while getComputedStyle still reports ours, so the colour looks like it is being
     // applied and simply never appears. Writing both is a harmless duplicate when no theme does it.
-    const inline = declarations
+    const toInline = items => items
       .flatMap(item => (item.startsWith('color:') ? [item, `-webkit-text-fill-${item}`] : [item]))
       .map(item => `${item} !important`)
       .join(';');
+    const inline = toInline(declarations);
+    // The same colour the wrapper would have carried, ready to ride on the quoted runs instead.
+    const speechInline = toInline(style.declarations.filter(item => item.startsWith('color:')));
     // The rhythm rides on inner spans so the outer one keeps the colour and the classes: a size step
     // inherits the speaker's colour instead of restating it, and a sanitiser that drops the inner
     // tags leaves the line whole and coloured.
-    const emphasis = coloring.rhythm === false ? null : translation => {
+    const rhythm = translation => {
       const contour = emphasisContour(translation, { emotion, intensity: first.intensity });
       return contour?.map(piece => ({
         text: piece.text,
         css: piece.scale === 1 ? '' : `font-size:${piece.scale.toFixed(3)}em !important`,
       })) ?? null;
     };
+    // Mixed lines trade rhythm for getting the colour right: the contour reads a whole line at a
+    // time, and a line cut into speech and narration is no longer one line to it.
+    const paintSpeech = translation => {
+      const parts = splitSpeechParts(translation);
+      if (!parts.some(part => part.spoken)) return null;
+      return parts.map(part => (part.spoken
+        ? { text: part.text, className: speakerClass, css: speechInline }
+        : { text: part.text }));
+    };
+    const emphasis = paintsInside ? paintSpeech : (coloring.rhythm === false ? null : rhythm);
     return {
-      open: `<span class="${classes.join(' ')}"${label ? ` title="${escapeAttribute(label)}"` : ''} style="${escapeAttribute(inline)}">`,
+      open: `<span class="${classes.join(' ')}"${label ? ` title="${escapeAttribute(label)}"` : ''}${inline ? ` style="${escapeAttribute(inline)}"` : ''}>`,
       close: '</span>',
       emphasis,
       // Tells the assembler to drop the colour out of any wrapper carried over from the original
       // line: two colours on one line would only mean the outer one losing without saying so.
-      paintsColor: declarations.some(item => item.startsWith('color:')),
+      // True for the mixed case as well, where the colour lands inside rather than on the wrapper.
+      paintsColor: paintsOutside || paintsInside,
     };
   };
 }

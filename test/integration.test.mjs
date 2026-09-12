@@ -303,7 +303,7 @@ test('a coloured run paints the floor, keeps the prompt clean and stores the lab
   const previousHost = globalThis.SillyTavern;
   const previousFetch = globalThis.fetch;
   t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
-  const message = { mes: '<story_scene>\n「何を考えてるの！」\n\n……わからない。\n</story_scene>', swipe_id: 0 };
+  const message = { mes: '<story_scene>\n「何を考えてるの！」\n\n「……わからない。」\n</story_scene>', swipe_id: 0 };
   const context = mockHost([message]);
   __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
 
@@ -312,7 +312,7 @@ test('a coloured run paints the floor, keeps the prompt clean and stores the lab
     sentMessages = JSON.parse(init.body).messages;
     return completionResponse([
       { id: 1, text: '「你到底在想什么！」', speaker: '英梨梨', emotion: 'angry', intensity: 2 },
-      { id: 2, text: '……我不知道。', speaker: '诗羽', emotion: 'whisper', intensity: 1 },
+      { id: 2, text: '「……我不知道。」', speaker: '诗羽', emotion: 'whisper', intensity: 1 },
     ]);
   };
   const result = await __testing.startTranslation(0, { quiet: true, force: true });
@@ -353,7 +353,7 @@ test('a coloured run paints the floor, keeps the prompt clean and stores the lab
   // The main model sees the Japanese original and no markup at all.
   const prompt = [{ mes: message.mes, extra: message.extra }];
   interceptGenerationChat(prompt);
-  assert.equal(prompt[0].mes, '<story_scene>\n「何を考えてるの！」\n\n……わからない。\n</story_scene>');
+  assert.equal(prompt[0].mes, '<story_scene>\n「何を考えてるの！」\n\n「……わからない。」\n</story_scene>');
 
   // Labels are stored so a reload, a restyle or a 补译 keeps the colours.
   const stored = message.extra[MESSAGE_META_KEY].annotations;
@@ -363,6 +363,36 @@ test('a coloured run paints the floor, keeps the prompt clean and stores the lab
   assert.equal(snapshot.translated, true);
   assert.deepEqual(snapshot.existingAnnotations.get(1), { speaker: '英梨梨', emotion: 'angry', intensity: 2 });
   assert.equal(context.chat[0], message);
+});
+
+test('speaker colour stops at the quote marks and never reaches narration', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  // Two shapes the old code painted identically: narration with one quoted clause inside it, and a
+  // line of pure narration the model labelled with a speaker anyway.
+  const message = { mes: '<story_scene>\n律は「あ、そう」と呟いた。\n\n雨が降っている。\n</story_scene>', swipe_id: 0 };
+  mockHost([message]);
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
+  globalThis.fetch = async () => completionResponse([
+    { id: 1, text: '「啊，这样。」律嘟囔了一句，没等说明念完就挂了电话。', speaker: '英梨梨', emotion: 'neutral' },
+    { id: 2, text: '下雨了。', speaker: '英梨梨', emotion: 'neutral' },
+  ]);
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+
+  const painted = [...message.mes.matchAll(/<span[^>]*color:#[0-9a-f]{6}[^>]*>([\s\S]*?)<\/span>/g)]
+    .map(match => match[1].replace(/[\u200b-\u200d\u2063]/g, ''));
+  // The quoted clause, and nothing else in either line.
+  assert.deepEqual(painted, ['「啊，这样。」']);
+  // Both translations still reach the floor whole, colour or no colour.
+  assert.match(message.mes, /律嘟囔了一句，没等说明念完就挂了电话。/);
+  assert.match(message.mes, /下雨了。/);
+  // Read-back is what 补译 and the main model see, and it must not notice any of this.
+  assert.equal(
+    stripGeneratedTranslationLines(message.mes),
+    '<story_scene>\n律は「あ、そう」と呟いた。\n\n雨が降っている。\n</story_scene>',
+  );
 });
 
 test('colouring off writes exactly the floor the extension has always written', async t => {

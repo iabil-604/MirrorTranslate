@@ -6,11 +6,11 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.15.6';
+} from './prompts.js?v=0.15.7';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.15.6';
+export const APP_VERSION = '0.15.7';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -40,6 +40,83 @@ const LEGACY_GENERATED_LINE_RE = new RegExp(`^\\{${INVISIBLE_MARKER}[^\\r\\n]*\\
 // The wrapper speaker/emotion styling is rendered into. Kept here so the restyle pass can recognise
 // and carry over a wrapper it did not generate.
 export const SPEAKER_CLASS = 'jy-spk';
+// Speech marks, and the narration that surrounds them.
+//
+// Speaker colour used to run across a whole line, so a line like 「あ、そう」と呟き、通話を切った
+// wore one speaker's colour over its narration as well. The narration belongs to the narrator no
+// matter who is quoted inside it, so the colour has to stop at these boundaries.
+const SPEECH_OPENERS = new Map([
+  ['「', '」'],
+  ['『', '』'],
+  ['“', '”'],
+  ['"', '"'],
+]);
+
+/**
+ * Splits a translated line into quoted and unquoted runs.
+ *
+ * An unterminated quote is reported as narration rather than guessed at: painting a run that was
+ * never closed would spill the speaker's colour over the rest of the line, which is the very thing
+ * this exists to stop.
+ */
+export function splitSpeechParts(value) {
+  const source = String(value ?? '');
+  const parts = [];
+  let buffer = '';
+  let closer = '';
+  let depth = 0;
+  const flush = spoken => {
+    if (buffer) parts.push({ text: buffer, spoken });
+    buffer = '';
+  };
+  for (const character of source) {
+    if (!closer) {
+      const pair = SPEECH_OPENERS.get(character);
+      if (pair) {
+        flush(false);
+        buffer = character;
+        closer = pair;
+        depth = 1;
+        continue;
+      }
+      buffer += character;
+      continue;
+    }
+    buffer += character;
+    if (character === closer) {
+      depth -= 1;
+      if (!depth) {
+        flush(true);
+        closer = '';
+      }
+    } else if (SPEECH_OPENERS.get(character) === closer) {
+      depth += 1;
+    }
+  }
+  flush(false);
+  return parts;
+}
+
+/**
+ * How a unit of translated lines carries speech: all of it quoted, none of it, or a mix.
+ *
+ * 'narration' is the case the reader complained about twice over — a line with no quoted span at
+ * all should not wear anybody's colour.
+ */
+export function describeSpeechShape(texts) {
+  const lines = (Array.isArray(texts) ? texts : [texts]).map(item => String(item ?? ''));
+  let spoken = 0;
+  let narrated = 0;
+  for (const line of lines) {
+    for (const part of splitSpeechParts(line)) {
+      if (part.spoken) spoken += 1;
+      else if (part.text.trim()) narrated += 1;
+    }
+  }
+  if (!spoken) return 'narration';
+  return narrated ? 'mixed' : 'spoken';
+}
+
 // SillyTavern rewrites message class names with a custom- prefix when it renders, and an edited
 // floor can be saved back in that form, so both spellings have to be recognised here.
 const SPEAKER_OPEN_RE = new RegExp(`<span class="(?:custom-)?${SPEAKER_CLASS}(?:[ "][^>]*)?>`);
@@ -1678,7 +1755,7 @@ export function assembleBilingual(layout, translationMap, options = {}) {
     const missingIds = ids.filter(id => !translationMap.get(id));
     if (missingIds.length && !allowMissing) throw new Error(`缺少第 ${missingIds.join('、')} 段译文。`);
     pieces.push(renderSourceBlock(part.sourceText ?? part.text, options));
-    const decoration = segmentDecoration(options.styleFor, ids);
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id)).filter(Boolean));
     const body = translationUnitBody(part, ids, translationMap, options, decoration);
     if (body) {
       pieces.push(`\n${renderTranslationBlock(body, {
@@ -1731,11 +1808,11 @@ function translationUnitBody(part, ids, translationMap, options, decoration = {}
 // Speaker and emotion styling rides inside the same invisible affix markers the visible prefixes
 // use. That is the whole trick: nothing new has to learn how to strip it, the main model's prompt
 // never sees it, and a floor written with colouring on reads back identically with it off.
-function segmentDecoration(styleFor, ids) {
+function segmentDecoration(styleFor, ids, texts = []) {
   if (typeof styleFor !== 'function') return {};
   let decoration;
   try {
-    decoration = styleFor(ids);
+    decoration = styleFor(ids, texts);
   } catch {
     return {}; // A palette problem must never cost the reader their translation.
   }
@@ -1764,7 +1841,7 @@ function styledBody(translation, styleBody) {
   } catch {
     return translation; // Rhythm is decoration; it never costs the reader their translation.
   }
-  if (!Array.isArray(pieces) || pieces.length < 2) return translation;
+  if (!Array.isArray(pieces) || !pieces.length) return translation;
   // Refuse anything that does not reassemble into the exact translation, so a bad split is inert
   // rather than a silent rewrite of the text.
   if (pieces.map(piece => piece?.text ?? '').join('') !== translation) return translation;
@@ -1772,10 +1849,19 @@ function styledBody(translation, styleBody) {
   // between `style="color:` and the rest still rejoins perfectly while nesting a tag inside another
   // tag's attribute. Anything with markup in it keeps its own structure.
   if (translation.includes('<')) return translation;
+  // Nothing to carry means nothing to wrap: a line split into runs that all came back bare is the
+  // line itself, and wrapping it would only add markers for a reader to strip later.
+  if (!pieces.some(piece => piece?.css || piece?.className)) return translation;
   return pieces
-    .map(piece => (piece.css
-      ? `${markedAffix(`<span style="${piece.css}">`)}${piece.text}${markedAffix('</span>')}`
-      : piece.text))
+    .map(piece => {
+      const attributes = [
+        piece.className ? `class="${piece.className}"` : '',
+        piece.css ? `style="${piece.css}"` : '',
+      ].filter(Boolean).join(' ');
+      return attributes
+        ? `${markedAffix(`<span ${attributes}>`)}${piece.text}${markedAffix('</span>')}`
+        : piece.text;
+    })
     .join('');
 }
 
@@ -1802,7 +1888,7 @@ export function assembleReplace(layout, translationMap, options = {}) {
     }
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
     const sourceText = part.sourceText ?? part.text;
-    const decoration = segmentDecoration(options.styleFor, ids);
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id)).filter(Boolean));
     const body = translationUnitBody(part, ids, translationMap, options, decoration);
     if (!body) {
       if (!allowMissing) throw new Error(`缺少第 ${ids.join('、')} 段译文。`);
