@@ -44,13 +44,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.15.2';
+} from './core.js?v=0.15.3';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.15.2';
+} from './processing.js?v=0.15.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -66,8 +66,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.15.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.2';
+} from './prompts.js?v=0.15.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.3';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -81,15 +81,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.15.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.15.2';
+} from './palette.js?v=0.15.3';
+import { sampleThemeBackground } from './theme-probe.js?v=0.15.3';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.15.2';
+} from './diagnostics.js?v=0.15.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -322,6 +322,20 @@ function recordDiagnostic(level, scope, message, details = {}, fullResponse, ext
   });
   for (const subscriber of runtime.diagnosticSubscribers) subscriber(readDiagnostics());
   return entry;
+}
+
+// The base URL never carries the credential (that travels as proxy_password), but it is the one
+// thing a “换了地址就不通” report always omits. Logging it is what separates a wrong endpoint from a
+// wrong model: /api/coding/v3 only serves the Coding Plan roster, /api/v3 serves the ordinary one.
+function describeChannelEndpoint(settings = runtime.settings) {
+  if (settings?.apiMode !== 'independent') return 'follow-current';
+  const raw = String(getActiveChannel(settings).url ?? '').trim();
+  if (!raw) return '未填写';
+  try {
+    return normalizeOpenAiBaseUrl(raw);
+  } catch (error) {
+    return `${raw}（无法解析：${safeError(error)}）`;
+  }
 }
 
 function subscribeDiagnostics(subscriber) {
@@ -662,25 +676,73 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   };
 }
 
+// A reasoning model can spend minutes on one batch, so the plain “超时了” line left the reader with no
+// next step. Name the usual cause and the two ways out instead.
+function describeTimeout(timeoutSec, idle) {
+  return idle
+    ? `副 API 已建立流式连接，但超过 ${timeoutSec} 秒没有新内容。`
+    : `独立副 API 请求超时（>${timeoutSec} 秒）。思考型模型整包返回常常更久：可在副 API 预设里调大「超时」，或打开流式写回让译文边收边写。`;
+}
+
+// The window used to cover the whole call. That is right for a one-shot request and wrong for a
+// stream: a run that kept delivering deltas past the channel timeout was cut off mid-translation.
+// The optional renew() handed to the task turns the window into an idle timer for whoever calls it,
+// and leaves it a total timeout for everyone who does not.
 async function withAbortTimeout(externalSignal, timeoutSec, task) {
   const controller = new AbortController();
   let timedOut = false;
+  let renewed = false;
   const onAbort = () => controller.abort();
   if (externalSignal?.aborted) onAbort();
   else externalSignal?.addEventListener('abort', onAbort, { once: true });
-  const timer = globalThis.setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, Math.max(10, Number(timeoutSec) || 180) * 1000);
+  const windowMs = Math.max(10, Number(timeoutSec) || 180) * 1000;
+  let timer = null;
+  const arm = () => {
+    if (timer !== null) globalThis.clearTimeout(timer);
+    timer = globalThis.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, windowMs);
+  };
+  const renew = () => {
+    if (timedOut || controller.signal.aborted) return;
+    renewed = true;
+    arm();
+  };
+  arm();
   try {
-    return await task(controller.signal);
+    return await task(controller.signal, renew);
   } catch (error) {
-    if (timedOut) throw new Error(`独立副 API 请求超时（>${timeoutSec} 秒）。`);
+    if (timedOut) throw new Error(describeTimeout(timeoutSec, renewed));
     throw error;
   } finally {
-    globalThis.clearTimeout(timer);
+    if (timer !== null) globalThis.clearTimeout(timer);
     externalSignal?.removeEventListener('abort', onAbort);
   }
+}
+
+// A one-shot request to a reasoning model sits silent for minutes with the bar parked where the last
+// step left it, which is exactly what “卡在 7% 然后超时” looks like from the panel. Ticking the
+// elapsed seconds costs nothing and tells the difference between slow and hung.
+function startWaitTicker(label, timeoutSec) {
+  const startedAt = Date.now();
+  let timer = null;
+  const schedule = () => {
+    timer = globalThis.setTimeout(() => {
+      runtime.timers.delete(timer);
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      updateTask({ status: 'running', message: `${label}已等待 ${seconds} 秒，本通道超时上限 ${timeoutSec} 秒。` });
+      schedule();
+    }, 5000);
+    runtime.timers.add(timer);
+  };
+  schedule();
+  return () => {
+    if (timer === null) return;
+    globalThis.clearTimeout(timer);
+    runtime.timers.delete(timer);
+    timer = null;
+  };
 }
 
 // Hosts and relays surface failures in wildly different shapes. Keep whatever is there so the full
@@ -1027,6 +1089,10 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
   const channel = getActiveChannel(settings);
   let raw;
 
+  const stopTicker = startWaitTicker(
+    phase === 'primary' ? '副 API 正在翻译完整正文，' : '副 API 正在补译缺失段落，',
+    channel.timeoutSec,
+  );
   try {
     if (settings.apiMode === 'independent') {
       const service = context.ChatCompletionService;
@@ -1053,9 +1119,12 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
         requestedIds: segments.map(segment => segment.id),
         apiMode: settings.apiMode,
         model: channel.model || 'follow-current',
+        endpoint: describeChannelEndpoint(settings),
       }, describeRequestFailure(error), { fullRequest: messages });
     }
     throw enrichRequestError(error);
+  } finally {
+    stopTicker();
   }
 
   recordDiagnostic('info', 'translation.raw-response', '已收到副 API 完整返回。', {
@@ -1064,6 +1133,7 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
     requestedIds: segments.map(segment => segment.id),
     apiMode: settings.apiMode,
     model: channel.model || 'follow-current',
+    endpoint: describeChannelEndpoint(settings),
     requestTokens: describeRequestTokens(messages, raw),
   }, raw, { fullRequest: messages });
   signal?.throwIfAborted?.();
@@ -1453,6 +1523,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
       segments: snapshot?.segments?.length ?? 0,
       apiMode: settings.apiMode,
       model: getActiveChannel(settings).model || 'follow-current',
+      endpoint: describeChannelEndpoint(settings),
     });
     if (!quiet) toast('error', message);
     throw error;
@@ -1472,7 +1543,7 @@ async function streamTranslationBatch(messages, settings, signal, onDelta = null
   const payload = { ...createIndependentRequest(settings, messages), stream: true };
   // The whole-request path has always honoured the channel timeout. Without the same wrapper a
   // stalled upstream kept the task "running" forever once the response headers had arrived.
-  return withAbortTimeout(signal, channel.timeoutSec, async streamSignal => {
+  return withAbortTimeout(signal, channel.timeoutSec, async (streamSignal, renew) => {
     const response = await fetch('/api/backends/chat-completions/generate', {
       method: 'POST',
       headers: getContext().getRequestHeaders(),
@@ -1492,6 +1563,8 @@ async function streamTranslationBatch(messages, settings, signal, onDelta = null
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      // Progress, not elapsed time, is what keeps the window open from here on.
+      renew();
       const decoded = decoder.decode(value, { stream: true });
       // Kept only until the first SSE frame proves this really is a stream.
       if (!frames && whole.length < 200000) whole += decoded;
@@ -1724,7 +1797,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     }
     const message = safeError(error);
     updateTask({ status: 'error', title: '翻译未写回', message, progress: 0 });
-    recordDiagnostic('error', 'translation.failed', message, { messageId: snapshot?.messageId ?? null, requestMode: 'stream' });
+    recordDiagnostic('error', 'translation.failed', message, { messageId: snapshot?.messageId ?? null, requestMode: 'stream', endpoint: describeChannelEndpoint(settings) });
     if (!quiet) toast('error', message);
     throw error;
   }).finally(() => {
@@ -1758,6 +1831,7 @@ async function testTranslationChannel() {
     recordDiagnostic('info', 'channel.test', '翻译通道测试成功。', {
       apiMode: runtime.settings.apiMode,
       model: getActiveChannel(runtime.settings).model || 'follow-current',
+      endpoint: describeChannelEndpoint(),
     });
     toast('success', '翻译通道测试成功。');
     return sample;
@@ -1767,6 +1841,7 @@ async function testTranslationChannel() {
     recordDiagnostic('error', 'channel.test', message, {
       apiMode: runtime.settings.apiMode,
       model: getActiveChannel(runtime.settings).model || 'follow-current',
+      endpoint: describeChannelEndpoint(),
     });
     toast('error', message);
     throw error;
@@ -1812,7 +1887,14 @@ async function fetchChannelModels() {
     });
     return models;
   } catch (error) {
-    updateTask({ status: 'error', title: '模型列表读取失败', message: safeError(error), progress: 0 });
+    const message = safeError(error);
+    updateTask({ status: 'error', title: '模型列表读取失败', message, progress: 0 });
+    // Without this the log stayed empty for the one failure that points straight at a wrong base
+    // URL: a relay that answers /chat/completions but has no /models under the same path.
+    recordDiagnostic('error', 'channel.models', message, {
+      apiMode: runtime.settings.apiMode,
+      endpoint: describeChannelEndpoint(),
+    });
     throw error;
   }
 }
@@ -2627,6 +2709,8 @@ function diagnosticReportMetadata() {
     appVersion: APP_VERSION,
     updateStatus: runtime.update.status,
     apiMode: runtime.settings.apiMode,
+    endpoint: describeChannelEndpoint(),
+    model: getActiveChannel(runtime.settings).model || 'follow-current',
     bodyTags: runtime.settings.bodyTags,
     excludedTags: runtime.settings.excludedTags,
     preserveLineRules: preserveRules.rules.length,
@@ -4382,6 +4466,7 @@ function configureForTest({ settings, worldInfoEntries, initialized } = {}) {
 }
 
 export const __testing = Object.freeze({
+  withAbortTimeout,
   buildTranslationMessages,
   latestAssistantMessageId,
   readMessageSnapshot,

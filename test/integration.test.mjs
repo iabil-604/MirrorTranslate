@@ -413,3 +413,56 @@ test('句内节奏 writes inside the translation without disturbing what reads b
   assert.ok(!mangled.includes('改写了'), '拒绝校验失败的拆分');
   assert.ok(mangled.includes(line), '译文必须原样保留');
 });
+
+// Stubbed timers rather than real ones: the window has a 10-second floor, and waiting it out twice
+// would cost more than the rest of this file put together.
+test('the channel window is a total timeout by default and an idle timeout once a stream renews it', async () => {
+  const { withAbortTimeout } = __testing;
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const pending = new Map();
+  let nextTimerId = 1;
+  globalThis.setTimeout = handler => {
+    const id = nextTimerId += 1;
+    pending.set(id, handler);
+    return id;
+  };
+  globalThis.clearTimeout = id => pending.delete(id);
+  const closeWindow = () => {
+    for (const [id, handler] of [...pending]) {
+      pending.delete(id);
+      handler();
+    }
+  };
+  const untilAborted = signal => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  });
+
+  try {
+    const oneShot = withAbortTimeout(undefined, 240, signal => untilAborted(signal));
+    assert.equal(pending.size, 1);
+    closeWindow();
+    await assert.rejects(oneShot, /请求超时/);
+
+    const streamed = withAbortTimeout(undefined, 240, (signal, renew) => {
+      renew();
+      renew();
+      return untilAborted(signal);
+    });
+    // Each delta must replace the pending window, never stack a second one behind it.
+    assert.equal(pending.size, 1);
+    closeWindow();
+    await assert.rejects(streamed, /没有新内容/);
+
+    // A stream that finishes before the window closes leaves no timer behind.
+    const finished = await withAbortTimeout(undefined, 240, (signal, renew) => {
+      renew();
+      return Promise.resolve('complete');
+    });
+    assert.equal(finished, 'complete');
+    assert.equal(pending.size, 0);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});

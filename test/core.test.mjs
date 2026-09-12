@@ -151,6 +151,16 @@ test('known untouched default prompts upgrade without overwriting user edits', (
 test('independent channel request uses an isolated OpenAI-compatible proxy payload', () => {
   assert.equal(normalizeOpenAiBaseUrl('https://example.com'), 'https://example.com/v1');
   assert.equal(normalizeOpenAiBaseUrl('https://example.com/v1/chat/completions'), 'https://example.com/v1');
+  // Volcengine Ark keeps its version segment behind a plan prefix. The default /v1 must never be
+  // appended over a path that is already there, or the Coding Plan base turns into a 404.
+  assert.equal(
+    normalizeOpenAiBaseUrl('https://ark.cn-beijing.volces.com/api/coding/v3/'),
+    'https://ark.cn-beijing.volces.com/api/coding/v3',
+  );
+  assert.equal(
+    normalizeOpenAiBaseUrl('https://ark.cn-beijing.volces.com/api/v3/chat/completions'),
+    'https://ark.cn-beijing.volces.com/api/v3',
+  );
   const messages = [{ role: 'user', content: '雨。' }];
   const payload = createIndependentRequest({
     apiUrl: 'https://example.com',
