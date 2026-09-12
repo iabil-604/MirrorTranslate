@@ -1,4 +1,4 @@
-import { getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.15.9';
+import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.15.9';
 import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.15.9';
 import { EMOTION_KEYS } from './palette.js?v=0.15.9';
 
@@ -50,10 +50,42 @@ function relevantMessages(snapshot, settings, includeTarget = false) {
   return snapshot.context.chat.slice(0, end + 1).filter(message => message && !message.is_system).slice(-count);
 }
 
+/**
+ * The part of a floor worth quoting back as context.
+ *
+ * The reference used to carry each floor whole. Presets that wrap reasoning blocks, status panels,
+ * affinity tables and choice lists around the prose turn one floor into thousands of tokens the
+ * translator was never meant to read, with the story itself a small part of it. Quote the same
+ * region the translation works on, and nothing else.
+ *
+ * A user's own message carries no extraction tags and is prose already, so it travels as written.
+ * An AI floor with no tags has no body to quote — it is a floor this extension could not have
+ * translated either — so it contributes nothing rather than dragging its panels along.
+ */
+function referenceBody(message, settings) {
+  const stripped = stripGeneratedTranslationLines(String(message?.mes ?? ''), message?.extra?.[MESSAGE_META_KEY]);
+  if (message?.is_user) return stripped;
+  const regions = [];
+  for (const [tags, mode] of [[settings.bodyTags, 'bilingual'], [settings.replaceTags, 'replace']]) {
+    if (!Array.isArray(tags) || !tags.length) continue;
+    try {
+      regions.push(...extractTaggedRegions(stripped, tags, { mode }).regions);
+    } catch {
+      // No usable tag pair here. That is an error on the floor being translated and merely an
+      // absence on a floor being quoted, so it stays quiet and contributes nothing.
+    }
+  }
+  if (!regions.length) return '';
+  return regions
+    .sort((left, right) => left.openStart - right.openStart)
+    .map(region => region.inner)
+    .join('\n\n');
+}
+
 function buildRecentContext(snapshot, settings) {
   if (!settings.includeRecentContext) return '';
   return relevantMessages(snapshot, settings).map(message => {
-    const text = cleanReferenceText(message.mes, message.extra?.[MESSAGE_META_KEY]);
+    const text = cleanReferenceText(referenceBody(message, settings));
     return text ? `【${messageLabel(snapshot.context, message)}】\n${text}` : '';
   }).filter(Boolean).join('\n\n');
 }
