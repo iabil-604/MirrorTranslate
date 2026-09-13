@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.16.0';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.16.1';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 
@@ -454,9 +454,17 @@ export const STYLE_PRESETS = Object.freeze({
     label: '平实白描',
     prompt: '使用平实、干净、克制的现代中文。原文白话就用白话，原文没有比喻就不添加比喻，避免华丽辞藻、成语堆砌和故作深沉的叙述。',
   }),
-  // Source- and genre-specific leanings. Readers kept asking which rule to write for a Korean webtoon
-  // or a shounen fight scene; each of these is a finished answer they can pick instead of drafting
-  // one. Every one stays inside the core spec: it shapes how the same content is said, never adds.
+});
+
+// Source- and genre-specific leanings, kept apart from 翻译文风 on purpose. 文风 decides how the Chinese
+// sounds; a leaning decides what the source's own conventions turn into. A reader wants 平实白描 and
+// 韩系 at the same time, not one instead of the other. Every leaning stays inside the core spec: it
+// shapes how the same content is said and never adds to it.
+export const LEANING_PRESETS = Object.freeze({
+  none: Object.freeze({
+    label: '不指定',
+    prompt: '',
+  }),
   galgame: Object.freeze({
     label: '日系 · Galgame 对白',
     prompt: '对白是主体，旁白多是主角的心声和吐槽。对白按角色属性保留口吻：嘴硬、迟钝、端正、元气的差别靠句长、语气词和措辞体现，不靠旁白解释。口癖和特殊句尾（のだ、ですわ、っす、にゃ）为每个角色选定一种中文对应并全篇统一，不音译成日文读音。选项、系统提示和心声保留原有的格式与层级。主角的吐槽跟着原文走，原文平淡就平淡，不替他补上机灵话。',
@@ -471,7 +479,7 @@ export const STYLE_PRESETS = Object.freeze({
   }),
   isekai: Object.freeze({
     label: '日系 · 异世界西幻',
-    prompt: '魔法、职业、技能、称号和状态栏字段优先用资料里的写法；没有写法时选读者熟悉的说法（冒险者公会、骑士团、宫廷魔术师）并全篇统一。贵族和王族的敬语用现代中文的礼貌措辞体现：您、请、失礼了，分寸靠句式而不是古语；不用“在下”“令尊”“叨扰”“尔等”这类文言和宫廷剧腔。技能发动、系统提示和状态栏保留原格式，不改写成叙述。',
+    prompt: '魔法、职业、技能、称号和状态栏字段优先用资料里的写法；没有写法时选读者熟悉的说法（冒险者公会、骑士团、宫廷魔术师）并全篇统一。贵族、老者和王族的口吻（ですかな、ぞ、じゃ、でござる这类句尾）用现代中文的措辞和语气体现年纪与身份，分寸靠句式而不是古语：当家译作我们家，貴殿译作您。不换成“寒舍”“贵府”“在下”“令尊”“叨扰”“尔等”这类文言谦辞、敬辞和宫廷剧腔。技能发动、系统提示和状态栏保留原格式，不改写成叙述。',
   }),
   korean_web: Object.freeze({
     label: '韩系 · 网文韩漫',
@@ -562,6 +570,8 @@ export const DEFAULT_PROMPT_PROFILE = Object.freeze({
   checklistPrompt: PRE_OUTPUT_CHECKLIST,
   styleMode: 'light_novel',
   styleCustom: '',
+  leaningMode: 'none',
+  leaningCustom: '',
   nameMode: 'contextual',
   nameCustom: '',
   honorificMode: 'preserve',
@@ -618,6 +628,7 @@ export function composeTranslationSpecification(profile) {
   };
   const variableSections = [
     chooseRule(STYLE_PRESETS, profile.styleMode, profile.styleCustom) && `# 翻译文风\n${chooseRule(STYLE_PRESETS, profile.styleMode, profile.styleCustom)}`,
+    chooseRule(LEANING_PRESETS, profile.leaningMode, profile.leaningCustom) && `# 翻译倾向\n${chooseRule(LEANING_PRESETS, profile.leaningMode, profile.leaningCustom)}`,
     chooseRule(NAME_PRESETS, profile.nameMode, profile.nameCustom) && `# 未知姓名与专名\n${chooseRule(NAME_PRESETS, profile.nameMode, profile.nameCustom)}`,
     chooseRule(HONORIFIC_PRESETS, profile.honorificMode, profile.honorificCustom) && `# 称谓与角色口吻\n${chooseRule(HONORIFIC_PRESETS, profile.honorificMode, profile.honorificCustom)}`,
     chooseRule(PUNCTUATION_PRESETS, profile.punctuationMode, profile.punctuationCustom) && `# 对话与标点\n${chooseRule(PUNCTUATION_PRESETS, profile.punctuationMode, profile.punctuationCustom)}`,

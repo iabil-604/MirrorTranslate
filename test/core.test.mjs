@@ -1127,14 +1127,21 @@ test('a floor that fits one batch is spread evenly across parallel lanes', () =>
   assert.equal(planTranslationBatches(segments, { maxChars: 250, parallel: 2 }).length, 5);
 });
 
-test('channel concurrency is clamped, new style presets survive a reload, placeholder speakers are dropped', async () => {
+test('channel concurrency is clamped, a leaning saved as a style moves to its own item, placeholder speakers are dropped', async () => {
   const { normalizeChannel, normalizePromptProfile, recoverStructuredTranslations, MAX_CHANNEL_CONCURRENCY } = await import('../core.js');
   assert.equal(normalizeChannel({}).concurrency, 1);
   assert.equal(normalizeChannel({ concurrency: 3 }).concurrency, 3);
   assert.equal(normalizeChannel({ concurrency: 99 }).concurrency, MAX_CHANNEL_CONCURRENCY);
   assert.equal(normalizeChannel({ concurrency: 0 }).concurrency, 1);
-  // A preset added to the list must not be thrown back to the default when the profile is loaded.
-  assert.equal(normalizePromptProfile({ styleMode: 'korean_web' }).styleMode, 'korean_web');
+  // v0.16.0 saved a leaning as the style. It moves to its own item rather than being lost.
+  const migrated = normalizePromptProfile({ styleMode: 'korean_web' });
+  assert.equal(migrated.styleMode, 'light_novel');
+  assert.equal(migrated.leaningMode, 'korean_web');
+  // Once both are set explicitly, neither overrides the other.
+  const both = normalizePromptProfile({ styleMode: 'plain', leaningMode: 'shonen' });
+  assert.equal(both.styleMode, 'plain');
+  assert.equal(both.leaningMode, 'shonen');
+  assert.equal(normalizePromptProfile({}).leaningMode, 'none');
   assert.equal(normalizePromptProfile({ styleMode: 'no_such_style' }).styleMode, 'light_novel');
 
   const recovered = recoverStructuredTranslations(JSON.stringify({ translations: [

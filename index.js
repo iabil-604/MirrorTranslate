@@ -50,13 +50,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.16.0';
+} from './core.js?v=0.16.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.16.0';
+} from './processing.js?v=0.16.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -67,13 +67,14 @@ import {
   PRE_OUTPUT_CHECKLIST,
   PUNCTUATION_PRESETS,
   STYLE_PRESETS,
+  LEANING_PRESETS,
   countPromptCharacters,
   findForbiddenPhraseHits,
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.16.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.16.0';
+} from './prompts.js?v=0.16.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.16.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -87,15 +88,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.16.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.16.0';
+} from './palette.js?v=0.16.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.16.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.16.0';
+} from './diagnostics.js?v=0.16.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -2347,6 +2348,7 @@ function renderStandardPromptItems(root, profile) {
 
   const optionItems = [
     ['style', '翻译文风', 'styleMode', 'styleCustom', STYLE_PRESETS],
+    ['leaning', '翻译倾向', 'leaningMode', 'leaningCustom', LEANING_PRESETS],
     ['honorific', '称谓与角色口吻', 'honorificMode', 'honorificCustom', HONORIFIC_PRESETS],
     ['name', '未知姓名与专名', 'nameMode', 'nameCustom', NAME_PRESETS],
     ['punctuation', '对话与标点', 'punctuationMode', 'punctuationCustom', PUNCTUATION_PRESETS],
@@ -2456,6 +2458,7 @@ function renderCustomPromptItems(root, profile) {
 
 const PROMPT_OPTION_PRESETS = Object.freeze({
   styleMode: STYLE_PRESETS,
+  leaningMode: LEANING_PRESETS,
   honorificMode: HONORIFIC_PRESETS,
   nameMode: NAME_PRESETS,
   punctuationMode: PUNCTUATION_PRESETS,
@@ -3370,6 +3373,7 @@ function resetPromptItem(profile, key) {
     jailbreak: ['jailbreakPrompt'],
     core: ['corePrompt'],
     style: ['styleMode', 'styleCustom'],
+    leaning: ['leaningMode', 'leaningCustom'],
     honorific: ['honorificMode', 'honorificCustom'],
     name: ['nameMode', 'nameCustom'],
     punctuation: ['punctuationMode', 'punctuationCustom'],
@@ -3772,7 +3776,7 @@ function createControlCenter(rootDocument = document) {
       syncFields(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-profile-field="styleMode"], [data-jy-profile-field="honorificMode"], [data-jy-profile-field="nameMode"], [data-jy-profile-field="punctuationMode"]')) {
+    if (event.target.matches('[data-jy-profile-field="styleMode"], [data-jy-profile-field="leaningMode"], [data-jy-profile-field="honorificMode"], [data-jy-profile-field="nameMode"], [data-jy-profile-field="punctuationMode"]')) {
       updatePromptConditionalFields(root);
     }
     if (event.target.matches('[data-jy-field="apiMode"], [data-jy-field="selectedChannelId"]')) {

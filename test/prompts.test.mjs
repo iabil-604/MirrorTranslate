@@ -88,18 +88,31 @@ test('absolute forbidden phrases are detected per completed segment', () => {
   ]);
 });
 
-test('every built-in translation leaning survives a reload and lands in the spec', async () => {
-  const { STYLE_PRESETS } = await import('../prompts.js');
-  const keys = Object.keys(STYLE_PRESETS);
-  assert.ok(keys.length >= 10);
-  const labels = keys.map(key => STYLE_PRESETS[key].label);
-  assert.equal(new Set(labels).size, labels.length, '预设名称不能重复');
-  for (const key of keys) {
-    const profile = normalizePromptProfile({ ...DEFAULT_PROMPT_PROFILE, styleMode: key });
-    assert.equal(profile.styleMode, key);
+test('translation leanings are their own item and combine with any style', async () => {
+  const { STYLE_PRESETS, LEANING_PRESETS } = await import('../prompts.js');
+  assert.deepEqual(Object.keys(STYLE_PRESETS), ['light_novel', 'strict_mirror', 'plain']);
+  const labels = Object.values(LEANING_PRESETS).map(preset => preset.label);
+  assert.equal(new Set(labels).size, labels.length, '倾向名称不能重复');
+
+  const unset = composeTranslationSpecification(normalizePromptProfile(DEFAULT_PROMPT_PROFILE));
+  assert.doesNotMatch(unset, /# 翻译倾向/, '不指定时不应出现倾向栏目');
+
+  for (const key of Object.keys(LEANING_PRESETS).filter(item => item !== 'none')) {
+    const profile = normalizePromptProfile({ ...DEFAULT_PROMPT_PROFILE, styleMode: 'plain', leaningMode: key });
+    assert.equal(profile.styleMode, 'plain');
+    assert.equal(profile.leaningMode, key);
     const spec = composeTranslationSpecification(profile);
-    const at = spec.indexOf(STYLE_PRESETS[key].prompt);
-    assert.ok(at >= 0, `${key} 没有进入规范`);
-    assert.ok(at < spec.indexOf('# 9. 输出协议'), `${key} 应当排在输出协议之前`);
+    const style = spec.indexOf('# 翻译文风');
+    const leaning = spec.indexOf('# 翻译倾向');
+    assert.ok(style >= 0 && leaning > style, `${key}：文风和倾向应当同时出现，文风在前`);
+    assert.ok(spec.includes(LEANING_PRESETS[key].prompt), `${key} 没有进入规范`);
+    assert.ok(leaning < spec.indexOf('# 9. 输出协议'), `${key} 应当排在输出协议之前`);
   }
+
+  const custom = composeTranslationSpecification(normalizePromptProfile({
+    ...DEFAULT_PROMPT_PROFILE,
+    leaningMode: 'custom',
+    leaningCustom: '原文是港漫，粗口保留力度。',
+  }));
+  assert.match(custom, /# 翻译倾向\n原文是港漫，粗口保留力度。/);
 });

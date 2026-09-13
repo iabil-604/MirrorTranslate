@@ -7,11 +7,12 @@ import {
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
   STYLE_PRESETS,
-} from './prompts.js?v=0.16.0';
+  LEANING_PRESETS,
+} from './prompts.js?v=0.16.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.16.0';
+export const APP_VERSION = '0.16.1';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -468,12 +469,19 @@ export function normalizePromptProfile(value = {}, fallbackId = DEFAULT_PROMPT_P
   profile.jailbreakPrompt = String(source.jailbreakPrompt ?? base.jailbreakPrompt);
   profile.corePrompt = String(source.corePrompt ?? '').trim() || CORE_TRANSLATION_SPEC;
   profile.checklistPrompt = String(source.checklistPrompt ?? '').trim() || PRE_OUTPUT_CHECKLIST;
-  profile.styleMode = normalizePromptMode(source.styleMode, [...Object.keys(STYLE_PRESETS), 'custom'], base.styleMode);
+  // v0.16.0 listed the leanings inside 翻译文风, so a profile saved then can carry one as its styleMode.
+  // Move it to its own item instead of dropping it back to the default style.
+  const legacyLeaning = !source.leaningMode && source.styleMode !== 'none' && Object.hasOwn(LEANING_PRESETS, source.styleMode)
+    ? source.styleMode
+    : null;
+  profile.styleMode = normalizePromptMode(legacyLeaning ? base.styleMode : source.styleMode, [...Object.keys(STYLE_PRESETS), 'custom'], base.styleMode);
+  profile.leaningMode = normalizePromptMode(legacyLeaning ?? source.leaningMode, [...Object.keys(LEANING_PRESETS), 'custom'], base.leaningMode);
   profile.nameMode = normalizePromptMode(source.nameMode, ['contextual', 'keep', 'transliterate', 'custom'], base.nameMode);
   profile.honorificMode = normalizePromptMode(source.honorificMode, ['preserve', 'translate', 'remove', 'custom'], base.honorificMode);
   profile.punctuationMode = normalizePromptMode(source.punctuationMode, ['japanese', 'chinese', 'source', 'custom'], base.punctuationMode);
   for (const key of [
     'styleCustom',
+    'leaningCustom',
     'nameCustom',
     'honorificCustom',
     'punctuationCustom',
