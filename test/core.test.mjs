@@ -1069,3 +1069,78 @@ test('a run styled across a quotation mark keeps both marks out of the spans', (
   ]);
   assert.deepEqual(nested.map(piece => piece.text), ['「', '他说『随便』，', '然后就走了', '」']);
 });
+
+test('speaker names a model spells differently resolve to the one the palette knows', async () => {
+  const { unifySpeakerNames } = await import('../core.js');
+  const known = ['艾莉丝', '希尔达', '源律', '菲利普·伯雷亚斯·格雷拉特', '洛琪希'];
+  const mapped = unifySpeakerNames(
+    ['艾莉丝·伯雷亚斯·格雷拉特', '希尔达夫人', '律', '菲利普', '洛琪希', '保罗'],
+    known,
+  );
+  assert.equal(mapped.get('艾莉丝·伯雷亚斯·格雷拉特'), '艾莉丝');
+  assert.equal(mapped.get('希尔达夫人'), '希尔达');
+  assert.equal(mapped.get('律'), '源律');
+  assert.equal(mapped.get('菲利普'), '菲利普·伯雷亚斯·格雷拉特');
+  assert.equal(mapped.get('洛琪希'), '洛琪希');
+  // Nobody by that name: left exactly as written.
+  assert.equal(mapped.get('保罗'), '保罗');
+
+  // A shared family name matches several people and so matches nobody.
+  assert.equal(unifySpeakerNames(['伯雷亚斯'], ['菲利普·伯雷亚斯', '希尔达·伯雷亚斯']).get('伯雷亚斯'), '伯雷亚斯');
+  // A longer unknown name that ends in a registered one is not assumed to be that person.
+  assert.equal(unifySpeakerNames(['千惠'], ['惠']).get('千惠'), '千惠');
+  // A title is only ever stripped to find someone already known.
+  assert.equal(unifySpeakerNames(['夏君'], []).get('夏君'), '夏君');
+
+  // With no roster, names reported side by side are unified with each other and the shorter form wins.
+  const floor = unifySpeakerNames(['艾莉丝·伯雷亚斯·格雷拉特', '艾莉丝', '艾莉丝酱', '罗罗'], []);
+  assert.equal(floor.get('艾莉丝·伯雷亚斯·格雷拉特'), '艾莉丝');
+  assert.equal(floor.get('艾莉丝酱'), '艾莉丝');
+  assert.equal(floor.get('罗罗'), '罗罗');
+});
+
+test('a line handed back in the source language is recognised as untranslated', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // Ordinary Chinese, including cries and a name written with a middle dot.
+  assert.equal(looksUntranslated('「……唔……呜，啊……」'), false);
+  assert.equal(looksUntranslated('哇啊啊啊——！'), false);
+  assert.equal(looksUntranslated('艾莉丝·伯雷亚斯把脸埋进我的颈窝。'), false);
+  // A name left in katakana inside an otherwise translated line is not a failed line.
+  assert.equal(looksUntranslated('我抬头看向ロロ，他正在笑。'), false);
+  // Echoed back untouched.
+  assert.equal(looksUntranslated('雨が降っている。', '雨が降っている。'), true);
+  // Half translated, half left in Japanese.
+  assert.equal(looksUntranslated('艾莉丝在毛毯里扑腾，ヒルダ様の腕を押し返した。'), true);
+  // Entirely Japanese without being an exact echo.
+  assert.equal(looksUntranslated('エリスは泣きながら私の袖を掴んだ。'), true);
+});
+
+test('a floor that fits one batch is spread evenly across parallel lanes', () => {
+  const segments = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
+  assert.equal(planTranslationBatches(segments, { maxChars: 48000 }).length, 1);
+  const lanes = planTranslationBatches(segments, { maxChars: 48000, parallel: 3 });
+  assert.deepEqual(lanes.map(batch => batch.length), [3, 3, 4]);
+  assert.deepEqual(lanes.flat().map(item => item.id), segments.map(item => item.id));
+  // Never more lanes than segments.
+  assert.equal(planTranslationBatches(segments.slice(0, 2), { maxChars: 48000, parallel: 4 }).length, 2);
+  // A floor that already needs budget-sized batches keeps them.
+  assert.equal(planTranslationBatches(segments, { maxChars: 250, parallel: 2 }).length, 5);
+});
+
+test('channel concurrency is clamped, new style presets survive a reload, placeholder speakers are dropped', async () => {
+  const { normalizeChannel, normalizePromptProfile, recoverStructuredTranslations, MAX_CHANNEL_CONCURRENCY } = await import('../core.js');
+  assert.equal(normalizeChannel({}).concurrency, 1);
+  assert.equal(normalizeChannel({ concurrency: 3 }).concurrency, 3);
+  assert.equal(normalizeChannel({ concurrency: 99 }).concurrency, MAX_CHANNEL_CONCURRENCY);
+  assert.equal(normalizeChannel({ concurrency: 0 }).concurrency, 1);
+  // A preset added to the list must not be thrown back to the default when the profile is loaded.
+  assert.equal(normalizePromptProfile({ styleMode: 'korean_web' }).styleMode, 'korean_web');
+  assert.equal(normalizePromptProfile({ styleMode: 'no_such_style' }).styleMode, 'light_novel');
+
+  const recovered = recoverStructuredTranslations(JSON.stringify({ translations: [
+    { id: 1, text: '下雨了。', speaker: '旁白', emotion: 'neutral' },
+    { id: 2, text: '「走吧。」', speaker: '洛琪希' },
+  ] }), [{ id: 1, text: '雨。' }, { id: 2, text: '「行こう。」' }]);
+  assert.equal(recovered.annotations.get(1)?.speaker, undefined);
+  assert.equal(recovered.annotations.get(2)?.speaker, '洛琪希');
+});

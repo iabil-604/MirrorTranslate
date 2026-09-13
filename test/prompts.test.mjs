@@ -87,3 +87,19 @@ test('absolute forbidden phrases are detected per completed segment', () => {
     { id: 2, phrases: ['涟漪'] },
   ]);
 });
+
+test('every built-in translation leaning survives a reload and lands in the spec', async () => {
+  const { STYLE_PRESETS } = await import('../prompts.js');
+  const keys = Object.keys(STYLE_PRESETS);
+  assert.ok(keys.length >= 10);
+  const labels = keys.map(key => STYLE_PRESETS[key].label);
+  assert.equal(new Set(labels).size, labels.length, '预设名称不能重复');
+  for (const key of keys) {
+    const profile = normalizePromptProfile({ ...DEFAULT_PROMPT_PROFILE, styleMode: key });
+    assert.equal(profile.styleMode, key);
+    const spec = composeTranslationSpecification(profile);
+    const at = spec.indexOf(STYLE_PRESETS[key].prompt);
+    assert.ok(at >= 0, `${key} 没有进入规范`);
+    assert.ok(at < spec.indexOf('# 9. 输出协议'), `${key} 应当排在输出协议之前`);
+  }
+});

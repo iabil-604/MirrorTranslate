@@ -6,11 +6,12 @@ import {
   LEGACY_DEFAULT_TRANSLATION_PROMPT,
   PRE_OUTPUT_CHECKLIST,
   normalizeTargetLanguage,
-} from './prompts.js?v=0.15.9';
+  STYLE_PRESETS,
+} from './prompts.js?v=0.16.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.15.9';
+export const APP_VERSION = '0.16.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -117,6 +118,104 @@ export function describeSpeechShape(texts) {
   return narrated ? 'mixed' : 'spoken';
 }
 
+// Titles a model bolts onto a name even when told to copy the roster verbatim. Stripping only ever
+// serves to find a name that is already known, so a real name that happens to end in one of these is
+// never cut down on its own.
+const SPEAKER_TITLE_TAIL = /(?:さん|ちゃん|くん|さま|様|殿|先輩|酱|醬|君|桑|大人|殿下|陛下|夫人|小姐|少爷|少爺|老师|老師|先生|前辈|前輩|学姐|学长|學姊|學長|哥哥|姐姐)$/u;
+const SPEAKER_NAME_SEPARATOR = /[\u00B7\u30FB\u2022\uFF65=\uFF1D\s]+/u;
+const HAN_ONLY = /^\p{Script=Han}+$/u;
+
+function speakerNameParts(name) {
+  return String(name ?? '').split(SPEAKER_NAME_SEPARATOR).filter(Boolean);
+}
+
+function uniqueSpeakerNames(values) {
+  return [...new Set([...(values ?? [])].map(value => String(value ?? '').trim()).filter(Boolean))];
+}
+
+function matchKnownSpeaker(name, known) {
+  if (known.includes(name)) return name;
+  const bare = name.replace(SPEAKER_TITLE_TAIL, '').trim();
+  if (bare && bare !== name && known.includes(bare)) return bare;
+  const target = bare || name;
+  // A full name for a registered short one: 艾莉丝·伯雷亚斯·格雷拉特 → 艾莉丝.
+  const parts = speakerNameParts(target);
+  if (parts.length > 1) {
+    const hits = known.filter(candidate => parts.includes(candidate));
+    if (hits.length === 1) return hits[0];
+  }
+  // A short name for a registered full one: 菲利普 → 菲利普·伯雷亚斯·格雷拉特. A shared family name
+  // matches several people and so matches nobody.
+  const wider = known.filter(candidate => {
+    const pieces = speakerNameParts(candidate);
+    return pieces.length > 1 && pieces.includes(target);
+  });
+  if (wider.length === 1) return wider[0];
+  // A bare given name for a registered family-and-given one with no separator to show the seam:
+  // 律 → 源律. Only in this direction; a longer unknown name that ends in a registered short one is
+  // as likely to be somebody else.
+  if (HAN_ONLY.test(target)) {
+    const hits = known.filter(candidate => HAN_ONLY.test(candidate)
+      && candidate.length > target.length
+      && candidate.length - target.length <= 2
+      && candidate.endsWith(target));
+    if (hits.length === 1) return hits[0];
+  }
+  return null;
+}
+
+/**
+ * Maps each speaker name a model reported onto the name the palette knows that person by.
+ *
+ * A closed roster says "copy these names verbatim", and a small model still answers 希尔达夫人,
+ * 艾莉丝·伯雷亚斯·格雷拉特 or 律 for 源律. Each spelling used to resolve on its own: one person in
+ * three colours, or in none. Registered and previously seen names win first; whatever is still loose is
+ * then unified with the shorter names reported beside it, so one floor never splits a character in two.
+ * Anything ambiguous is left exactly as the model wrote it.
+ */
+export function unifySpeakerNames(reported, knownNames = []) {
+  const known = uniqueSpeakerNames(knownNames);
+  const mapping = new Map();
+  for (const name of uniqueSpeakerNames(reported)) mapping.set(name, matchKnownSpeaker(name, known) ?? name);
+  const loose = [...new Set(mapping.values())].filter(name => !known.includes(name));
+  for (const [name, current] of mapping) {
+    if (known.includes(current)) continue;
+    const shorter = loose.filter(other => other !== current && other.length < current.length);
+    const bare = current.replace(SPEAKER_TITLE_TAIL, '').trim();
+    if (bare && bare !== current && shorter.includes(bare)) {
+      mapping.set(name, bare);
+      continue;
+    }
+    const parts = speakerNameParts(bare || current);
+    if (parts.length < 2) continue;
+    const hits = shorter.filter(other => parts.includes(other));
+    if (hits.length === 1) mapping.set(name, hits[0]);
+  }
+  return mapping;
+}
+
+// Hiragana and katakana letters. The prolonged sound mark and the middle dot are left out on purpose:
+// both turn up in ordinary Chinese renderings of names and drawn-out cries.
+const KANA_RE = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF]/gu;
+const KANA_OR_HAN_RE = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF\p{Script=Han}]/gu;
+
+/**
+ * Whether a returned "translation" is still, in substance, the source language.
+ *
+ * Small models sometimes hand a line back untouched, or translate half of it and leave the rest in
+ * Japanese. That passes every structural check — the id is right, the text is not empty — and lands
+ * on the floor looking like a translation. Kana are the tell: Chinese text carries none, so a line in
+ * which they make up a real share of the script goes back for another attempt instead.
+ */
+export function looksUntranslated(text, source = '') {
+  const value = String(text ?? '');
+  const kana = value.match(KANA_RE)?.length ?? 0;
+  if (!kana) return false;
+  if (source && value.replace(/\s+/g, '') === String(source).replace(/\s+/g, '')) return true;
+  const script = value.match(KANA_OR_HAN_RE)?.length ?? 0;
+  return kana >= 3 && kana / script >= 0.3;
+}
+
 // SillyTavern rewrites message class names with a custom- prefix when it renders, and an edited
 // floor can be saved back in that form, so both spellings have to be recognised here.
 const SPEAKER_OPEN_RE = new RegExp(`<span class="(?:custom-)?${SPEAKER_CLASS}(?:[ "][^>]*)?>`);
@@ -140,7 +239,11 @@ export const DEFAULT_CHANNEL = Object.freeze({
   tokenSaving: false,
   reasoningEffort: '',
   excludeParams: [],
+  // Batches sent at once. 1 keeps the whole floor in one request, which is what every run did before.
+  concurrency: 1,
 });
+
+export const MAX_CHANNEL_CONCURRENCY = 4;
 
 // Speaker colouring and emotion typography. The secondary model only ever returns a label; the
 // palette, the contrast maths and the typography all live on this side. See palette.js.
@@ -322,6 +425,7 @@ export function normalizeChannel(value = {}, fallbackId = DEFAULT_CHANNEL.id) {
     tokenSaving: source.tokenSaving === true,
     reasoningEffort: REASONING_EFFORTS.includes(source.reasoningEffort) ? source.reasoningEffort : '',
     excludeParams: parseExcludedParams(source.excludeParams),
+    concurrency: clampInteger(source.concurrency, 1, MAX_CHANNEL_CONCURRENCY, DEFAULT_CHANNEL.concurrency),
   };
 }
 
@@ -364,7 +468,7 @@ export function normalizePromptProfile(value = {}, fallbackId = DEFAULT_PROMPT_P
   profile.jailbreakPrompt = String(source.jailbreakPrompt ?? base.jailbreakPrompt);
   profile.corePrompt = String(source.corePrompt ?? '').trim() || CORE_TRANSLATION_SPEC;
   profile.checklistPrompt = String(source.checklistPrompt ?? '').trim() || PRE_OUTPUT_CHECKLIST;
-  profile.styleMode = normalizePromptMode(source.styleMode, ['light_novel', 'strict_mirror', 'plain', 'custom'], base.styleMode);
+  profile.styleMode = normalizePromptMode(source.styleMode, [...Object.keys(STYLE_PRESETS), 'custom'], base.styleMode);
   profile.nameMode = normalizePromptMode(source.nameMode, ['contextual', 'keep', 'transliterate', 'custom'], base.nameMode);
   profile.honorificMode = normalizePromptMode(source.honorificMode, ['preserve', 'translate', 'remove', 'custom'], base.honorificMode);
   profile.punctuationMode = normalizePromptMode(source.punctuationMode, ['japanese', 'chinese', 'source', 'custom'], base.punctuationMode);
@@ -1603,9 +1707,17 @@ function normalizeTranslationText(value) {
 // The optional speaker/emotion labels. They are display metadata: a value that is missing, wrong or
 // nonsense costs the line its colour and nothing else, so nothing here is allowed to throw or to
 // reach the translated text itself.
+// Answers a small model gives instead of leaving the field out. Kept as speakers they would each earn
+// a colour of their own, and a narrated line would be painted as though somebody were talking.
+const NON_SPEAKERS = new Set([
+  '旁白', '叙述', '叙述者', '敘述', '敘述者', '描写', '描寫', '心理描写', '内心', '内心独白', '独白',
+  '无', '無', '未知', '不明', '无人', 'narrator', 'narration', 'none', 'null', 'unknown', 'n/a', 'na', '-',
+]);
+
 function readAnnotation(object) {
   if (!object) return null;
-  const speaker = String(object.speaker ?? object.who ?? object.name ?? object.character ?? '').trim().slice(0, 60);
+  const reportedSpeaker = String(object.speaker ?? object.who ?? object.name ?? object.character ?? '').trim().slice(0, 60);
+  const speaker = NON_SPEAKERS.has(reportedSpeaker.toLowerCase()) ? '' : reportedSpeaker;
   const emotion = String(object.emotion ?? object.emo ?? object.mood ?? object.tone ?? '').trim().slice(0, 40);
   if (!speaker && !emotion) return null;
   const rawIntensity = object.intensity ?? object.level ?? object.strength;
@@ -1647,6 +1759,37 @@ export function planTranslationBatches(segments, options = {}) {
     const length = String(segment?.text ?? '').length;
     // A single oversized segment still travels alone rather than being dropped or split.
     if (current.length && chars + length > maxChars) {
+      batches.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(segment);
+    chars += length;
+  }
+  if (current.length) batches.push(current);
+  const parallel = clampInteger(options.parallel, 1, 8, 1);
+  // Parallel lanes only pay off when there is something to spread across them. A floor that already
+  // needs at least as many batches as lanes keeps its budget-sized ones; a floor that fits in fewer is
+  // split evenly by characters, so no lane sits idle while another carries the whole floor.
+  if (parallel > 1 && batches.length < parallel && list.length > batches.length) {
+    const even = splitBatchesEvenly(list, Math.min(parallel, list.length));
+    const fits = even.every(batch => batch.length === 1
+      || batch.reduce((sum, segment) => sum + String(segment?.text ?? '').length, 0) <= maxChars);
+    if (fits) return even;
+  }
+  return batches;
+}
+
+function splitBatchesEvenly(list, count) {
+  const total = list.reduce((sum, segment) => sum + String(segment?.text ?? '').length, 0);
+  const share = total / count;
+  const batches = [];
+  let current = [];
+  let chars = 0;
+  for (const segment of list) {
+    const length = String(segment?.text ?? '').length;
+    // Close a lane once this segment would carry it past its share, while lanes remain to open.
+    if (current.length && chars + length / 2 > share && batches.length < count - 1) {
       batches.push(current);
       current = [];
       chars = 0;

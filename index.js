@@ -17,6 +17,9 @@ import {
   SPEAKER_CLASS,
   describeSpeechShape,
   splitSpeechParts,
+  unifySpeakerNames,
+  looksUntranslated,
+  MAX_CHANNEL_CONCURRENCY,
   createGenerationGate,
   createIndependentRequest,
   clampInteger,
@@ -47,13 +50,13 @@ import {
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
-} from './core.js?v=0.15.9';
+} from './core.js?v=0.16.0';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.15.9';
+} from './processing.js?v=0.16.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -69,8 +72,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.15.9';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.15.9';
+} from './prompts.js?v=0.16.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.16.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -84,15 +87,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.15.9';
-import { sampleThemeBackground } from './theme-probe.js?v=0.15.9';
+} from './palette.js?v=0.16.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.16.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.15.9';
+} from './diagnostics.js?v=0.16.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -232,7 +235,7 @@ const CONTROL_CENTER_MARKUP = `
  <p id="jy-api-model-help" class="jy-muted" data-jy-model-help></p>
  </div></div>
  <details class="jy-advanced"><summary>请求参数</summary><div class="jy-form-grid">
- <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
+ <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
  </div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">列出全局挂载与当前角色卡激活的世界书条目；勾选后节约模式下仅注入这些内容，白名单跟随当前角色卡保存。一个都不勾则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
 </div>
 <div class="jy-retry-setting"><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-field="retries" min="0" max="5" step="1"></label><p class="jy-muted">适用于当前翻译通道。</p></div>
@@ -944,16 +947,32 @@ function oklchToSrgbSafe(hue, band) {
   return oklchToSrgb({ l: band.lightness ?? 0.6, c: Math.max(0.06, band.chromaMax * 0.8), h: hue });
 }
 
+// One person, one name. A model that answers 希尔达夫人 on one line and 希尔达 on the next, or spells a
+// full name out once, would otherwise split a character across colours. Names that cannot be placed
+// are left exactly as written; the stored labels are never rewritten, only read through this.
+function canonicalAnnotations(settings, annotations) {
+  const reported = [...annotations.values()].map(mark => mark?.speaker).filter(Boolean);
+  if (!reported.length) return annotations;
+  const names = unifySpeakerNames(reported, [...speakerRoster(settings), ...runtime.autoSpeakerNames]);
+  const result = new Map();
+  for (const [id, mark] of annotations) {
+    const speaker = mark?.speaker ? names.get(String(mark.speaker).trim()) ?? mark.speaker : mark?.speaker;
+    result.set(id, speaker === mark?.speaker ? mark : { ...mark, speaker });
+  }
+  return result;
+}
+
 /**
  * Builds the per-segment decorator handed to assembleBilingual / assembleReplace.
  *
  * Returns null when nothing would be painted, so a floor translated with colouring off is written
  * byte-for-byte the way it always was.
  */
-function buildSegmentStyler(settings, annotations) {
+function buildSegmentStyler(settings, reportedAnnotations) {
   const coloring = activeColoring(settings);
   const band = coloring.band;
-  if (!band || (!coloring.speakers && !coloring.emotions) || !(annotations instanceof Map) || !annotations.size) return null;
+  if (!band || (!coloring.speakers && !coloring.emotions) || !(reportedAnnotations instanceof Map) || !reportedAnnotations.size) return null;
+  const annotations = canonicalAnnotations(settings, reportedAnnotations);
   const named = [...annotations.values()].map(mark => mark?.speaker).filter(Boolean);
   const speakers = coloring.speakers ? resolvedSpeakerColors(settings, named) : new Map();
   // Say out loud who the model reported and who the palette recognised. A speaker that resolves to
@@ -1217,6 +1236,34 @@ function renderWorldInfoList(root) {
   }
 }
 
+/**
+ * Drops returned lines that are still in the source language, so they count as missing.
+ *
+ * Only when the target is Chinese and names are not deliberately kept in Japanese: both of those put
+ * kana into a correct translation. A dropped line goes back through the same repair path as a line the
+ * model never returned at all, instead of being written down looking like a translation.
+ */
+function withoutUntranslated(recovered, segments, settings, { quiet = false } = {}) {
+  const profile = getActivePromptProfile(settings);
+  if (profile.nameMode === 'keep') return recovered;
+  if (!/中文|汉语|漢語|chinese|^zh/i.test(normalizeTargetLanguage(profile.targetLanguage))) return recovered;
+  const sources = new Map(segments.map(segment => [Number(segment.id), segment.text]));
+  const dropped = [...recovered.translations]
+    .filter(([id, text]) => looksUntranslated(text, sources.get(Number(id))))
+    .map(([id]) => id);
+  if (!dropped.length) return recovered;
+  for (const id of dropped) {
+    recovered.translations.delete(id);
+    recovered.annotations?.delete(id);
+  }
+  if (!quiet) {
+    recordDiagnostic('warn', 'translation.untranslated', '副 API 有段落原样返回或仍是日文，这几段按缺失处理并重新请求。', {
+      ids: dropped,
+    });
+  }
+  return recovered;
+}
+
 async function invokeTranslationBatch(segments, settings, signal, packet = {}, phase = 'primary', requestMeta = {}) {
   const context = getContext();
   const messages = buildTranslationMessages(segments, settings, packet, phase, requestMeta);
@@ -1275,7 +1322,7 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
     reasoningCharacters: reasoning.length || undefined,
   }, raw, { fullRequest: messages, reasoning });
   signal?.throwIfAborted?.();
-  const recovered = recoverStructuredTranslations(raw, segments);
+  const recovered = withoutUntranslated(recoverStructuredTranslations(raw, segments), segments, settings);
   if (!recovered.translations.size) {
     recordDiagnostic('error', 'translation.empty-response', '副 API 返回中没有任何可用译文。', {
       phase,
@@ -1305,6 +1352,7 @@ const MAX_TRANSLATION_REQUESTS = 16;
 async function translateOneBatch(batch, settings, signal, packet, translations, budget, state, annotations = new Map()) {
   let pending = batch;
   let lastError = null;
+  let attempts = 0;
   while (pending.length) {
     if (state.requests >= MAX_TRANSLATION_REQUESTS) {
       recordDiagnostic('warn', 'translation.request-cap', '本次翻译已达到请求次数上限，停止继续补译。', {
@@ -1317,12 +1365,14 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
       signal?.throwIfAborted?.();
       state.requests += 1;
       const before = translations.size;
+      const phase = attempts > 0 || state.seeded ? 'repair' : 'primary';
+      attempts += 1;
       const recovered = await invokeTranslationBatch(
         pending,
         settings,
         signal,
         packet,
-        translations.size ? 'repair' : 'primary',
+        phase,
         { roster: state.roster ?? [] },
       );
       for (const [id, text] of recovered.translations) translations.set(id, text);
@@ -1365,24 +1415,56 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
   return null;
 }
 
+function channelConcurrency(channel) {
+  return clampInteger(channel?.concurrency, 1, MAX_CHANNEL_CONCURRENCY, 1);
+}
+
+/**
+ * Runs `work` over `items` with at most `lanes` in flight; results keep input order.
+ *
+ * A failure does not tear down lanes already running. They share one translation map, and a batch
+ * cancelled halfway would only have its finished answer thrown away. No new item starts after one.
+ */
+async function runInLanes(items, lanes, work) {
+  const results = new Array(items.length);
+  let next = 0;
+  let failure = null;
+  const lane = async () => {
+    while (!failure && next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        results[index] = await work(items[index], index);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(lanes, items.length)) }, lane));
+  if (failure) throw failure;
+  return results;
+}
+
 async function invokeWithRetries(segments, settings, signal, packet = {}, seedTranslations = new Map(), retryBudget = null, seedAnnotations = new Map()) {
   const budget = retryBudget || { remaining: settings.retries };
   const translations = new Map(seedTranslations);
   const annotations = new Map(seedAnnotations);
   const channel = getActiveChannel(settings);
-  const batches = planTranslationBatches(segments, { maxChars: translationCharBudget(channel.maxTokens) });
-  const state = { requests: 0, roster: speakerRoster(settings) };
+  const lanes = channelConcurrency(channel);
+  const batches = planTranslationBatches(segments, { maxChars: translationCharBudget(channel.maxTokens), parallel: lanes });
+  // `seeded` is fixed here rather than read off the map later: with lanes running side by side, a
+  // batch starting after another one finished would otherwise take itself for a repair.
+  const state = { requests: 0, roster: speakerRoster(settings), seeded: translations.size > 0 };
   let lastError;
   recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
     segments: segments.length,
     batches: batches.length,
     charBudget: translationCharBudget(channel.maxTokens),
     maxTokens: channel.maxTokens,
+    concurrency: lanes,
   });
-  for (const batch of batches) {
-    const failure = await translateOneBatch(batch, settings, signal, packet, translations, budget, state, annotations);
-    if (failure) lastError = failure;
-  }
+  const failures = await runInLanes(batches, lanes, batch => translateOneBatch(batch, settings, signal, packet, translations, budget, state, annotations));
+  for (const failure of failures) if (failure) lastError = failure;
   {
     const pending = segments.filter(segment => !translations.has(segment.id));
     if (!pending.length) return { translations, annotations, missingIds: [], complete: true };
@@ -1823,10 +1905,12 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       settings,
       channel.tokenSaving ? whitelistedWorldbookContent() : null,
     );
-    const batches = planTranslationBatches(snapshot.segments, { maxChars: translationCharBudget(channel.maxTokens) });
+    const lanes = channelConcurrency(channel);
+    const batches = planTranslationBatches(snapshot.segments, { maxChars: translationCharBudget(channel.maxTokens), parallel: lanes });
     // A forced run re-requests every segment; 补译 seeds with what is already written back.
     const translations = force ? new Map() : new Map(snapshot.existingTranslations);
     const annotations = force ? new Map() : new Map(snapshot.existingAnnotations);
+    const seeded = translations.size > 0;
     const roster = speakerRoster(settings);
     const total = snapshot.segments.length;
 
@@ -1872,41 +1956,53 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
         message: `副 API 正在思考（已 ${text.length} 字），还没有开始输出译文。`,
       });
     };
-    let lastDelta = 0;
-    const foldStreamedItems = pending => accumulated => {
-      const now = Date.now();
-      if (now - lastDelta < 600) return;
-      lastDelta = now;
-      try {
-        const partial = recoverStructuredTranslations(accumulated, pending);
-        let changed = false;
-        for (const [id, value] of partial.translations) {
-          if (!translations.has(id)) {
-            translations.set(id, value);
-            if (partial.annotations.has(id)) annotations.set(id, partial.annotations.get(id));
-            changed = true;
+    // Throttled per batch. With batches streaming side by side, one shared clock let whichever batch
+    // spoke first swallow every other batch's update inside the same window.
+    const foldStreamedItems = pending => {
+      let lastDelta = 0;
+      return accumulated => {
+        const now = Date.now();
+        if (now - lastDelta < 600) return;
+        lastDelta = now;
+        try {
+          const partial = withoutUntranslated(recoverStructuredTranslations(accumulated, pending), pending, settings, { quiet: true });
+          let changed = false;
+          for (const [id, value] of partial.translations) {
+            if (!translations.has(id)) {
+              translations.set(id, value);
+              if (partial.annotations.has(id)) annotations.set(id, partial.annotations.get(id));
+              changed = true;
+            }
           }
-        }
-        if (changed) {
-          updateTask({
-            status: 'running',
-            message: `已恢复 ${translations.size} / ${total} 段。`,
-            progress: 10 + Math.round(80 * translations.size / total),
-          });
-          maybeProgress();
-        }
-      } catch { /* partial text may not parse yet */ }
+          if (changed) {
+            updateTask({
+              status: 'running',
+              message: `已恢复 ${translations.size} / ${total} 段。`,
+              progress: 10 + Math.round(80 * translations.size / total),
+            });
+            maybeProgress();
+          }
+        } catch { /* partial text may not parse yet */ }
+      };
     };
 
-    for (const [batchIndex, batch] of batches.entries()) {
+    // Batches running side by side share one thinking panel, so it is cleared once up front rather than
+    // wiped by every batch that starts while another is still mid-thought.
+    if (lanes > 1) {
+      runtime.thinkingOpen = null;
+      updateThinking({ text: '', characters: 0, live: false, batch: null });
+    }
+    const streamBatch = async (batch, batchIndex) => {
       const pending = batch.filter(segment => !translations.has(segment.id));
-      if (!pending.length) continue;
-      const phase = translations.size ? 'repair' : 'primary';
+      if (!pending.length) return;
+      const phase = seeded ? 'repair' : 'primary';
       const messages = buildTranslationMessages(pending, settings, packet, phase, { roster });
       // Each batch thinks afresh; carrying the previous batch's thinking into this one would read as
       // the model having already written what it has not started.
-      runtime.thinkingOpen = null;
-      updateThinking({ text: '', characters: 0, live: false, batch: batchIndex + 1 });
+      if (lanes === 1) {
+        runtime.thinkingOpen = null;
+        updateThinking({ text: '', characters: 0, live: false, batch: batchIndex + 1 });
+      }
       let raw = '';
       try {
         raw = await streamTranslationBatch(messages, settings, controller.signal, foldStreamedItems(pending), reportThinking);
@@ -1926,9 +2022,9 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
           progress: 10 + Math.round(80 * translations.size / total),
         });
         maybeProgress();
-        continue;
+        return;
       }
-      const recovered = recoverStructuredTranslations(raw, pending);
+      const recovered = withoutUntranslated(recoverStructuredTranslations(raw, pending), pending, settings);
       for (const [id, value] of recovered.translations) translations.set(id, value);
       for (const [id, mark] of recovered.annotations) annotations.set(id, mark);
       const reasoning = extractReasoningText(raw);
@@ -1951,6 +2047,26 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
         progress: 10 + Math.round(80 * translations.size / total),
       });
       maybeProgress();
+    };
+    await runInLanes(batches, lanes, streamBatch);
+
+    // The whole-request path asks again for whatever a batch left out. Streaming stopped at one attempt
+    // per batch, so a line a small model skipped, or sent back still in Japanese, simply stayed missing
+    // until someone pressed 补译. Close those gaps through the same repair loop before writing.
+    const gaps = snapshot.segments.filter(segment => !translations.has(segment.id));
+    if (gaps.length && translations.size && Number(settings.retries) > 0) {
+      recordDiagnostic('warn', 'translation.stream-repair', '流式批次有缺失段落，改用整包请求补译。', {
+        missingIds: gaps.map(segment => segment.id),
+      });
+      updateTask({ status: 'running', message: `正在补译缺失的 ${gaps.length} 段…` });
+      try {
+        const repaired = await invokeWithRetries(gaps, settings, controller.signal, packet, translations, null, annotations);
+        for (const [id, value] of repaired.translations) translations.set(id, value);
+        for (const [id, mark] of repaired.annotations ?? []) annotations.set(id, mark);
+      } catch (error) {
+        if (controller.signal.aborted || isAbortError(error)) throw error;
+        recordDiagnostic('warn', 'translation.stream-repair-failed', `流式补译没有成功：${safeError(error)}`, {});
+      }
     }
 
     await repairForbiddenPhrases(snapshot.segments, translations, settings, controller.signal, packet);
@@ -2246,6 +2362,14 @@ function renderStandardPromptItems(root, profile) {
       modified: optionModified,
       buildEditor: editor => {
         appendLabeledControl(doc, editor, '采用规则', makePromptSelect(doc, modeField, profile[modeField], presets));
+        // What the chosen preset actually tells the model. Picking between 韩系 · 网文韩漫 and
+        // 欧美 · 小说奇幻 by label alone is exactly the guessing readers asked to be spared.
+        const preview = doc.createElement('p');
+        preview.className = 'jy-muted jy-preset-preview';
+        preview.dataset.jyPresetPreviewFor = modeField;
+        preview.textContent = presets[profile[modeField]]?.prompt ?? '';
+        preview.hidden = profile[modeField] === 'custom' || !preview.textContent;
+        editor.appendChild(preview);
         const custom = makePromptTextarea(doc, customField, profile[customField], 7, '写下这项自定义规则。');
         custom.dataset.jyCustomFor = modeField;
         appendLabeledControl(doc, editor, '自定义规则', custom);
@@ -2330,11 +2454,24 @@ function renderCustomPromptItems(root, profile) {
   });
 }
 
+const PROMPT_OPTION_PRESETS = Object.freeze({
+  styleMode: STYLE_PRESETS,
+  honorificMode: HONORIFIC_PRESETS,
+  nameMode: NAME_PRESETS,
+  punctuationMode: PUNCTUATION_PRESETS,
+});
+
 function updatePromptConditionalFields(root) {
   for (const custom of root.querySelectorAll('[data-jy-custom-for]')) {
     const mode = root.querySelector(`[data-jy-profile-field="${custom.dataset.jyCustomFor}"]`)?.value;
     const label = custom.closest('label');
     if (label) label.hidden = mode !== 'custom';
+  }
+  for (const preview of root.querySelectorAll('[data-jy-preset-preview-for]')) {
+    const field = preview.dataset.jyPresetPreviewFor;
+    const mode = root.querySelector(`[data-jy-profile-field="${field}"]`)?.value;
+    preview.textContent = PROMPT_OPTION_PRESETS[field]?.[mode]?.prompt ?? '';
+    preview.hidden = mode === 'custom' || !preview.textContent;
   }
 }
 
@@ -2544,7 +2681,7 @@ function collectSettings(root) {
     for (const element of root.querySelectorAll('[data-jy-channel-field]')) {
       const key = element.dataset.jyChannelField;
       if (element.type === 'checkbox') editing[key] = element.checked;
-      else if (['timeoutSec', 'maxTokens', 'temperature'].includes(key)) editing[key] = Number(element.value);
+      else if (['timeoutSec', 'maxTokens', 'temperature', 'concurrency'].includes(key)) editing[key] = Number(element.value);
       else if (key === 'excludeParams') editing[key] = element.value;
       else editing[key] = element.value;
     }
@@ -4807,6 +4944,7 @@ function configureForTest({ settings, worldInfoEntries, initialized } = {}) {
 
 export const __testing = Object.freeze({
   withAbortTimeout,
+  runInLanes,
   buildTranslationMessages,
   latestAssistantMessageId,
   readMessageSnapshot,

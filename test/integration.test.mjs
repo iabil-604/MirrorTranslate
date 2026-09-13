@@ -438,6 +438,96 @@ test('a quotation mark never ends up in a different span from its partner', asyn
   );
 });
 
+test('parallel lanes run side by side and still hand results back in order', async () => {
+  const { runInLanes } = __testing;
+  let inFlight = 0;
+  let peak = 0;
+  const finished = [];
+  const results = await runInLanes([30, 10, 20, 5], 2, async (delay, index) => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    inFlight -= 1;
+    finished.push(index);
+    return index * 10;
+  });
+  assert.equal(peak, 2);
+  assert.deepEqual(results, [0, 10, 20, 30]);
+  assert.notDeepEqual(finished, [0, 1, 2, 3]);
+
+  inFlight = 0;
+  peak = 0;
+  await runInLanes([2, 2, 2], 1, async delay => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    inFlight -= 1;
+  });
+  assert.equal(peak, 1, '一条车道就是原来的逐批发送');
+});
+
+test('a streamed floor split across lanes asks again for a line sent back in Japanese', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const lines = ['雨が降っている。', '風が冷たい。', '猫が鳴いた。', '夜が明けた。'];
+  const message = { mes: `<story_scene>\n${lines.join('\n\n')}\n</story_scene>`, swipe_id: 0 };
+  const repairs = [];
+  mockHost([message], {
+    ChatCompletionService: {
+      async processRequest(payload) {
+        const input = JSON.parse(payload.messages.at(-1).content);
+        repairs.push(input.segments.map(segment => segment.id));
+        return { content: JSON.stringify({ translations: input.segments.map(segment => ({ id: segment.id, text: '猫叫了。' })) }) };
+      },
+    },
+  });
+  __testing.configureForTest({
+    settings: { ...streamingSettings, retries: 1, channels: [{ ...streamingSettings.channels[0], concurrency: 2 }] },
+    initialized: true,
+  });
+  // Line 3 comes back untouched, the way a small model sometimes returns one.
+  const replies = { 1: '下雨了。', 2: '风很冷。', 3: '猫が鳴いた。', 4: '天亮了。' };
+  let open = 0;
+  let peak = 0;
+  globalThis.fetch = async (_url, init) => {
+    const input = JSON.parse(JSON.parse(init.body).messages.at(-1).content);
+    open += 1;
+    peak = Math.max(peak, open);
+    await new Promise(resolve => setTimeout(resolve, 15));
+    open -= 1;
+    const payload = JSON.stringify({ translations: input.segments.map(segment => ({ id: segment.id, text: replies[segment.id] })) });
+    return sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: payload } }] })}\n\n`, 'data: [DONE]\n\n']);
+  };
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  assert.equal(peak, 2, '两批应当同时在途');
+  // The Japanese reply was not written down as a translation; only that line went back, and it came home.
+  assert.deepEqual(repairs, [[3]]);
+  assert.match(message.mes, /猫叫了。/);
+  assert.match(message.mes, /下雨了。/);
+  assert.match(message.mes, /天亮了。/);
+});
+
+test('one character spelled two ways in one floor wears one colour', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n「行こう。」\n\n「待って。」\n</story_scene>', swipe_id: 0 };
+  mockHost([message]);
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
+  globalThis.fetch = async () => completionResponse([
+    { id: 1, text: '「走吧。」', speaker: '艾莉丝·伯雷亚斯·格雷拉特', emotion: 'neutral' },
+    { id: 2, text: '「等等。」', speaker: '艾莉丝', emotion: 'neutral' },
+  ]);
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  const slugs = [...message.mes.matchAll(/class="jy-spk (jy-spk-[a-z0-9]+)/g)].map(match => match[1]);
+  assert.equal(slugs.length, 2);
+  assert.equal(slugs[0], slugs[1], '同一个人不该穿两种颜色');
+  assert.doesNotMatch(message.mes, /title="艾莉丝·伯雷亚斯/);
+});
+
 test('colouring off writes exactly the floor the extension has always written', async t => {
   const previousHost = globalThis.SillyTavern;
   const previousFetch = globalThis.fetch;

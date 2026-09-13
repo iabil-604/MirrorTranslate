@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.15.9';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.16.0';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 
@@ -453,6 +453,37 @@ export const STYLE_PRESETS = Object.freeze({
   plain: Object.freeze({
     label: '平实白描',
     prompt: '使用平实、干净、克制的现代中文。原文白话就用白话，原文没有比喻就不添加比喻，避免华丽辞藻、成语堆砌和故作深沉的叙述。',
+  }),
+  // Source- and genre-specific leanings. Readers kept asking which rule to write for a Korean webtoon
+  // or a shounen fight scene; each of these is a finished answer they can pick instead of drafting
+  // one. Every one stays inside the core spec: it shapes how the same content is said, never adds.
+  galgame: Object.freeze({
+    label: '日系 · Galgame 对白',
+    prompt: '对白是主体，旁白多是主角的心声和吐槽。对白按角色属性保留口吻：嘴硬、迟钝、端正、元气的差别靠句长、语气词和措辞体现，不靠旁白解释。口癖和特殊句尾（のだ、ですわ、っす、にゃ）为每个角色选定一种中文对应并全篇统一，不音译成日文读音。选项、系统提示和心声保留原有的格式与层级。主角的吐槽跟着原文走，原文平淡就平淡，不替他补上机灵话。',
+  }),
+  shonen: Object.freeze({
+    label: '日系 · 热血战斗',
+    prompt: '战斗与对峙用短句推进，一个动作一句；喊话短促有力，喘息、停顿和打断用破折号或省略号保留。招式名、组织名、称号优先用资料里的写法；没有写法时意译得简洁响亮，全篇统一。豪言和挑衅保持原有的冲劲，不软化成商量的口气，也不替角色加原文没有的决心宣言。不用“只见”“说时迟那时快”这类说书腔和武侠腔，不用成语描写招式。',
+  }),
+  daily_moe: Object.freeze({
+    label: '日系 · 日常萌系',
+    prompt: '轻松日常的语感：句子短，语气软，节奏跟着角色的小动作走。拟声拟态词换成中文口语里有画面的说法（软乎乎、蹭来蹭去），不堆叠叠词，不音译。撒娇、吐槽、害羞保持原文的分寸，原文没有语气词的地方不额外加“嘛”“呢”“啦”。旁白保持温和的观察距离，不写成煽情独白，也不为了可爱改变原意。',
+  }),
+  isekai: Object.freeze({
+    label: '日系 · 异世界西幻',
+    prompt: '魔法、职业、技能、称号和状态栏字段优先用资料里的写法；没有写法时选读者熟悉的说法（冒险者公会、骑士团、宫廷魔术师）并全篇统一。贵族和王族的敬语用现代中文的礼貌措辞体现：您、请、失礼了，分寸靠句式而不是古语；不用“在下”“令尊”“叨扰”“尔等”这类文言和宫廷剧腔。技能发动、系统提示和状态栏保留原格式，不改写成叙述。',
+  }),
+  korean_web: Object.freeze({
+    label: '韩系 · 网文韩漫',
+    prompt: '韩文原文里，존댓말与반말的切换是人物关系的信号：用“您／你”和句子的客气程度体现，关系变化时译文跟着变。称呼按关系转成中文：오빠、형 译作哥，언니、누나 译作姐，선배 译作前辈，씨 视语境译作先生、小姐或直呼其名，님 按身份译作大人或职务称呼，不保留韩文音译。回归、重生、觉醒、猎人、系统面板这类题材术语优先用资料里的写法并全篇统一，面板和提示保留原格式。拟声词换成中文里效果相当的说法。',
+  }),
+  western_novel: Object.freeze({
+    label: '欧美 · 小说奇幻',
+    prompt: '英文等西方语言原文：长句按中文习惯拆成短句，定语从句化成独立分句，不保留“被……所……”“当……的时候”这类翻译腔。人名、地名优先用资料里的写法，没有写法时按通行音译并全篇统一，不给外国人名套中式称谓。Mr.、Mrs.、Lady、Sir、Lord 按身份译作先生、夫人、女士、爵士、大人。俚语和脏话按强弱换成中文里分量相当的说法，不照字面直译，也不刻意文雅化或写成古风。',
+  }),
+  western_casual: Object.freeze({
+    label: '欧美 · 现代口语',
+    prompt: '现代口语语境：对白要像真人聊天，玩笑、反讽和梗按意思找中文里效果相当的说法；找不到对应时把意思说清楚，不加注释。脏话和俚语保留原有力度，不净化也不加码。旁白简洁利落，时间、地点、品牌照写，不本土化成中国的地名、节日和网络流行语。',
   }),
 });
 
