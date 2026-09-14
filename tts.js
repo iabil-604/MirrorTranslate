@@ -5,8 +5,8 @@ import {
   parseJsonCandidates,
   splitSpeechParts,
   unifySpeakerNames,
-} from './core.js?v=0.17.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.17.0';
+} from './core.js?v=0.17.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.17.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.

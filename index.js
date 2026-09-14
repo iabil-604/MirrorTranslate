@@ -52,7 +52,7 @@ import {
   restyleBilingual,
   normalizeTts,
   normalizeVoiceList,
-} from './core.js?v=0.17.0';
+} from './core.js?v=0.17.1';
 import {
   FISH_MIME,
   alignSpansToTimeline,
@@ -83,14 +83,14 @@ import {
   splitUtterances,
   toStandardDocument,
   voiceRosterNames,
-} from './tts.js?v=0.17.0';
-import { createTtsStore } from './tts-store.js?v=0.17.0';
+} from './tts.js?v=0.17.1';
+import { createTtsStore } from './tts-store.js?v=0.17.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.17.0';
+} from './processing.js?v=0.17.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -107,8 +107,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.17.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.17.0';
+} from './prompts.js?v=0.17.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.17.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -122,15 +122,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.17.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.17.0';
+} from './palette.js?v=0.17.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.17.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.17.0';
+} from './diagnostics.js?v=0.17.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -256,6 +256,7 @@ const CONTROL_CENTER_MARKUP = `
  </aside>
 </div>
 <div class="jy-automation"><div><h3>自动接续翻译</h3><p class="jy-muted">主回复完成后，自动补上译文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label><label class="jy-check"><input type="checkbox" data-jy-field="streamingWriteback">流式写回（beta，勾选后所有翻译走流式；仅独立模式，跟随模式自动回退整包）</label></div>
+<div class="jy-automation" data-jy-tts-desk><div><h3>朗读（有声小说）</h3><p class="jy-muted">把译文或原文念出来，旁白和角色各用各的声音。关着就是只翻译，楼层里不加任何东西。需要 Fish Audio 的 API Key。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label><button type="button" class="jy-text-button" data-jy-action="open-tts" hidden>朗读设置 →</button></div>
 </section>
 
 <section class="jy-page" data-jy-page="prompt" role="tabpanel" hidden>
@@ -312,7 +313,7 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 匹配整行。纯边框、纯符号与标签行自动保留。</p></details>
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-check" title="打开后控制中心出现「朗读」页，楼层里出现播放按钮；关着就是只翻译的一般模式"><input type="checkbox" data-jy-tts-field="enabled">朗读功能（有声小说）</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label></div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label></div>
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
 <details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
 <p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。</p>
@@ -4272,8 +4273,10 @@ function syncTtsFields(root, settings = runtime.settings) {
 /**
  * Ordinary mode: the 朗读 tab is not in the rail and the page shows only its own switch.
  *
- * A page switched off while it is open stays open with just the switch on it, so turning the feature
- * back on is one more click rather than a hunt; the tab disappears once the reader moves elsewhere.
+ * The feature is switched on from the desk, where the other big switch already lives, so the tab only
+ * appears for someone who asked for it. A page switched off while it is open stays open with just the
+ * switch on it, so turning it back on is one click rather than a trip back to the desk; the tab goes
+ * once the reader moves elsewhere.
  */
 function syncTtsFeatureVisibility(root, settings = runtime.settings) {
   const enabled = ttsSettings(settings).enabled;
@@ -4281,6 +4284,8 @@ function syncTtsFeatureVisibility(root, settings = runtime.settings) {
   if (tab) tab.hidden = !enabled && tab.getAttribute('aria-selected') !== 'true';
   const page = root.querySelector('[data-jy-page="tts"]');
   if (page) page.dataset.jyTtsOff = String(!enabled);
+  const shortcut = root.querySelector('[data-jy-action="open-tts"]');
+  if (shortcut) shortcut.hidden = !enabled;
 }
 
 function collectTtsFields(root, current) {
@@ -4966,6 +4971,8 @@ function createControlCenter(rootDocument = document) {
         selectTab('settings');
       } else if (action === 'open-prompt') {
         selectTab('prompt');
+      } else if (action === 'open-tts') {
+        selectTab('tts');
       } else if (action === 'refresh-base-prompts') {
         const next = collectSettings(root);
         const active = getActivePromptProfile(next);
