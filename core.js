@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.16.1';
+} from './prompts.js?v=0.17.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.16.1';
+export const APP_VERSION = '0.17.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -268,10 +268,62 @@ export const DEFAULT_COLORING = Object.freeze({
   bandProbedAt: '',
 });
 
+// Reading the translation aloud. The provider block is Fish Audio today; everything above it — which
+// lines are read, by whom, in what mood — is provider-neutral and lives in tts.js.
+export const TTS_MODES = Object.freeze(['floor', 'sentence']);
+export const TTS_RANGES = Object.freeze(['all', 'dialogue', 'narration']);
+// Which language is read: the translation, or the original the floor was written in.
+export const TTS_SIDES = Object.freeze(['translation', 'source']);
+export const TTS_ANALYSIS_MODES = Object.freeze(['model', 'annotations']);
+export const FISH_MODELS = Object.freeze(['s2-pro', 's2.1-pro', 's2.1-pro-free', 'drama-3-preview', 's1']);
+export const FISH_FORMATS = Object.freeze(['mp3', 'opus', 'wav']);
+export const FISH_LATENCIES = Object.freeze(['normal', 'balanced', 'low']);
+
+export const DEFAULT_FISH = Object.freeze({
+  key: '',
+  baseUrl: 'https://api.fish.audio',
+  // api.fish.audio answers no CORS preflight, so a browser cannot call it directly. The host's own
+  // /proxy/ route is the way through; direct stays available for a relay or a local fish-speech server.
+  viaProxy: true,
+  model: 's2-pro',
+  format: 'mp3',
+  mp3Bitrate: 128,
+  latency: 'normal',
+  speed: 1,
+  volume: 0,
+  temperature: 0.7,
+  topP: 0.7,
+  normalize: true,
+  // Characters of story text per request in whole-floor mode. Longer floors are cut at sentence
+  // boundaries and played back as consecutive parts.
+  maxChars: 1500,
+  timeoutSec: 180,
+});
+
+export const DEFAULT_TTS = Object.freeze({
+  // The whole feature. Off is the ordinary translate-only mode: no 朗读 page, no floor buttons, nothing
+  // listening in the background and no audio store opened.
+  enabled: false,
+  side: 'translation',
+  mode: 'floor',
+  range: 'all',
+  analysis: 'model',
+  emotionCues: true,
+  // Read when a floor carries no translation written by this extension.
+  sourceTags: Object.freeze(['jy-translation']),
+  narratorVoice: '',
+  narratorTitle: '',
+  dialogueVoice: '',
+  dialogueTitle: '',
+  fish: DEFAULT_FISH,
+});
+
 export const DEFAULT_SETTINGS = Object.freeze({
   schemaVersion: 12,
   coloring: DEFAULT_COLORING,
   speakerPalette: {},
+  tts: DEFAULT_TTS,
+  ttsVoices: {},
   theme: 'day',
   autoGeneration: true,
   autoSwipe: true,
@@ -574,6 +626,85 @@ export function normalizeSpeakerList(value) {
     .slice(0, 40);
 }
 
+// Fish voice ids are 32 hex characters; a relay or a local server may name voices differently, so the
+// check only keeps out whitespace and markup rather than insisting on one provider's spelling.
+export function normalizeVoiceId(value) {
+  const id = String(value ?? '').trim();
+  return /^[A-Za-z0-9_.:@-]{1,128}$/.test(id) ? id : '';
+}
+
+function normalizeVoiceTitle(value) {
+  return String(value ?? '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 80);
+}
+
+// One row per character whose lines get their own voice. Stored per character card, like the speaker
+// palette, because a name only means somebody within one cast.
+export function normalizeVoiceList(value) {
+  const seen = new Set();
+  return (Array.isArray(value) ? value : [])
+    .map(item => {
+      if (!item || typeof item !== 'object') return null;
+      const name = String(item.name ?? '').trim().slice(0, 60);
+      if (!name) return null;
+      const aliases = [...new Set((Array.isArray(item.aliases) ? item.aliases : String(item.aliases ?? '').split(/[\s,，、;；]+/))
+        .map(alias => String(alias ?? '').trim().slice(0, 60))
+        .filter(alias => alias && alias !== name))].slice(0, 8);
+      return { name, aliases, voiceId: normalizeVoiceId(item.voiceId), title: normalizeVoiceTitle(item.title) };
+    })
+    .filter(item => {
+      if (!item || seen.has(item.name)) return false;
+      seen.add(item.name);
+      return true;
+    })
+    .slice(0, 60);
+}
+
+export function normalizeFishSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  let baseUrl = String(source.baseUrl ?? DEFAULT_FISH.baseUrl).trim().replace(/\/+$/, '');
+  try {
+    const url = new URL(baseUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) baseUrl = DEFAULT_FISH.baseUrl;
+  } catch {
+    baseUrl = DEFAULT_FISH.baseUrl;
+  }
+  return {
+    key: String(source.key ?? '').trim(),
+    baseUrl,
+    viaProxy: source.viaProxy === undefined ? DEFAULT_FISH.viaProxy : source.viaProxy !== false,
+    model: FISH_MODELS.includes(source.model) ? source.model : DEFAULT_FISH.model,
+    format: FISH_FORMATS.includes(source.format) ? source.format : DEFAULT_FISH.format,
+    mp3Bitrate: [64, 128, 192].includes(Number(source.mp3Bitrate)) ? Number(source.mp3Bitrate) : DEFAULT_FISH.mp3Bitrate,
+    latency: FISH_LATENCIES.includes(source.latency) ? source.latency : DEFAULT_FISH.latency,
+    speed: clampNumber(source.speed, 0.5, 2, DEFAULT_FISH.speed),
+    volume: clampNumber(source.volume, -20, 20, DEFAULT_FISH.volume),
+    temperature: clampNumber(source.temperature, 0, 1, DEFAULT_FISH.temperature),
+    topP: clampNumber(source.topP, 0, 1, DEFAULT_FISH.topP),
+    normalize: source.normalize === undefined ? DEFAULT_FISH.normalize : source.normalize !== false,
+    maxChars: clampInteger(source.maxChars, 200, 10000, DEFAULT_FISH.maxChars),
+    timeoutSec: clampInteger(source.timeoutSec, 10, 600, DEFAULT_FISH.timeoutSec),
+  };
+}
+
+export function normalizeTts(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const tags = parseTagNames(source.sourceTags ?? DEFAULT_TTS.sourceTags);
+  return {
+    enabled: source.enabled === true,
+    side: TTS_SIDES.includes(source.side) ? source.side : DEFAULT_TTS.side,
+    mode: TTS_MODES.includes(source.mode) ? source.mode : DEFAULT_TTS.mode,
+    range: TTS_RANGES.includes(source.range) ? source.range : DEFAULT_TTS.range,
+    analysis: TTS_ANALYSIS_MODES.includes(source.analysis) ? source.analysis : DEFAULT_TTS.analysis,
+    emotionCues: source.emotionCues === undefined ? DEFAULT_TTS.emotionCues : source.emotionCues !== false,
+    sourceTags: tags,
+    narratorVoice: normalizeVoiceId(source.narratorVoice),
+    narratorTitle: normalizeVoiceTitle(source.narratorTitle),
+    dialogueVoice: normalizeVoiceId(source.dialogueVoice),
+    dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
+    fish: normalizeFishSettings(source.fish),
+  };
+}
+
 export function mergeSettings(value = {}) {
   const source = value && typeof value === 'object' ? value : {};
   const merged = { ...deepClone(DEFAULT_SETTINGS), ...source };
@@ -679,6 +810,14 @@ export function mergeSettings(value = {}) {
   for (const [characterKey, list] of Object.entries(rawPalette)) {
     const speakers = normalizeSpeakerList(list);
     if (speakers.length) merged.speakerPalette[characterKey] = speakers;
+  }
+  merged.tts = normalizeTts(source.tts);
+  // Voices follow the character card for the same reason the palette does.
+  merged.ttsVoices = {};
+  const rawVoices = source.ttsVoices && typeof source.ttsVoices === 'object' ? source.ttsVoices : {};
+  for (const [characterKey, list] of Object.entries(rawVoices)) {
+    const voices = normalizeVoiceList(list);
+    if (voices.length) merged.ttsVoices[characterKey] = voices;
   }
   merged.includeWorldbook = Boolean(merged.includeWorldbook);
   merged.includeCharacterCard = Boolean(merged.includeCharacterCard);
@@ -1643,7 +1782,9 @@ function findJsonFragmentEnd(text, start) {
   return -1;
 }
 
-function parseJsonCandidates(raw) {
+// Every JSON value a model reply can be read as: the whole reply, fenced blocks, and each balanced
+// fragment. Shared with the read-aloud analysis, which asks for labels in the same loose way.
+export function parseJsonCandidates(raw) {
   const value = unwrapResponseContent(raw);
   if (value && typeof value === 'object') return [value];
   if (typeof value !== 'string') return [];
@@ -1722,10 +1863,14 @@ const NON_SPEAKERS = new Set([
   '无', '無', '未知', '不明', '无人', 'narrator', 'narration', 'none', 'null', 'unknown', 'n/a', 'na', '-',
 ]);
 
+export function isPlaceholderSpeaker(name) {
+  return NON_SPEAKERS.has(String(name ?? '').trim().toLowerCase());
+}
+
 function readAnnotation(object) {
   if (!object) return null;
   const reportedSpeaker = String(object.speaker ?? object.who ?? object.name ?? object.character ?? '').trim().slice(0, 60);
-  const speaker = NON_SPEAKERS.has(reportedSpeaker.toLowerCase()) ? '' : reportedSpeaker;
+  const speaker = isPlaceholderSpeaker(reportedSpeaker) ? '' : reportedSpeaker;
   const emotion = String(object.emotion ?? object.emo ?? object.mood ?? object.tone ?? '').trim().slice(0, 40);
   if (!speaker && !emotion) return null;
   const rawIntensity = object.intensity ?? object.level ?? object.strength;

@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.16.1';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.17.0';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 

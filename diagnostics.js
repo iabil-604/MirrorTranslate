@@ -26,6 +26,8 @@ function cleanString(value) {
   return String(value ?? '')
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [已隐藏]')
     .replace(/([?&](?:key|token|api_key|access_token)=)[^&#\s]+/gi, '$1[已隐藏]')
+    // Provider keys such as Fish's sk-fish-… can surface inside an error message quoted back verbatim.
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, '[密钥已隐藏]')
     .slice(0, 2000);
 }
 

@@ -69,6 +69,13 @@
       "fallback": "updateMessageBlock"
     },
     {
+      "id": "read-aloud-cors-proxy",
+      "owner": "sillytavern",
+      "symbol": "/proxy/:url (config.yaml enableCorsProxy)",
+      "required": false,
+      "fallback": "direct-connection-to-a-cors-enabled-relay"
+    },
+    {
       "id": "native-extension-updater",
       "owner": "sillytavern",
       "symbol": "/api/extensions/discover + /api/extensions/version + /api/extensions/update",

@@ -69,6 +69,163 @@
   :is(.jy-reading-minimal, .custom-jy-reading-minimal) { padding-left: 13px; }
 }
 
+/* Reading aloud inside the three built-in styles.
+
+   The generic buttons in host.css take every colour from the text around them, which is right on a bare
+   floor and wrong inside a card that has its own accent. Here the play buttons and the highlight take the
+   card's accent, and the bar under the floor — which sits after the cards, not inside one — is told the
+   style by data-jy-reading and dresses to match. #chat keeps these above the generic rules. */
+
+/* 可爱风: the petal pink of the card border and its flower. */
+#chat :is(.jy-reading-cute, .custom-jy-reading-cute) .jy-tts-play {
+  border-color: #c88b9566;
+  background: #d597a31c;
+  color: #bf8792;
+  -webkit-text-fill-color: #bf8792;
+  opacity: .8;
+}
+#chat :is(.jy-reading-cute, .custom-jy-reading-cute) .jy-tts-play:hover,
+#chat :is(.jy-reading-cute, .custom-jy-reading-cute) .jy-tts-play[data-state="playing"] {
+  background: #d597a33d;
+  box-shadow: 0 0 0 3px #d597a31f;
+  opacity: 1;
+}
+:is(.jy-reading-cute, .custom-jy-reading-cute)::highlight(jy-tts-current),
+:is(.jy-reading-cute, .custom-jy-reading-cute) *::highlight(jy-tts-current) {
+  background-color: #d597a347;
+}
+#chat .jy-tts-bar[data-jy-reading="cute"] {
+  margin-top: .4em;
+  padding: .55em 0 0 .2em;
+  border-top-color: #c88b9538;
+}
+#chat .jy-tts-bar[data-jy-reading="cute"] :is(.jy-tts-bar-play, .jy-tts-bar-stop) {
+  border-color: #c88b9566;
+  border-radius: 13px 13px 13px 4px;
+  background: linear-gradient(120deg, #d597a324, #d597a30d);
+  color: #bf8792;
+  -webkit-text-fill-color: #bf8792;
+}
+/* The card's flower stands in for the play triangle; two glyphs side by side only read as clutter. */
+#chat .jy-tts-bar[data-jy-reading="cute"] .jy-tts-bar-play::before { content: '✿'; }
+#chat .jy-tts-bar[data-jy-reading="cute"] .jy-tts-bar-play svg { display: none; }
+
+/* 极简风: the buttons stay out of the way until the line is under the pointer, and the sentence being
+   read is underlined instead of filled, the way the style already separates things with a single rule. */
+#chat :is(.jy-reading-minimal, .custom-jy-reading-minimal) .jy-tts-play {
+  border-color: transparent;
+  background: transparent;
+  color: #879b92;
+  -webkit-text-fill-color: #879b92;
+  opacity: .3;
+}
+#chat :is(.jy-reading-minimal, .custom-jy-reading-minimal) :is(p, .jy-reading-translation, .custom-jy-reading-translation):hover .jy-tts-play {
+  opacity: .75;
+}
+/* A phone never hovers, so a button waiting for the pointer would never be found. */
+@media (hover: none) {
+  #chat :is(.jy-reading-minimal, .custom-jy-reading-minimal) .jy-tts-play { opacity: .6; }
+}
+#chat :is(.jy-reading-minimal, .custom-jy-reading-minimal) .jy-tts-play:is(:hover, :focus-visible, [data-state="playing"], [data-state="busy"]) {
+  border-color: #879b9280;
+  opacity: 1;
+}
+:is(.jy-reading-minimal, .custom-jy-reading-minimal)::highlight(jy-tts-current),
+:is(.jy-reading-minimal, .custom-jy-reading-minimal) *::highlight(jy-tts-current) {
+  background-color: #879b921f;
+  text-decoration: underline 2px #879b92b3;
+  text-underline-offset: .28em;
+}
+#chat .jy-tts-bar[data-jy-reading="minimal"] {
+  padding: .1em 0 .1em 18px;
+  border-top: 0;
+  border-left: 2px solid #879b923b;
+}
+#chat .jy-tts-bar[data-jy-reading="minimal"] :is(.jy-tts-bar-play, .jy-tts-bar-stop) {
+  padding: .15em 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #879b92;
+  -webkit-text-fill-color: #879b92;
+}
+#chat .jy-tts-bar[data-jy-reading="minimal"] :is(.jy-tts-bar-play, .jy-tts-bar-stop):hover {
+  text-decoration: underline;
+  text-underline-offset: .25em;
+}
+
+/* 原文折叠: the grey-green of the summary chip, and the bar indented on the same rule as the
+   translation it plays. */
+#chat :is(.jy-reading-fold, .custom-jy-reading-fold) .jy-tts-play {
+  border-color: #879b9266;
+  background: #879b9214;
+  color: #91a196;
+  -webkit-text-fill-color: #91a196;
+  opacity: .75;
+}
+#chat :is(.jy-reading-fold, .custom-jy-reading-fold) .jy-tts-play:is(:hover, [data-state="playing"]) {
+  background: #879b9238;
+  opacity: 1;
+}
+:is(.jy-reading-fold, .custom-jy-reading-fold)::highlight(jy-tts-current),
+:is(.jy-reading-fold, .custom-jy-reading-fold) *::highlight(jy-tts-current) {
+  background-color: #91a19642;
+}
+#chat .jy-tts-bar[data-jy-reading="fold"] {
+  margin-left: .3em;
+  padding: .15em 0 .15em 1.1em;
+  border-top: 0;
+  border-left: 2px solid #879b9233;
+}
+#chat .jy-tts-bar[data-jy-reading="fold"] :is(.jy-tts-bar-play, .jy-tts-bar-stop) {
+  padding: 3px 10px;
+  border-color: #879b922e;
+  border-radius: 6px;
+  background: #879b920a;
+  font-size: .92em;
+  color: #91a196;
+  -webkit-text-fill-color: #91a196;
+}
+
+/* Speaker colouring and emotion typography.
+
+   Two carriers, on purpose. Each span gets an inline style with the fully resolved colour, and the
+   same information again as class names. If the host ever strips style attributes from message HTML
+   the classes still carry it, and a re-run of 取色 repaints every existing floor through the
+   generated palette sheet without touching a single stored message.
+
+   Both class spellings are listed because SillyTavern prefixes message classes with custom-. */
+:is(.jy-spk, .custom-jy-spk) { transition: color 120ms ease; }
+:is(.jy-spk, .custom-jy-spk)[title] { cursor: help; }
+
+:is(.jy-emo-happy, .custom-jy-emo-happy) { font-weight: 560; }
+:is(.jy-emo-happy, .custom-jy-emo-happy):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 620; }
+:is(.jy-emo-tender, .custom-jy-emo-tender) { font-style: italic; }
+:is(.jy-emo-tender, .custom-jy-emo-tender):is(.jy-emo-l2, .custom-jy-emo-l2) { font-style: italic; font-weight: 360; }
+:is(.jy-emo-sad, .custom-jy-emo-sad) { font-style: italic; font-weight: 360; }
+:is(.jy-emo-sad, .custom-jy-emo-sad):is(.jy-emo-l2, .custom-jy-emo-l2) { font-style: italic; font-weight: 320; }
+:is(.jy-emo-angry, .custom-jy-emo-angry) { font-weight: 640; }
+:is(.jy-emo-angry, .custom-jy-emo-angry):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 760; letter-spacing: -.01em; }
+:is(.jy-emo-fear, .custom-jy-emo-fear) { font-style: italic; letter-spacing: .03em; }
+:is(.jy-emo-fear, .custom-jy-emo-fear):is(.jy-emo-l2, .custom-jy-emo-l2) { font-style: italic; letter-spacing: .06em; font-size: .94em; }
+:is(.jy-emo-shy, .custom-jy-emo-shy) { letter-spacing: .01em; font-size: .98em; }
+:is(.jy-emo-shy, .custom-jy-emo-shy):is(.jy-emo-l2, .custom-jy-emo-l2) { letter-spacing: .02em; font-size: .96em; }
+:is(.jy-emo-surprise, .custom-jy-emo-surprise) { font-weight: 620; }
+:is(.jy-emo-surprise, .custom-jy-emo-surprise):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 700; font-size: 1.06em; }
+:is(.jy-emo-serious, .custom-jy-emo-serious) { font-weight: 540; }
+:is(.jy-emo-serious, .custom-jy-emo-serious):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 620; letter-spacing: -.02em; }
+:is(.jy-emo-resolute, .custom-jy-emo-resolute) { font-weight: 600; }
+:is(.jy-emo-resolute, .custom-jy-emo-resolute):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 700; }
+:is(.jy-emo-whisper, .custom-jy-emo-whisper) { font-style: italic; font-weight: 340; font-size: .95em; }
+:is(.jy-emo-whisper, .custom-jy-emo-whisper):is(.jy-emo-l2, .custom-jy-emo-l2) { font-style: italic; font-weight: 280; font-size: .9em; letter-spacing: .04em; }
+:is(.jy-emo-shout, .custom-jy-emo-shout) { font-weight: 700; font-size: 1.06em; }
+:is(.jy-emo-shout, .custom-jy-emo-shout):is(.jy-emo-l2, .custom-jy-emo-l2) { font-weight: 820; font-size: 1.12em; }
+
+/* Motion is opt-out for anyone who asked the system not to animate. */
+@media (prefers-reduced-motion: reduce) {
+  :is(.jy-spk, .custom-jy-spk) { transition: none; }
+}
+
 </style></head><body><main><header><span class="brand">镜译 · MIRROR TRANSLATE</span><button class="theme" type="button" aria-pressed="false">切换为夜间</button></header><div class="hero"><h1>同一段话，三种阅读心情。</h1><p>原文与译文各有位置，故事自然连在一起。</p></div><div class="grid"><article><div class="card-heading"><span class="number">01</span><div><h2>可爱风</h2><p>一点桃粉，一枚小花。</p></div></div><div class="sample"><div class="jy-reading jy-reading-cute">
 <div class="jy-reading-source">
 

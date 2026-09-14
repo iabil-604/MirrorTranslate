@@ -17,7 +17,10 @@
     .mock-card h2 { margin-top: 0; font-size: 16px; }
     .mock-probe { display: grid; gap: 6px; margin-bottom: 16px; color: #aeb7c4; font-size: 13px; }
     .mock-probe input { box-sizing: border-box; width: 100%; height: 36px; padding: 7px 9px; border: 1px solid #48505e; border-radius: 7px; background: #12151a; color: #eef1f6; }
-    #chat-preview { white-space: pre-wrap; line-height: 1.8; color: #dce2ea; }
+    #chat .mes_text { line-height: 1.8; color: #dce2ea; font-size: 15px; }
+    /* The host keeps quote marks as text and suppresses the browser's own <q> quotes. */
+    #chat q::before, #chat q::after { content: ''; }
+    #chat q { color: #e2c08a; }
     .extension_container { padding: 13px; border: 1px solid #3a414d; border-radius: 12px; }
     .inline-drawer-header { display: flex; justify-content: space-between; }
     @media (max-width: 760px) { .mock-layout { grid-template-columns: 1fr; } }
@@ -31,7 +34,7 @@
   <main class="mock-layout">
     <section class="mock-card">
       <h2>当前 AI 回复</h2>
-      <div id="chat-preview"></div>
+      <div id="chat"><div class="mes" mesid="0"><div class="mes_block"><div class="mes_text"></div></div></div></div>
     </section>
     <aside class="mock-card">
       <h2>扩展设置区</h2>
@@ -58,7 +61,15 @@
       CHAT_CHANGED: 'chat_changed',
     };
     const eventSource = new MockEvents();
-    const original = `<story_scene>\n夕暮れの教室には、誰もいなかった。\n窓から差し込む光が、机を淡く照らしている。\n\n「明日も、ここで会える？」\n</story_scene>`;
+    const original = `<story_scene>\n夕暮れの教室には、誰もいなかった。\n窓から差し込む光が、机を淡く照らしている。\n\n桜井は振り返って、「来たんだね」と小さく笑った。\n\n「明日も、ここで会える？」\n「……うん。約束する」\n</story_scene>`;
+    // Stand-in translations for the lines above, with the per-line speaker labels a model returns.
+    const previewTranslations = new Map([
+      ['夕暮れの教室には、誰もいなかった。', { text: '傍晚的教室里，一个人也没有。' }],
+      ['窓から差し込む光が、机を淡く照らしている。', { text: '从窗外照进来的光，淡淡地照着桌面。' }],
+      ['桜井は振り返って、「来たんだね」と小さく笑った。', { text: '樱井回过头，「你来了啊」，轻轻笑了一下。', speaker: '樱井', emotion: 'happy', intensity: 1 }],
+      ['「明日も、ここで会える？」', { text: '「明天，也能在这里见面吗？」', speaker: '玩家', emotion: 'fear', intensity: 1 }],
+      ['「……うん。約束する」', { text: '「……嗯。我保证。」', speaker: '樱井', emotion: 'tender', intensity: 1 }],
+    ]);
     const chat = [{
       mes: original,
       name: 'Assistant',
@@ -69,14 +80,59 @@
       swipe_info: [{ extra: {} }],
       extra: {},
     }];
-    const renderChat = () => { document.getElementById('chat-preview').textContent = chat[0].mes; };
+    // Roughly what the host's messageFormatting leaves in .mes_text, in the host's order: the display
+    // regex scripts (boundary cleanup, hidden originals, bound beautify rules), quotes kept as text
+    // inside <q>, blank-line paragraphs, and every class name prefixed with custom- by the sanitiser.
+    const { compileNativeRegex } = await import('./processing.js');
+    // The first render happens before the host context below exists, and before any rule is bound.
+    const displayRules = () => {
+      try { return context.extensionSettings.regex ?? []; } catch { return []; }
+    };
+    const applyDisplayRegex = mes => displayRules()
+      .filter(rule => !rule.disabled && rule.markdownOnly && (rule.placement ?? []).includes(2))
+      .reduce((text, rule) => {
+        try { return text.replace(compileNativeRegex(rule.findRegex), rule.replaceString); } catch { return text; }
+      }, mes);
+    const tagsOnly = /^(?:\s*<[^<>]+>\s*)+$/;
+    const formatMessage = mes => applyDisplayRegex(String(mes))
+      .replace(/\n?\u2063\u200d\u2063[\s\S]*?\u2063\ufeff\u2063/g, '')
+      .replace(/[\u200b-\u200d\u2060-\u2064\ufeff]/g, '')
+      .replace(/<\/?story_scene>/g, '')
+      .replace(/(「[^「」\n]*」|“[^“”\n]*”)/g, '<q>$1</q>')
+      .split(/\n{2,}/)
+      .map(block => block.trim())
+      .filter(Boolean)
+      .map(block => (tagsOnly.test(block) ? block.replace(/\n/g, '') : `<p>${block.replace(/\n/g, '<br>')}</p>`))
+      .join('')
+      .replace(/class="([^"]*)"/g, (_whole, names) => `class="${names.split(/\s+/).filter(Boolean).map(name => `custom-${name}`).join(' ')}"`);
+    const renderChat = () => { document.querySelector('#chat .mes_text').innerHTML = formatMessage(chat[0].mes); };
     renderChat();
     let insertedImageTag = false;
 
     const translatePayload = prompt => {
       const user = Array.isArray(prompt) ? prompt.findLast(item => item.role === 'user') : null;
       const body = user ? JSON.parse(user.content) : { segments: [{ id: 1 }] };
-      const translations = body.segments.map(item => ({ id: item.id, text: `{第${item.id}段\n中文镜像}` })).reverse();
+      // The read-aloud analysis: labels by id, the speaker taken from a name in the narration before a
+      // quote, and a mood from the closing punctuation.
+      if (body.task === 'label_utterances_for_audiobook') {
+        let lastName = '樱井';
+        const labels = body.utterances.map(item => {
+          if (item.kind !== 'quoted') {
+            const named = (body.roster ?? []).find(name => item.text.includes(name)) ?? (item.text.includes('樱井') ? '樱井' : null);
+            if (named) lastName = named;
+            return { id: item.id, type: 'narration' };
+          }
+          const speaker = lastName;
+          lastName = lastName === '樱井' ? '玩家' : '樱井';
+          const emotion = /？」?$/.test(item.text) ? 'surprise' : /……/.test(item.text) ? 'tender' : 'happy';
+          return { id: item.id, type: 'dialogue', speaker, emotion, intensity: 1 };
+        });
+        return JSON.stringify({ labels });
+      }
+      const translations = body.segments.map(item => {
+        const known = previewTranslations.get(item.text);
+        return known ? { id: item.id, ...known } : { id: item.id, text: `{第${item.id}段\n中文镜像}` };
+      }).reverse();
       return `模型说明会被忽略\n\`\`\`json\n${JSON.stringify({ translations })}\n\`\`\``;
     };
     const context = {
@@ -98,11 +154,12 @@
         },
       },
       saveSettingsDebounced() {},
-      getRequestHeaders() { return { 'Content-Type': 'application/json' }; },
+      getRequestHeaders() { return { 'Content-Type': 'application/json', 'X-CSRF-Token': 'preview-token' }; },
       substituteParams(value) { return value; },
       async getWorldInfoPrompt() { return { worldInfoBefore: '桜井的中文写法是樱井。', worldInfoAfter: '' }; },
       async saveChat() {},
       updateMessageBlock() { renderChat(); },
+      getCurrentChatId() { return 'preview-chat'; },
       async generateRaw({ prompt }) {
         if (!insertedImageTag) {
           insertedImageTag = true;
