@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.18.2';
+} from './prompts.js?v=0.18.3';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.18.2';
+export const APP_VERSION = '0.18.3';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -280,6 +280,9 @@ export const TTS_SIDES = Object.freeze(['translation', 'source']);
 // 'auto' reads deeply for a whole floor and lightly for a stream; the rest pin one depth.
 export const TTS_ANALYSIS_MODES = Object.freeze(['auto', 'deep', 'light', 'annotations']);
 export const TTS_DOWNLOAD_SCOPES = Object.freeze(['auto', 'floor', 'current']);
+// Where the character voice table lives: one per character card (every chat of the card shares it),
+// or one per chat, for a card played through several times with different casts.
+export const TTS_VOICE_SCOPES = Object.freeze(['character', 'chat']);
 // Languages a voice can be bound to. Codes are what the analysis returns and what the script check
 // falls back to; the labels are only for the settings page.
 export const TTS_LANGUAGES = Object.freeze([
@@ -407,6 +410,7 @@ export const DEFAULT_TTS = Object.freeze({
   autoGenerate: false,
   // What 「保存到本地」 saves: the whole floor, the paragraph being read, or one or the other by mode.
   downloadScope: 'auto',
+  voiceScope: 'character',
   quotePairs: DEFAULT_QUOTE_PAIRS,
   skipPairs: DEFAULT_SKIP_PAIRS,
   // What the deep reading is allowed to see besides the floor itself.
@@ -861,6 +865,7 @@ export function normalizeTts(value) {
     prosodySplit: source.prosodySplit === undefined ? DEFAULT_TTS.prosodySplit : source.prosodySplit !== false,
     autoGenerate: source.autoGenerate === true,
     downloadScope: TTS_DOWNLOAD_SCOPES.includes(source.downloadScope) ? source.downloadScope : DEFAULT_TTS.downloadScope,
+    voiceScope: TTS_VOICE_SCOPES.includes(source.voiceScope) ? source.voiceScope : DEFAULT_TTS.voiceScope,
     quotePairs: normalizePairStrings(source.quotePairs, DEFAULT_QUOTE_PAIRS),
     skipPairs: normalizePairStrings(source.skipPairs, DEFAULT_SKIP_PAIRS),
     context: normalizeTtsContext(source.context),

@@ -389,6 +389,29 @@ test('the latest floor is made in the background, paragraph by paragraph in the 
   assert.equal(usage.entries >= 3, true);
 });
 
+test('a voice table can be kept per chat: a new chat borrows the card\'s until it saves its own', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-scope');
+  const cardTable = [{ name: '泰罗', voiceId: 'voice-card' }];
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, analysis: 'annotations', voiceScope: 'chat', fish: FISH }, ttsVoices: { 'taro.png': cardTable } },
+  });
+  context.chat.push(await translatedFloor('「暑い！」', [[1, '「好热！」']], settings, { 1: { speaker: '泰罗' } }));
+  assert.equal(__testing.ttsVoicesKey(settings), 'taro.png|chat|tts-scope');
+  assert.deepEqual(__testing.ttsVoicesFor(settings).map(row => row.voiceId), ['voice-card'], 'borrowed from the card');
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal((await __testing.ttsItemsFor(floor, segments, settings)).items[0].voiceId, 'voice-card');
+
+  const own = __testing.configureForTest({ settings: { ttsVoices: { 'taro.png': cardTable, 'taro.png|chat|tts-scope': [{ name: '泰罗', voiceId: 'voice-chat' }] } } });
+  assert.equal((await __testing.ttsItemsFor(floor, segments, own)).items[0].voiceId, 'voice-chat', 'the chat\'s own table wins');
+  const emptied = __testing.configureForTest({ settings: { ttsVoices: { 'taro.png': cardTable, 'taro.png|chat|tts-scope': [] } } });
+  assert.deepEqual(__testing.ttsVoicesFor(emptied), [], 'an emptied chat table does not fall back to the card');
+  const card = __testing.configureForTest({ settings: { tts: { ...own.tts, voiceScope: 'character' } } });
+  assert.equal(__testing.ttsVoicesKey(card), 'taro.png');
+  assert.equal((await __testing.ttsItemsFor(floor, segments, card)).items[0].voiceId, 'voice-card');
+});
+
 test('the cast is read out of the card and the worldbook by the model, and never guessed without it', async t => {
   restoreGlobals(t);
   const requests = [];

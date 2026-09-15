@@ -58,7 +58,7 @@ import {
   formatPairList,
   parseJsonCandidates,
   TTS_LANGUAGES,
-} from './core.js?v=0.18.2';
+} from './core.js?v=0.18.3';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -101,14 +101,14 @@ import {
   toStandardDocument,
   voiceRosterNames,
   voiceSummary,
-} from './tts.js?v=0.18.2';
-import { createTtsStore } from './tts-store.js?v=0.18.2';
+} from './tts.js?v=0.18.3';
+import { createTtsStore } from './tts-store.js?v=0.18.3';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.18.2';
+} from './processing.js?v=0.18.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -125,8 +125,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.18.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.18.2';
+} from './prompts.js?v=0.18.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.18.3';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -140,15 +140,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.18.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.18.2';
+} from './palette.js?v=0.18.3';
+import { sampleThemeBackground } from './theme-probe.js?v=0.18.3';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.18.2';
+} from './diagnostics.js?v=0.18.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -362,7 +362,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每一句后面会出现播放按钮和情绪按钮，底部有「朗读本楼」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
 <div class="jy-connection-choice" role="radiogroup" aria-label="生成方式"><label><input type="radio" name="jy-tts-mode" value="floor" data-jy-tts-field="mode"><span><strong>全篇发送</strong><small>副模型细读整楼再配音，情绪最饱满；整楼一次生成，点哪句跳哪句</small></span></label><label><input type="radio" name="jy-tts-mode" value="stream" data-jy-tts-field="mode"><span><strong>流式朗读</strong><small>按段生成、先到先播，分析得少、出声快；点哪句只生成那一段</small></span></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
-<div class="jy-form-section"><div class="jy-section-title"><span>01</span><h2>读什么</h2></div><div class="jy-form-body">
+<details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">谁说的、什么情绪</span><select data-jy-tts-field="analysis"><option value="auto">跟随模式（全篇深度，流式轻量）</option><option value="deep">总是深度分析</option><option value="light">总是轻量分析</option><option value="annotations">只用翻译标注，不请求</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">跟随模式（全篇存整楼，流式存当前段）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把情绪转成 Fish 的情绪标签一起发送</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼翻译完成后自动生成音频，不播放</label></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
@@ -370,26 +370,28 @@ const CONTROL_CENTER_MARKUP = `
 <label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label>
 <div class="jy-behaviors"><span class="jy-label">深度分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
 <p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>深度分析：副模型带着背景资料判断这个人是谁、为什么这么说、情绪和惯性、有没有潜台词、哪里停顿哪里重读、要不要倒吸气或哽咽，写成结构化的配音指令；镜译在本地把它换成 Fish 能懂的英文标签（[frustrated][holding back] 之类）和语速音量。台词本身不经过模型，一个字不改。<br>轻量分析只标说话人和一个情绪。两种分析都按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮可以看到分析结果和最终发给 Fish 的内容，可以改。</p>
-</div></div>
-<div class="jy-form-section"><div class="jy-section-title"><span>02</span><h2>Fish Audio</h2></div><div class="jy-form-body">
+</div></details>
+<details class="jy-form-section jy-fold" data-jy-fold="tts-fish"><summary class="jy-section-title"><span>02</span><h2>Fish Audio</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <label><span class="jy-label">API Key</span><input type="password" data-jy-tts-fish="key" placeholder="sk-…" autocomplete="new-password" spellcheck="false"></label>
 <label><span class="jy-label">模型</span><select data-jy-tts-fish="model"><option value="s2-pro">s2-pro</option><option value="s2.1-pro">s2.1-pro</option><option value="s2.1-pro-free">s2.1-pro-free（免费开发者档）</option><option value="drama-3-preview">drama-3-preview（预览版）</option><option value="s1">s1（旧版，不能一次用多个音色）</option></select></label>
 <label class="jy-check"><input type="checkbox" data-jy-tts-fish="viaProxy">经酒馆 CORS 代理发送</label>
 <label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-fish="baseUrl" placeholder="https://api.fish.audio" spellcheck="false"></label>
 <p class="jy-muted" data-jy-tts-proxy-help></p>
-</div></div>
-<div class="jy-form-section"><div class="jy-section-title"><span>03</span><h2>音色</h2></div><div class="jy-form-body">
+</div></details>
+<details class="jy-form-section jy-fold" data-jy-fold="tts-voices"><summary class="jy-section-title"><span>03</span><h2>音色</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">旁白音色 <span class="jy-tts-title" data-jy-tts-title="narrator"></span></span><span class="jy-tts-pick" data-jy-tts-pick-scope data-jy-tts-page-pick><input type="text" data-jy-tts-field="narratorVoice" placeholder="Fish Voice ID，留空用 Fish 默认音色" spellcheck="false"></span></label><label><span class="jy-label">对白默认音色 <span class="jy-tts-title" data-jy-tts-title="dialogue"></span></span><span class="jy-tts-pick" data-jy-tts-pick-scope data-jy-tts-page-pick><input type="text" data-jy-tts-field="dialogueVoice" placeholder="没有专属音色的角色都用这个" spellcheck="false"></span></label></div>
 <div class="jy-tts-lang-block" data-jy-tts-multilang><div class="jy-row-between"><div><h3>多国语言</h3><p class="jy-muted">同一个人读中文、英语、日语可以各用一个音色，英语还分美式和英式（伦敦腔）。这里给旁白加；每个角色行里各有一个「＋ 多国语言音色」按钮。句子的语言由副模型判断，没判断按文字本身。</p></div><button type="button" class="jy-button" data-jy-action="tts-add-narrator-lang">＋ 旁白加一门语言</button></div><div class="jy-tts-lang-list" data-jy-tts-narrator-langs></div></div>
-<div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button><button type="button" class="jy-button" data-jy-action="tts-add-voice">添加角色</button><button type="button" class="jy-button" data-jy-action="tts-import-speakers">导入已知说话人</button><button type="button" class="jy-button" data-jy-action="tts-lookup-voices">查询音色名</button><button type="button" class="jy-text-button" data-jy-action="tts-clear-voices">清空角色表</button></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">角色表保存范围</span><select data-jy-tts-field="voiceScope"><option value="character">跟着角色卡（这张卡的所有聊天共用一张表）</option><option value="chat">每个聊天单独一份（不同周目各配各的）</option></select></label></div>
+<p class="jy-muted" data-jy-tts-scope-note></p>
+<div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button><button type="button" class="jy-button" data-jy-action="tts-add-voice">添加角色</button><button type="button" class="jy-button" data-jy-action="tts-import-speakers">导入已知说话人</button><button type="button" class="jy-button" data-jy-action="tts-lookup-voices">查询音色名</button><button type="button" class="jy-text-button" data-jy-action="tts-prune-voices">删掉没绑音色的行</button><button type="button" class="jy-text-button" data-jy-action="tts-clear-voices">清空角色表</button></div>
 <div class="jy-tts-voice-list" data-jy-tts-voice-list></div>
 <p class="jy-muted">角色表跟着当前角色卡保存。「从角色卡和世界书识别角色」让副模型读一遍角色卡和世界书条目，把人物名单一次导进来（需要副模型能连上，模型没回应就什么都不加）；导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「＋ 多国语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色。</p>
-</div></div>
-<div class="jy-form-section"><div class="jy-section-title"><span>04</span><h2>音色库</h2></div><div class="jy-form-body">
+</div></details>
+<details class="jy-form-section jy-fold" data-jy-fold="tts-library"><summary class="jy-section-title"><span>04</span><h2>音色库</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-add-library">添加音色</button></div>
 <div class="jy-tts-library" data-jy-tts-library></div>
 <p class="jy-muted">给常用的 Fish 音色起个自己的名字存起来，全部角色卡共用。之后旁白、对白默认音色、每个角色、每门语言的音色都可以直接从库里选，不用再去翻 32 位的 ID。Voice ID 在 fish.audio 音色页面的地址栏里。</p>
-</div></div>
+</div></details>
 <details class="jy-advanced"><summary>声音参数</summary><div class="jy-form-grid">
 <label><span class="jy-label">音频格式</span><select data-jy-tts-fish="format"><option value="mp3">mp3（兼容最好）</option><option value="opus">opus（体积小，旧版 Safari 可能播不了）</option><option value="wav">wav（无损，体积大）</option></select></label><label><span class="jy-label">延迟与质量</span><select data-jy-tts-fish="latency"><option value="normal">normal（质量最好）</option><option value="balanced">balanced</option><option value="low">low（最快）</option></select></label>
 <label><span class="jy-label">语速（0.5–2）</span><input type="number" data-jy-tts-fish="speed" min="0.5" max="2" step="0.05"></label><label><span class="jy-label">音量调整 / dB</span><input type="number" data-jy-tts-fish="volume" min="-20" max="20" step="1"></label>
@@ -2383,8 +2385,27 @@ function ttsStore() {
   return runtime.tts.store;
 }
 
+// Where this cast's voice table is kept: under the character card, or under this one chat when the
+// reader keeps a table per playthrough. A chat that has no table of its own yet reads the card's, and
+// the first save in that chat writes its own copy.
+function ttsVoicesKey(settings = runtime.settings) {
+  const characterKey = worldInfoCharacterKey();
+  if (ttsSettings(settings).voiceScope !== 'chat') return characterKey;
+  const chatId = getCurrentChatId();
+  return chatId ? `${characterKey}|chat|${chatId}` : characterKey;
+}
+
 function ttsVoicesFor(settings = runtime.settings) {
-  return normalizeVoiceList(settings?.ttsVoices?.[worldInfoCharacterKey()]);
+  const tables = settings?.ttsVoices ?? {};
+  const key = ttsVoicesKey(settings);
+  if (Array.isArray(tables[key])) return normalizeVoiceList(tables[key]);
+  return normalizeVoiceList(tables[worldInfoCharacterKey()]);
+}
+
+// Whether the table shown is this chat's own or borrowed from the card.
+function ttsVoicesOwned(settings = runtime.settings) {
+  const key = ttsVoicesKey(settings);
+  return key === worldInfoCharacterKey() || Array.isArray(settings?.ttsVoices?.[key]);
 }
 
 function ttsVoiceConfig(settings = runtime.settings) {
@@ -4785,10 +4806,11 @@ function readLanguageRows(container) {
  * One character's row: who they are, then the voice. A row with a voice of its own is locked and says
  * so; one without follows the dialogue default and changes with it. Languages hang under the row.
  */
-function ttsVoiceRowElement(doc, voice, settings = runtime.settings) {
-  const row = doc.createElement('div');
+function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = false } = {}) {
+  const row = doc.createElement('details');
   row.className = 'jy-tts-voice-row';
   row.dataset.jyTtsVoiceRow = '';
+  row.open = open;
   // The fetched title belongs to one id; a row whose id is edited loses it on the next save.
   row.dataset.voiceId = voice.voiceId ?? '';
   row.dataset.title = voice.title ?? '';
@@ -4848,8 +4870,31 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings) {
   langs.className = 'jy-tts-lang-list';
   langs.dataset.jyTtsVoiceLangs = '';
   for (const [lang, id] of Object.entries(voice.voices ?? {})) langs.appendChild(ttsLanguageRowElement(doc, lang, id, settings));
-  row.append(name, aliases, lock, scope, title, tools, langs);
+  // Folded, a row is one line: the name, whether it has a voice of its own, and what is bound.
+  const summary = doc.createElement('summary');
+  summary.className = 'jy-tts-voice-summary';
+  const summaryName = doc.createElement('span');
+  summaryName.className = 'jy-tts-voice-summary-name';
+  summaryName.dataset.jyTtsVoiceSummaryName = '';
+  summaryName.textContent = voice.name || '（未命名）';
+  const summaryMeta = doc.createElement('span');
+  summaryMeta.className = 'jy-tts-voice-summary-meta';
+  summaryMeta.textContent = ttsVoiceRowMeta(voice);
+  summary.append(summaryName, lock, summaryMeta);
+  const body = doc.createElement('div');
+  body.className = 'jy-tts-voice-body';
+  body.append(name, aliases, scope, title, tools, langs);
+  row.append(summary, body);
   return row;
+}
+
+function ttsVoiceRowMeta(voice) {
+  const parts = [];
+  if (voice.voiceId) parts.push(voice.title || `${voice.voiceId.slice(0, 6)}…`);
+  const langs = Object.keys(voice.voices ?? {});
+  if (langs.length) parts.push(langs.map(code => languageLabel(code)).join('、'));
+  if ((voice.aliases ?? []).length) parts.push(`别名 ${voice.aliases.length}`);
+  return parts.join(' · ');
 }
 
 function renderTtsVoiceList(root, settings = runtime.settings) {
@@ -4857,15 +4902,79 @@ function renderTtsVoiceList(root, settings = runtime.settings) {
   if (!list) return;
   const doc = list.ownerDocument;
   const voices = ttsVoicesFor(settings);
+  // Rows being edited stay open across a redraw.
+  const open = new Set([...list.querySelectorAll('[data-jy-tts-voice-row][open]')].map(row => row.querySelector('[data-jy-tts-voice-name]')?.value.trim()).filter(Boolean));
   list.replaceChildren();
   if (!voices.length) {
     const note = doc.createElement('p');
     note.className = 'jy-muted';
-    note.textContent = '还没有登记角色。没登记的角色用对白默认音色读，不会不读。可以从世界书一键识别角色。';
+    note.textContent = '还没有登记角色。没登记的角色用对白默认音色读，不会不读。可以从角色卡和世界书一键识别角色。';
     list.appendChild(note);
     return;
   }
-  for (const voice of voices) list.appendChild(ttsVoiceRowElement(doc, voice, settings));
+  for (const voice of voices) list.appendChild(ttsVoiceRowElement(doc, voice, settings, { open: open.has(voice.name) }));
+}
+
+// The reading page folds its four sections; which are open is remembered in this browser.
+const TTS_FOLD_KEY = `${MODULE_ID}.tts-folds.v1`;
+
+function readTtsFolds() {
+  try {
+    const value = JSON.parse(globalThis.localStorage?.getItem(TTS_FOLD_KEY) || '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeTtsFold(id, open) {
+  try {
+    const folds = readTtsFolds();
+    folds[id] = open;
+    globalThis.localStorage?.setItem(TTS_FOLD_KEY, JSON.stringify(folds));
+  } catch {
+    // Storage refused: the folds simply start from their defaults next time.
+  }
+}
+
+function syncTtsFolds(root, settings = runtime.settings) {
+  const tts = ttsSettings(settings);
+  const stored = readTtsFolds();
+  // Nothing set up yet: the Fish section is what needs filling first; the cast is what gets edited most.
+  const defaults = { 'tts-read': false, 'tts-fish': !tts.fish.key, 'tts-voices': true, 'tts-library': false };
+  for (const details of root.querySelectorAll('details[data-jy-fold]')) {
+    const id = details.dataset.jyFold;
+    details.open = typeof stored[id] === 'boolean' ? stored[id] : (defaults[id] ?? true);
+  }
+  if (!root.dataset.jyTtsFolds) {
+    root.dataset.jyTtsFolds = 'bound';
+    // toggle does not bubble; a capturing listener on the root still hears every fold.
+    root.addEventListener('toggle', event => {
+      const details = event.target;
+      if (details instanceof Element && details.matches('details[data-jy-fold]')) writeTtsFold(details.dataset.jyFold, details.open);
+    }, true);
+  }
+}
+
+// One line per folded section saying what is in it, so nothing has to be opened to be checked.
+function syncTtsFoldSummaries(root, settings = runtime.settings) {
+  const tts = ttsSettings(settings);
+  const voices = ttsVoicesFor(settings);
+  const owned = voices.filter(row => row.voiceId || Object.keys(row.voices ?? {}).length).length;
+  const library = normalizeVoiceLibrary(settings?.voiceLibrary);
+  const analysisLabel = { auto: '分析跟随模式', deep: '总是深度分析', light: '总是轻量分析', annotations: '只用翻译标注' }[tts.analysis] ?? '';
+  const summaries = {
+    'tts-read': `${tts.side === 'source' ? '读原文' : '读译文'} · ${TTS_RANGE_LABELS[tts.range]} · ${analysisLabel}`,
+    'tts-fish': tts.fish.key ? `已填 Key · ${tts.fish.model}` : '还没填 API Key',
+    'tts-voices': `旁白${tts.narratorVoice ? '已设' : '未设'} · 对白默认${tts.dialogueVoice ? '已设' : '未设'} · ${voices.length} 个角色（${owned} 个专属）${tts.voiceScope === 'chat' ? ' · 每个聊天一份' : ''}`,
+    'tts-library': library.length ? `${library.length} 个音色` : '空',
+  };
+  for (const [id, text] of Object.entries(summaries)) setText(root, `[data-jy-fold="${id}"] [data-jy-fold-summary]`, text);
+  setText(root, '[data-jy-tts-scope-note]', tts.voiceScope === 'chat'
+    ? (ttsVoicesOwned(settings)
+      ? '这张表只属于当前聊天，别的聊天看不到。'
+      : '当前聊天还没有自己的表，显示的是角色卡的表；在这里改动并保存后，会成为本聊天自己的一份，角色卡的表不变。')
+    : '这张卡的所有聊天共用这张表。同一张卡开了几个周目、各有各的人物，就改成「每个聊天单独一份」。音色库不受这个影响，永远全局共用。');
 }
 
 function ttsLibraryRowElement(doc, voice) {
@@ -4992,6 +5101,8 @@ function syncTtsFields(root, settings = runtime.settings) {
   renderNarratorLanguages(root, settings);
   renderTtsVoiceList(root, settings);
   renderTtsLibrary(root, settings);
+  syncTtsFolds(root, settings);
+  syncTtsFoldSummaries(root, settings);
   updateTtsProxyHelp(root);
   updateTtsModeHelp(root);
   renderTtsPreview(root);
@@ -5095,9 +5206,10 @@ function collectTtsFields(root, current) {
   });
   const list = normalizeVoiceList(rows);
   current.ttsVoices = { ...(current.ttsVoices || {}) };
-  const characterKey = worldInfoCharacterKey();
-  if (list.length) current.ttsVoices[characterKey] = list;
-  else delete current.ttsVoices[characterKey];
+  const tableKey = ttsVoicesKey(current);
+  // A chat-scoped table is written even when empty, so an emptied chat does not fall back to the card.
+  if (list.length || tableKey !== worldInfoCharacterKey()) current.ttsVoices[tableKey] = list;
+  else delete current.ttsVoices[tableKey];
 }
 
 /**
@@ -5944,7 +6056,7 @@ function createControlCenter(rootDocument = document) {
         const list = root.querySelector('[data-jy-tts-voice-list]');
         if (list) {
           if (list.querySelector(':scope > .jy-muted')) list.replaceChildren();
-          list.appendChild(ttsVoiceRowElement(list.ownerDocument, { name: '', aliases: [], voiceId: '', voices: {}, title: '' }, runtime.settings));
+          list.appendChild(ttsVoiceRowElement(list.ownerDocument, { name: '', aliases: [], voiceId: '', voices: {}, title: '' }, runtime.settings, { open: true }));
           list.querySelector('[data-jy-tts-voice-row]:last-child [data-jy-tts-voice-name]')?.focus();
         }
       } else if (action === 'tts-remove-voice') {
@@ -5992,8 +6104,8 @@ function createControlCenter(rootDocument = document) {
         const next = collectSettings(root);
         setText(root, '[data-jy-tts-save-note]', '正在读世界书、识别角色…');
         const { cast, source } = await importCastFromWorldbook(next);
-        const characterKey = worldInfoCharacterKey();
-        const existing = normalizeVoiceList(next.ttsVoices?.[characterKey]);
+        const characterKey = ttsVoicesKey(next);
+        const existing = ttsVoicesFor(next);
         const known = new Set(voiceRosterNames(existing));
         const added = [];
         for (const person of cast) {
@@ -6011,15 +6123,31 @@ function createControlCenter(rootDocument = document) {
         toast('success', `副模型识别并加入 ${added.length} 个角色${source === 'model' ? '' : ''}。它们先跟随对白默认音色，绑定专属音色后就会锁定。`);
       } else if (action === 'tts-clear-voices') {
         const next = collectSettings(root);
-        const characterKey = worldInfoCharacterKey();
-        const count = normalizeVoiceList(next.ttsVoices?.[characterKey]).length;
+        const characterKey = ttsVoicesKey(next);
+        const count = ttsVoicesFor(next).length;
         if (!count) throw new Error('角色表已经是空的。');
-        if (typeof globalThis.confirm === 'function' && !globalThis.confirm(`清空当前角色卡的角色表（${count} 行）？音色库和旁白、对白默认音色不受影响。`)) return;
+        if (typeof globalThis.confirm === 'function' && !globalThis.confirm(`清空这张角色表（${count} 行）？音色库和旁白、对白默认音色不受影响。`)) return;
         next.ttsVoices = { ...(next.ttsVoices || {}) };
-        delete next.ttsVoices[characterKey];
+        if (characterKey === worldInfoCharacterKey()) delete next.ttsVoices[characterKey];
+        else next.ttsVoices[characterKey] = [];
         saveSettings(next);
         renderTtsVoiceList(root, runtime.settings);
+        syncTtsFoldSummaries(root, runtime.settings);
         toast('success', `已清空 ${count} 行角色表。`);
+      } else if (action === 'tts-prune-voices') {
+        // Rows that never got a voice of their own: the leftovers of a bad import, most of the time.
+        const next = collectSettings(root);
+        const characterKey = ttsVoicesKey(next);
+        const existing = ttsVoicesFor(next);
+        const kept = existing.filter(row => row.voiceId || Object.keys(row.voices ?? {}).length);
+        const removed = existing.length - kept.length;
+        if (!removed) throw new Error('没有可删的行：每个角色都绑了音色。');
+        if (typeof globalThis.confirm === 'function' && !globalThis.confirm(`删掉 ${removed} 个没绑音色的角色，保留 ${kept.length} 个绑了音色的？`)) return;
+        next.ttsVoices = { ...(next.ttsVoices || {}), [characterKey]: kept };
+        saveSettings(next);
+        renderTtsVoiceList(root, runtime.settings);
+        syncTtsFoldSummaries(root, runtime.settings);
+        toast('success', `删掉了 ${removed} 个没绑音色的角色，留下 ${kept.length} 个。`);
       } else if (action === 'tts-pregenerate') {
         saveSettings(collectSettings(root));
         const messageId = latestAssistantMessageId(getContext());
@@ -6033,8 +6161,8 @@ function createControlCenter(rootDocument = document) {
         // Everyone this extension already knows by name: the colour palette, the speakers the model
         // reported while translating, and the ones the last analysis found.
         const next = collectSettings(root);
-        const characterKey = worldInfoCharacterKey();
-        const existing = normalizeVoiceList(next.ttsVoices?.[characterKey]);
+        const characterKey = ttsVoicesKey(next);
+        const existing = ttsVoicesFor(next);
         const known = new Set(voiceRosterNames(existing));
         const candidates = [
           ...speakerPaletteFor(next).map(item => ({ name: item.name, aliases: item.aliases })),
@@ -6077,7 +6205,7 @@ function createControlCenter(rootDocument = document) {
           dialogueTitle: titles.get(tts.dialogueVoice) ?? tts.dialogueTitle,
         });
         const voices = ttsVoicesFor(next).map(item => ({ ...item, title: titles.get(item.voiceId) ?? item.title }));
-        if (voices.length) next.ttsVoices = { ...(next.ttsVoices || {}), [worldInfoCharacterKey()]: voices };
+        if (voices.length) next.ttsVoices = { ...(next.ttsVoices || {}), [ttsVoicesKey(next)]: voices };
         saveSettings(next);
         syncTtsFields(root, runtime.settings);
         if (failures.length) toast('warning', `有 ${failures.length} 个音色没查到：${failures.join('；')}`);
@@ -6263,7 +6391,7 @@ function createControlCenter(rootDocument = document) {
       }
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="analysis"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="downloadScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="analysis"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
       // The feature switch lives on two pages; the one just clicked decides, the other follows.
       if (event.target.matches('[data-jy-tts-field="enabled"]')) {
         for (const twin of root.querySelectorAll('[data-jy-tts-field="enabled"]')) twin.checked = event.target.checked;
@@ -6285,6 +6413,11 @@ function createControlCenter(rootDocument = document) {
   };
 
   const onInput = event => {
+    // A folded character row shows its name; the name typed into it shows up there at once.
+    if (event.target.matches('[data-jy-tts-voice-name]')) {
+      const label = event.target.closest('[data-jy-tts-voice-row]')?.querySelector('[data-jy-tts-voice-summary-name]');
+      if (label) label.textContent = event.target.value.trim() || '（未命名）';
+    }
     if (event.target.matches('[data-jy-field="coloringVividness"]')) {
       const percent = Number(event.target.value);
       setText(root, '[data-jy-vividness-value]', `${percent}%`);
@@ -7605,7 +7738,11 @@ function registerRuntimeEvents() {
     scheduleEntries();
     // The speaker palette is per character card, so a different chat may need a different sheet.
     syncSpeakerStylesheet(runtime.settings);
-    if (runtime.panel?.controller?.root) refreshCurrentCard(runtime.panel.controller.root);
+    if (runtime.panel?.controller?.root) {
+      refreshCurrentCard(runtime.panel.controller.root);
+      // The voice table may be per chat; the page shows the one that belongs to the chat just opened.
+      syncTtsFields(runtime.panel.controller.root, runtime.settings);
+    }
     // Message ids restart in another chat; nothing playing or pending can carry over.
     stopTts();
     runtime.tts.ranges.clear();
@@ -7806,6 +7943,8 @@ export const __testing = Object.freeze({
   collectTtsFloor,
   prepareTtsSegments,
   ttsItemsFor,
+  ttsVoicesKey,
+  ttsVoicesFor,
   ensureTtsRecording,
   resolveTtsEntry,
   findTtsEntry,

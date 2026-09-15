@@ -590,6 +590,9 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.equal(mergeSettings({}).tts.analysis, DEFAULT_TTS.analysis);
   assert.equal(mergeSettings({}).tts.autoGenerate, false);
   assert.equal(mergeSettings({}).tts.downloadScope, 'auto');
+  assert.equal(mergeSettings({}).tts.voiceScope, 'character');
+  assert.equal(mergeSettings({ tts: { voiceScope: 'chat' } }).tts.voiceScope, 'chat');
+  assert.equal(mergeSettings({ tts: { voiceScope: 'universe' } }).tts.voiceScope, 'character');
   assert.equal(mergeSettings({ tts: { side: 'source' } }).tts.side, 'source');
   assert.equal(mergeSettings({ tts: { side: 'klingon' } }).tts.side, 'translation');
 });
