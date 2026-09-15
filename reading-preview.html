@@ -226,6 +226,21 @@
   :is(.jy-spk, .custom-jy-spk) { transition: none; }
 }
 
+/* The cue button beside the play button takes each card's accent the same way. */
+#chat :is(.jy-reading-cute, .custom-jy-reading-cute) .jy-tts-edit { border-color: #c88b9544; color: #bf8792; -webkit-text-fill-color: #bf8792; opacity: .55; }
+#chat :is(.jy-reading-cute, .custom-jy-reading-cute) .jy-tts-edit:hover { background: #d597a33d; opacity: 1; }
+#chat :is(.jy-reading-minimal, .custom-jy-reading-minimal) .jy-tts-edit { border-color: transparent; color: #879b92; -webkit-text-fill-color: #879b92; opacity: .2; }
+#chat :is(.jy-reading-minimal, .custom-jy-reading-minimal) :is(p, .jy-reading-translation, .custom-jy-reading-translation):hover .jy-tts-edit { opacity: .6; }
+@media (hover: none) {
+  #chat :is(.jy-reading-minimal, .custom-jy-reading-minimal) .jy-tts-edit { opacity: .45; }
+}
+#chat :is(.jy-reading-minimal, .custom-jy-reading-minimal) .jy-tts-edit:is(:hover, :focus-visible) { border-color: #879b9280; opacity: 1; }
+#chat :is(.jy-reading-fold, .custom-jy-reading-fold) .jy-tts-edit { border-color: #879b9244; color: #91a196; -webkit-text-fill-color: #91a196; opacity: .5; }
+#chat :is(.jy-reading-fold, .custom-jy-reading-fold) .jy-tts-edit:hover { background: #879b9238; opacity: 1; }
+#chat .jy-tts-bar[data-jy-reading="fold"] .jy-tts-bar-panel { color: #91a196; -webkit-text-fill-color: #91a196; }
+#chat .jy-tts-bar[data-jy-reading="cute"] .jy-tts-bar-panel { color: #bf8792; -webkit-text-fill-color: #bf8792; }
+#chat .jy-tts-bar[data-jy-reading="minimal"] .jy-tts-bar-panel { color: #879b92; -webkit-text-fill-color: #879b92; }
+
 </style></head><body><main><header><span class="brand">镜译 · MIRROR TRANSLATE</span><button class="theme" type="button" aria-pressed="false">切换为夜间</button></header><div class="hero"><h1>同一段话，三种阅读心情。</h1><p>原文与译文各有位置，故事自然连在一起。</p></div><div class="grid"><article><div class="card-heading"><span class="number">01</span><div><h2>可爱风</h2><p>一点桃粉，一枚小花。</p></div></div><div class="sample"><div class="jy-reading jy-reading-cute">
 <div class="jy-reading-source">
 

@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.17.1';
+} from './prompts.js?v=0.18.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.17.1';
+export const APP_VERSION = '0.18.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -270,14 +270,96 @@ export const DEFAULT_COLORING = Object.freeze({
 
 // Reading the translation aloud. The provider block is Fish Audio today; everything above it — which
 // lines are read, by whom, in what mood — is provider-neutral and lives in tts.js.
-export const TTS_MODES = Object.freeze(['floor', 'sentence']);
+// 'floor' sends the whole floor as one recording after a deep reading of it; 'stream' sends one
+// paragraph at a time and starts playing as soon as the first one is back. The old 'sentence' mode is
+// folded into 'stream': a single sentence is found inside whichever recording already holds it.
+export const TTS_MODES = Object.freeze(['floor', 'stream']);
 export const TTS_RANGES = Object.freeze(['all', 'dialogue', 'narration']);
 // Which language is read: the translation, or the original the floor was written in.
 export const TTS_SIDES = Object.freeze(['translation', 'source']);
-export const TTS_ANALYSIS_MODES = Object.freeze(['model', 'annotations']);
+// 'auto' reads deeply for a whole floor and lightly for a stream; the rest pin one depth.
+export const TTS_ANALYSIS_MODES = Object.freeze(['auto', 'deep', 'light', 'annotations']);
+export const TTS_DOWNLOAD_SCOPES = Object.freeze(['auto', 'floor', 'current']);
+// Languages a voice can be bound to. Codes are what the analysis returns and what the script check
+// falls back to; the labels are only for the settings page.
+export const TTS_LANGUAGES = Object.freeze([
+  ['zh', '中文'], ['en', '英语'], ['ja', '日语'], ['ko', '韩语'], ['de', '德语'], ['fr', '法语'], ['es', '西班牙语'],
+  ['ru', '俄语'], ['it', '意大利语'], ['pt', '葡萄牙语'], ['nl', '荷兰语'], ['pl', '波兰语'], ['ar', '阿拉伯语'],
+]);
 export const FISH_MODELS = Object.freeze(['s2-pro', 's2.1-pro', 's2.1-pro-free', 'drama-3-preview', 's1']);
 export const FISH_FORMATS = Object.freeze(['mp3', 'opus', 'wav']);
 export const FISH_LATENCIES = Object.freeze(['normal', 'balanced', 'low']);
+// What a line is cut at. Quote pairs hold speech; skip pairs hold what is never read aloud, such as
+// the *actions* a preset writes between asterisks. Each entry is an opener and a closer.
+export const DEFAULT_QUOTE_PAIRS = Object.freeze(['「」', '『』', '“”', '""']);
+export const DEFAULT_SKIP_PAIRS = Object.freeze([]);
+
+// The list is typed as text: entries separated by commas or line breaks, an opener and a closer inside
+// each entry separated by a space (`** **`), or written together when both are one character (`「」`).
+export function parsePairList(value) {
+  const source = Array.isArray(value) ? value : String(value ?? '').split(/[\n,，;；]+/);
+  const pairs = [];
+  const seen = new Set();
+  for (const raw of source) {
+    let open = '';
+    let close = '';
+    if (raw && typeof raw === 'object') {
+      open = String(raw.open ?? '');
+      close = String(raw.close ?? '');
+    } else {
+      const entry = String(raw ?? '').trim();
+      if (!entry) continue;
+      const tokens = entry.split(/\s+/).filter(Boolean);
+      if (tokens.length >= 2) [open, close] = tokens;
+      else {
+        const characters = [...tokens[0]];
+        if (characters.length === 1) open = close = characters[0];
+        else if (characters.length === 2) [open, close] = characters;
+        else if (characters.length % 2 === 0) {
+          open = characters.slice(0, characters.length / 2).join('');
+          close = characters.slice(characters.length / 2).join('');
+        } else continue;
+      }
+    }
+    if (!open || !close || open.length > 4 || close.length > 4) continue;
+    const key = `${open}\u0000${close}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pairs.push({ open, close });
+  }
+  return pairs.slice(0, 16);
+}
+
+export function formatPairList(pairs) {
+  return parsePairList(pairs).map(pair => ([...pair.open].length === 1 && [...pair.close].length === 1 ? `${pair.open}${pair.close}` : `${pair.open} ${pair.close}`)).join(', ');
+}
+
+// Stored as the strings the reader typed, so the field shows exactly what was saved.
+function normalizePairStrings(value, fallback) {
+  if (value === undefined) return [...fallback];
+  const entries = Array.isArray(value) ? value : String(value ?? '').split(/[\n,，;；]+/);
+  const result = [];
+  const seen = new Set();
+  for (const raw of entries) {
+    const [pair] = parsePairList([raw]);
+    if (!pair) continue;
+    const key = `${pair.open}\u0000${pair.close}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(typeof raw === 'string' ? raw.trim() : formatPairList([pair]));
+  }
+  return result.slice(0, 16);
+}
+
+export function normalizeLanguageCode(value) {
+  const code = String(value ?? '').trim().toLowerCase().replace(/[_-].*$/, '');
+  return /^[a-z]{2,3}$/.test(code) ? code : '';
+}
+
+export function languageLabel(code) {
+  const found = TTS_LANGUAGES.find(([key]) => key === code);
+  return found ? found[1] : String(code ?? '');
+}
 
 export const DEFAULT_FISH = Object.freeze({
   key: '',
@@ -307,12 +389,25 @@ export const DEFAULT_TTS = Object.freeze({
   side: 'translation',
   mode: 'floor',
   range: 'all',
-  analysis: 'model',
+  analysis: 'auto',
   emotionCues: true,
+  // Sentences whose analysis asks for another speed or volume become their own request, since Fish
+  // sets prosody per request; off keeps one request and says it with cues alone.
+  prosodySplit: true,
+  // The latest floor's audio is made right after its translation lands, without playing it.
+  autoGenerate: false,
+  // What 「保存到本地」 saves: the whole floor, the paragraph being read, or one or the other by mode.
+  downloadScope: 'auto',
+  quotePairs: DEFAULT_QUOTE_PAIRS,
+  skipPairs: DEFAULT_SKIP_PAIRS,
+  // What the deep reading is allowed to see besides the floor itself.
+  context: Object.freeze({ character: true, worldbook: true, recent: true, floors: 2 }),
   // Read when a floor carries no translation written by this extension.
   sourceTags: Object.freeze(['jy-translation']),
   narratorVoice: '',
   narratorTitle: '',
+  // Narrator voices per language, for a reader who switches between the translation and the original.
+  narratorVoices: Object.freeze({}),
   dialogueVoice: '',
   dialogueTitle: '',
   fish: DEFAULT_FISH,
@@ -324,6 +419,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   speakerPalette: {},
   tts: DEFAULT_TTS,
   ttsVoices: {},
+  // Voice ids the reader has saved by name, shared across every character card.
+  voiceLibrary: [],
   theme: 'day',
   autoGeneration: true,
   autoSwipe: true,
@@ -637,8 +734,26 @@ function normalizeVoiceTitle(value) {
   return String(value ?? '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 80);
 }
 
+// lang → voice id. An entry without a language is dropped rather than guessed at.
+export function normalizeLanguageVoices(value) {
+  const result = {};
+  const entries = value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.entries(value)
+    : (Array.isArray(value) ? value : []).map(item => [item?.lang, item?.voiceId]);
+  for (const [rawLang, rawId] of entries) {
+    const lang = normalizeLanguageCode(rawLang);
+    const voiceId = normalizeVoiceId(rawId);
+    if (lang && voiceId && Object.keys(result).length < 16) result[lang] = voiceId;
+  }
+  return result;
+}
+
 // One row per character whose lines get their own voice. Stored per character card, like the speaker
 // palette, because a name only means somebody within one cast.
+//
+// A row is either locked to its own voice or follows the dialogue default. Importing a cast from the
+// worldbook makes unlocked rows, so changing the default changes all of them at once; typing a voice
+// id into a row locks it, and a locked row keeps its voice whatever the default does later.
 export function normalizeVoiceList(value) {
   const seen = new Set();
   return (Array.isArray(value) ? value : [])
@@ -649,7 +764,11 @@ export function normalizeVoiceList(value) {
       const aliases = [...new Set((Array.isArray(item.aliases) ? item.aliases : String(item.aliases ?? '').split(/[\s,，、;；]+/))
         .map(alias => String(alias ?? '').trim().slice(0, 60))
         .filter(alias => alias && alias !== name))].slice(0, 8);
-      return { name, aliases, voiceId: normalizeVoiceId(item.voiceId), title: normalizeVoiceTitle(item.title) };
+      const voiceId = normalizeVoiceId(item.voiceId);
+      const voices = normalizeLanguageVoices(item.voices);
+      // A row written before locks existed is locked exactly when it carries a voice of its own.
+      const locked = item.locked === undefined ? Boolean(voiceId || Object.keys(voices).length) : item.locked === true;
+      return { name, aliases, voiceId, voices, locked, title: normalizeVoiceTitle(item.title) };
     })
     .filter(item => {
       if (!item || seen.has(item.name)) return false;
@@ -686,19 +805,60 @@ export function normalizeFishSettings(value) {
   };
 }
 
+// Voices saved by name, independent of any character card. `id` is a local handle for the rows on the
+// settings page; `voiceId` is what the provider knows.
+export function normalizeVoiceLibrary(value) {
+  const seen = new Set();
+  return (Array.isArray(value) ? value : [])
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const voiceId = normalizeVoiceId(item.voiceId);
+      if (!voiceId) return null;
+      const name = String(item.name ?? '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 60) || voiceId.slice(0, 8);
+      const id = String(item.id ?? '').trim().slice(0, 40) || `voice-${index + 1}`;
+      return { id, name, voiceId, lang: normalizeLanguageCode(item.lang), title: normalizeVoiceTitle(item.title) };
+    })
+    .filter(item => {
+      if (!item || seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    })
+    .slice(0, 200);
+}
+
+function normalizeTtsContext(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    character: source.character === undefined ? DEFAULT_TTS.context.character : source.character !== false,
+    worldbook: source.worldbook === undefined ? DEFAULT_TTS.context.worldbook : source.worldbook !== false,
+    recent: source.recent === undefined ? DEFAULT_TTS.context.recent : source.recent !== false,
+    floors: clampInteger(source.floors, 0, 10, DEFAULT_TTS.context.floors),
+  };
+}
+
 export function normalizeTts(value) {
   const source = value && typeof value === 'object' ? value : {};
   const tags = parseTagNames(source.sourceTags ?? DEFAULT_TTS.sourceTags);
+  // 0.17 had a 'sentence' mode and a 'model' analysis; both have a home in the new choices.
+  const mode = source.mode === 'sentence' ? 'stream' : source.mode;
+  const analysis = source.analysis === 'model' ? 'auto' : source.analysis;
   return {
     enabled: source.enabled === true,
     side: TTS_SIDES.includes(source.side) ? source.side : DEFAULT_TTS.side,
-    mode: TTS_MODES.includes(source.mode) ? source.mode : DEFAULT_TTS.mode,
+    mode: TTS_MODES.includes(mode) ? mode : DEFAULT_TTS.mode,
     range: TTS_RANGES.includes(source.range) ? source.range : DEFAULT_TTS.range,
-    analysis: TTS_ANALYSIS_MODES.includes(source.analysis) ? source.analysis : DEFAULT_TTS.analysis,
+    analysis: TTS_ANALYSIS_MODES.includes(analysis) ? analysis : DEFAULT_TTS.analysis,
     emotionCues: source.emotionCues === undefined ? DEFAULT_TTS.emotionCues : source.emotionCues !== false,
+    prosodySplit: source.prosodySplit === undefined ? DEFAULT_TTS.prosodySplit : source.prosodySplit !== false,
+    autoGenerate: source.autoGenerate === true,
+    downloadScope: TTS_DOWNLOAD_SCOPES.includes(source.downloadScope) ? source.downloadScope : DEFAULT_TTS.downloadScope,
+    quotePairs: normalizePairStrings(source.quotePairs, DEFAULT_QUOTE_PAIRS),
+    skipPairs: normalizePairStrings(source.skipPairs, DEFAULT_SKIP_PAIRS),
+    context: normalizeTtsContext(source.context),
     sourceTags: tags,
     narratorVoice: normalizeVoiceId(source.narratorVoice),
     narratorTitle: normalizeVoiceTitle(source.narratorTitle),
+    narratorVoices: normalizeLanguageVoices(source.narratorVoices),
     dialogueVoice: normalizeVoiceId(source.dialogueVoice),
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     fish: normalizeFishSettings(source.fish),
@@ -819,6 +979,7 @@ export function mergeSettings(value = {}) {
     const voices = normalizeVoiceList(list);
     if (voices.length) merged.ttsVoices[characterKey] = voices;
   }
+  merged.voiceLibrary = normalizeVoiceLibrary(source.voiceLibrary);
   merged.includeWorldbook = Boolean(merged.includeWorldbook);
   merged.includeCharacterCard = Boolean(merged.includeCharacterCard);
   merged.includeRecentContext = Boolean(merged.includeRecentContext);

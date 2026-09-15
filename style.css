@@ -550,3 +550,77 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-mini-scratch-body,
   .jy-mini-scratch-top::after { transition-duration: 1ms; transition-delay: 0ms; }
 }
+
+/* 朗读 · 音色库、语言音色、锁定状态。A picker sits beside every voice-id field and fills it. */
+.jy-tts-pick { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.jy-tts-pick input { flex: 1 1 auto; min-width: 0; }
+.jy-tts-pick select { flex: 0 0 auto; width: 38%; max-width: 160px; min-width: 0; font-size: 11px; }
+.jy-tts-voice-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; grid-template-areas: "name aliases lock" "voice voice title" "tools tools tools" "langs langs langs"; }
+.jy-tts-voice-row > .jy-tts-pick { grid-area: voice; }
+.jy-tts-voice-row .jy-tts-lock { grid-area: lock; justify-self: end; white-space: nowrap; }
+.jy-tts-lock[data-locked="true"] { color: var(--jy-accent-ink); border-color: var(--jy-accent); background: var(--jy-accent-tint); }
+.jy-tts-voice-tools { grid-area: tools; display: flex; flex-wrap: wrap; gap: 2px 14px; }
+.jy-tts-voice-tools .jy-text-button { padding: 2px 0; }
+.jy-tts-lang-list { grid-area: langs; display: flex; flex-direction: column; gap: 5px; }
+.jy-tts-lang-list:empty { display: none; }
+.jy-tts-lang-row { display: grid; grid-template-columns: 92px minmax(0,1fr) auto; gap: 6px; align-items: center; padding-left: 10px; border-left: 2px solid var(--jy-line-soft); }
+.jy-tts-lang-row .jy-text-button { padding: 2px 6px; font-size: 14px; line-height: 1; }
+.jy-tts-lang-row [data-jy-tts-lang-id] { font-family: Consolas, ui-monospace, monospace; }
+.jy-tts-lang-block { margin: 8px 0 12px; }
+.jy-tts-lang-block .jy-row-between { align-items: center; margin-bottom: 4px; }
+.jy-tts-lang-block .jy-label { margin: 0; }
+.jy-tts-library { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.jy-tts-library-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr) 92px auto; grid-template-areas: "name id lang remove" "title title title title"; gap: 6px; align-items: center; padding-bottom: 8px; border-bottom: 1px solid var(--jy-line-soft); }
+.jy-tts-library-row [data-jy-tts-library-name] { grid-area: name; }
+.jy-tts-library-row [data-jy-tts-library-id] { grid-area: id; font-family: Consolas, ui-monospace, monospace; }
+.jy-tts-library-row [data-jy-tts-library-lang] { grid-area: lang; }
+.jy-tts-library-row .jy-tts-title { grid-area: title; font-size: 11.5px; }
+.jy-tts-library-row .jy-tts-title:empty { display: none; }
+.jy-tts-library-row [data-jy-action="tts-remove-library"] { grid-area: remove; }
+.jy-behaviors .jy-inline-field input[type="number"] { width: 64px; }
+.jy-behaviors > .jy-label { margin: 0; align-self: center; }
+@media (max-width: 640px) {
+  .jy-tts-voice-row { grid-template-areas: "name aliases" "lock lock" "voice voice" "title title" "tools tools" "langs langs"; grid-template-columns: 1fr 1fr; }
+  .jy-tts-voice-row .jy-tts-lock { justify-self: start; }
+  .jy-tts-lang-row { grid-template-columns: 78px minmax(0,1fr) auto; }
+  .jy-tts-library-row { grid-template-columns: minmax(0,1fr) 92px; grid-template-areas: "name lang" "id id" "title remove"; }
+  .jy-tts-pick select { width: 44%; }
+}
+
+/* The floating window: a second page for reading aloud, with the transport and one sentence's voice. */
+.jy-mini-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 0 12px; background: var(--jy-rail); }
+.jy-mini-tabs button { border: 0; background: transparent; color: #a9c0b2; font-size: 12px; font-weight: 650; letter-spacing: .06em; padding: 6px 0 8px; border-bottom: 2px solid transparent; transition: color var(--jy-hover), border-color var(--jy-hover); }
+.jy-mini-tabs button:hover { color: #f2f7f0; }
+.jy-mini-tabs button[aria-selected="true"] { color: #f2f7f0; border-bottom-color: #e2cf9c; }
+.jy-mini-tabs[hidden], .jy-mini-body[hidden] { display: none; }
+.jy-mini-transport { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.jy-mini-transport .jy-button { min-height: 34px; padding: 0 4px; font-size: 15px; }
+.jy-mini-transport .jy-button[data-jy-action="tts-read-floor"] { font-size: 12px; }
+.jy-mini-transport .jy-button:disabled { opacity: .45; }
+.jy-mini-inspect { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--jy-line-soft); }
+.jy-mini-inspect[hidden] { display: none; }
+.jy-mini-inspect-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.jy-mini-inspect-head strong { font-size: 13px; flex: 0 0 auto; }
+.jy-mini-inspect-head .jy-muted { margin: 0; font-size: 11px; text-align: right; line-height: 1.5; }
+.jy-mini-inspect-text { margin: 0; padding: 8px 10px; border-radius: 7px; background: var(--jy-band); border: 1px solid var(--jy-band-line); font-size: 12.5px; line-height: 1.8; overflow-wrap: anywhere; }
+.jy-mini-inspect-summary { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 3px 10px; margin: 0; font-size: 11.5px; line-height: 1.6; max-height: 150px; overflow-y: auto; scrollbar-width: thin; }
+.jy-mini-inspect-summary dt { color: var(--jy-muted); white-space: nowrap; }
+.jy-mini-inspect-summary dd { margin: 0; overflow-wrap: anywhere; }
+.jy-mini-inspect-summary[hidden] { display: none; }
+.jy-mini-inspect-field .jy-label { margin-bottom: 5px; }
+.jy-mini-inspect-field textarea { min-height: 72px; max-height: 200px; font: 12px/1.7 Consolas, ui-monospace, monospace; }
+.jy-mini-inspect-tags { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.jy-mini-inspect-tags select { min-height: 26px; padding: 2px 8px; font-size: 11px; max-width: 46%; }
+.jy-mini-chip { border: 1px solid var(--jy-line); border-radius: 999px; background: var(--jy-surface); color: var(--jy-accent-ink); font-size: 11px; line-height: 1.4; padding: 3px 9px; transition: background var(--jy-hover); }
+.jy-mini-chip:hover { background: var(--jy-accent-soft); }
+.jy-mini-inspect-prosody { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.jy-mini-inspect-prosody label { display: flex; align-items: center; gap: 6px; }
+.jy-mini-inspect-prosody .jy-label { margin: 0; flex: 0 0 auto; }
+.jy-mini-inspect-prosody input { min-width: 0; }
+.jy-mini-inspect-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.jy-mini-inspect-actions .jy-button { min-height: 30px; font-size: 12px; }
+.jy-mini-inspect > .jy-muted { margin: 0; font-size: 11px; }
+/* The reading page can be taller than a phone; the window caps itself and the body scrolls. */
+.jy-mini { display: flex; flex-direction: column; max-height: calc(100dvh - 16px); }
+.jy-mini-bar, .jy-mini-tabs { flex: 0 0 auto; }
+.jy-mini-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }

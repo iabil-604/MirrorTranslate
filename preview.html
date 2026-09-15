@@ -59,6 +59,7 @@
       MESSAGE_EDITED: 'message_edited',
       MESSAGE_UPDATED: 'message_updated',
       CHAT_CHANGED: 'chat_changed',
+      WORLDINFO_ENTRIES_LOADED: 'worldinfo_entries_loaded',
     };
     const eventSource = new MockEvents();
     const original = `<story_scene>\n夕暮れの教室には、誰もいなかった。\n窓から差し込む光が、机を淡く照らしている。\n\n桜井は振り返って、「来たんだね」と小さく笑った。\n\n「明日も、ここで会える？」\n「……うん。約束する」\n</story_scene>`;
@@ -114,7 +115,8 @@
       const body = user ? JSON.parse(user.content) : { segments: [{ id: 1 }] };
       // The read-aloud analysis: labels by id, the speaker taken from a name in the narration before a
       // quote, and a mood from the closing punctuation.
-      if (body.task === 'label_utterances_for_audiobook') {
+      if (body.task === 'label_utterances_for_audiobook' || body.task === 'direct_voices_for_audiobook') {
+        const deep = body.task === 'direct_voices_for_audiobook';
         let lastName = '樱井';
         const labels = body.utterances.map(item => {
           if (item.kind !== 'quoted') {
@@ -124,10 +126,24 @@
           }
           const speaker = lastName;
           lastName = lastName === '樱井' ? '玩家' : '樱井';
-          const emotion = /？」?$/.test(item.text) ? 'surprise' : /……/.test(item.text) ? 'tender' : 'happy';
-          return { id: item.id, type: 'dialogue', speaker, emotion, intensity: 1 };
+          if (!deep) {
+            const emotion = /？」?$/.test(item.text) ? 'surprise' : /……/.test(item.text) ? 'tender' : 'happy';
+            return { id: item.id, type: 'dialogue', speaker, emotion, intensity: 1 };
+          }
+          // The deep reading: a voice per line, shaped like a real reply, so the panel has something to show.
+          if (/？」?$/.test(item.text)) {
+            return { id: item.id, type: 'dialogue', speaker, emotion: 'nervous', secondary: 'hopeful', intensity: 1, trend: 'rising', state: '怕对方拒绝', intent: '试探', subtext: '想再见面', restraint: 1, speed: 'slow', volume: 'quiet', tension: 1, hesitation: 2, ending: 'rising', pauses: [{ after: '明天', length: 'short' }], stress: ['见面'], delivery: '小心翼翼', focus: '见面' };
+          }
+          if (/……/.test(item.text)) {
+            return { id: item.id, type: 'dialogue', speaker, emotion: 'tender', intensity: 1, trend: 'steady', state: '被打动了', intent: '承诺', restraint: 1, speed: 'slow', volume: 'quiet', sounds: [{ at: 'start', tag: 'sighing' }], stress: ['保证'], ending: 'falling', delivery: '轻声承诺' };
+          }
+          return { id: item.id, type: 'dialogue', speaker, emotion: 'happy', intensity: 1, state: '见到人就开心', intent: '打招呼', speed: 'normal' };
         });
-        return JSON.stringify({ labels });
+        if (!deep) return JSON.stringify({ labels });
+        return JSON.stringify({ scene: '傍晚，空教室，光很淡。', characters: [{ name: '樱井', state: '安静，但一直在等', habit: '说话轻，句尾常带笑' }], voices: labels });
+      }
+      if (body.task === 'list_characters_from_worldbook') {
+        return JSON.stringify({ characters: [{ name: '樱井', aliases: ['桜井'], lang: 'ja' }, { name: '老胡', aliases: [] }] });
       }
       const translations = body.segments.map(item => {
         const known = previewTranslations.get(item.text);
@@ -156,7 +172,18 @@
       saveSettingsDebounced() {},
       getRequestHeaders() { return { 'Content-Type': 'application/json', 'X-CSRF-Token': 'preview-token' }; },
       substituteParams(value) { return value; },
-      async getWorldInfoPrompt() { return { worldInfoBefore: '桜井的中文写法是樱井。', worldInfoAfter: '' }; },
+      async getWorldInfoPrompt() {
+        // The host reports its sorted entries on every scan; the reading page's cast import reads them.
+        await eventSource.emit('worldinfo_entries_loaded', {
+          globalLore: [
+            { world: '预览', uid: 1, comment: '樱井', key: ['桜井', '樱井'], content: '{{char}}，安静的同学，说话很轻。' },
+            { world: '预览', uid: 2, comment: '老胡', key: ['老胡'], content: '小卖部老板。' },
+            { world: '预览', uid: 3, comment: '教室设定', key: ['教室'], content: '没有空调。' },
+          ],
+          characterLore: [], chatLore: [], personaLore: [],
+        });
+        return { worldInfoBefore: '桜井的中文写法是樱井。', worldInfoAfter: '' };
+      },
       async saveChat() {},
       updateMessageBlock() { renderChat(); },
       getCurrentChatId() { return 'preview-chat'; },

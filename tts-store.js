@@ -152,6 +152,23 @@ export function createTtsStore({ indexedDB = globalThis.indexedDB, maxBytes = DE
       await guarded(target => target.put(ANALYSIS_STORE, stamped));
       return stamped;
     },
+    deleteAnalysis: key => guarded(target => target.delete(ANALYSIS_STORE, key)),
+    /** Every recording of one floor, any text version; the caller keeps the ones for its version. */
+    listFloorAudio: floorId => guarded(target => target.byFloor(AUDIO_STORE, floorId), []),
+    // The reader's own version of one sentence lives beside the analyses, keyed by floor, text version
+    // and sentence, so it outlives the recordings it produced and goes with the text it belonged to.
+    getOverride: (floorId, version, segmentId) => guarded(target => target.get(ANALYSIS_STORE, `o:${floorId}|${version}|${segmentId}`), null),
+    async putOverride(record) {
+      const key = `o:${record.floorId}|${record.version}|${record.segmentId}`;
+      const stamped = { ...record, key, kind: 'override', createdAt: record.createdAt ?? now() };
+      await guarded(target => target.put(ANALYSIS_STORE, stamped));
+      return stamped;
+    },
+    deleteOverride: (floorId, version, segmentId) => guarded(target => target.delete(ANALYSIS_STORE, `o:${floorId}|${version}|${segmentId}`)),
+    async listOverrides(floorId, version) {
+      const records = await guarded(target => target.byFloor(ANALYSIS_STORE, floorId), []);
+      return records.filter(record => record.kind === 'override' && record.version === version);
+    },
     /** Drops every record of a floor made for another text version. */
     async pruneFloor(floorId, keepVersion) {
       let removed = 0;

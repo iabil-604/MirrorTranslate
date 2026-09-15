@@ -421,3 +421,55 @@
 #jingyi-translator-floating-button[data-theme="fresh"] .jingyi-fab-count { color:#536d4b; }
 #jingyi-translator-floating-button[data-theme="vampire"] { background:#351724; color:#e4bd7b; border-color:#956f40; }
 #jingyi-translator-floating-button[data-theme="glass"] { background:#355d7380; backdrop-filter:blur(12px); color:#f3f8fc; border-color:#bed3df80; }
+
+/* Beside every play button, the way in to the sentence's voice: what it was read as, editable. */
+#chat .jy-tts-edit {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 1.3em;
+  height: 1.3em;
+  margin: 0 0.12em 0 0;
+  padding: 0;
+  vertical-align: -0.18em;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
+  font: inherit;
+  line-height: 1;
+  opacity: 0.32;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+#chat .jy-tts-edit svg { width: 0.7em; height: 0.7em; fill: currentColor; pointer-events: none; }
+#chat .jy-tts-edit:hover,
+#chat .jy-tts-edit:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+#chat .jy-tts-edit:focus-visible {
+  outline: 2px solid color-mix(in srgb, currentColor 60%, transparent);
+  outline-offset: 2px;
+}
+@media (hover: none) {
+  #chat .jy-tts-edit { opacity: 0.5; }
+}
+#chat .jy-tts-bar-panel {
+  margin: 0 0 0 auto;
+  padding: 0.2em 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
+  font: inherit;
+  opacity: 0.6;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.25em;
+  cursor: pointer;
+}
+#chat .jy-tts-bar-panel:hover { opacity: 1; }
+#chat .jy-tts-bar[data-state="paused"] .jy-tts-bar-status { opacity: 0.7; }

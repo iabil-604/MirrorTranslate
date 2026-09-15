@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { DEFAULT_TTS, mergeSettings, normalizeTts, normalizeVoiceList } from '../core.js';
+import { DEFAULT_TTS, formatPairList, mergeSettings, normalizeTts, normalizeVoiceLibrary, normalizeVoiceList, parsePairList } from '../core.js';
 import {
+  FISH_EMOTIONS,
   NARRATOR,
   alignSpansToTimeline,
   analysisCacheKey,
@@ -10,27 +11,43 @@ import {
   buildGlobalTimeline,
   buildSegments,
   buildTtsAnalysisMessages,
+  buildVoiceAnalysisMessages,
+  compileVoiceCues,
   createSseParser,
   createTimestampCollector,
+  cueLabel,
   describeFishFailure,
+  detectLanguage,
   emotionCue,
+  findCoveringEntry,
+  fingerprintKey,
   fishEndpoint,
   fishFingerprint,
   fishHeaders,
   floorCacheKey,
+  groupSegmentsByLine,
   labelsFromAnnotations,
   linesFromTaggedText,
   locateAnchors,
+  mergeWavBuffers,
+  normalizeVoice,
   parseTtsAnalysis,
+  parseVoiceAnalysis,
   planFishParts,
   planVoices,
   playbackWindow,
+  recordCovers,
+  recordingCacheKey,
   resolveSegmentVoice,
   segmentsInRange,
-  sentenceCacheKey,
+  sentenceFishText,
+  sentenceProsody,
+  splitByPairs,
   splitNarrationSentences,
   splitUtterances,
+  stripCues,
   toStandardDocument,
+  voiceSummary,
 } from '../tts.js';
 import { createMemoryBackend, createTtsStore, planEviction } from '../tts-store.js';
 import { addDiagnostic, clearDiagnostics, readDiagnostics } from '../diagnostics.js';
@@ -76,81 +93,128 @@ test('narration splits at full stops and silent runs are not utterances', () => 
   assert.deepEqual(utterances.map(item => [item.kind, item.text]), [['narration', '她没有回答。']]);
 });
 
+test('the reader chooses which marks hold speech and which hold what is never read', () => {
+  // A preset that writes actions between asterisks and speech between curly quotes.
+  const line = '泰罗说：“真的好热啊” *好想裸奔* 然后他站了起来。';
+  const parts = splitByPairs(line, { quotePairs: ['“”'], skipPairs: ['* *'] });
+  assert.deepEqual(parts.map(part => [part.kind, part.text]), [
+    ['narration', '泰罗说：'], ['quoted', '“真的好热啊”'], ['narration', ' '], ['skipped', '*好想裸奔*'], ['narration', ' 然后他站了起来。'],
+  ]);
+  const utterances = splitUtterances([{ lineId: 1, text: line }], { quotePairs: ['“”'], skipPairs: ['* *'] });
+  assert.deepEqual(utterances.map(item => [item.kind, item.text]), [['narration', '泰罗说：'], ['quoted', '真的好热啊'], ['narration', '然后他站了起来。']]);
+  // With the default pairs the asterisks mean nothing and the run is read as narration.
+  assert.deepEqual(splitUtterances([{ lineId: 1, text: line }]).map(item => item.kind), ['narration', 'quoted', 'narration']);
+  // Double asterisks are their own pair when written with a space; nesting of an asymmetric pair holds.
+  assert.deepEqual(splitByPairs('**加粗**「他说「好」了」', { quotePairs: ['「」'], skipPairs: ['** **'] }).map(part => [part.kind, part.text]), [
+    ['skipped', '**加粗**'], ['quoted', '「他说「好」了」'],
+  ]);
+  // An unterminated opener is narration, not a guess.
+  assert.deepEqual(splitByPairs('他说：“没有结尾', { quotePairs: ['“”'] }).map(part => part.kind), ['narration']);
+  assert.deepEqual(parsePairList('「」, “”, ** **, x'), [{ open: '「', close: '」' }, { open: '“', close: '”' }, { open: '**', close: '**' }, { open: 'x', close: 'x' }]);
+  assert.equal(formatPairList(['「」', '** **']), '「」, ** **');
+});
+
+test('the language of a sentence is read off its script, kana outranking han', () => {
+  assert.equal(detectLanguage('蓝蓝的天空'), 'zh');
+  assert.equal(detectLanguage('夕暮れの教室には、誰もいなかった。'), 'ja');
+  assert.equal(detectLanguage('What a beautiful day.'), 'en');
+  assert.equal(detectLanguage('안녕하세요'), 'ko');
+  assert.equal(detectLanguage('Привет'), 'ru');
+  assert.equal(detectLanguage('……'), '');
+  assert.deepEqual(groupSegmentsByLine([{ id: 1, lineId: 1 }, { id: 2, lineId: 1 }, { id: 3, lineId: 2 }]).map(line => [line.lineId, line.segments.length]), [[1, 2], [2, 1]]);
+});
+
 test('the analysis request carries ids and never offers the model a place to return text', () => {
   const utterances = splitUtterances([{ lineId: 1, text: '泰罗说：「我操好热啊！」' }]);
-  const messages = buildTtsAnalysisMessages(utterances, { roster: ['泰罗', '佐菲'], userName: '玩家' });
-  const input = JSON.parse(messages.at(-1).content);
-  assert.deepEqual(input.utterances, [
-    { id: 1, kind: 'narration', text: '泰罗说：' },
-    { id: 2, kind: 'quoted', text: '「我操好热啊！」' },
-  ]);
+  const messages = buildTtsAnalysisMessages(utterances, { roster: ['泰罗', '佐菲'], characterName: '泰罗', userName: '玩家' });
+  assert.equal(messages.length, 2);
+  const input = JSON.parse(messages[1].content);
+  assert.equal(input.task, 'label_utterances_for_audiobook');
   assert.deepEqual(input.roster, ['泰罗', '佐菲']);
+  assert.deepEqual(input.utterances, [{ id: 1, kind: 'narration', text: '泰罗说：' }, { id: 2, kind: 'quoted', text: '「我操好热啊！」' }]);
   assert.match(messages[0].content, /不要输出 text/);
+  assert.match(messages[0].content, /lang 是这一句的语言代码/);
+  assert.doesNotMatch(messages[0].content, /"text":/);
 });
 
 test('analysis labels are validated and any text the model sends back is ignored', () => {
-  const utterances = splitUtterances([{ lineId: 1, text: '泰罗说：「我操好热啊！」佐菲：「来了。」「嗯。」' }]);
-  const raw = JSON.stringify({
+  const utterances = splitUtterances([{ lineId: 1, text: '泰罗说：「我操好热啊！」' }, { lineId: 2, text: '「Sure.」' }]);
+  const { labels } = parseTtsAnalysis(`好的：\n\`\`\`json\n${JSON.stringify({
     labels: [
+      { id: 1, type: 'narration', text: '泰罗说：' },
       { id: 2, type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 5, text: '哎呀，真是热死我了！' },
-      { id: 2, type: 'dialogue', speaker: '别人' },
-      { id: 4, type: 'dialogue', speaker: '旁白', emotion: 'furious-ish' },
-      { id: 99, type: 'dialogue', speaker: '不存在' },
-      { id: 5, type: 'narration' },
+      { id: 3, type: 'dialogue', speaker: '佐菲', emotion: 'happy', lang: 'en-US' },
+      { id: 9, type: 'dialogue', speaker: '幽灵' },
+      { id: 2, type: 'dialogue', speaker: '佐菲' },
+      { id: 1, speaker: '未知' },
     ],
-  });
-  const { labels } = parseTtsAnalysis(`好的：\n\`\`\`json\n${raw}\n\`\`\``, utterances);
-  assert.deepEqual(labels.get(2), { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2 });
-  assert.deepEqual(labels.get(4), { type: 'dialogue' });
-  assert.equal(labels.has(99), false);
-  const segments = buildSegments(utterances, labels);
-  assert.equal(segments[1].text, '我操好热啊！');
-  assert.equal(segments.find(item => item.id === 5).type, 'narration');
-
-  // A reply cut off mid-array still gives up the objects that closed.
-  const truncated = '{"labels":[{"id":2,"type":"dialogue","speaker":"泰罗","emotion":"happy"},{"id":4,"type":"dia';
-  assert.equal(parseTtsAnalysis(truncated, utterances).labels.get(2).emotion, 'happy');
+  })}\n\`\`\``, utterances);
+  assert.deepEqual([...labels], [
+    [1, { type: 'narration' }],
+    [2, { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2 }],
+    [3, { type: 'dialogue', speaker: '佐菲', emotion: 'happy', lang: 'en' }],
+  ]);
+  // A reply cut off mid-array still yields the objects that closed.
+  const truncated = parseTtsAnalysis('{"labels":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","speaker":"泰罗","emo', utterances);
+  assert.equal(truncated.labels.get(1)?.type, 'narration');
 });
 
 test('segments follow the standard structure: narrator for narration, unified speakers, null for neutral', () => {
-  const utterances = splitUtterances([{ lineId: 1, text: '太阳很大。「好热！」「你怎么来了？」' }]);
-  const labels = new Map([
-    [2, { type: 'dialogue', speaker: '泰罗先生', emotion: 'happy', intensity: 1 }],
-    [3, { type: 'dialogue', speaker: '佐菲', emotion: 'neutral' }],
-  ]);
-  const segments = buildSegments(utterances, labels, { knownNames: ['泰罗', '佐菲'] });
-  assert.deepEqual(toStandardDocument(segments).segments, [
-    { id: 'seg_001', type: 'narration', text: '太阳很大。', speaker: NARRATOR, emotion: null },
-    { id: 'seg_002', type: 'dialogue', text: '好热！', speaker: '泰罗', emotion: 'happy' },
-    { id: 'seg_003', type: 'dialogue', text: '你怎么来了？', speaker: '佐菲', emotion: null },
-  ]);
+  const utterances = splitUtterances([{ lineId: 1, text: '希尔达夫人说：「来了。」' }, { lineId: 2, text: '「Hello.」' }]);
+  const labels = new Map([[2, { type: 'dialogue', speaker: '希尔达夫人', emotion: 'neutral' }], [3, { type: 'dialogue', speaker: '希尔达' }]]);
+  const segments = buildSegments(utterances, labels, { knownNames: ['希尔达'] });
+  assert.equal(segments[0].speaker, NARRATOR);
+  assert.equal(segments[0].lang, 'zh');
+  assert.equal(segments[1].speaker, '希尔达');
+  assert.equal(segments[1].emotion, null);
+  assert.equal(segments[2].speaker, '希尔达');
+  assert.equal(segments[2].lang, 'en');
+  const document = toStandardDocument(segments, [{ id: 2, start: 1.5, end: 2.25 }]);
+  assert.deepEqual(document.segments[1], { id: 'seg_002', type: 'dialogue', text: '来了。', speaker: '希尔达', lang: 'zh', emotion: null, start: 1.5, end: 2.25 });
   assert.deepEqual(segmentsInRange(segments, 'dialogue').map(item => item.id), [2, 3]);
   assert.deepEqual(segmentsInRange(segments, 'narration').map(item => item.id), [1]);
-  assert.equal(segmentsInRange(segments, 'all').length, 3);
 });
 
 test('translation annotations label only the quoted runs of their line', () => {
-  const utterances = splitUtterances([{ lineId: 7, text: '泰罗放下杯子，「好热。」' }]);
-  const labels = labelsFromAnnotations(utterances, new Map([[7, { speaker: '泰罗', emotion: '恼火', intensity: 2 }]]));
-  assert.deepEqual([...labels], [[2, { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2 }]]);
+  const utterances = splitUtterances([{ lineId: 4, text: '泰罗说：「走吧。」' }]);
+  const labels = labelsFromAnnotations(utterances, new Map([[4, { speaker: '泰罗', emotion: 'resolute', intensity: 2 }]]));
+  assert.deepEqual([...labels], [[2, { type: 'dialogue', speaker: '泰罗', emotion: 'resolute', intensity: 2 }]]);
 });
 
-test('voices resolve by name or alias, narration keeps its own voice, and gaps are reported', () => {
+test('voices resolve by name, alias, language and lock; nobody is left silent', () => {
   const voices = normalizeVoiceList([
-    { name: '泰罗', aliases: '小泰', voiceId: 'voice-b' },
-    { name: '佐菲', voiceId: 'voice c' },
+    { name: '泰罗', aliases: ['泰罗奥特曼'], voiceId: 'v-taro', voices: { ja: 'v-taro-ja' } },
+    { name: '佐菲', voiceId: '', locked: false },
   ]);
-  assert.equal(voices[1].voiceId, '', 'an id with whitespace is not an id');
-  const config = { voices, narratorVoice: 'voice-a', dialogueVoice: '' };
-  assert.equal(resolveSegmentVoice({ type: 'narration' }, config), 'voice-a');
-  assert.equal(resolveSegmentVoice({ type: 'dialogue', speaker: '小泰' }, config), 'voice-b');
-  assert.equal(resolveSegmentVoice({ type: 'dialogue', speaker: '奥特之母' }, { ...config, dialogueVoice: 'voice-d' }), 'voice-d');
+  const config = { voices, narratorVoice: 'v-narr', narratorVoices: { ja: 'v-narr-ja' }, dialogueVoice: 'v-default' };
+  const dialogue = (speaker, lang = 'zh') => ({ type: 'dialogue', speaker, lang });
+  assert.equal(resolveSegmentVoice(dialogue('泰罗'), config), 'v-taro');
+  assert.equal(resolveSegmentVoice(dialogue('泰罗奥特曼'), config), 'v-taro');
+  assert.equal(resolveSegmentVoice(dialogue('泰罗', 'ja'), config), 'v-taro-ja');
+  assert.equal(resolveSegmentVoice(dialogue('泰罗', 'en'), config), 'v-taro', 'no voice for that language falls back to the character\'s own');
+  assert.equal(resolveSegmentVoice(dialogue('佐菲'), config), 'v-default', 'an unlocked row follows the dialogue default');
+  assert.equal(resolveSegmentVoice({ type: 'narration', lang: 'zh' }, config), 'v-narr');
+  assert.equal(resolveSegmentVoice({ type: 'narration', lang: 'ja' }, config), 'v-narr-ja');
+  assert.equal(resolveSegmentVoice(dialogue('路人'), { voices, narratorVoice: 'v-narr' }), 'v-narr', 'no dialogue default: the narrator reads it');
+  assert.equal(resolveSegmentVoice(dialogue('路人'), { voices }), '', 'nothing configured means the provider\'s default voice');
+
   const plan = planVoices([
-    { id: 1, type: 'dialogue', speaker: '佐菲', text: '来了。' },
-    { id: 2, type: 'narration', speaker: NARRATOR, text: '风很大。' },
-  ], { voices, narratorVoice: '', dialogueVoice: '' });
-  assert.deepEqual(plan.missing, ['佐菲', '旁白']);
-  assert.equal(plan.items.length, 0);
+    { id: 1, type: 'dialogue', speaker: '佐菲', text: '来了。', lang: 'zh' },
+    { id: 2, type: 'narration', speaker: NARRATOR, text: '风很大。', lang: 'zh' },
+    { id: 3, type: 'dialogue', speaker: '泰罗', text: '走吧。', lang: 'zh' },
+  ], { voices, narratorVoice: '', narratorVoices: {}, dialogueVoice: '' });
+  assert.equal(plan.items.length, 3, 'every sentence keeps its place');
+  assert.deepEqual(plan.items.map(item => item.voiceId), ['', '', 'v-taro']);
+  assert.deepEqual(plan.unvoiced, ['佐菲', '旁白']);
+  assert.deepEqual(plan.defaulted, []);
+});
+
+test('rows lock when they get a voice and unlock when it is taken away', () => {
+  const rows = normalizeVoiceList([{ name: 'A', voiceId: 'v' }, { name: 'B' }, { name: 'C', voices: { ja: 'v-ja' } }, { name: 'D', voiceId: 'v', locked: false }]);
+  assert.deepEqual(rows.map(row => [row.name, row.locked]), [['A', true], ['B', false], ['C', true], ['D', false]]);
+  assert.deepEqual(rows[2].voices, { ja: 'v-ja' });
+  const library = normalizeVoiceLibrary([{ name: '少年', voiceId: '99c6e180c87c4d5fb506534e7ac62ced', lang: 'ZH-cn' }, { name: 'x', voiceId: 'bad id' }, { id: 'k', voiceId: 'abc' }]);
+  assert.deepEqual(library.map(item => [item.id, item.name, item.lang]), [['voice-1', '少年', 'zh'], ['k', 'abc', '']]);
 });
 
 test('moods become Fish cues: brackets for S2, the fixed parenthesised set for S1', () => {
@@ -159,15 +223,116 @@ test('moods become Fish cues: brackets for S2, the fixed parenthesised set for S
   assert.equal(emotionCue('whisper', 0, 's2-pro'), '[soft tone]');
   assert.equal(emotionCue('angry', 2, 's1'), '(angry)(shouting)');
   assert.equal(emotionCue('neutral', 2, 's2-pro'), '');
-  assert.equal(emotionCue('nonsense', 1, 's2-pro'), '');
+  assert.equal(emotionCue('nonsense', 1, 's2-pro'), '[nonsense]', 'S2 reads free-form natural language');
+  assert.equal(emotionCue('nonsense', 1, 's1'), '', 'S1 only knows its fixed set');
+  // Fish's own vocabulary keeps Fish's own scale.
+  assert.equal(emotionCue('frustrated', 2, 's2-pro'), '[very frustrated]');
+  assert.equal(emotionCue('scared', 0, 's2-pro'), '[nervous]');
+  assert.equal(emotionCue('excited', 2, 's2-pro'), '[ecstatic]');
+  assert.equal(cueLabel('frustrated'), '沮丧');
+  assert.equal(cueLabel('very sad'), '很悲伤');
+  assert.equal(cueLabel('tender'), '温柔');
 });
 
-test('the Fish payload uses one reference id alone and speaker tags only where the voice changes', () => {
-  const segment = (id, text, extra = {}) => ({ id, type: 'dialogue', text, speaker: null, emotion: null, intensity: null, ...extra });
+test('the deep request carries the cast, the references and the voice fields, still without text', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '泰罗压低了声音：「我……我要裸奔啦。」' }]);
+  const messages = buildVoiceAnalysisMessages(utterances, {
+    roster: ['泰罗'], characterName: '泰罗', userName: '玩家',
+    packet: { character: '泰罗：怕热，嘴硬。', worldbook: '教室没有空调。', recent: '【第 3 楼】泰罗擦汗。' },
+  });
+  const input = JSON.parse(messages[1].content);
+  assert.equal(input.task, 'direct_voices_for_audiobook');
+  assert.deepEqual(input.references, { character: '泰罗：怕热，嘴硬。', worldbook: '教室没有空调。', recent: '【第 3 楼】泰罗擦汗。' });
+  assert.deepEqual(input.emotions, FISH_EMOTIONS);
+  assert.deepEqual(input.utterances.map(item => item.text), ['泰罗压低了声音：', '「我……我要裸奔啦。」']);
+  for (const field of ['subtext', 'restraint', 'pauses', 'stress', 'shifts', 'sounds', 'breath', 'hesitation', 'ending']) assert.match(messages[0].content, new RegExp(field));
+  assert.match(messages[0].content, /情绪惯性/);
+  assert.match(messages[0].content, /不要输出 text/);
+});
+
+test('the deep reply becomes labels plus a checked voice per sentence', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '泰罗压低了声音：「我……我要裸奔啦。」' }]);
+  const reply = JSON.stringify({
+    scene: '闷热的教室，放学后。',
+    characters: [{ name: '泰罗', state: '热得快疯了', habit: '句尾拖长' }],
+    voices: [
+      { id: 1, type: 'narration' },
+      {
+        id: 2, type: 'dialogue', speaker: '泰罗', lang: 'zh', emotion: 'Frustrated', secondary: 'embarrassed', intensity: 2, trend: 'rising',
+        state: '又热又躁', intent: '抱怨', subtext: '想让人拦着', restraint: 2, speed: 'fast', pitch: 'high', volume: 'quiet', energy: 2, tension: 2,
+        breath: 'panting', rasp: 0, hesitation: 2, rhythm: 'choppy', ending: 'cut', urgency: 1,
+        pauses: [{ after: '我', length: 'long' }, { after: '不存在的词', length: 'short' }],
+        stress: ['裸奔', '也不存在'], shifts: [{ at: '我要', emotion: 'shy' }], sounds: [{ at: 'start', tag: 'sighing' }, { at: 'end', tag: 'nonsense' }],
+        delivery: '崩溃式抱怨', focus: '热', text: '哎呀热死了',
+      },
+    ],
+  });
+  const { labels, voices, scene, characters } = parseVoiceAnalysis(reply, utterances);
+  assert.equal(scene, '闷热的教室，放学后。');
+  assert.deepEqual(characters, [{ name: '泰罗', state: '热得快疯了', habit: '句尾拖长' }]);
+  assert.deepEqual(labels.get(1), { type: 'narration' });
+  assert.deepEqual(labels.get(2), { type: 'dialogue', speaker: '泰罗', intensity: 2, lang: 'zh' });
+  const voice = voices.get(2);
+  assert.equal(voice.emotion, 'frustrated');
+  assert.equal(voice.secondary, 'embarrassed');
+  assert.equal(voice.restraint, 2);
+  assert.deepEqual(voice.pauses, [{ after: '我', length: 'long' }], 'a pause after a word the sentence lacks is dropped');
+  assert.deepEqual(voice.stress, ['裸奔']);
+  assert.deepEqual(voice.shifts, [{ at: '我要', emotion: 'shy' }]);
+  assert.deepEqual(voice.sounds, [{ at: 'start', tag: 'sighing' }, { at: 'end', tag: 'nonsense' }]);
+  assert.equal(voices.get(1), undefined, 'a plain narration line carries no voice');
+  assert.equal(normalizeVoice({ speed: 'normal', volume: 'normal', intensity: 'x' }, ''), null);
+
+  const segments = buildSegments(utterances, labels, { voices });
+  assert.equal(segments[1].emotion, 'frustrated');
+  assert.equal(segments[1].intensity, 2);
+  assert.equal(segments[1].voice.subtext, '想让人拦着');
+  const summary = voiceSummary(segments[1].voice);
+  assert.deepEqual(summary[0], ['情绪', '沮丧（强） · 难为情']);
+  assert.ok(summary.some(([term, value]) => term === '停顿' && value === '「我」后长停'));
+  assert.ok(summary.some(([term, value]) => term === '潜台词' && value === '想让人拦着'));
+});
+
+test('a voice compiles into leading cues, inline cues and prosody steps, and the words stay', () => {
+  const segment = {
+    id: 2, type: 'dialogue', text: '我……我要裸奔啦。', speaker: '泰罗', lang: 'zh', emotion: 'frustrated', intensity: 2,
+    voice: {
+      emotion: 'frustrated', secondary: 'embarrassed', intensity: 2, restraint: 2, speed: 'fast', volume: 'quiet', tension: 2, hesitation: 2, urgency: 1,
+      pauses: [{ after: '我', length: 'long' }], stress: ['裸奔'], shifts: [{ at: '我要', emotion: 'shy' }], sounds: [{ at: 'start', tag: 'sighing' }, { at: 'end', tag: 'chuckling' }],
+    },
+  };
+  const compiled = compileVoiceCues(segment, { model: 's2-pro' });
+  assert.deepEqual(compiled.cues, ['[very frustrated]', '[embarrassed]', '[whispering]', '[sighing]'], 'four cues at most: the hesitant descriptor gives way to the sigh');
+  assert.equal(compiled.text, '我 [long-break] …… [shy] 我要 [emphasis] 裸奔啦。');
+  assert.equal(compiled.tail, '[chuckling]');
+  assert.deepEqual([compiled.speed, compiled.volume], ['fast', 'quiet']);
+  const item = { segment, voiceId: 'v' };
+  assert.equal(sentenceFishText(item, { model: 's2-pro' }), '[very frustrated][embarrassed][whispering][sighing] 我 [long-break] …… [shy] 我要 [emphasis] 裸奔啦。 [chuckling]');
+  assert.equal(stripCues(sentenceFishText(item, { model: 's2-pro' })).replace(/\s/g, ''), '我……我要裸奔啦。');
+  // S1: only its fixed set, in parentheses, and no emphasis.
+  const legacy = compileVoiceCues(segment, { model: 's1' });
+  assert.deepEqual(legacy.cues, ['(frustrated)', '(embarrassed)', '(whispering)', '(sighing)']);
+  assert.equal(legacy.text, '我 (long-break) …… (embarrassed) 我要裸奔啦。');
+  // Cues off: the words alone, the prosody steps still known.
+  assert.equal(sentenceFishText(item, { model: 's2-pro' }, { emotionCues: false }), '我……我要裸奔啦。');
+  assert.deepEqual(sentenceProsody(item, { speed: 1, volume: 0 }), { speed: 1.12, volume: -3 });
+  assert.deepEqual(sentenceProsody(item, { speed: 1, volume: 0 }, { prosodySplit: false }), { speed: 1, volume: 0 });
+  // The reader's own version wins whole, prosody included.
+  const edited = { ...item, override: { text: '[calm] 我要裸奔啦。', speed: 0.8, volume: 4 } };
+  assert.equal(sentenceFishText(edited, { model: 's2-pro' }), '[calm] 我要裸奔啦。');
+  assert.deepEqual(sentenceProsody(edited, { speed: 1, volume: 0 }), { speed: 0.8, volume: 4 });
+  // A light label with no voice still gets its one cue.
+  assert.deepEqual(compileVoiceCues({ text: '好热！', emotion: 'happy', intensity: 1 }).cues, ['[happy]']);
+  assert.deepEqual(compileVoiceCues({ text: '好热！' }).cues, []);
+});
+
+test('the Fish payload uses one reference id alone, speaker tags where the voice changes, none when unvoiced', () => {
+  const segment = (id, text, extra = {}) => ({ id, type: 'dialogue', text, speaker: null, emotion: null, intensity: null, lang: 'zh', ...extra });
   const single = buildFishPayload([{ segment: segment(1, '好热！', { emotion: 'happy', intensity: 1 }), voiceId: 'v-taro' }], FISH);
   assert.equal(single.body.text, '[happy] 好热！');
   assert.equal(single.body.reference_id, 'v-taro');
   assert.equal(single.body.mp3_bitrate, 128);
+  assert.deepEqual(single.body.prosody, { speed: 1, volume: 0 });
   assert.doesNotMatch(single.body.text, /<\|speaker/);
 
   const multi = buildFishPayload([
@@ -176,138 +341,161 @@ test('the Fish payload uses one reference id alone and speaker tags only where t
     { segment: segment(3, '那就一起吧。'), voiceId: 'v-taro' },
     { segment: segment(4, '泰罗放下了杯子。', { type: 'narration' }), voiceId: 'v-narrator' },
   ], FISH);
-  assert.deepEqual(multi.body.reference_id, ['v-narrator', 'v-taro']);
   assert.equal(multi.body.text, '<|speaker:0|>蓝蓝的天空上有红红的太阳。\n<|speaker:1|>[surprised] 你怎么来了？\n那就一起吧。\n<|speaker:0|>泰罗放下了杯子。');
+  assert.deepEqual(multi.body.reference_id, ['v-narrator', 'v-taro']);
   assert.deepEqual(multi.spans.map(span => span.text), ['蓝蓝的天空上有红红的太阳。', '你怎么来了？', '那就一起吧。', '泰罗放下了杯子。']);
 
-  const plain = buildFishPayload([{ segment: segment(1, '好热！', { emotion: 'happy' }), voiceId: 'v' }], { ...FISH, format: 'opus' }, { emotionCues: false });
-  assert.equal(plain.body.text, '好热！');
-  assert.equal('mp3_bitrate' in plain.body, false);
-  assert.throws(() => buildFishPayload(multi.spans.map((span, index) => ({ segment: segment(span.id, span.text), voiceId: `v${index % 2}` })), { ...FISH, model: 's1' }), /s1/);
+  const unvoiced = buildFishPayload([{ segment: segment(1, '好热！'), voiceId: '' }], FISH);
+  assert.equal('reference_id' in unvoiced.body, false, 'Fish picks its default voice');
+  assert.throws(() => buildFishPayload([{ segment: segment(1, 'a'), voiceId: 'v' }, { segment: segment(2, 'b'), voiceId: '' }], FISH), /混用/);
+  assert.throws(() => buildFishPayload([{ segment: segment(1, 'a'), voiceId: 'v-a' }, { segment: segment(2, 'b'), voiceId: 'v-b' }], { ...FISH, model: 's1' }), /s1/);
+  // An edited sentence's span is the edited words with the cues taken off.
+  const edited = buildFishPayload([{ segment: segment(1, '好热！'), voiceId: 'v', override: { text: '[calm] 好 [break] 热啊！' } }], FISH);
+  assert.equal(edited.body.text, '[calm] 好 [break] 热啊！');
+  assert.equal(edited.spans[0].text, '好 热啊！');
 });
 
-test('a floor is split into requests by voice on S1 and by size on every model', () => {
-  const items = ['一二三四五', '六七八', '九十', '十一十二'].map((text, index) => ({
-    segment: { id: index + 1, text }, voiceId: index === 2 ? 'b' : 'a',
-  }));
-  assert.deepEqual(planFishParts(items, { model: 's2-pro', maxChars: 100 }).map(part => part.map(item => item.segment.id)), [[1, 2, 3, 4]]);
-  assert.deepEqual(planFishParts(items, { model: 's1', maxChars: 100 }).map(part => part.map(item => item.segment.id)), [[1, 2], [3], [4]]);
-  assert.deepEqual(planFishParts(items, { model: 's2-pro', maxChars: 8 }).map(part => part.map(item => item.segment.id)), [[1, 2], [3, 4]]);
+test('a floor is split into requests by voice on S1, by voicelessness, by prosody and by size', () => {
+  const item = (id, voiceId, extra = {}) => ({ segment: { id, type: 'dialogue', text: '一'.repeat(10), lang: 'zh', ...extra }, voiceId });
+  const items = [item(1, 'a'), item(2, 'a'), item(3, 'b'), item(4, 'a')];
+  assert.deepEqual(planFishParts(items, { model: 's1' }).map(part => part.map(entry => entry.segment.id)), [[1, 2], [3], [4]]);
+  assert.deepEqual(planFishParts(items, { model: 's2-pro' }).map(part => part.length), [4]);
+  assert.deepEqual(planFishParts(items, { model: 's2-pro', maxChars: 25 }).map(part => part.map(entry => entry.segment.id)), [[1, 2], [3, 4]]);
+  // A sentence read faster is its own request, since Fish sets speed per request.
+  const paced = [item(1, 'a'), item(2, 'a', { voice: { speed: 'fast' } }), item(3, 'a', { voice: { speed: 'fast' } }), item(4, 'a')];
+  assert.deepEqual(planFishParts(paced, { model: 's2-pro' }).map(part => part.map(entry => entry.segment.id)), [[1], [2, 3], [4]]);
+  assert.deepEqual(planFishParts(paced, { model: 's2-pro', prosodySplit: false }).map(part => part.length), [4]);
+  assert.equal(buildFishPayload(planFishParts(paced, {})[1], FISH).body.prosody.speed, 1.12);
+  // A sentence with no voice cannot sit in a speaker array beside one that has.
+  assert.deepEqual(planFishParts([item(1, 'a'), item(2, ''), item(3, '')], {}).map(part => part.map(entry => entry.segment.id)), [[1], [2, 3]]);
 });
 
 test('the SSE parser survives frames split anywhere, CRLF line ends and comments', () => {
-  const payloads = [
-    { audio_base64: 'QUJD', content: '甲', alignment: null, chunk_seq: 0, chunk_audio_offset_sec: 0 },
-    { audio_base64: 'REVG', content: '甲', alignment: { audio_duration: 1, segments: [{ text: '甲', start: 0, end: 1 }] }, chunk_seq: 0, chunk_audio_offset_sec: 0 },
-  ];
-  const wire = `: keep-alive\r\n\r\n${payloads.map(item => `event: message\r\ndata: ${JSON.stringify(item)}\r\n\r\n`).join('')}`;
-  for (const size of [1, 2, 3, 7, 50, wire.length]) {
-    const events = [];
-    const parser = createSseParser(event => events.push(event));
-    for (let index = 0; index < wire.length; index += size) parser.push(wire.slice(index, index + size));
-    parser.end();
-    assert.equal(events.length, 2, `chunk size ${size}`);
-    assert.deepEqual(events.map(event => JSON.parse(event.data).audio_base64), ['QUJD', 'REVG']);
-    assert.equal(events[0].event, 'message');
-  }
-  const multiline = [];
-  const parser = createSseParser(event => multiline.push(event.data));
-  parser.push('data: {"a":\ndata: 1}\n\n');
+  const events = [];
+  const parser = createSseParser(event => events.push(event));
+  const wire = 'event: message\r\ndata: {"a":1}\r\n\r\n: keepalive\n\ndata: {"b":\ndata: 2}\n\nevent: done\ndata: [DONE]\n\n';
+  for (let index = 0; index < wire.length; index += 7) parser.push(wire.slice(index, index + 7));
   parser.end();
-  assert.deepEqual(JSON.parse(multiline[0]), { a: 1 });
+  assert.deepEqual(events, [
+    { event: 'message', data: '{"a":1}' },
+    { event: 'message', data: '{"b":\n2}' },
+    { event: 'done', data: '[DONE]' },
+  ]);
+  const tail = [];
+  const trailing = createSseParser(event => tail.push(event));
+  trailing.push('data: last');
+  trailing.end();
+  assert.deepEqual(tail, [{ event: 'message', data: 'last' }]);
 });
 
 test('alignment snapshots replace each other per chunk and chunks sit on one timeline', () => {
   const collector = createTimestampCollector();
-  collector.accept({ audio_base64: 'AA==', alignment: { audio_duration: 4, segments: LIVE_MULTI_CHUNK0.slice(0, 16) }, chunk_seq: 0, chunk_audio_offset_sec: 0 });
-  collector.accept({ audio_base64: 'AQ==', alignment: { audio_duration: 4.31891156462585, segments: LIVE_MULTI_CHUNK0 }, chunk_seq: 0, chunk_audio_offset_sec: 0 });
-  collector.accept({ audio_base64: 'Ag==', alignment: { audio_duration: 1.7690249433106575, segments: LIVE_MULTI_CHUNK1 }, chunk_seq: 1, chunk_audio_offset_sec: 4.31891156462585 });
+  collector.accept({ audio_base64: 'AA==', chunk_seq: 0, chunk_audio_offset_sec: 0, alignment: { audio_duration: 4.5, segments: LIVE_MULTI_CHUNK0.slice(0, 3) } });
+  collector.accept({ audio_base64: 'AQ==', chunk_seq: 0, chunk_audio_offset_sec: 0, alignment: { audio_duration: 4.5, segments: LIVE_MULTI_CHUNK0 } });
+  collector.accept({ audio_base64: 'Ag==', chunk_seq: 1, chunk_audio_offset_sec: 4.58, alignment: { audio_duration: 1.8, segments: LIVE_MULTI_CHUNK1 } });
   const { audio, alignments, events } = collector.result();
-  assert.equal(events, 3);
   assert.deepEqual(audio, ['AA==', 'AQ==', 'Ag==']);
-  assert.equal(alignments.get(0).segments.length, 17, 'the newer snapshot wins');
+  assert.equal(events, 3);
+  assert.equal(alignments.get(0).segments.length, LIVE_MULTI_CHUNK0.length, 'the later snapshot replaced the earlier one');
   const { timeline, duration } = buildGlobalTimeline(alignments);
-  assert.equal(timeline.length, 24);
-  assert.equal(timeline[17].text, '泰');
-  assert.ok(Math.abs(timeline[17].start - 4.47891156462585) < 1e-9);
-  assert.ok(Math.abs(duration - 6.0879365079365075) < 1e-9);
+  assert.equal(timeline.length, LIVE_MULTI_CHUNK0.length + LIVE_MULTI_CHUNK1.length);
+  assert.equal(timeline.at(-1).text, '子');
+  assert.equal(timeline.at(-1).start, 4.58 + 1.28);
+  assert.equal(duration, 4.58 + 1.8);
 });
 
 test('sentences find their place in real Fish alignment, pauses and punctuation included', () => {
-  const single = alignSpansToTimeline([
+  const spans = [
     { id: 1, text: '蓝蓝的天空上有红红的太阳。' },
     { id: 2, text: '我操好热啊！' },
     { id: 3, text: '然后泰罗喝了口水。' },
-  ], LIVE_SINGLE, { duration: 9.427301587301587 });
-  assert.deepEqual(single, [
+  ];
+  const aligned = alignSpansToTimeline(spans, LIVE_SINGLE, { duration: 9.6 });
+  assert.deepEqual(aligned.map(({ id, start, end, coverage }) => ({ id, start, end, coverage })), [
     { id: 1, start: 0, end: 2.32, coverage: 1 },
     { id: 2, start: 2.88, end: 7.12, coverage: 1 },
     { id: 3, start: 7.92, end: 9.28, coverage: 1 },
   ]);
-
-  const alignments = new Map([
-    [0, { offset: 0, duration: 4.31891156462585, segments: LIVE_MULTI_CHUNK0 }],
-    [1, { offset: 4.31891156462585, duration: 1.7690249433106575, segments: LIVE_MULTI_CHUNK1 }],
-  ]);
-  const { timeline, duration } = buildGlobalTimeline(alignments);
+  const { timeline } = buildGlobalTimeline(new Map([
+    [0, { offset: 0, duration: 4.5, segments: LIVE_MULTI_CHUNK0 }],
+    [1, { offset: 4.58, duration: 1.8, segments: LIVE_MULTI_CHUNK1 }],
+  ]));
   const multi = alignSpansToTimeline([
-    { id: 1, text: '蓝蓝的天空上有红红的太阳。' },
-    { id: 2, text: '你怎么来了？' },
-    { id: 3, text: '泰罗放下了杯子。' },
-  ], timeline, { duration });
-  assert.deepEqual(multi.map(item => [item.id, item.start, item.end]), [[1, 0, 2.96], [2, 3.2, 4.16], [3, 4.479, 5.839]]);
+    { id: 1, text: '蓝蓝的天空上有红红的太阳。' }, { id: 2, text: '你怎么来了？' }, { id: 3, text: '泰罗放下了杯子。' },
+  ], timeline);
+  assert.deepEqual(multi.map(({ id, start, end }) => [id, start, end]), [[1, 0, 2.96], [2, 3.2, 4.16], [3, 4.74, 6.1]]);
+  assert.ok(multi.every(entry => entry.coverage === 1));
 });
 
 test('alignment resynchronises past numbers read as words and gives a lost sentence the gap', () => {
-  const timeline = [...'他花了一百二十三元', ...'好的', ...'走吧'].map((text, index) => ({ text, start: index * 0.2, end: index * 0.2 + 0.18 }));
-  const result = alignSpansToTimeline([
-    { id: 1, text: '他花了123元。' },
-    { id: 2, text: '「……」' },
-    { id: 3, text: '好的。' },
-    { id: 4, text: '12' },
-    { id: 5, text: '走吧！' },
-  ], timeline, { duration: 2.6 });
-  assert.equal(result[0].start, 0);
-  assert.equal(result[0].end, 1.78, 'the sentence runs to 元 after the digits were read as words');
-  assert.equal(result[2].start, 1.8);
-  assert.equal(result[2].end, 2.18);
-  assert.equal(result[1].interpolated, true);
-  assert.equal(result[3].interpolated, true);
-  assert.ok(result[3].start >= result[2].end && result[3].end <= result[4].start);
-  assert.equal(result[4].start, 2.2);
+  const spoken = [...'一共来了'].map((text, index) => ({ text, start: index * 0.2, end: index * 0.2 + 0.18 }))
+    .concat([{ text: '一百二十三', start: 0.9, end: 1.7 }])
+    .concat([...'个人然后走了'].map((text, index) => ({ text, start: 1.8 + index * 0.2, end: 1.98 + index * 0.2 })));
+  const aligned = alignSpansToTimeline([
+    { id: 1, text: '一共来了123个人。' },
+    { id: 2, text: '456' },
+    { id: 3, text: '然后走了。' },
+  ], spoken);
+  assert.equal(aligned[0].start, 0);
+  assert.equal(aligned[0].end, 2.18, 'resynchronised on 个人 after the digits');
+  assert.ok(aligned[0].coverage > 0.5 && aligned[0].coverage < 1);
+  assert.equal(aligned[1].interpolated, true);
+  assert.equal(aligned[1].start, aligned[0].end);
+  assert.equal(aligned[1].end, aligned[2].start);
+  assert.equal(aligned[2].start, 2.2);
+  assert.equal(aligned[2].coverage, 1);
 });
 
 test('a sentence replays with a little air, never reaching into its neighbours', () => {
   const entries = [
     { id: 1, part: 0, start: 0, end: 2.32 },
     { id: 2, part: 0, start: 2.88, end: 7.12 },
-    { id: 3, part: 0, start: 7.2, end: 9.28 },
-    { id: 4, part: 1, start: 0.1, end: 1.5 },
+    { id: 3, part: 0, start: 7.92, end: 9.28 },
+    { id: 4, part: 1, start: 0.16, end: 1.52 },
   ];
-  assert.deepEqual(playbackWindow(entries, 0, 9.43), { part: 0, start: 0, end: 2.67 });
-  assert.deepEqual(playbackWindow(entries, 1, 9.43), { part: 0, start: 2.8, end: 7.2 });
-  assert.deepEqual(playbackWindow(entries, 2, 9.43), { part: 0, start: 7.12, end: 9.43 });
-  assert.deepEqual(playbackWindow(entries, 3, 1.7), { part: 1, start: 0.02, end: 1.7 });
+  assert.deepEqual(playbackWindow(entries, 0, 9.6), { part: 0, start: 0, end: 2.67 });
+  assert.deepEqual(playbackWindow(entries, 1, 9.6), { part: 0, start: 2.8, end: 7.47 });
+  assert.deepEqual(playbackWindow(entries, 2, 9.6), { part: 0, start: 7.84, end: 9.6 });
+  assert.deepEqual(playbackWindow(entries, 3, 1.8), { part: 1, start: 0.08, end: 1.8 });
+  assert.equal(playbackWindow(entries, 9), null);
 });
 
-test('cache keys change with text, voice, mood and sound settings, and not with credentials', async () => {
+test('cache keys change with text, voice, mood, edits and sound settings, and not with credentials', async () => {
   const segment = { id: 2, type: 'dialogue', text: '好热！', speaker: '泰罗', emotion: 'happy', intensity: 1 };
   const fingerprint = fishFingerprint(FISH);
-  const base = { floorId: 'chat|3|0', segment, voiceId: 'voice-b', fingerprint };
-  const key = await sentenceCacheKey(base);
-  assert.equal(await sentenceCacheKey(structuredClone(base)), key);
-  assert.notEqual(await sentenceCacheKey({ ...base, segment: { ...segment, text: '好热啊！' } }), key);
-  assert.notEqual(await sentenceCacheKey({ ...base, voiceId: 'voice-c' }), key);
-  assert.notEqual(await sentenceCacheKey({ ...base, segment: { ...segment, emotion: 'angry' } }), key);
-  assert.notEqual(await sentenceCacheKey({ ...base, fingerprint: fishFingerprint({ ...FISH, speed: 1.2 }) }), key);
-  assert.equal(await sentenceCacheKey({ ...base, fingerprint: fishFingerprint({ ...FISH, key: 'other', baseUrl: 'https://relay.example' }) }), key);
-
   const items = [{ segment, voiceId: 'voice-b' }];
+  const base = { floorId: 'chat|3|0', version: 'v1', unit: 'sentence:2', maxChars: 1500, items, fingerprint };
+  const key = await recordingCacheKey(base);
+  assert.equal(await recordingCacheKey(structuredClone(base)), key);
+  assert.notEqual(await recordingCacheKey({ ...base, items: [{ segment: { ...segment, text: '好热啊！' }, voiceId: 'voice-b' }] }), key);
+  assert.notEqual(await recordingCacheKey({ ...base, items: [{ segment, voiceId: 'voice-c' }] }), key);
+  assert.notEqual(await recordingCacheKey({ ...base, items: [{ segment: { ...segment, emotion: 'angry' }, voiceId: 'voice-b' }] }), key);
+  assert.notEqual(await recordingCacheKey({ ...base, items: [{ segment, voiceId: 'voice-b', override: { text: '[calm] 好热！' } }] }), key);
+  assert.notEqual(await recordingCacheKey({ ...base, fingerprint: fishFingerprint({ ...FISH, speed: 1.2 }) }), key);
+  assert.notEqual(await recordingCacheKey({ ...base, unit: 'line:1' }), key);
+  assert.equal(await recordingCacheKey({ ...base, fingerprint: fishFingerprint({ ...FISH, key: 'other', baseUrl: 'https://relay.example' }) }), key);
   const floor = await floorCacheKey({ floorId: 'chat|3|0', version: 'v1', range: 'all', maxChars: 1500, items, fingerprint });
   assert.notEqual(await floorCacheKey({ floorId: 'chat|3|0', version: 'v1', range: 'dialogue', maxChars: 1500, items, fingerprint }), floor);
-  assert.notEqual(await floorCacheKey({ floorId: 'chat|4|0', version: 'v1', range: 'all', maxChars: 1500, items, fingerprint }), floor);
+  assert.notEqual(await fingerprintKey(fingerprint), await fingerprintKey(fishFingerprint(FISH, { emotionCues: false })));
   const utterances = splitUtterances([{ lineId: 1, text: '「好热！」' }]);
   assert.notEqual(await analysisCacheKey({ utterances, roster: ['泰罗'], source: 'model' }), await analysisCacheKey({ utterances, roster: ['佐菲'], source: 'model' }));
+  assert.notEqual(await analysisCacheKey({ utterances, roster: [], source: 'model', depth: 'light' }), await analysisCacheKey({ utterances, roster: [], source: 'model', depth: 'deep' }));
+});
+
+test('a recording remembers which sentences it holds, and a later click finds them whatever unit made them', () => {
+  const items = [
+    { segment: { id: 1, type: 'narration', text: '风停了。', lineId: 1, speaker: 'narrator' }, voiceId: 'v-n' },
+    { segment: { id: 2, type: 'dialogue', text: '走吧。', lineId: 1, speaker: '泰罗' }, voiceId: 'v-t', override: { text: '[calm] 走吧。' } },
+  ];
+  const covers = recordCovers(items, [{ id: 1, start: 0, end: 1, coverage: 1 }, { id: 2, start: 1.2, end: 2, coverage: 1 }]);
+  assert.deepEqual(covers.map(entry => [entry.id, entry.text, entry.voiceId, entry.edited, entry.lineId]), [[1, '风停了。', 'v-n', false, 1], [2, '走吧。', 'v-t', true, 1]]);
+  const older = { key: 'old', fingerprint: 'fp', createdAt: 1, timeline: covers.map(entry => ({ ...entry, part: 0 })) };
+  const newer = { key: 'new', fingerprint: 'fp', createdAt: 2, timeline: [{ ...covers[0], part: 0 }] };
+  const other = { key: 'other', fingerprint: 'fp2', createdAt: 3, timeline: [{ ...covers[0], part: 0 }] };
+  const found = findCoveringEntry([older, newer, other], { text: '风停了。', voiceId: 'v-n', fingerprint: 'fp' });
+  assert.equal(found.record.key, 'new', 'the newest recording with the same sound settings wins');
+  assert.equal(findCoveringEntry([older], { text: '风停了。', voiceId: 'v-x', fingerprint: 'fp' }), null, 'another voice is another recording');
+  assert.equal(findCoveringEntry([older], { text: '走吧。', voiceId: 'v-t', fingerprint: 'fp' }), null, 'an edited take does not stand in for the plain sentence');
 });
 
 test('Fish failures read as something a reader can act on', () => {
@@ -345,38 +533,51 @@ test('utterances are found on the rendered floor after markdown and quote wrappi
 });
 
 test('tag fallback reads literal jy-translation blocks and sheds markup and boundaries', () => {
-  const mes = '<story>原文</story>\n<jy-translation>\u2063\u200c\u2063蓝蓝的天空\n<span class="jy-spk" style="color:red">「好热！」</span>\u2063\u200b\u2063</jy-translation>\n<jy-translation>你&amp;我</jy-translation>';
-  assert.deepEqual(linesFromTaggedText(mes, ['jy-translation']), [
-    { lineId: 1, text: '蓝蓝的天空' },
-    { lineId: 2, text: '「好热！」' },
-    { lineId: 3, text: '你&我' },
+  const text = '<story>原文</story>\n<jy-translation>\n蓝蓝的天空。\n<b>泰罗</b>说：「好热！」&nbsp;\n\n</jy-translation>\n<jy-translation>第二段。</jy-translation>';
+  assert.deepEqual(linesFromTaggedText(text, ['jy-translation']), [
+    { lineId: 1, text: '蓝蓝的天空。' },
+    { lineId: 2, text: '泰罗说：「好热！」' },
+    { lineId: 3, text: '第二段。' },
   ]);
+  assert.deepEqual(linesFromTaggedText(text, ['nope', 'bad tag']), []);
 });
 
-test('read-aloud settings normalise, clamp and follow the character card', () => {
+test('read-aloud settings normalise, clamp, migrate and follow the character card', () => {
   const settings = mergeSettings({
     tts: {
-      enabled: true, mode: 'sentence', range: 'dialogue', analysis: 'bogus', narratorVoice: '99c6e180c87c4d5fb506534e7ac62ced',
+      enabled: true, mode: 'sentence', range: 'dialogue', analysis: 'model', narratorVoice: '99c6e180c87c4d5fb506534e7ac62ced',
+      quotePairs: '“”, ** **', skipPairs: '* *', context: { floors: 99, worldbook: false }, narratorVoices: { JA: 'v-ja', xx: '' },
       fish: { model: 'gpt', speed: 9, maxChars: 5, viaProxy: false, baseUrl: 'ftp://nope', key: '  sk-x  ' },
     },
     ttsVoices: { 'card.png': [{ name: '泰罗', voiceId: 'abc' }, { name: '' }], empty: [] },
+    voiceLibrary: [{ name: '少年', voiceId: 'lib-1', lang: 'zh' }],
   });
   assert.equal(settings.tts.enabled, true);
-  assert.equal(settings.tts.mode, 'sentence');
+  assert.equal(settings.tts.mode, 'stream', 'the old sentence mode lives on as the stream');
+  assert.equal(settings.tts.analysis, 'auto', 'the old model analysis follows the mode');
   assert.equal(settings.tts.range, 'dialogue');
-  assert.equal(settings.tts.analysis, DEFAULT_TTS.analysis);
+  assert.deepEqual(settings.tts.quotePairs, ['“”', '** **']);
+  assert.deepEqual(settings.tts.skipPairs, ['* *']);
+  assert.deepEqual(settings.tts.context, { character: true, worldbook: false, recent: true, floors: 10 });
+  assert.deepEqual(settings.tts.narratorVoices, { ja: 'v-ja' });
   assert.equal(settings.tts.fish.model, 's2-pro');
   assert.equal(settings.tts.fish.speed, 2);
   assert.equal(settings.tts.fish.maxChars, 200);
   assert.equal(settings.tts.fish.viaProxy, false);
   assert.equal(settings.tts.fish.baseUrl, 'https://api.fish.audio');
   assert.equal(settings.tts.fish.key, 'sk-x');
-  assert.deepEqual(settings.ttsVoices, { 'card.png': [{ name: '泰罗', aliases: [], voiceId: 'abc', title: '' }] });
+  assert.deepEqual(settings.ttsVoices, { 'card.png': [{ name: '泰罗', aliases: [], voiceId: 'abc', voices: {}, locked: true, title: '' }] });
+  assert.deepEqual(settings.voiceLibrary, [{ id: 'voice-1', name: '少年', voiceId: 'lib-1', lang: 'zh', title: '' }]);
   assert.deepEqual(mergeSettings({}).tts, normalizeTts(undefined));
   assert.deepEqual(mergeSettings({}).tts.sourceTags, ['jy-translation']);
+  assert.deepEqual(mergeSettings({}).tts.quotePairs, ['「」', '『』', '“”', '""']);
+  assert.equal(mergeSettings({ tts: { quotePairs: '' } }).tts.quotePairs.length, 0, 'an emptied field means no quote pairs');
   // Ordinary mode is the default: nothing about reading aloud is on until someone turns it on.
   assert.equal(mergeSettings({}).tts.enabled, false);
   assert.equal(mergeSettings({}).tts.side, 'translation');
+  assert.equal(mergeSettings({}).tts.analysis, DEFAULT_TTS.analysis);
+  assert.equal(mergeSettings({}).tts.autoGenerate, false);
+  assert.equal(mergeSettings({}).tts.downloadScope, 'auto');
   assert.equal(mergeSettings({ tts: { side: 'source' } }).tts.side, 'source');
   assert.equal(mergeSettings({ tts: { side: 'klingon' } }).tts.side, 'translation');
 });
@@ -392,16 +593,40 @@ test('the cache evicts least recently used audio, prunes stale floor versions an
   assert.equal(await store.getAudio('b'), null, 'b was the least recently used');
   assert.ok(await store.getAudio('a'));
   assert.equal((await store.usage()).bytes, 8);
+  assert.equal((await store.listFloorAudio('chat1|1|0')).length, 1);
 
   await store.putAnalysis({ key: 'x', floorId: 'chat1|1|0', version: 'v1', labels: [] });
   await store.putAnalysis({ key: 'y', floorId: 'chat1|1|0', version: 'v2', labels: [] });
+  await store.putOverride({ floorId: 'chat1|1|0', version: 'v2', segmentId: 3, text: '[calm] 好。' });
+  assert.equal((await store.getOverride('chat1|1|0', 'v2', 3)).text, '[calm] 好。');
+  assert.equal((await store.listOverrides('chat1|1|0', 'v2')).length, 1);
   assert.equal(await store.pruneFloor('chat1|1|0', 'v2'), 2, 'only the old version of this floor goes');
   assert.ok(await store.getAnalysis('y'));
+  assert.ok(await store.getOverride('chat1|1|0', 'v2', 3), 'the override for the current text stays');
   assert.equal(await store.getAudio('a'), null);
   assert.equal(await store.getAnalysis('x'), null);
+  await store.deleteOverride('chat1|1|0', 'v2', 3);
+  assert.equal(await store.getOverride('chat1|1|0', 'v2', 3), null);
   assert.equal(await store.clearChat('chat2'), 1);
   assert.equal((await store.usage()).entries, 0);
   assert.deepEqual(planEviction([{ key: 'k', bytes: 5, usedAt: 1 }], 10), []);
+});
+
+test('saved wav parts become one file with one header', () => {
+  const wav = (samples) => {
+    const bytes = new Uint8Array(44 + samples.length);
+    const text = (offset, value) => { for (let index = 0; index < value.length; index += 1) bytes[offset + index] = value.charCodeAt(index); };
+    text(0, 'RIFF'); text(8, 'WAVE'); text(12, 'fmt ');
+    bytes[16] = 16; bytes[20] = 1; bytes[22] = 1; bytes[34] = 16;
+    text(36, 'data'); bytes[40] = samples.length;
+    bytes.set(samples, 44);
+    return bytes;
+  };
+  const merged = mergeWavBuffers([wav([1, 2, 3, 4]), wav([5, 6])]);
+  assert.equal(String.fromCharCode(...merged.slice(0, 4)), 'RIFF');
+  assert.equal(merged.length, 44 + 6);
+  assert.deepEqual([...merged.slice(44)], [1, 2, 3, 4, 5, 6]);
+  assert.equal(merged[40], 6, 'the data length is the total');
 });
 
 test('a provider key quoted back in an error never reaches the log, safe summary included', () => {
