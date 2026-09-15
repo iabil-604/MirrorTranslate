@@ -389,19 +389,19 @@ test('the latest floor is made in the background, paragraph by paragraph in the 
   assert.equal(usage.entries >= 3, true);
 });
 
-test('the cast is read out of the worldbook by the model, or by titles when the model is unavailable', async t => {
+test('the cast is read out of the card and the worldbook by the model, and never guessed without it', async t => {
   restoreGlobals(t);
   const requests = [];
   mockHost('tts-cast', {
     async processRequest(payload) {
       requests.push(payload);
-      return { content: JSON.stringify({ characters: [{ name: '樱井', aliases: ['桜井'], lang: 'ja' }, { name: '玩家' }, { name: '' }] }) };
+      return { content: JSON.stringify({ characters: [{ name: '樱井', aliases: ['桜井'], lang: 'ja' }, { name: '泰罗', lang: 'en-gb' }, { name: '玩家' }, { name: '' }] }) };
     },
   });
   const lore = {
     globalLore: [
       { world: 'w', uid: 1, comment: '樱井', key: ['桜井', '樱井'], content: '{{char}} 的同学，安静。' },
-      { world: 'w', uid: 2, comment: '教室设定', key: ['教室'], content: '没有空调。' },
+      { world: 'w', uid: 2, comment: '体型指导条目', key: ['体型'], content: '描写身体时……' },
       { world: 'w', uid: 3, comment: '', key: ['老胡'], content: '小卖部老板。' },
     ],
     characterLore: [], chatLore: [], personaLore: [],
@@ -409,14 +409,21 @@ test('the cast is read out of the worldbook by the model, or by titles when the 
   const settings = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1' }, worldInfoEntries: lore });
   const result = await __testing.importCastFromWorldbook(settings);
   assert.equal(result.source, 'model');
-  assert.deepEqual(result.cast, [{ name: '樱井', aliases: ['桜井'], lang: 'ja' }], 'the user is left out, blanks dropped');
+  assert.deepEqual(result.cast, [{ name: '樱井', aliases: ['桜井'], lang: 'ja' }, { name: '泰罗', aliases: [], lang: 'en-GB' }], 'the user is left out, blanks dropped, accents kept');
   const input = JSON.parse(requests[0].messages.at(-1).content);
   assert.equal(input.task, 'list_characters_from_worldbook');
-  assert.deepEqual(input.entries.map(entry => entry.title), ['樱井', '教室设定', '']);
+  assert.deepEqual(input.entries.map(entry => entry.title), ['角色卡：泰罗', '樱井', '体型指导条目', ''], 'the card goes first');
+  assert.match(input.entries[0].content, /怕热，嘴硬/);
+  assert.match(requests[0].messages[0].content, /「XX 指导」的条目通常不是人物/);
 
-  mockHost('tts-cast-local', { async processRequest() { throw new Error('relay down'); } });
+  // Without a model there is no list at all: titles are not names.
+  mockHost('tts-cast-offline', { async processRequest() { throw new Error('relay down'); } });
   const offline = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1' }, worldInfoEntries: lore });
-  const fallback = await __testing.importCastFromWorldbook(offline);
-  assert.equal(fallback.source, 'local');
-  assert.deepEqual(fallback.cast.map(person => person.name), ['樱井', '老胡'], 'titles that look like names, not the settings entry');
+  await assert.rejects(__testing.importCastFromWorldbook(offline), /识别角色需要副模型/);
+
+  // Nothing readable at all is its own message.
+  const { context } = mockHost('tts-cast-empty');
+  context.characters = [];
+  const bare = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1' }, worldInfoEntries: { globalLore: [], characterLore: [], chatLore: [], personaLore: [] } });
+  await assert.rejects(__testing.importCastFromWorldbook(bare), /没有可读的世界书条目/);
 });

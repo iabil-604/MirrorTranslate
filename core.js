@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.18.1';
+} from './prompts.js?v=0.18.2';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.18.1';
+export const APP_VERSION = '0.18.2';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -283,8 +283,9 @@ export const TTS_DOWNLOAD_SCOPES = Object.freeze(['auto', 'floor', 'current']);
 // Languages a voice can be bound to. Codes are what the analysis returns and what the script check
 // falls back to; the labels are only for the settings page.
 export const TTS_LANGUAGES = Object.freeze([
-  ['zh', '中文'], ['en', '英语'], ['ja', '日语'], ['ko', '韩语'], ['de', '德语'], ['fr', '法语'], ['es', '西班牙语'],
-  ['ru', '俄语'], ['it', '意大利语'], ['pt', '葡萄牙语'], ['nl', '荷兰语'], ['pl', '波兰语'], ['ar', '阿拉伯语'],
+  ['zh', '中文'], ['en', '英语（通用）'], ['en-US', '美式英语'], ['en-GB', '英式英语（伦敦腔）'], ['ja', '日语'], ['ko', '韩语'],
+  ['de', '德语'], ['fr', '法语'], ['es', '西班牙语'], ['ru', '俄语'], ['it', '意大利语'], ['pt', '葡萄牙语'], ['nl', '荷兰语'],
+  ['pl', '波兰语'], ['ar', '阿拉伯语'],
 ]);
 export const FISH_MODELS = Object.freeze(['s2-pro', 's2.1-pro', 's2.1-pro-free', 'drama-3-preview', 's1']);
 export const FISH_FORMATS = Object.freeze(['mp3', 'opus', 'wav']);
@@ -351,9 +352,17 @@ function normalizePairStrings(value, fallback) {
   return result.slice(0, 16);
 }
 
+// A language tag: `en`, or with a region for an accent, `en-US` / `en-GB`. The base is kept lowercase
+// and the region uppercase, the way the tags are usually written, so `EN_us` and `en-US` are one key.
 export function normalizeLanguageCode(value) {
-  const code = String(value ?? '').trim().toLowerCase().replace(/[_-].*$/, '');
-  return /^[a-z]{2,3}$/.test(code) ? code : '';
+  const match = String(value ?? '').trim().match(/^([A-Za-z]{2,3})(?:[_-]([A-Za-z]{2}|\d{3}))?$/);
+  if (!match) return '';
+  return match[2] ? `${match[1].toLowerCase()}-${match[2].toUpperCase()}` : match[1].toLowerCase();
+}
+
+// `en-GB` → `en`; a plain code is its own base.
+export function languageBase(code) {
+  return String(code ?? '').split('-')[0];
 }
 
 export function languageLabel(code) {

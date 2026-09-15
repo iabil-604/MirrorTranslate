@@ -152,7 +152,7 @@ test('analysis labels are validated and any text the model sends back is ignored
   assert.deepEqual([...labels], [
     [1, { type: 'narration' }],
     [2, { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2 }],
-    [3, { type: 'dialogue', speaker: '佐菲', emotion: 'happy', lang: 'en' }],
+    [3, { type: 'dialogue', speaker: '佐菲', emotion: 'happy', lang: 'en-US' }],
   ]);
   // A reply cut off mid-array still yields the objects that closed.
   const truncated = parseTtsAnalysis('{"labels":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","speaker":"泰罗","emo', utterances);
@@ -192,6 +192,18 @@ test('voices resolve by name, alias, language and lock; nobody is left silent', 
   assert.equal(resolveSegmentVoice(dialogue('泰罗奥特曼'), config), 'v-taro');
   assert.equal(resolveSegmentVoice(dialogue('泰罗', 'ja'), config), 'v-taro-ja');
   assert.equal(resolveSegmentVoice(dialogue('泰罗', 'en'), config), 'v-taro', 'no voice for that language falls back to the character\'s own');
+  // Accents: the exact tag, then the plain language, then any accent of it.
+  const accented = normalizeVoiceList([{ name: '爱丽丝', voiceId: 'v-alice', voices: { 'en-US': 'v-us', 'en-GB': 'v-gb', 'en': 'v-en' } }]);
+  const accents = { voices: accented, narratorVoice: '', narratorVoices: { 'en-GB': 'v-narr-gb' }, dialogueVoice: 'v-default' };
+  assert.equal(resolveSegmentVoice(dialogue('爱丽丝', 'en-GB'), accents), 'v-gb');
+  assert.equal(resolveSegmentVoice(dialogue('爱丽丝', 'en-AU'), accents), 'v-en', 'an accent nobody bound takes the plain language');
+  assert.equal(resolveSegmentVoice(dialogue('爱丽丝', 'en'), accents), 'v-en');
+  const usOnly = { ...accents, voices: normalizeVoiceList([{ name: '爱丽丝', voiceId: 'v-alice', voices: { 'en-US': 'v-us' } }]) };
+  assert.equal(resolveSegmentVoice(dialogue('爱丽丝', 'en'), usOnly), 'v-us', 'plain English reaches the one accent bound');
+  assert.equal(resolveSegmentVoice(dialogue('爱丽丝', 'en-GB'), usOnly), 'v-us', 'a sibling accent is closer than the character\'s own voice');
+  assert.equal(resolveSegmentVoice(dialogue('爱丽丝', 'de'), usOnly), 'v-alice');
+  assert.equal(resolveSegmentVoice({ type: 'narration', lang: 'en' }, accents), 'v-narr-gb');
+  assert.equal(resolveSegmentVoice({ type: 'narration', lang: 'ja' }, accents), 'v-default');
   assert.equal(resolveSegmentVoice(dialogue('佐菲'), config), 'v-default', 'an unlocked row follows the dialogue default');
   assert.equal(resolveSegmentVoice({ type: 'narration', lang: 'zh' }, config), 'v-narr');
   assert.equal(resolveSegmentVoice({ type: 'narration', lang: 'ja' }, config), 'v-narr-ja');
@@ -213,8 +225,8 @@ test('rows lock when they get a voice and unlock when it is taken away', () => {
   const rows = normalizeVoiceList([{ name: 'A', voiceId: 'v' }, { name: 'B' }, { name: 'C', voices: { ja: 'v-ja' } }, { name: 'D', voiceId: 'v', locked: false }]);
   assert.deepEqual(rows.map(row => [row.name, row.locked]), [['A', true], ['B', false], ['C', true], ['D', false]]);
   assert.deepEqual(rows[2].voices, { ja: 'v-ja' });
-  const library = normalizeVoiceLibrary([{ name: '少年', voiceId: '99c6e180c87c4d5fb506534e7ac62ced', lang: 'ZH-cn' }, { name: 'x', voiceId: 'bad id' }, { id: 'k', voiceId: 'abc' }]);
-  assert.deepEqual(library.map(item => [item.id, item.name, item.lang]), [['voice-1', '少年', 'zh'], ['k', 'abc', '']]);
+  const library = normalizeVoiceLibrary([{ name: '少年', voiceId: '99c6e180c87c4d5fb506534e7ac62ced', lang: 'ZH-cn' }, { name: 'x', voiceId: 'bad id' }, { id: 'k', voiceId: 'abc', lang: 'en_gb' }, { id: 'j', voiceId: 'def', lang: 'english' }]);
+  assert.deepEqual(library.map(item => [item.id, item.name, item.lang]), [['voice-1', '少年', 'zh-CN'], ['k', 'abc', 'en-GB'], ['j', 'def', '']]);
 });
 
 test('moods become Fish cues: brackets for S2, the fixed parenthesised set for S1', () => {
@@ -546,7 +558,7 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   const settings = mergeSettings({
     tts: {
       enabled: true, mode: 'sentence', range: 'dialogue', analysis: 'model', narratorVoice: '99c6e180c87c4d5fb506534e7ac62ced',
-      quotePairs: '“”, ** **', skipPairs: '* *', context: { floors: 99, worldbook: false }, narratorVoices: { JA: 'v-ja', xx: '' },
+      quotePairs: '“”, ** **', skipPairs: '* *', context: { floors: 99, worldbook: false }, narratorVoices: { JA: 'v-ja', xx: '', 'en-us': 'v-us' },
       fish: { model: 'gpt', speed: 9, maxChars: 5, viaProxy: false, baseUrl: 'ftp://nope', key: '  sk-x  ' },
     },
     ttsVoices: { 'card.png': [{ name: '泰罗', voiceId: 'abc' }, { name: '' }], empty: [] },
@@ -559,7 +571,7 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.deepEqual(settings.tts.quotePairs, ['“”', '** **']);
   assert.deepEqual(settings.tts.skipPairs, ['* *']);
   assert.deepEqual(settings.tts.context, { character: true, worldbook: false, recent: true, floors: 10 });
-  assert.deepEqual(settings.tts.narratorVoices, { ja: 'v-ja' });
+  assert.deepEqual(settings.tts.narratorVoices, { ja: 'v-ja', 'en-US': 'v-us' });
   assert.equal(settings.tts.fish.model, 's2-pro');
   assert.equal(settings.tts.fish.speed, 2);
   assert.equal(settings.tts.fish.maxChars, 200);

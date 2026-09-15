@@ -2,13 +2,14 @@ import {
   DEFAULT_QUOTE_PAIRS,
   hashText,
   isPlaceholderSpeaker,
+  languageBase,
   normalizeLanguageCode,
   normalizeNewlines,
   parseJsonCandidates,
   parsePairList,
   unifySpeakerNames,
-} from './core.js?v=0.18.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.18.1';
+} from './core.js?v=0.18.2';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.18.2';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -330,7 +331,7 @@ export function buildTtsAnalysisMessages(utterances, { roster = [], characterNam
     `2. speaker 只给 dialogue。优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人，写正文里对这个人的称呼。${userName ? `用户扮演的角色叫 ${userName}。` : ''}看不出是谁说的就省略 speaker，不要猜。`,
     `3. emotion 只给 dialogue，只能取下列英文标签之一并逐字照抄：${EMOTION_GLOSS}。依据是这句话本身和紧挨着它的叙述（例如「吼道」「小声说」），不是你对剧情的推测。看不出明显情绪写 neutral。`,
     '4. intensity 0 弱、1 中、2 强，默认 1。只有原文明确写了加强或减弱（感叹号连用、吼、尖叫、低声、颤抖）才写 2 或 0。',
-    '5. lang 是这一句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。只在这一句的语言和整楼主要语言不同时写，其余省略。',
+    '5. lang 是这一句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。只在这一句的语言和整楼主要语言不同、或人物设定明确了口音时写，其余省略。',
     '6. 每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。',
     ...(references.length
       ? ['7. 输入里的 translations 是这些原文行（按 line 对应）的译文，只用来帮你认人、理解语气。speaker 按 roster 或译文里的写法写，不要写原文里的名字。']
@@ -497,7 +498,7 @@ export function buildVoiceAnalysisMessages(utterances, { roster = [], characterN
     'voices 每句一项，除 id 外的字段都可以省略，省略就是平常；只写确实成立的：',
     '- type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。引号用来标书名、专有名词、强调时是 narration；「泰罗：好热」这种没有引号的台词是 dialogue。',
     `- speaker：只给 dialogue，优先从 roster 里逐字照抄，不加敬称；roster 里没有的人写正文里对这个人的称呼。${userName ? `用户扮演的角色叫 ${userName}。` : ''}看不出是谁说的就省略。`,
-    '- lang：这句的语言代码（zh、en、ja、ko、de、fr、es、ru……），与整楼主要语言相同时省略。',
+    '- lang：这句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。与整楼主要语言相同、人物设定又没说口音时省略。',
     `- emotion：基础情绪，英文，优先取 emotions 列表里的词；都不合适时用 1–3 个英文词描述。secondary：次级情绪。intensity：0 弱、1 中、2 强。trend：句内走向 rising / falling / steady。`,
     '- state：此刻心理状态（中文 ≤20 字）。intent：说话意图（≤12 字）。subtext：潜台词，言不由衷时写真正想说的（≤20 字）。restraint：自我克制 0 放开、1 一般、2 压着。',
     '- speed：slow / normal / fast。pitch：low / normal / high。volume：quiet / normal / loud。energy、tension、urgency、rasp（嘶哑）、hesitation（犹豫）：0–2。breath：none / audible / panting。rhythm：even / choppy / dragging。ending：falling / rising / trailing / cut。',
@@ -694,12 +695,27 @@ export function findVoiceEntry(voices, name) {
  * when the row is locked, then the dialogue default, then the narrator. Nothing at all means the
  * provider's own default voice; a floor never stays silent for want of a row.
  */
+/**
+ * The voice bound to a language, accents included: the exact tag first (`en-GB`), then the plain
+ * language (`en`), then any accent of it (a sentence the model only called `en` still reaches the
+ * `en-US` voice the character has).
+ */
+export function languageVoice(table, lang) {
+  if (!table || typeof table !== 'object' || !lang) return '';
+  if (table[lang]) return table[lang];
+  const base = languageBase(lang);
+  if (table[base]) return table[base];
+  const sibling = Object.keys(table).find(key => languageBase(key) === base);
+  return sibling ? table[sibling] : '';
+}
+
 export function resolveSegmentVoice(segment, { voices = [], narratorVoice = '', narratorVoices = {}, dialogueVoice = '' } = {}) {
   const lang = String(segment?.lang ?? '');
-  if (segment?.type === 'narration') return narratorVoices?.[lang] || narratorVoice || dialogueVoice || '';
+  if (segment?.type === 'narration') return languageVoice(narratorVoices, lang) || narratorVoice || dialogueVoice || '';
   const entry = findVoiceEntry(voices, segment?.speaker);
   if (entry) {
-    if (entry.voices?.[lang]) return entry.voices[lang];
+    const byLanguage = languageVoice(entry.voices, lang);
+    if (byLanguage) return byLanguage;
     if (entry.locked !== false && entry.voiceId) return entry.voiceId;
   }
   return dialogueVoice || narratorVoice || '';
@@ -715,7 +731,7 @@ export function planVoices(segments, config) {
     if (!voiceId) unvoiced.add(who);
     else if (segment.type === 'dialogue') {
       const entry = findVoiceEntry(config?.voices, segment.speaker);
-      const own = entry && ((entry.voices?.[segment.lang]) || (entry.locked !== false && entry.voiceId));
+      const own = entry && (languageVoice(entry.voices, segment.lang) || (entry.locked !== false && entry.voiceId));
       if (!own) defaulted.add(who);
     }
     items.push({ segment, voiceId });

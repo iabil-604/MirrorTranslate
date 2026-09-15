@@ -58,7 +58,7 @@ import {
   formatPairList,
   parseJsonCandidates,
   TTS_LANGUAGES,
-} from './core.js?v=0.18.1';
+} from './core.js?v=0.18.2';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -101,14 +101,14 @@ import {
   toStandardDocument,
   voiceRosterNames,
   voiceSummary,
-} from './tts.js?v=0.18.1';
-import { createTtsStore } from './tts-store.js?v=0.18.1';
+} from './tts.js?v=0.18.2';
+import { createTtsStore } from './tts-store.js?v=0.18.2';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.18.1';
+} from './processing.js?v=0.18.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -125,8 +125,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.18.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.18.1';
+} from './prompts.js?v=0.18.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.18.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -140,15 +140,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.18.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.18.1';
+} from './palette.js?v=0.18.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.18.2';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.18.1';
+} from './diagnostics.js?v=0.18.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -358,7 +358,7 @@ const CONTROL_CENTER_MARKUP = `
 </section>
 
 <section class="jy-page" data-jy-page="tts" role="tabpanel" hidden>
-<header class="jy-page-heading"><div><h1>朗读</h1><span class="jy-page-context">旁白和每个角色各用各的声音，点哪句读哪句</span></div><button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button></header>
+<header class="jy-page-heading"><div><h1>朗读</h1><span class="jy-page-context">旁白和每个角色各用各的声音，多国语言各配各的音色，点哪句读哪句</span></div><button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button></header>
 <div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每一句后面会出现播放按钮和情绪按钮，底部有「朗读本楼」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
 <div class="jy-connection-choice" role="radiogroup" aria-label="生成方式"><label><input type="radio" name="jy-tts-mode" value="floor" data-jy-tts-field="mode"><span><strong>全篇发送</strong><small>副模型细读整楼再配音，情绪最饱满；整楼一次生成，点哪句跳哪句</small></span></label><label><input type="radio" name="jy-tts-mode" value="stream" data-jy-tts-field="mode"><span><strong>流式朗读</strong><small>按段生成、先到先播，分析得少、出声快；点哪句只生成那一段</small></span></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
@@ -380,10 +380,10 @@ const CONTROL_CENTER_MARKUP = `
 </div></div>
 <div class="jy-form-section"><div class="jy-section-title"><span>03</span><h2>音色</h2></div><div class="jy-form-body">
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">旁白音色 <span class="jy-tts-title" data-jy-tts-title="narrator"></span></span><span class="jy-tts-pick" data-jy-tts-pick-scope data-jy-tts-page-pick><input type="text" data-jy-tts-field="narratorVoice" placeholder="Fish Voice ID，留空用 Fish 默认音色" spellcheck="false"></span></label><label><span class="jy-label">对白默认音色 <span class="jy-tts-title" data-jy-tts-title="dialogue"></span></span><span class="jy-tts-pick" data-jy-tts-pick-scope data-jy-tts-page-pick><input type="text" data-jy-tts-field="dialogueVoice" placeholder="没有专属音色的角色都用这个" spellcheck="false"></span></label></div>
-<div class="jy-tts-lang-block"><div class="jy-row-between"><span class="jy-label">旁白按语言换音色</span><button type="button" class="jy-text-button" data-jy-action="tts-add-narrator-lang">+ 语言音色</button></div><div class="jy-tts-lang-list" data-jy-tts-narrator-langs></div></div>
-<div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从世界书识别角色</button><button type="button" class="jy-button" data-jy-action="tts-add-voice">添加角色</button><button type="button" class="jy-button" data-jy-action="tts-import-speakers">导入已知说话人</button><button type="button" class="jy-button" data-jy-action="tts-lookup-voices">查询音色名</button></div>
+<div class="jy-tts-lang-block" data-jy-tts-multilang><div class="jy-row-between"><div><h3>多国语言</h3><p class="jy-muted">同一个人读中文、英语、日语可以各用一个音色，英语还分美式和英式（伦敦腔）。这里给旁白加；每个角色行里各有一个「＋ 多国语言音色」按钮。句子的语言由副模型判断，没判断按文字本身。</p></div><button type="button" class="jy-button" data-jy-action="tts-add-narrator-lang">＋ 旁白加一门语言</button></div><div class="jy-tts-lang-list" data-jy-tts-narrator-langs></div></div>
+<div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button><button type="button" class="jy-button" data-jy-action="tts-add-voice">添加角色</button><button type="button" class="jy-button" data-jy-action="tts-import-speakers">导入已知说话人</button><button type="button" class="jy-button" data-jy-action="tts-lookup-voices">查询音色名</button><button type="button" class="jy-text-button" data-jy-action="tts-clear-voices">清空角色表</button></div>
 <div class="jy-tts-voice-list" data-jy-tts-voice-list></div>
-<p class="jy-muted">角色表跟着当前角色卡保存。「从世界书识别角色」让副模型读一遍世界书条目，把人物名单一次导进来，导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「+ 语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色。</p>
+<p class="jy-muted">角色表跟着当前角色卡保存。「从角色卡和世界书识别角色」让副模型读一遍角色卡和世界书条目，把人物名单一次导进来（需要副模型能连上，模型没回应就什么都不加）；导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「＋ 多国语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色。</p>
 </div></div>
 <div class="jy-form-section"><div class="jy-section-title"><span>04</span><h2>音色库</h2></div><div class="jy-form-body">
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-add-library">添加音色</button></div>
@@ -4828,10 +4828,10 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings) {
   tools.className = 'jy-tts-voice-tools';
   const addLang = doc.createElement('button');
   addLang.type = 'button';
-  addLang.className = 'jy-text-button';
+  addLang.className = 'jy-button jy-tts-lang-button';
   addLang.dataset.jyAction = 'tts-add-lang';
-  addLang.textContent = '+ 语言音色';
-  addLang.title = '同一个角色在另一门语言里用别的音色，比如读原文时用日语音色';
+  addLang.textContent = '＋ 多国语言音色';
+  addLang.title = '同一个角色读别的语言时用别的音色：中文一个、日语一个、美式英语一个……';
   const unbind = doc.createElement('button');
   unbind.type = 'button';
   unbind.className = 'jy-text-button';
@@ -5101,12 +5101,13 @@ function collectTtsFields(root, current) {
 }
 
 /**
- * Finds the cast in the worldbook.
+ * Finds the cast in the character card and the worldbook.
  *
- * The entries the host reports (titles, keys and a slice of each content) go to the secondary model
- * with the question 'who in here is a person'; the answer is names and aliases only. Without a usable
- * model, entries whose titles look like names stand in. Either way the rows come back unlocked, so
- * they follow the dialogue default until someone gives them a voice of their own.
+ * The card's own text and the entries the host reports (titles, keys and a slice of each content) go
+ * to the secondary model with the question 'who in here is a person'; the answer is names and aliases
+ * only. There is deliberately no guess without the model: a worldbook is mostly rules, places and
+ * formats, and a list made from its titles is a list of rubbish. The rows come back unlocked, so they
+ * follow the dialogue default until someone gives them a voice of their own.
  */
 async function importCastFromWorldbook(settings = runtime.settings, { signal } = {}) {
   const context = getContext();
@@ -5116,59 +5117,57 @@ async function importCastFromWorldbook(settings = runtime.settings, { signal } =
     try { await context.getWorldInfoPrompt?.([''], 8, true); } catch { /* best-effort */ }
     entries = readableWorldInfoEntries();
   }
-  if (!entries.length) throw new Error('酒馆没有报告任何世界书条目。先给这个角色启用一本世界书，或者发一条消息让酒馆扫描一次，再来识别。');
   const substitute = typeof context.substituteParams === 'function' ? value => String(context.substituteParams(value) ?? value) : value => value;
+  const clean = (value, limit) => substitute(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, limit);
   const digest = entries.slice(0, 200).map(entry => ({
-    title: substitute(String(entry.comment ?? '')).replace(/\s+/g, ' ').trim().slice(0, 60),
-    keys: (Array.isArray(entry.key) ? entry.key : []).map(key => substitute(String(key ?? '')).trim()).filter(Boolean).slice(0, 8),
-    content: substitute(String(entry.content ?? '')).replace(/\s+/g, ' ').trim().slice(0, 360),
+    title: clean(entry.comment, 60),
+    keys: (Array.isArray(entry.key) ? entry.key : []).map(key => clean(key, 40)).filter(Boolean).slice(0, 8),
+    content: clean(entry.content, 360),
   })).filter(entry => entry.title || entry.keys.length || entry.content);
-  const localGuess = () => digest
-    .map(entry => entry.title || entry.keys[0] || '')
-    .map(name => name.replace(/[【】\[\]（）()《》「」<>]/g, '').trim())
-    .filter(name => name && name.length <= 12 && !/[\s,，、;；:：。.\-—_/\\|=]/.test(name) && !/(?:设定|世界观|规则|地点|物品|背景|系统|格式|说明|须知|注意|介绍|资料|总览|列表|模板|状态栏)/.test(name))
-    .map(name => ({ name, aliases: [], lang: '' }));
+  // The card is a source of people too: its own protagonist, and whoever its description names.
+  const character = context.groupId === null || context.groupId === undefined ? context.characters?.[Number(context.characterId)] : null;
+  const cardName = clean(character?.name, 60);
+  const cardText = character ? [character.description, character.personality, character.scenario].map(value => clean(value, 1200)).filter(Boolean).join(' ') : '';
+  const card = cardName || cardText ? { title: `角色卡：${cardName}`, keys: cardName ? [cardName] : [], content: cardText.slice(0, 2400) } : null;
+  if (!digest.length && !card) throw new Error('没有可读的世界书条目，也没有角色卡。先给这个角色启用一本世界书，或者发一条消息让酒馆扫描一次，再来识别。');
   const messages = [
     {
       role: 'system',
       content: [
-        '下面是一本角色扮演用的世界书里的条目（标题、关键词、内容片段）。请从中找出所有人物角色，也就是剧情里会说话的人。',
+        '下面是一张角色扮演用的角色卡和它的世界书条目（标题、关键词、内容片段）。请从中找出所有人物角色，也就是剧情里会说话的人。',
         '只输出一个 JSON 对象：{"characters":[{"name":"名字","aliases":["别名"],"lang":"zh"}]}',
-        '1. 只列人物，不列地点、物品、组织、设定、规则、格式说明。',
+        '1. 只列人物。地点、物品、组织、设定、规则、格式说明、写作指导都不是人物；标题像「XX 条目」「XX 设定」「XX 指导」的条目通常不是人物，除非内容里明确写了一个人。',
         '2. name 用正文里最常见、最完整的称呼；aliases 放其他写法（原文名、昵称、姓氏、称号），没有就给空数组。',
-        '3. lang 是这个人主要说的语言代码（zh、en、ja、ko、de、fr……），看不出就省略。',
-        `4. ${context.name1 ? `用户扮演的角色叫 ${context.name1}，不用列。` : ''}${context.name2 ? `当前角色卡的主角叫 ${context.name2}，如果条目里有，照常列出。` : ''}`,
+        '3. lang 是这个人主要说的语言代码（zh、en、ja、ko、de、fr……），英语可以细分 en-US / en-GB，看不出就省略。',
+        `4. ${context.name1 ? `用户扮演的角色叫 ${context.name1}，不用列。` : ''}${cardName ? `标题以「角色卡：」开头的是当前角色卡，它的主角叫 ${cardName}，照常列出。` : ''}`,
         '5. 不要编造条目里没有的人。没有人物就输出 {"characters":[]}。',
       ].join('\n'),
     },
-    { role: 'user', content: JSON.stringify({ task: 'list_characters_from_worldbook', entries: digest }) },
+    { role: 'user', content: JSON.stringify({ task: 'list_characters_from_worldbook', entries: [card, ...digest].filter(Boolean) }) },
   ];
-  let characters = [];
-  let source = 'model';
+  let raw;
   try {
-    const raw = await requestSubModelRaw(messages, settings, signal);
-    for (const candidate of parseJsonCandidates(raw)) {
-      const list = Array.isArray(candidate) ? candidate : Array.isArray(candidate?.characters) ? candidate.characters : [];
-      for (const item of list) {
-        const name = String(item?.name ?? item ?? '').trim().slice(0, 60);
-        if (!name) continue;
-        characters.push({
-          name,
-          aliases: (Array.isArray(item?.aliases) ? item.aliases : []).map(alias => String(alias ?? '').trim()).filter(alias => alias && alias !== name).slice(0, 8),
-          lang: normalizeLanguageCode(item?.lang),
-        });
-      }
-      if (characters.length) break;
-    }
-    if (!characters.length) {
-      characters = localGuess();
-      source = 'local';
-    }
+    raw = await requestSubModelRaw(messages, settings, signal);
   } catch (error) {
     if (isAbortError(error)) throw error;
-    recordDiagnostic('warn', 'tts.cast-import', `副模型识别角色失败，改用条目标题：${safeError(error)}`, { entries: digest.length });
-    characters = localGuess();
-    source = 'local';
+    recordDiagnostic('error', 'tts.cast-import', `副模型识别角色失败：${safeError(error)}`, {
+      entries: digest.length, card: Boolean(card), apiMode: settings.apiMode, endpoint: describeChannelEndpoint(settings),
+    }, describeRequestFailure(error), { fullRequest: messages });
+    throw new Error(`识别角色需要副模型，这次没有回应：${safeError(error)} 酒馆当前没连上模型的话，先在「模型连接」里连一个，或者配一个独立副 API。`);
+  }
+  const characters = [];
+  for (const candidate of parseJsonCandidates(raw)) {
+    const list = Array.isArray(candidate) ? candidate : Array.isArray(candidate?.characters) ? candidate.characters : [];
+    for (const item of list) {
+      const name = String(item?.name ?? item ?? '').trim().slice(0, 60);
+      if (!name) continue;
+      characters.push({
+        name,
+        aliases: (Array.isArray(item?.aliases) ? item.aliases : []).map(alias => String(alias ?? '').trim()).filter(alias => alias && alias !== name).slice(0, 8),
+        lang: normalizeLanguageCode(item?.lang),
+      });
+    }
+    if (characters.length) break;
   }
   const seen = new Set();
   const cast = characters.filter(person => {
@@ -5176,10 +5175,12 @@ async function importCastFromWorldbook(settings = runtime.settings, { signal } =
     seen.add(person.name);
     return true;
   }).slice(0, 60);
-  recordDiagnostic('info', 'tts.cast-import', `从 ${digest.length} 条世界书条目里识别出 ${cast.length} 个角色（${source === 'model' ? '副模型' : '本地按标题'}）。`, {
-    entries: digest.length, characters: cast.map(person => person.name), source,
-  }, undefined, { fullRequest: messages });
-  return { cast, source, entries: digest.length };
+  recordDiagnostic(cast.length ? 'info' : 'warn', 'tts.cast-import', cast.length
+    ? `副模型从角色卡和 ${digest.length} 条世界书条目里识别出 ${cast.length} 个角色。`
+    : `副模型没有从角色卡和 ${digest.length} 条世界书条目里识别出人物。`, {
+    entries: digest.length, card: Boolean(card), characters: cast.map(person => person.name),
+  }, raw, { fullRequest: messages });
+  return { cast, source: 'model', entries: digest.length };
 }
 
 // The structure of the latest floor as it would be read: the type, speaker and mood of every sentence,
@@ -6003,11 +6004,22 @@ function createControlCenter(rootDocument = document) {
           added.push({ name: person.name, aliases: person.aliases, voiceId: '', voices: {}, locked: false, title: '' });
         }
         setText(root, '[data-jy-tts-save-note]', '修改后保存朗读设置');
-        if (!added.length) throw new Error(cast.length ? '世界书里识别出的角色都已经在表里了。' : '世界书里没有识别出人物角色。');
+        if (!added.length) throw new Error(cast.length ? '识别出的角色都已经在表里了。' : '副模型没有从角色卡和世界书里识别出人物角色。');
         next.ttsVoices = { ...(next.ttsVoices || {}), [characterKey]: [...existing, ...added] };
         saveSettings(next);
         renderTtsVoiceList(root, runtime.settings);
-        toast('success', `从世界书识别并加入 ${added.length} 个角色（${source === 'model' ? '副模型识别' : '按条目标题'}）。它们先跟随对白默认音色，绑定专属音色后就会锁定。`);
+        toast('success', `副模型识别并加入 ${added.length} 个角色${source === 'model' ? '' : ''}。它们先跟随对白默认音色，绑定专属音色后就会锁定。`);
+      } else if (action === 'tts-clear-voices') {
+        const next = collectSettings(root);
+        const characterKey = worldInfoCharacterKey();
+        const count = normalizeVoiceList(next.ttsVoices?.[characterKey]).length;
+        if (!count) throw new Error('角色表已经是空的。');
+        if (typeof globalThis.confirm === 'function' && !globalThis.confirm(`清空当前角色卡的角色表（${count} 行）？音色库和旁白、对白默认音色不受影响。`)) return;
+        next.ttsVoices = { ...(next.ttsVoices || {}) };
+        delete next.ttsVoices[characterKey];
+        saveSettings(next);
+        renderTtsVoiceList(root, runtime.settings);
+        toast('success', `已清空 ${count} 行角色表。`);
       } else if (action === 'tts-pregenerate') {
         saveSettings(collectSettings(root));
         const messageId = latestAssistantMessageId(getContext());

@@ -643,3 +643,14 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-mini-inspect-actions .jy-button { min-height: 36px; }
   .jy-mini-tabs button { padding: 9px 0 11px; font-size: 13px; }
 }
+/* 多国语言: a titled block for the narrator, and a real button on every character row. */
+.jy-tts-lang-block { margin: 12px 0 14px; padding: 12px 14px; background: var(--jy-band); border: 1px solid var(--jy-band-line); border-radius: var(--jy-radius-sm); }
+.jy-tts-lang-block h3 { margin: 0 0 3px; font-size: 13px; font-weight: 650; }
+.jy-tts-lang-block .jy-muted { margin: 0; }
+.jy-tts-lang-block .jy-row-between { gap: 12px; align-items: flex-start; margin-bottom: 8px; }
+.jy-tts-lang-block .jy-row-between > .jy-button { flex: 0 0 auto; }
+.jy-tts-lang-block .jy-tts-lang-list:empty { display: none; }
+.jy-tts-lang-button { min-height: 26px; padding: 2px 10px; font-size: 11px; }
+@media (max-width: 640px) {
+  .jy-tts-lang-block .jy-row-between { flex-direction: column; align-items: stretch; }
+}
