@@ -58,7 +58,7 @@ import {
   formatPairList,
   parseJsonCandidates,
   TTS_LANGUAGES,
-} from './core.js?v=0.18.0';
+} from './core.js?v=0.18.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -101,14 +101,14 @@ import {
   toStandardDocument,
   voiceRosterNames,
   voiceSummary,
-} from './tts.js?v=0.18.0';
-import { createTtsStore } from './tts-store.js?v=0.18.0';
+} from './tts.js?v=0.18.1';
+import { createTtsStore } from './tts-store.js?v=0.18.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.18.0';
+} from './processing.js?v=0.18.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -125,8 +125,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.18.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.18.0';
+} from './prompts.js?v=0.18.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.18.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -140,15 +140,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.18.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.18.0';
+} from './palette.js?v=0.18.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.18.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.18.0';
+} from './diagnostics.js?v=0.18.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -6904,12 +6904,54 @@ async function openMiniWindow() {
   let inspecting = null;
   let inspectToken = 0;
   let inspectDirty = false;
-  const selectMiniTab = name => {
+  // Switching pages animates twice over: the window's height eases from the old page's to the new
+  // one's, and the new page slides in from the side it lives on. The underline under the tabs slides
+  // by CSS off data-mini-tab. Nothing moves when the system asks for reduced motion.
+  let resizeSettle = null;
+  const settleResize = () => {
+    if (resizeSettle !== null) {
+      globalThis.clearTimeout(resizeSettle);
+      runtime.timers.delete(resizeSettle);
+      resizeSettle = null;
+    }
+    win.removeEventListener('transitionend', onResizeEnd);
+    win.classList.remove('is-resizing');
+    win.style.height = '';
+    if (win.isConnected) reanchor();
+  };
+  const onResizeEnd = event => {
+    if (event.target === win && event.propertyName === 'height') settleResize();
+  };
+  const selectMiniTab = (name, { animate = true } = {}) => {
+    const from = pages[miniTab];
+    const to = pages[name];
+    const switching = miniTab !== name && from && to;
+    const before = switching ? win.offsetHeight : 0;
     miniTab = name;
     for (const button of tabs.querySelectorAll('[data-jy-mini-tab]')) button.setAttribute('aria-selected', String(button.dataset.jyMiniTab === name));
     pages.translate.hidden = name !== 'translate';
     pages.reading.hidden = name !== 'reading';
     win.dataset.miniTab = name;
+    const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+    if (switching && animate && !reduced && before) {
+      settleResize();
+      const after = win.offsetHeight;
+      if (after !== before) {
+        win.style.height = `${before}px`;
+        // Committing the old height first is what gives the transition a starting point.
+        void win.offsetHeight;
+        win.classList.add('is-resizing');
+        win.style.height = `${after}px`;
+        // The transition's own end clears the fixed height; the timer only covers a dropped event.
+        win.addEventListener('transitionend', onResizeEnd);
+        resizeSettle = globalThis.setTimeout(settleResize, 420);
+        runtime.timers.add(resizeSettle);
+      }
+      to.dataset.direction = name === 'reading' ? 'forward' : 'back';
+      to.classList.remove('is-entering');
+      void to.offsetWidth;
+      to.classList.add('is-entering');
+    }
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
   };
   const syncMiniTabs = () => {
@@ -7149,6 +7191,8 @@ async function openMiniWindow() {
     if (closed) return;
     closed = true;
     win.dataset.closing = 'true';
+    // A half-finished page switch must not hold the window at a fixed height while it fades out.
+    settleResize();
     globalThis.removeEventListener('pointermove', onPointerMove);
     globalThis.removeEventListener('pointerup', finishPointer);
     globalThis.removeEventListener('pointercancel', finishPointer);

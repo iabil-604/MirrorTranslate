@@ -473,3 +473,18 @@
 }
 #chat .jy-tts-bar-panel:hover { opacity: 1; }
 #chat .jy-tts-bar[data-state="paused"] .jy-tts-bar-status { opacity: 0.7; }
+/* A phone taps where a mouse hovers: the two inline buttons grow and sit a little apart. */
+@media (hover: none) {
+  #chat .jy-tts-play,
+  #chat .jy-tts-edit {
+    width: 1.55em;
+    height: 1.55em;
+    vertical-align: -0.28em;
+  }
+  #chat .jy-tts-play { margin-right: 0.2em; }
+  #chat .jy-tts-bar-play,
+  #chat .jy-tts-bar-stop {
+    padding: 0.35em 0.9em;
+  }
+  #chat .jy-tts-bar-panel { padding: 0.35em 0; }
+}
