@@ -314,7 +314,7 @@ function referenceLines(translations) {
  * The light request: who reads each utterance, in what mood.
  *
  * The utterances travel with their ids and the model answers with labels keyed by those ids. There is no
- * text field in the answer at all, which is what keeps 「我操好热啊！」 from coming back as something
+ * text field in the answer at all, which is what keeps 「烦死了！」 from coming back as something
  * politer: whatever the model thinks of the wording, it has nowhere to write it.
  */
 export function buildTtsAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null } = {}) {
