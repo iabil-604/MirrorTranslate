@@ -16,6 +16,7 @@ import {
   createSseParser,
   createTimestampCollector,
   cueLabel,
+  deriveLabelsForSide,
   describeFishFailure,
   detectLanguage,
   emotionCue,
@@ -46,6 +47,7 @@ import {
   splitNarrationSentences,
   splitUtterances,
   stripCues,
+  tamePunctuationMarks,
   toStandardDocument,
   voiceSummary,
 } from '../tts.js';
@@ -257,9 +259,16 @@ test('the deep request carries the cast, the references and the voice fields, st
   assert.deepEqual(input.references, { character: '泰罗：怕热，嘴硬。', worldbook: '教室没有空调。', recent: '【第 3 楼】泰罗擦汗。' });
   assert.deepEqual(input.emotions, FISH_EMOTIONS);
   assert.deepEqual(input.utterances.map(item => item.text), ['泰罗压低了声音：', '「我……我要裸奔啦。」']);
-  for (const field of ['subtext', 'restraint', 'pauses', 'stress', 'shifts', 'sounds', 'breath', 'hesitation', 'ending']) assert.match(messages[0].content, new RegExp(field));
+  for (const field of ['subtext', 'restraint', 'pauses', 'stress', 'shifts', 'sounds', 'breath', 'hesitation']) assert.match(messages[0].content, new RegExp(field));
+  for (const gone of ['trend', 'pitch', 'energy', 'rhythm', 'ending', 'urgency', 'delivery', 'focus']) assert.doesNotMatch(messages[0].content, new RegExp(`- ${gone}`));
   assert.match(messages[0].content, /情绪惯性/);
+  assert.match(messages[0].content, /省力原则/);
   assert.match(messages[0].content, /不要输出 text/);
+  assert.equal('hints' in input, false);
+  // The translation's own labels ride along as hints, and a custom prompt replaces the built-in one.
+  const hinted = buildVoiceAnalysisMessages(utterances, { userName: '玩家', hints: new Map([[2, { type: 'dialogue', speaker: '泰罗', emotion: 'shy', intensity: 1 }]]), systemPrompt: '自定义提示词，{{user}}标签：{{sounds}}' });
+  assert.deepEqual(JSON.parse(hinted[1].content).hints, [{ id: 2, speaker: '泰罗', emotion: 'shy', intensity: 1 }]);
+  assert.equal(hinted[0].content, '自定义提示词，用户扮演的角色叫 玩家。标签：sighing / gasping / sobbing / laughing / chuckling / groaning / panting / crying loudly / clear throat / yawning');
 });
 
 test('the deep reply becomes labels plus a checked voice per sentence', () => {
@@ -279,9 +288,7 @@ test('the deep reply becomes labels plus a checked voice per sentence', () => {
       },
     ],
   });
-  const { labels, voices, scene, characters } = parseVoiceAnalysis(reply, utterances);
-  assert.equal(scene, '闷热的教室，放学后。');
-  assert.deepEqual(characters, [{ name: '泰罗', state: '热得快疯了', habit: '句尾拖长' }]);
+  const { labels, voices } = parseVoiceAnalysis(reply, utterances);
   assert.deepEqual(labels.get(1), { type: 'narration' });
   assert.deepEqual(labels.get(2), { type: 'dialogue', speaker: '泰罗', intensity: 2, lang: 'zh' });
   const voice = voices.get(2);
@@ -292,6 +299,8 @@ test('the deep reply becomes labels plus a checked voice per sentence', () => {
   assert.deepEqual(voice.stress, ['裸奔']);
   assert.deepEqual(voice.shifts, [{ at: '我要', emotion: 'shy' }]);
   assert.deepEqual(voice.sounds, [{ at: 'start', tag: 'sighing' }, { at: 'end', tag: 'nonsense' }]);
+  assert.equal('trend' in voice, false, 'fields that never became a cue are no longer kept');
+  assert.equal('state' in voice, false);
   assert.equal(voices.get(1), undefined, 'a plain narration line carries no voice');
   assert.equal(normalizeVoice({ speed: 'normal', volume: 'normal', intensity: 'x' }, ''), null);
 
@@ -303,6 +312,43 @@ test('the deep reply becomes labels plus a checked voice per sentence', () => {
   assert.deepEqual(summary[0], ['情绪', '沮丧（强） · 难为情']);
   assert.ok(summary.some(([term, value]) => term === '停顿' && value === '「我」后长停'));
   assert.ok(summary.some(([term, value]) => term === '潜台词' && value === '想让人拦着'));
+
+  // Hints: an id alone, or a sentence left out, keeps the translation's own label; a partial answer
+  // keeps the hint's speaker under the model's mood.
+  const hints = new Map([[1, { type: 'narration' }], [2, { type: 'dialogue', speaker: '泰罗', emotion: 'shy', intensity: 1 }]]);
+  const lean = parseVoiceAnalysis('{"voices":[{"id":1},{"id":2,"emotion":"frustrated","intensity":2}]}', utterances, { hints });
+  assert.deepEqual(lean.labels.get(1), { type: 'narration' });
+  assert.deepEqual(lean.labels.get(2), { type: 'dialogue', speaker: '泰罗', emotion: 'shy', intensity: 2 });
+  assert.equal(lean.voices.get(2).emotion, 'frustrated');
+  assert.equal(lean.reused, 1);
+  const silent = parseVoiceAnalysis('{"voices":[]}', utterances, { hints });
+  assert.equal(silent.labels.size, 2, 'sentences the model skipped keep their hints');
+  assert.equal(silent.reused, 2);
+});
+
+test('the other language of a floor is labelled from the one that was read', () => {
+  const primary = splitUtterances([{ lineId: 1, text: '樱井回过头，「你来了啊」，轻轻笑了一下。' }, { lineId: 2, text: '「明天见。」' }]);
+  const labels = new Map([[2, { type: 'dialogue', speaker: '樱井', emotion: 'happy', lang: 'zh' }], [4, { type: 'dialogue', speaker: '樱井', emotion: 'tender' }]]);
+  const voices = new Map([[2, { emotion: 'happy', intensity: 1, stress: ['来'], pauses: [{ after: '你', length: 'short' }], speed: 'slow' }]]);
+  const other = splitUtterances([{ lineId: 1, text: '桜井は振り返って、「来たんだね」と小さく笑った。' }, { lineId: 2, text: '「また明日。」' }]);
+  const derived = deriveLabelsForSide(primary, labels, voices, other);
+  assert.deepEqual(derived.labels.get(2), { type: 'dialogue', speaker: '樱井', emotion: 'happy' }, 'the language does not carry over');
+  assert.deepEqual(derived.labels.get(4), { type: 'dialogue', speaker: '樱井', emotion: 'tender' });
+  assert.deepEqual(derived.voices.get(2), { emotion: 'happy', intensity: 1, speed: 'slow' }, 'word-bound cues stay with their own text');
+  assert.equal(derived.labels.has(1), false);
+});
+
+test('runs of exclamation marks are tamed in what Fish is sent, never in what is aligned', () => {
+  assert.equal(tamePunctuationMarks('吵死了!!!笨蛋真嗣!!! 看前面!?'), '吵死了!笨蛋真嗣! 看前面?!');
+  assert.equal(tamePunctuationMarks('うるさいわね！！！　前だけ！？'), 'うるさいわね！　前だけ？！');
+  assert.equal(tamePunctuationMarks('好～～～热'), '好～热');
+  const item = { segment: { id: 1, type: 'dialogue', text: '吵死了!!!', emotion: 'angry', intensity: 2 }, voiceId: 'v' };
+  assert.equal(sentenceFishText(item, FISH, { tamePunctuation: true }), '[furious] 吵死了!');
+  assert.equal(sentenceFishText(item, FISH), '[furious] 吵死了!!!');
+  const payload = buildFishPayload([item], FISH, { tamePunctuation: true });
+  assert.equal(payload.body.text, '[furious] 吵死了!');
+  assert.equal(payload.spans[0].text, '吵死了!!!');
+  assert.notEqual(JSON.stringify(fishFingerprint(FISH, { tamePunctuation: true })), JSON.stringify(fishFingerprint(FISH)));
 });
 
 test('a voice compiles into leading cues, inline cues and prosody steps, and the words stay', () => {
@@ -490,8 +536,10 @@ test('cache keys change with text, voice, mood, edits and sound settings, and no
   assert.notEqual(await floorCacheKey({ floorId: 'chat|3|0', version: 'v1', range: 'dialogue', maxChars: 1500, items, fingerprint }), floor);
   assert.notEqual(await fingerprintKey(fingerprint), await fingerprintKey(fishFingerprint(FISH, { emotionCues: false })));
   const utterances = splitUtterances([{ lineId: 1, text: '「好热！」' }]);
-  assert.notEqual(await analysisCacheKey({ utterances, roster: ['泰罗'], source: 'model' }), await analysisCacheKey({ utterances, roster: ['佐菲'], source: 'model' }));
-  assert.notEqual(await analysisCacheKey({ utterances, roster: [], source: 'model', depth: 'light' }), await analysisCacheKey({ utterances, roster: [], source: 'model', depth: 'deep' }));
+  // The reading is keyed by the text alone: a longer cast list or another floor above is no reason to read it again.
+  assert.notEqual(await analysisCacheKey({ utterances, depth: 'light' }), await analysisCacheKey({ utterances, depth: 'deep' }));
+  assert.notEqual(await analysisCacheKey({ utterances, depth: 'deep', side: 'source' }), await analysisCacheKey({ utterances, depth: 'deep', side: 'translation' }));
+  assert.equal(await analysisCacheKey({ utterances, depth: 'deep' }), await analysisCacheKey({ utterances: structuredClone(utterances), depth: 'deep' }));
 });
 
 test('a recording remembers which sentences it holds, and a later click finds them whatever unit made them', () => {
@@ -542,6 +590,22 @@ test('utterances are found on the rendered floor after markdown and quote wrappi
   assert.deepEqual(found.get(2), { start: { node: 3, offset: 0 }, end: { node: 4, offset: 5 } });
   assert.deepEqual(found.get(3), { start: { node: 5, offset: 0 }, end: { node: 6, offset: 4 } });
   assert.deepEqual(found.get(4), { start: { node: 8, offset: 0 }, end: { node: 8, offset: 2 } }, 'the short line does not latch onto the source above');
+
+  // A preset that folds the original under a summary, turns 「」 into “”, drops a comma and wraps the
+  // characters in its own tags: only the letters are compared, so every sentence is still found, and
+  // the button still lands after the closing quote.
+  const folded = ['原文', '桜井は振り返って', '“来たんだね”', 'と小さく笑った', '樱井回过头', '“你来了啊”', '轻轻笑了一下。'];
+  const foldedLines = [{ lineId: 1, text: '桜井は振り返って、「来たんだね」と小さく笑った。' }];
+  const foldedUtterances = splitUtterances(foldedLines);
+  const foldedFound = locateAnchors(folded, foldedLines, foldedUtterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
+  assert.deepEqual(foldedFound.get(1), { start: { node: 1, offset: 0 }, end: { node: 1, offset: 8 } });
+  assert.deepEqual(foldedFound.get(2), { start: { node: 2, offset: 1 }, end: { node: 2, offset: 6 } }, 'the page\'s own quote marks are not the anchor\'s, so they stay outside');
+  assert.deepEqual(foldedFound.get(3), { start: { node: 3, offset: 0 }, end: { node: 3, offset: 7 } });
+  // A word the rendering swallowed in the middle: the first and last letters still bracket the run.
+  const gappy = ['蓝蓝的天空上有红红的太阳', '<图>', '，泰罗放下杯子说道：'];
+  const gappyLines = [{ lineId: 1, text: '蓝蓝的天空上有红红的太阳，泰罗放下杯子说道：' }];
+  const gappyFound = locateAnchors(gappy, gappyLines, [{ id: 1, lineId: 1, text: '蓝蓝的天空上有红红的太阳，泰罗放下杯子说道：' }]);
+  assert.deepEqual(gappyFound.get(1), { start: { node: 0, offset: 0 }, end: { node: 2, offset: 10 } });
 });
 
 test('tag fallback reads literal jy-translation blocks and sheds markup and boundaries', () => {
@@ -669,4 +733,22 @@ test('a refused IndexedDB falls back to memory for the rest of the session', asy
   const memory = createMemoryBackend();
   await memory.put('audio', { key: 'z' });
   assert.equal((await memory.all('audio')).length, 1);
+});
+
+test('the sentences before a batch ride along as lead, to be read and never answered', () => {
+  const all = splitUtterances([{ lineId: 1, text: '教室里没有空调。' }, { lineId: 2, text: '泰罗擦了擦汗。' }, { lineId: 3, text: '「热死了。」' }]);
+  const lead = all.slice(0, 1);
+  const batch = all.slice(1);
+  const deep = buildVoiceAnalysisMessages(batch, { lead });
+  const deepInput = JSON.parse(deep[1].content);
+  assert.deepEqual(deepInput.utterances.map(item => item.id), [2, 3]);
+  assert.equal(deepInput.lead.length, 1);
+  assert.equal(deepInput.lead[0].id, 1);
+  assert.match(deepInput.lead[0].text, /空调/);
+  assert.match(deep[0].content, /lead，那是这一批前面紧挨着的几句/);
+  const light = buildTtsAnalysisMessages(batch, { lead });
+  const lightInput = JSON.parse(light[1].content);
+  assert.deepEqual(lightInput.lead.map(item => item.id), [1]);
+  assert.match(light[0].content, /只用来认人和判断语气，不用回答/);
+  assert.equal('lead' in JSON.parse(buildVoiceAnalysisMessages(batch)[1].content), false, 'a first batch has nothing before it');
 });

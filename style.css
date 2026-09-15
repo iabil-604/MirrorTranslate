@@ -681,3 +681,30 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-tts-voice-body { grid-template-areas: "name name" "aliases aliases" "voice voice" "title title" "tools tools" "langs langs"; padding-left: 8px; }
   .jy-fold-summary { display: none; }
 }
+/* A library voice shows its name in place of the id; the progress list under the transport. */
+.jy-tts-known { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; min-height: 34px; padding: 4px 11px; border: 1px solid var(--jy-accent); border-radius: var(--jy-radius-sm); background: var(--jy-accent-tint); color: var(--jy-accent-ink); font-weight: 650; font-size: 12px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.jy-tts-known::after { content: "✎"; margin-left: auto; font-weight: 400; color: var(--jy-muted); }
+.jy-mini-steps { list-style: none; margin: 0; padding: 10px 0 0; border-top: 1px solid var(--jy-line-soft); display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; max-height: 190px; overflow-y: auto; scrollbar-width: thin; }
+.jy-mini-steps[hidden] { display: none; }
+.jy-mini-steps-head { color: var(--jy-muted); font-size: 11px; margin-bottom: 2px; }
+.jy-mini-steps li:not(.jy-mini-steps-head) { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: center; line-height: 1.5; }
+.jy-mini-step-mark { position: relative; width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid var(--jy-line-strong); }
+.jy-mini-steps li[data-state="done"] .jy-mini-step-mark { border-color: var(--jy-ok); background: var(--jy-ok); }
+.jy-mini-steps li[data-state="done"] .jy-mini-step-mark::after { content: ""; position: absolute; left: 3px; top: 1px; width: 3px; height: 6px; border-right: 1.5px solid #fff; border-bottom: 1.5px solid #fff; transform: rotate(45deg); }
+.jy-mini-steps li[data-state="active"] .jy-mini-step-mark { border-color: var(--jy-accent-soft); border-top-color: var(--jy-accent); animation: jy-spin .9s linear infinite; }
+.jy-mini-steps li[data-state="error"] .jy-mini-step-mark { border-color: var(--jy-error); background: var(--jy-error-soft); }
+.jy-mini-steps li[data-state="pending"] { color: var(--jy-muted); }
+.jy-mini-step-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jy-mini-step-detail { color: var(--jy-muted); font-size: 11px; white-space: nowrap; }
+@keyframes jy-spin { to { transform: rotate(360deg); } }
+/* The steps list keeps its own height inside the scrolling page instead of shrinking to a sliver. */
+.jy-mini-steps { flex: 0 0 auto; }
+/* The reading page's progress bar is a slider: thicker, with a knob at the end of the fill. */
+.jy-progress-seek { height: 8px; cursor: pointer; touch-action: none; position: relative; border-radius: 4px; overflow: visible; }
+.jy-progress-seek span { position: relative; width: 0; transform: none !important; transition: width 120ms linear; border-radius: 4px; }
+.jy-progress-seek span::after { content: ""; position: absolute; right: -7px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; background: var(--jy-accent); box-shadow: 0 0 0 2px var(--jy-surface); opacity: 0; transition: opacity 120ms ease; }
+.jy-progress-seek[data-live="true"] span::after, .jy-progress-seek:hover span::after, .jy-progress-seek:focus-visible span::after { opacity: 1; }
+.jy-progress-seek[data-live="true"] { cursor: grab; }
+.jy-progress-seek[data-live="true"]:active { cursor: grabbing; }
+.jy-progress-seek:focus-visible { outline: 2px solid var(--jy-focus); outline-offset: 3px; }
+@media (hover: none) { .jy-progress-seek { height: 10px; } .jy-progress-seek span::after { opacity: 1; width: 18px; height: 18px; margin-top: -9px; right: -9px; } }

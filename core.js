@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.18.3';
+} from './prompts.js?v=0.19.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.18.3';
+export const APP_VERSION = '0.19.1';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -275,8 +275,11 @@ export const DEFAULT_COLORING = Object.freeze({
 // folded into 'stream': a single sentence is found inside whichever recording already holds it.
 export const TTS_MODES = Object.freeze(['floor', 'stream']);
 export const TTS_RANGES = Object.freeze(['all', 'dialogue', 'narration']);
-// Which language is read: the translation, or the original the floor was written in.
-export const TTS_SIDES = Object.freeze(['translation', 'source']);
+// Which language is read: the translation, the original the floor was written in, or both — each
+// made on its own, every line getting a button in either language.
+export const TTS_SIDES = Object.freeze(['translation', 'source', 'both']);
+// What one request of the stream carries: a paragraph, or a single sentence.
+export const TTS_STREAM_UNITS = Object.freeze(['line', 'sentence']);
 // 'auto' reads deeply for a whole floor and lightly for a stream; the rest pin one depth.
 export const TTS_ANALYSIS_MODES = Object.freeze(['auto', 'deep', 'light', 'annotations']);
 export const TTS_DOWNLOAD_SCOPES = Object.freeze(['auto', 'floor', 'current']);
@@ -411,6 +414,15 @@ export const DEFAULT_TTS = Object.freeze({
   // What 「保存到本地」 saves: the whole floor, the paragraph being read, or one or the other by mode.
   downloadScope: 'auto',
   voiceScope: 'character',
+  streamUnit: 'line',
+  // Off means a click makes the audio and stops there; a second click on a made sentence plays it.
+  playAfterGenerate: true,
+  // Runs of ！！！ become one mark; the cue carries the strength instead of the voice shrieking.
+  tamePunctuation: true,
+  // The reader's own system prompts for the two readings; empty means the built-in ones.
+  prompts: Object.freeze({ deep: '', light: '' }),
+  // The saved connection the readings go to; empty follows the translation's own setting.
+  channelId: '',
   quotePairs: DEFAULT_QUOTE_PAIRS,
   skipPairs: DEFAULT_SKIP_PAIRS,
   // What the deep reading is allowed to see besides the floor itself.
@@ -866,6 +878,14 @@ export function normalizeTts(value) {
     autoGenerate: source.autoGenerate === true,
     downloadScope: TTS_DOWNLOAD_SCOPES.includes(source.downloadScope) ? source.downloadScope : DEFAULT_TTS.downloadScope,
     voiceScope: TTS_VOICE_SCOPES.includes(source.voiceScope) ? source.voiceScope : DEFAULT_TTS.voiceScope,
+    streamUnit: TTS_STREAM_UNITS.includes(source.streamUnit) ? source.streamUnit : DEFAULT_TTS.streamUnit,
+    playAfterGenerate: source.playAfterGenerate === undefined ? DEFAULT_TTS.playAfterGenerate : source.playAfterGenerate !== false,
+    tamePunctuation: source.tamePunctuation === undefined ? DEFAULT_TTS.tamePunctuation : source.tamePunctuation !== false,
+    prompts: {
+      deep: typeof source.prompts?.deep === 'string' ? normalizeNewlines(source.prompts.deep).slice(0, 12000) : '',
+      light: typeof source.prompts?.light === 'string' ? normalizeNewlines(source.prompts.light).slice(0, 12000) : '',
+    },
+    channelId: String(source.channelId ?? '').trim().slice(0, 80),
     quotePairs: normalizePairStrings(source.quotePairs, DEFAULT_QUOTE_PAIRS),
     skipPairs: normalizePairStrings(source.skipPairs, DEFAULT_SKIP_PAIRS),
     context: normalizeTtsContext(source.context),

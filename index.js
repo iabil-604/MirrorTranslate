@@ -58,7 +58,7 @@ import {
   formatPairList,
   parseJsonCandidates,
   TTS_LANGUAGES,
-} from './core.js?v=0.18.3';
+} from './core.js?v=0.19.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -74,6 +74,8 @@ import {
   createSseParser,
   createTimestampCollector,
   cueLabel,
+  DEFAULT_TTS_PROMPTS,
+  deriveLabelsForSide,
   describeFishFailure,
   findCoveringEntry,
   fingerprintKey,
@@ -101,14 +103,14 @@ import {
   toStandardDocument,
   voiceRosterNames,
   voiceSummary,
-} from './tts.js?v=0.18.3';
-import { createTtsStore } from './tts-store.js?v=0.18.3';
+} from './tts.js?v=0.19.1';
+import { createTtsStore } from './tts-store.js?v=0.19.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.18.3';
+} from './processing.js?v=0.19.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -125,8 +127,8 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.18.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.18.3';
+} from './prompts.js?v=0.19.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.19.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -140,15 +142,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.18.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.18.3';
+} from './palette.js?v=0.19.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.19.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.18.3';
+} from './diagnostics.js?v=0.19.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -232,6 +234,13 @@ const runtime = {
     overrides: new Map(),
     fingerprint: null,
     inspect: null,
+    // messageId|side → the steps of the last run on that floor, kept so the panel can show them after.
+    progress: new Map(),
+    // floorId|version already made in the background, so a redraw never starts the same run twice.
+    pregenerated: new Set(),
+    // messageId → the mes last decorated, so a redraw with the same text costs one string compare.
+    mesSeen: new Map(),
+    viewer: null,
     highlighted: null,
     anchorWarned: new Set(),
     // floorId → the text version already cleaned up after, so a redraw does not tidy the same floor twice.
@@ -363,8 +372,8 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-connection-choice" role="radiogroup" aria-label="生成方式"><label><input type="radio" name="jy-tts-mode" value="floor" data-jy-tts-field="mode"><span><strong>全篇发送</strong><small>副模型细读整楼再配音，情绪最饱满；整楼一次生成，点哪句跳哪句</small></span></label><label><input type="radio" name="jy-tts-mode" value="stream" data-jy-tts-field="mode"><span><strong>流式朗读</strong><small>按段生成、先到先播，分析得少、出声快；点哪句只生成那一段</small></span></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">谁说的、什么情绪</span><select data-jy-tts-field="analysis"><option value="auto">跟随模式（全篇深度，流式轻量）</option><option value="deep">总是深度分析</option><option value="light">总是轻量分析</option><option value="annotations">只用翻译标注，不请求</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">跟随模式（全篇存整楼，流式存当前段）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option></select></label></div>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把情绪转成 Fish 的情绪标签一起发送</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼翻译完成后自动生成音频，不播放</label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">谁说的、什么情绪</span><select data-jy-tts-field="analysis"><option value="auto">跟随模式（全篇深度，流式轻量）</option><option value="deep">总是深度分析</option><option value="light">总是轻量分析</option><option value="annotations">只用翻译标注，不请求</option></select></label><label><span class="jy-label">分析用的副 API</span><select data-jy-tts-field="channelId"><option value="">跟随翻译的模型设置</option></select></label><label><span class="jy-label">流式朗读按</span><select data-jy-tts-field="streamUnit"><option value="line">段（一个自然段一次请求）</option><option value="sentence">句（一句一次请求，点哪句只做哪句）</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">跟随模式（全篇存整楼，流式存当前段）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option></select></label></div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把情绪转成 Fish 的情绪标签一起发送</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼翻译完成后自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">生成完自动播放（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
 <label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label>
@@ -392,6 +401,11 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-tts-library" data-jy-tts-library></div>
 <p class="jy-muted">给常用的 Fish 音色起个自己的名字存起来，全部角色卡共用。之后旁白、对白默认音色、每个角色、每门语言的音色都可以直接从库里选，不用再去翻 32 位的 ID。Voice ID 在 fish.audio 音色页面的地址栏里。</p>
 </div></details>
+<details class="jy-advanced"><summary>副模型提示词（高级）</summary>
+<p class="jy-muted">留空用内置的。可用占位符：<code>{{user}}</code> 用户扮演的角色，<code>{{palette}}</code> 轻量分析的情绪标签表，<code>{{sounds}}</code> Fish 的非语言声标签，<code>{{references_rule}}</code> 读原文时关于译文的那条规则。JSON 的输出格式和字段名要照旧，不然解析不出来；深度分析里 hints 的省力原则也建议留着，那是省时间的关键。</p>
+<label><span class="jy-label">深度分析（全篇发送）</span><textarea data-jy-tts-prompt="deep" rows="10" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="deep">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="deep">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="deep">恢复默认</button></div>
+<label><span class="jy-label">轻量分析（流式朗读）</span><textarea data-jy-tts-prompt="light" rows="8" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="light">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="light">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="light">恢复默认</button></div>
+</details>
 <details class="jy-advanced"><summary>声音参数</summary><div class="jy-form-grid">
 <label><span class="jy-label">音频格式</span><select data-jy-tts-fish="format"><option value="mp3">mp3（兼容最好）</option><option value="opus">opus（体积小，旧版 Safari 可能播不了）</option><option value="wav">wav（无损，体积大）</option></select></label><label><span class="jy-label">延迟与质量</span><select data-jy-tts-fish="latency"><option value="normal">normal（质量最好）</option><option value="balanced">balanced</option><option value="low">low（最快）</option></select></label>
 <label><span class="jy-label">语速（0.5–2）</span><input type="number" data-jy-tts-fish="speed" min="0.5" max="2" step="0.05"></label><label><span class="jy-label">音量调整 / dB</span><input type="number" data-jy-tts-fish="volume" min="-20" max="20" step="1"></label>
@@ -2431,24 +2445,37 @@ function ttsUtterances(floor, settings = runtime.settings) {
  * visible affixes are. One it never translated falls back to literal source tags such as
  * <jy-translation>, for presets that type them themselves.
  */
-async function collectTtsFloor(messageId, settings = runtime.settings) {
+// The languages a floor is read in under the current setting, the one the floor bar plays first.
+function ttsSides(settings = runtime.settings) {
+  const side = ttsSettings(settings).side;
+  return side === 'both' ? ['translation', 'source'] : [side];
+}
+
+function primaryTtsSide(settings = runtime.settings) {
+  return ttsSides(settings)[0];
+}
+
+async function collectTtsFloor(messageId, settings = runtime.settings, sideOverride = null) {
   const context = getContext();
   const id = Number(messageId);
   const message = context.chat?.[id];
   if (!Number.isInteger(id) || !message || message.is_user || message.is_system || typeof message.mes !== 'string') return null;
   const chatId = getCurrentChatId(context);
   const swipeId = Number(message.swipe_id ?? 0);
-  const side = ttsSettings(settings).side;
+  const requested = sideOverride ?? ttsSettings(settings).side;
+  const side = requested === 'both' ? 'translation' : requested;
   let lines = [];
   let annotations = new Map();
   let references = null;
   let source = 'tags';
+  let complete = false;
   // The original is readable on any floor whose body tags extract, translated or not; the translation
   // only on a floor this extension wrote, or through the literal source tags below.
   if (side === 'source' || message.extra?.[MESSAGE_META_KEY]) {
     try {
       const snapshot = await readMessageSnapshot(id, settings, { quiet: true });
       annotations = canonicalAnnotations(settings, snapshot.existingAnnotations);
+      complete = snapshot.translated === true;
       if (side === 'source') {
         lines = snapshot.segments
           .map(segment => ({ lineId: segment.id, text: plainLineText(segment.text) }))
@@ -2483,6 +2510,8 @@ async function collectTtsFloor(messageId, settings = runtime.settings) {
     annotations,
     references: references?.size ? references : null,
     source,
+    // Whether the translation this floor reads is finished; the original is always whole.
+    complete: side === 'source' || source === 'tags' ? true : complete,
   };
 }
 
@@ -2518,6 +2547,10 @@ function ttsAnalysisDepth(tts) {
   return tts.analysis;
 }
 
+// The most of each reference the deep reading is handed. A worldbook runs to tens of thousands of
+// characters; the reading needs the gist of the people, not the whole rulebook.
+const TTS_CONTEXT_CAPS = Object.freeze({ character: 4000, worldbook: 8000, recent: 8000 });
+
 // What the deep reading may see. The translation's own context builder is reused with the reading's
 // switches in place of the translation's, so the worldbook, the card and the recent floors arrive in
 // the same shape and the same clean-up the translator gets.
@@ -2535,7 +2568,11 @@ async function ttsContextPacket(floor, settings) {
       contextMessages: Math.max(1, wants.floors),
     };
     const packet = await collectTranslationContext(snapshot, scoped, getActiveChannel(scoped).tokenSaving ? whitelistedWorldbookContent() : null);
-    return { character: packet.character, worldbook: packet.worldbook, recent: packet.recent };
+    const cap = (value, limit) => {
+      const text = String(value ?? '');
+      return text.length > limit ? `${text.slice(0, limit)}\n…（已截断）` : text;
+    };
+    return { character: cap(packet.character, TTS_CONTEXT_CAPS.character), worldbook: cap(packet.worldbook, TTS_CONTEXT_CAPS.worldbook), recent: cap(packet.recent, TTS_CONTEXT_CAPS.recent) };
   } catch (error) {
     recordDiagnostic('warn', 'tts.context', `读取朗读分析的背景资料失败，这一楼只按正文分析：${safeError(error)}`, { floor: floor.floorId });
     return { character: '', worldbook: '', recent: '' };
@@ -2546,64 +2583,138 @@ async function ttsContextPacket(floor, settings) {
  * Asks the model about one floor, once per text version and depth.
  *
  * The light reading labels speaker and mood; the deep one reads the floor with its context and returns
- * a voice for every sentence. Either way the answer is labels keyed by id and never text.
+ * a voice for every sentence that needs one, leaning on the translation's own labels for the rest.
+ * Either way the answer is labels keyed by id and never text. `onRequest` is told only when a request
+ * actually goes out, so a cached reading never claims to be thinking.
  */
-async function analyzeTtsFloor(floor, utterances, settings, depth) {
+async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, hints = null } = {}) {
   const roster = ttsKnownNames(settings);
   const tts = ttsSettings(settings);
-  const packet = depth === 'deep' ? await ttsContextPacket(floor, settings) : null;
-  const contextKey = packet ? await hashText(JSON.stringify(packet)) : '';
-  const key = await analysisCacheKey({ utterances, roster, source: 'model', references: floor.references, depth, context: contextKey });
-  const stored = await ttsStore().getAnalysis(key);
-  if (Array.isArray(stored?.labels) && stored.labels.length) {
-    return { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), scene: stored.scene ?? '', characters: stored.characters ?? [], depth };
+  const key = await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side });
+  if (!force) {
+    const stored = await ttsStore().getAnalysis(key);
+    if (Array.isArray(stored?.labels) && stored.labels.length) {
+      return { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), depth, cached: true };
+    }
   }
   return dedupeTtsJob(key, floor.messageId, async signal => {
+    onRequest?.();
+    const request = ttsRequestSettings(settings);
+    const packet = depth === 'deep' ? await ttsContextPacket(floor, settings) : null;
     const context = getContext();
-    const options = { roster, characterName: context.name2 ?? '', userName: context.name1 ?? '', translations: floor.references };
-    const messages = depth === 'deep'
-      ? buildVoiceAnalysisMessages(utterances, { ...options, packet })
-      : buildTtsAnalysisMessages(utterances, options);
-    let raw;
-    try {
-      raw = await requestSubModelRaw(messages, settings, signal);
-    } catch (error) {
-      if (!isAbortError(error)) {
-        recordDiagnostic('error', 'tts.analysis-failed', `朗读分析请求失败：${safeError(error)}`, {
-          floor: floor.floorId,
-          depth,
-          utterances: utterances.length,
-          apiMode: settings.apiMode,
-          endpoint: describeChannelEndpoint(settings),
-        }, describeRequestFailure(error), { fullRequest: messages, floor: floor.messageId });
+    const options = {
+      roster, characterName: context.name2 ?? '', userName: context.name1 ?? '', translations: floor.references,
+      packet, hints, systemPrompt: depth === 'deep' ? tts.prompts.deep : tts.prompts.light,
+    };
+    // A long floor goes out in batches, as many at once as the connection allows, each batch seeing
+    // the few sentences before it. Wall time drops by about the number of batches.
+    const lanes = request.apiMode === 'independent' ? channelConcurrency(getActiveChannel(request)) : 1;
+    const chunks = chunkTtsUtterances(utterances, lanes);
+    const started = Date.now();
+    const results = await runInLanes(chunks, lanes, async (chunk, index) => {
+      const messages = depth === 'deep'
+        ? buildVoiceAnalysisMessages(chunk.items, { ...options, lead: chunk.lead })
+        : buildTtsAnalysisMessages(chunk.items, { ...options, lead: chunk.lead });
+      let raw;
+      const batchStarted = Date.now();
+      try {
+        raw = await requestSubModelRaw(messages, request, signal);
+      } catch (error) {
+        if (!isAbortError(error)) {
+          recordDiagnostic('error', 'tts.analysis-failed', `朗读分析请求失败${chunks.length > 1 ? `（第 ${index + 1}/${chunks.length} 批）` : ''}：${safeError(error)}`, {
+            floor: floor.floorId,
+            depth,
+            batch: `${index + 1}/${chunks.length}`,
+            utterances: chunk.items.length,
+            apiMode: request.apiMode,
+            endpoint: describeChannelEndpoint(request),
+          }, describeRequestFailure(error), { fullRequest: messages, floor: floor.messageId });
+        }
+        throw error;
       }
-      throw error;
+      const parsed = depth === 'deep' ? parseVoiceAnalysis(raw, chunk.items, { hints }) : { ...parseTtsAnalysis(raw, chunk.items), voices: new Map(), reused: 0 };
+      recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.analysis', parsed.labels.size
+        ? (depth === 'deep'
+          ? `副模型细读了 ${parsed.labels.size} 句${chunks.length > 1 ? `（第 ${index + 1}/${chunks.length} 批）` : ''}，${parsed.voices.size} 句展开写了配音指令，${parsed.reused} 句沿用翻译时的底色，用时 ${((Date.now() - batchStarted) / 1000).toFixed(1)} 秒。`
+          : `副模型给 ${parsed.labels.size} 句标了类型、说话人或情绪${chunks.length > 1 ? `（第 ${index + 1}/${chunks.length} 批）` : ''}，用时 ${((Date.now() - batchStarted) / 1000).toFixed(1)} 秒。`)
+        : `副模型没有返回可用的朗读标注${chunks.length > 1 ? `（第 ${index + 1}/${chunks.length} 批）` : ''}，这一批按引号区分旁白与对白。`, {
+        floor: floor.floorId,
+        depth,
+        batch: `${index + 1}/${chunks.length}`,
+        lanes,
+        utterances: chunk.items.length,
+        labeled: parsed.labels.size,
+        voiced: parsed.voices.size,
+        reused: parsed.reused,
+        apiMode: request.apiMode,
+        endpoint: describeChannelEndpoint(request),
+        requestTokens: describeRequestTokens(messages, raw),
+        contextBytes: packet ? Object.values(packet).reduce((sum, value) => sum + String(value ?? '').length, 0) : undefined,
+        seconds: Number(((Date.now() - batchStarted) / 1000).toFixed(1)),
+      }, raw, { fullRequest: messages, floor: floor.messageId });
+      return parsed;
+    });
+    const labels = new Map();
+    const voices = new Map();
+    let reused = 0;
+    for (const parsed of results) {
+      for (const [id, label] of parsed.labels) labels.set(id, label);
+      for (const [id, voice] of parsed.voices) voices.set(id, voice);
+      reused += parsed.reused ?? 0;
     }
-    const parsed = depth === 'deep' ? parseVoiceAnalysis(raw, utterances) : { ...parseTtsAnalysis(raw, utterances), voices: new Map(), scene: '', characters: [] };
-    const { labels, voices } = parsed;
-    recordDiagnostic(labels.size ? 'info' : 'warn', 'tts.analysis', labels.size
-      ? (depth === 'deep'
-        ? `副模型深度分析了 ${labels.size} 句，其中 ${voices.size} 句带配音指令。`
-        : `副模型给 ${labels.size} 句标了类型、说话人或情绪。`)
-      : '副模型没有返回可用的朗读标注，这一楼按引号区分旁白与对白。', {
-      floor: floor.floorId,
-      depth,
-      utterances: utterances.length,
-      labeled: labels.size,
-      voiced: voices.size,
-      scene: parsed.scene || undefined,
-      apiMode: settings.apiMode,
-      requestTokens: describeRequestTokens(messages, raw),
-      contextBytes: packet ? Object.values(packet).reduce((sum, value) => sum + String(value ?? '').length, 0) : undefined,
-    }, raw, { fullRequest: messages, floor: floor.messageId });
-    // An empty answer is not cached: the next play asks again instead of living with a failed reply.
-    if (labels.size) {
-      await ttsStore().putAnalysis({
-        key, floorId: floor.floorId, version: floor.version, depth, labels: [...labels], voices: [...voices], scene: parsed.scene, characters: parsed.characters,
+    if (chunks.length > 1) {
+      recordDiagnostic('info', 'tts.analysis-batches', `这一楼的分析分了 ${chunks.length} 批、${lanes} 路并行，总用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒。`, {
+        floor: floor.floorId, depth, batches: chunks.map(chunk => chunk.items.length), lanes, labeled: labels.size, reused,
       });
     }
-    return { labels, voices, scene: parsed.scene, characters: parsed.characters, depth };
+    // An empty answer is not cached: the next play asks again instead of living with a failed reply.
+    if (labels.size) {
+      await ttsStore().putAnalysis({ key, floorId: floor.floorId, version: floor.version, depth, labels: [...labels], voices: [...voices] });
+    }
+    return { labels, voices, depth, cached: false };
   });
+}
+
+// The connection the readings go to: the reading's own saved connection when one is chosen, else
+// whatever the translation uses.
+function ttsRequestSettings(settings = runtime.settings) {
+  const id = ttsSettings(settings).channelId;
+  if (!id) return settings;
+  const channel = (Array.isArray(settings?.channels) ? settings.channels : []).find(item => item.id === id);
+  if (!channel) return settings;
+  return { ...settings, apiMode: 'independent', selectedChannelId: id };
+}
+
+// A floor of more than this many sentences is read in batches when the connection allows more than
+// one request at a time; a batch never cuts a paragraph in half.
+const TTS_BATCH_SINGLE = 30;
+const TTS_BATCH_MIN = 16;
+
+function chunkTtsUtterances(utterances, lanes) {
+  const list = Array.isArray(utterances) ? utterances : [];
+  const count = Math.min(Math.max(1, Number(lanes) || 1), Math.ceil(list.length / TTS_BATCH_MIN));
+  if (count <= 1 || list.length <= TTS_BATCH_SINGLE) return [{ items: list, lead: [] }];
+  const size = Math.ceil(list.length / count);
+  const chunks = [];
+  let current = [];
+  list.forEach((item, index) => {
+    current.push(item);
+    const next = list[index + 1];
+    if (current.length >= size && (!next || next.lineId !== item.lineId)) {
+      chunks.push(current);
+      current = [];
+    }
+  });
+  if (current.length) chunks.push(current);
+  return chunks.map((items, index) => ({ items, lead: index ? chunks[index - 1].slice(-3) : [] }));
+}
+
+// The floor the reading is taken from when both languages are read: the translation, where the cast
+// is named the way the voices are registered; the original only when there is no translation.
+async function ttsPrimaryFloor(floor, settings) {
+  if (ttsSettings(settings).side !== 'both' || floor.side !== 'source') return null;
+  const translation = await collectTtsFloor(floor.messageId, settings, 'translation');
+  return translation && translation.source !== 'tags' ? translation : null;
 }
 
 /**
@@ -2611,40 +2722,63 @@ async function analyzeTtsFloor(floor, utterances, settings, depth) {
  *
  * The translation's own annotations are the starting point and cost nothing. When the model is asked,
  * it is asked once per text version and depth; a failed request falls back to the annotations with a
- * warning rather than refusing to read.
+ * warning rather than refusing to read. When both languages are read, the original is labelled from
+ * the translation's reading instead of being read a second time.
  */
-async function prepareTtsSegments(floor, settings, { onStatus = null } = {}) {
+async function prepareTtsSegments(floor, settings, { onStatus = null, force = false, onStep = null } = {}) {
   const tts = ttsSettings(settings);
   const utterances = ttsUtterances(floor, settings);
   let labels = labelsFromAnnotations(utterances, floor.annotations);
   let voices = null;
   const depth = ttsAnalysisDepth(tts);
-  if (depth !== 'annotations' && utterances.length) {
+  const primary = await ttsPrimaryFloor(floor, settings);
+  if (primary) {
+    const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep });
+    const derived = deriveLabelsForSide(read.utterances, read.labels, read.voices, utterances);
+    for (const [id, label] of derived.labels) labels.set(id, { ...(labels.get(id) ?? {}), ...label });
+    voices = derived.voices;
     const key = ttsLabelKey(floor);
-    const known = runtime.tts.analysis.get(key);
+    runtime.tts.analysis.set(key, { labels, voices, depth: read.depth ?? depth, derived: true });
+  } else if (depth !== 'annotations' && utterances.length) {
+    const key = ttsLabelKey(floor);
+    const known = force ? null : runtime.tts.analysis.get(key);
     if (known && (known.depth === depth || (known.depth === 'deep' && depth === 'light'))) {
       labels = known.labels;
       voices = known.voices;
+      onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '细读这一楼' : '分析谁在说话', detail: '已有结果' });
     } else {
-      onStatus?.(depth === 'deep' ? '副模型正在细读这一楼…' : '正在分析谁在说话…');
+      let requested = false;
       try {
-        const analyzed = await analyzeTtsFloor(floor, utterances, settings, depth);
+        const analyzed = await analyzeTtsFloor(floor, utterances, settings, depth, {
+          force,
+          hints: depth === 'deep' ? labels : null,
+          onRequest: () => {
+            requested = true;
+            onStatus?.(depth === 'deep' ? '副模型正在细读这一楼…' : '正在分析谁在说话…');
+            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `细读这一楼（${utterances.length} 句）` : `分析谁在说话（${utterances.length} 句）` });
+          },
+        });
         if (analyzed.labels.size) {
           labels = analyzed.labels;
           voices = analyzed.voices;
-          runtime.tts.analysis.set(key, analyzed);
+          runtime.tts.analysis.set(key, { ...analyzed, depth });
           if (runtime.tts.analysis.size > 200) runtime.tts.analysis.delete(runtime.tts.analysis.keys().next().value);
+          onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '细读这一楼' : '分析谁在说话', detail: analyzed.cached ? '已有结果' : `${labels.size} 句` });
           // Types may have moved: a quoted title is narration, an unquoted order is dialogue.
           scheduleTtsDecorate(floor.messageId, { force: true });
+        } else {
+          onStep?.('analysis', { state: 'error', label: '分析', detail: '副模型没有返回可用标注' });
         }
       } catch (error) {
         if (isAbortError(error)) throw error;
+        onStep?.('analysis', { state: 'error', label: '分析', detail: safeError(error) });
         toast('warning', `朗读分析失败，这一楼先按翻译时的标注读：${safeError(error)}`);
       }
+      if (!requested) onStatus?.('');
     }
   }
   const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices });
-  return { utterances, labels, voices, segments };
+  return { utterances, labels, voices, segments, depth };
 }
 
 function requireFishKey(tts) {
@@ -2746,7 +2880,7 @@ async function streamFishTimestamps(body, fish, signal) {
 // Everything that changes the sound, hashed once per distinct settings.
 async function ttsFingerprint(settings = runtime.settings) {
   const tts = ttsSettings(settings);
-  const fingerprint = fishFingerprint(tts.fish, { emotionCues: tts.emotionCues, prosodySplit: tts.prosodySplit });
+  const fingerprint = fishFingerprint(tts.fish, { emotionCues: tts.emotionCues, prosodySplit: tts.prosodySplit, tamePunctuation: tts.tamePunctuation });
   const json = JSON.stringify(fingerprint);
   if (runtime.tts.fingerprint?.json !== json) runtime.tts.fingerprint = { json, fingerprint, key: await fingerprintKey(fingerprint) };
   return runtime.tts.fingerprint;
@@ -2767,9 +2901,9 @@ async function ttsOverrides(floor) {
  * the override. Names without a voice of their own are noted once per floor, not thrown: a sentence
  * without any voice reads in the provider's default voice rather than not at all.
  */
-async function ttsItemsFor(floor, segments, settings) {
+async function ttsItemsFor(floor, segments, settings, { range = null } = {}) {
   const tts = ttsSettings(settings);
-  const inRange = segmentsInRange(segments, tts.range);
+  const inRange = segmentsInRange(segments, range ?? tts.range);
   const plan = planVoices(inRange, ttsVoiceConfig(settings));
   const overrides = await ttsOverrides(floor);
   const items = plan.items.map(item => {
@@ -2828,14 +2962,16 @@ async function findTtsEntry(floor, item, settings) {
  * ranges right here, and the record keeps both the audio and the ranges, so playing any sentence
  * afterwards is a seek, never another request.
  */
-async function ensureTtsRecording(floor, unit, items, settings, onStatus = null) {
+async function ensureTtsRecording(floor, unit, items, settings, onStatus = null, onStep = null) {
   const tts = ttsSettings(settings);
   if (!items.length) throw new Error('这一段没有可朗读的句子。');
+  const stepId = `record:${unit}`;
   const { fingerprint, key: fingerprintId } = await ttsFingerprint(settings);
   const key = await recordingCacheKey({ floorId: floor.floorId, version: floor.version, unit, maxChars: tts.fish.maxChars, items, fingerprint });
   const cached = await ttsStore().getAudio(key);
   if (cached?.parts?.length && Array.isArray(cached.timeline)) {
     rememberRecording(floor, cached);
+    onStep?.(stepId, { state: 'done', label: ttsUnitLabel(unit), detail: '已有音频' });
     return { record: cached, cached: true };
   }
   requireFishKey(tts);
@@ -2844,9 +2980,11 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null)
     const storedParts = [];
     const timeline = [];
     const label = unit.startsWith('line:') ? '这一段' : unit.startsWith('sentence:') ? '这一句' : '整楼';
+    onStep?.(stepId, { state: 'active', label: ttsUnitLabel(unit), detail: `${items.length} 句${parts.length > 1 ? `，分 ${parts.length} 次请求` : ''}` });
     for (const [index, part] of parts.entries()) {
       onStatus?.(parts.length > 1 ? `正在生成${label}音频（第 ${index + 1}/${parts.length} 段）…` : `正在生成${label}音频…`);
-      const { body, spans } = buildFishPayload(part, tts.fish, { emotionCues: tts.emotionCues, prosodySplit: tts.prosodySplit });
+      if (parts.length > 1) onStep?.(stepId, { state: 'active', detail: `第 ${index + 1}/${parts.length} 次请求` });
+      const { body, spans } = buildFishPayload(part, tts.fish, { emotionCues: tts.emotionCues, prosodySplit: tts.prosodySplit, tamePunctuation: tts.tamePunctuation });
       let stream;
       try {
         stream = await streamFishTimestamps(body, tts.fish, signal);
@@ -2855,6 +2993,7 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null)
           recordDiagnostic('error', 'tts.request-failed', safeError(error), {
             floor: floor.floorId, unit, part: index + 1, parts: parts.length, model: tts.fish.model, viaProxy: tts.fish.viaProxy, status: error.status ?? null,
           }, { status: error.status ?? null, body: error.body ?? '' }, { fullRequest: body, floor: floor.messageId });
+          onStep?.(stepId, { state: 'error', detail: safeError(error) });
         }
         throw error;
       }
@@ -2893,28 +3032,82 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null)
       overrideText: unit.startsWith('sentence:') ? (items[0].override?.text ?? '') : '',
     });
     rememberRecording(floor, stored);
+    onStep?.(stepId, { state: 'done', detail: `${items.length} 句 · ${storedParts.reduce((sum, part) => sum + (Number(part.duration) || 0), 0).toFixed(1)} 秒` });
     notifyTtsPanels();
     return stored;
   });
   return { record, cached: false };
 }
 
-// The unit a sentence is made in: the whole floor in floor mode, its paragraph in the stream.
+// The unit a sentence is made in: the whole floor in floor mode; in the stream its paragraph, or the
+// sentence alone when the reader chose to hear sentences one by one.
 function ttsUnitFor(tts, items, item) {
   if (tts.mode === 'stream') {
+    if (tts.streamUnit === 'sentence') return { unit: `sentence:${item.segment.id}`, items: [item] };
     const lineId = item.segment.lineId;
     return { unit: `line:${lineId}`, items: items.filter(candidate => candidate.segment.lineId === lineId) };
   }
   return { unit: `floor:${tts.range}`, items };
 }
 
+// Every unit a floor is made of, in reading order, for making the whole floor ahead of time.
+function ttsUnitsOf(tts, items) {
+  if (tts.mode !== 'stream') return items.length ? [{ unit: `floor:${tts.range}`, items }] : [];
+  if (tts.streamUnit === 'sentence') return items.map(item => ({ unit: `sentence:${item.segment.id}`, items: [item] }));
+  return groupSegmentsByLine(items.map(item => item.segment)).map(line => ({ unit: `line:${line.lineId}`, items: items.filter(item => item.segment.lineId === line.lineId) }));
+}
+
+// What a unit is called on the floor bar and in the progress list.
+function ttsUnitLabel(unit) {
+  if (unit.startsWith('line:')) return `生成第 ${unit.slice(5)} 段`;
+  if (unit.startsWith('sentence:')) return `生成第 ${unit.slice(9)} 句`;
+  return '生成整楼音频';
+}
+
+// ---------------------------------------------------------------------------------------------
+// Progress: the steps of the last run on a floor — the reading, then every unit of audio — kept after
+// the run so the panel can still show what happened, and replaced by the next run on that floor.
+// ---------------------------------------------------------------------------------------------
+
+function ttsProgressKey(messageId, side) {
+  return `${messageId}|${side}`;
+}
+
+function ttsProgressFor(messageId, side) {
+  return runtime.tts.progress.get(ttsProgressKey(messageId, side)) ?? null;
+}
+
+function beginTtsProgress(floor, tts = ttsSettings()) {
+  const key = ttsProgressKey(floor.messageId, floor.side);
+  const record = { messageId: floor.messageId, side: floor.side, version: floor.version, mode: tts.mode, startedAt: Date.now(), steps: [] };
+  runtime.tts.progress.set(key, record);
+  if (runtime.tts.progress.size > 40) runtime.tts.progress.delete(runtime.tts.progress.keys().next().value);
+  notifyTtsPanels();
+  return record;
+}
+
+function ttsStep(floor, id, patch = {}) {
+  const key = ttsProgressKey(floor.messageId, floor.side);
+  let record = runtime.tts.progress.get(key);
+  if (!record || record.version !== floor.version) record = beginTtsProgress(floor);
+  let step = record.steps.find(item => item.id === id);
+  if (!step) {
+    step = { id, label: id, state: 'pending' };
+    record.steps.push(step);
+  }
+  Object.assign(step, patch);
+  if (patch.state === 'active' && !step.since) step.since = Date.now();
+  if (patch.state === 'done' || patch.state === 'error') step.finishedAt = Date.now();
+  notifyTtsPanels();
+}
+
 /** The recording entry for one item, made if need be. */
-async function resolveTtsEntry(floor, items, item, settings, onStatus = null) {
+async function resolveTtsEntry(floor, items, item, settings, onStatus = null, onStep = null) {
   const found = await findTtsEntry(floor, item, settings);
   if (found) return { ...found, cached: true };
   const tts = ttsSettings(settings);
   const target = item.override?.text ? { unit: `sentence:${item.segment.id}`, items: [item] } : ttsUnitFor(tts, items, item);
-  const { record } = await ensureTtsRecording(floor, target.unit, target.items, settings, onStatus);
+  const { record } = await ensureTtsRecording(floor, target.unit, target.items, settings, onStatus, onStep);
   const index = record.timeline.findIndex(entry => entry.id === item.segment.id);
   if (index < 0) throw new Error('这一句不在生成的音频里。');
   return { record, index, cached: false };
@@ -3010,7 +3203,7 @@ function playTtsAudio(url, { start = 0, end = null, onTime = null } = {}) {
   });
 }
 
-function highlightTtsUtterance(messageId, utteranceId) {
+function highlightTtsUtterance(messageId, utteranceId, side = null) {
   for (const button of document.querySelectorAll('#chat .jy-tts-play[data-state="playing"]')) delete button.dataset.state;
   const registry = globalThis.CSS?.highlights;
   if (utteranceId === null || utteranceId === undefined) {
@@ -3018,21 +3211,23 @@ function highlightTtsUtterance(messageId, utteranceId) {
     registry?.delete('jy-tts-current');
     return;
   }
-  runtime.tts.highlighted = { messageId, utteranceId };
-  const button = ttsButton(messageId, utteranceId);
+  const which = side ?? primaryTtsSide();
+  runtime.tts.highlighted = { messageId, utteranceId, side: which };
+  const button = ttsButton(messageId, utteranceId, which);
   if (button && !button.dataset.state) button.dataset.state = 'playing';
-  const range = runtime.tts.ranges.get(messageId)?.get(utteranceId);
+  const range = runtime.tts.ranges.get(messageId)?.get(`${which}:${utteranceId}`);
   // The Custom Highlight API paints a range without wrapping it, so the floor's DOM stays untouched.
   if (registry && typeof globalThis.Highlight === 'function' && range) registry.set('jy-tts-current', new globalThis.Highlight(range));
   else registry?.delete('jy-tts-current');
 }
 
-function ttsButton(messageId, utteranceId) {
-  return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-play[data-jy-tts-utt="${utteranceId}"]`);
+function ttsButton(messageId, utteranceId, side = null) {
+  const which = side ?? primaryTtsSide();
+  return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-play[data-jy-tts-utt="${utteranceId}"][data-jy-tts-side="${which}"]`);
 }
 
-function setTtsButtonState(messageId, utteranceId, state) {
-  const button = ttsButton(messageId, utteranceId);
+function setTtsButtonState(messageId, utteranceId, state, side = null) {
+  const button = ttsButton(messageId, utteranceId, side);
   if (!button) return;
   if (state) button.dataset.state = state;
   else delete button.dataset.state;
@@ -3116,7 +3311,7 @@ function setTransport(transport, patch) {
  * The transport for one floor. Every sentence in range is an item; the current one is played from the
  * recording that holds it, and the recordings that hold the ones after it are made while it plays.
  */
-async function createTtsTransport(messageId, { single = false, fromUtterance = null } = {}) {
+async function createTtsTransport(messageId, { single = false, fromUtterance = null, side = null } = {}) {
   const settings = runtime.settings;
   const tts = ttsSettings(settings);
   const previous = runtime.tts.transport;
@@ -3124,9 +3319,12 @@ async function createTtsTransport(messageId, { single = false, fromUtterance = n
   const transport = {
     id: Symbol('tts-transport'),
     messageId,
+    side: side ?? primaryTtsSide(settings),
     settings,
     mode: tts.mode,
     single,
+    // Off: the click makes the audio and stops; the next click on a made sentence plays it.
+    generateOnly: !tts.playAfterGenerate,
     state: 'loading',
     message: '准备朗读…',
     floor: null,
@@ -3138,23 +3336,34 @@ async function createTtsTransport(messageId, { single = false, fromUtterance = n
   };
   runtime.tts.transport = transport;
   setTransport(transport, {});
-  const floor = await collectTtsFloor(messageId, settings);
-  if (!floor) throw new Error('这一楼没有可朗读的译文。');
+  const floor = await collectTtsFloor(messageId, settings, transport.side);
+  if (!floor) throw new Error(transport.side === 'source' ? '这一楼没有可朗读的原文。' : '这一楼没有可朗读的译文。');
   transport.floor = floor;
-  const { segments } = await prepareTtsSegments(floor, settings, { onStatus: text => setTransport(transport, { message: text }) });
+  beginTtsProgress(floor, tts);
+  const { segments } = await prepareTtsSegments(floor, settings, {
+    onStatus: text => setTransport(transport, { message: text }),
+    onStep: (id, patch) => ttsStep(floor, id, patch),
+  });
   if (runtime.tts.transport !== transport) return null;
-  const { items } = await ttsItemsFor(floor, segments, settings);
+  let { items } = await ttsItemsFor(floor, segments, settings);
+  if (fromUtterance !== null && !items.some(item => item.segment.id === fromUtterance)) {
+    // The sentence clicked sits outside the reading range (the reading may have re-typed it); it is
+    // still the one asked for.
+    const everything = await ttsItemsFor(floor, segments, settings, { range: 'all' });
+    if (!everything.items.some(item => item.segment.id === fromUtterance)) throw new Error('这一句已经变了，等楼层重新渲染后再点。');
+    items = everything.items;
+  }
   if (!items.length) {
     throw new Error(tts.range === 'dialogue' ? '这一楼没有对白可读。' : tts.range === 'narration' ? '这一楼没有旁白可读。' : '这一楼没有可朗读的句子。');
   }
   transport.items = items;
-  runtime.tts.floors.set(messageId, { floor, segments, items, settings });
-  if (fromUtterance !== null) {
-    const index = items.findIndex(item => item.segment.id === fromUtterance);
-    if (index < 0) throw new Error('这一句不在当前的朗读范围里。');
-    transport.index = index;
-  }
+  runtime.tts.floors.set(ttsPreparedKey(messageId, floor.side), { floor, segments, items, settings });
+  if (fromUtterance !== null) transport.index = items.findIndex(item => item.segment.id === fromUtterance);
   return transport;
+}
+
+function ttsPreparedKey(messageId, side) {
+  return `${messageId}|${side}`;
 }
 
 function isTtsTransport(transport) {
@@ -3177,14 +3386,19 @@ async function runTtsTransport(transport) {
     while (live() && transport.index < items.length) {
       const item = items[transport.index];
       setTransport(transport, { state: 'loading', message: '正在准备音频…' });
-      setTtsButtonState(transport.messageId, item.segment.id, 'busy');
+      setTtsButtonState(transport.messageId, item.segment.id, 'busy', transport.side);
       let entry;
       try {
-        entry = await resolveTtsEntry(floor, items, item, settings, text => live() && setTransport(transport, { message: text }));
+        entry = await resolveTtsEntry(floor, items, item, settings, text => live() && setTransport(transport, { message: text }), (id, patch) => ttsStep(floor, id, patch));
       } finally {
-        setTtsButtonState(transport.messageId, item.segment.id, null);
+        setTtsButtonState(transport.messageId, item.segment.id, null, transport.side);
       }
       if (!live()) return;
+      if (transport.generateOnly && !entry.cached) {
+        // Made, not played: the reader asked for it that way. The next click on it plays.
+        setTransport(transport, { state: 'idle', message: '已生成，再点一次播放' });
+        return;
+      }
       const { record, index } = entry;
       const part = record.timeline[index].part;
       // The stretch of this part that belongs to items still ahead, in order, so the clock can name them.
@@ -3200,12 +3414,12 @@ async function runTtsTransport(transport) {
       const window = playbackWindow(record.timeline, index, record.parts[part]?.duration);
       const endWindow = playbackWindow(record.timeline, record.timeline.findIndex(candidateEntry => candidateEntry.id === items[lastOffset].segment.id && candidateEntry.part === part), record.parts[part]?.duration);
       const url = ttsObjectUrl(`${record.key}#${part}`, record.parts[part].blob);
-      transport.current = { record, part, url };
+      transport.current = { record, part, url, start: window.start, end: endWindow.end };
       // Prefetch: the recording the next paragraph will need, while this one plays.
       const next = items[lastOffset + 1];
       if (next && !transport.single) void resolveTtsEntry(floor, items, next, settings).catch(() => {});
       setTransport(transport, { state: 'playing', message: '' });
-      highlightTtsUtterance(transport.messageId, item.segment.id);
+      highlightTtsUtterance(transport.messageId, item.segment.id, transport.side);
       const outcome = await playTtsAudio(url, {
         start: window.start,
         end: endWindow.end,
@@ -3216,7 +3430,7 @@ async function runTtsTransport(transport) {
           transport.progress = { time: Math.max(0, time - window.start), duration: Math.max(0, endWindow.end - window.start) || duration || 0 };
           if (active !== transport.index) {
             transport.index = active;
-            highlightTtsUtterance(transport.messageId, items[active].segment.id);
+            highlightTtsUtterance(transport.messageId, items[active].segment.id, transport.side);
             setTransport(transport, {});
           } else {
             notifyTtsPanels();
@@ -3316,6 +3530,41 @@ function toggleTtsPause() {
   else resumeTts();
 }
 
+/**
+ * Moves to a point of the stretch being read, as a fraction of it. Playing or paused, the clock is
+ * simply set and the highlight follows it; after the end, the sentence at that point is read from.
+ */
+function seekTts(fraction) {
+  const transport = runtime.tts.transport;
+  const current = transport?.current;
+  if (!current) return;
+  const span = Math.max(0, (Number(current.end) || 0) - (Number(current.start) || 0));
+  const time = (Number(current.start) || 0) + Math.max(0, Math.min(1, Number(fraction) || 0)) * span;
+  const audio = runtime.tts.player?.audio;
+  if (['playing', 'paused'].includes(transport.state) && audio?.src) {
+    // Paused, the clock stops just short of the end: reaching it would start the next sentence.
+    const clock = transport.state === 'paused' ? Math.min(time, Math.max(current.start, current.end - 0.05)) : time;
+    try {
+      audio.currentTime = clock;
+    } catch {
+      return;
+    }
+    transport.progress = { time: Math.max(0, clock - current.start), duration: span };
+    notifyTtsPanels();
+    return;
+  }
+  const inPart = current.record.timeline.map((entry, index) => ({ entry, index })).filter(item => item.entry.part === current.part);
+  let target = inPart[0];
+  for (const item of inPart) if (item.entry.start <= time + 0.05) target = item;
+  const index = target ? transport.items.findIndex(item => item.segment.id === target.entry.id) : -1;
+  if (index < 0) return;
+  transport.generation += 1;
+  stopTtsPlayback();
+  transport.index = index;
+  transport.single = false;
+  void runTtsTransport(transport);
+}
+
 // Steps to another paragraph and reads on from there, whatever was playing.
 function stepTtsParagraph(direction) {
   const transport = runtime.tts.transport;
@@ -3338,10 +3587,29 @@ function stepTtsParagraph(direction) {
   void runTtsTransport(transport);
 }
 
-async function playTtsUtterance(messageId, utteranceId) {
+async function playTtsUtterance(messageId, utteranceId, side = null) {
+  const wantedSide = side ?? primaryTtsSide();
+  const existing = runtime.tts.transport;
+  // The floor already open in the transport, paused or not: a click on one of its sentences is a seek,
+  // never a second preparation of the same floor.
+  if (existing && existing.messageId === messageId && existing.side === wantedSide && existing.floor && existing.items.length) {
+    const index = existing.items.findIndex(item => item.segment.id === utteranceId);
+    if (index >= 0) {
+      if (existing.state === 'loading' && existing.index === index) return;
+      existing.generation += 1;
+      stopTtsPlayback();
+      existing.index = index;
+      existing.single = true;
+      existing.generateOnly = !ttsSettings().playAfterGenerate;
+      await runTtsTransport(existing);
+      return;
+    }
+  }
+  // A second click while the first is still preparing this floor changes nothing.
+  if (existing?.state === 'loading' && existing.messageId === messageId && existing.side === wantedSide) return;
   setTtsButtonState(messageId, utteranceId, 'busy');
   try {
-    const transport = await createTtsTransport(messageId, { single: true, fromUtterance: utteranceId });
+    const transport = await createTtsTransport(messageId, { single: true, fromUtterance: utteranceId, side: wantedSide });
     if (!transport) return;
     await runTtsTransport(transport);
   } catch (error) {
@@ -3355,9 +3623,18 @@ async function playTtsUtterance(messageId, utteranceId) {
   }
 }
 
-async function playTtsFloor(messageId) {
+async function playTtsFloor(messageId, side = null) {
+  const wantedSide = side ?? primaryTtsSide();
   try {
-    const transport = await createTtsTransport(messageId, { single: false });
+    if (!ttsSettings().playAfterGenerate) {
+      // Generate-only: the floor is made first; a floor that is already made plays.
+      const made = await pregenerateTtsFloor(messageId, { quiet: true, side: wantedSide });
+      if (made) {
+        setTtsStatus(messageId, `已生成 ${made} 段音频，再点一次「朗读本楼」播放`, 'idle');
+        return;
+      }
+    }
+    const transport = await createTtsTransport(messageId, { single: false, side: wantedSide });
     if (!transport) return;
     await runTtsTransport(transport);
   } catch (error) {
@@ -3373,49 +3650,55 @@ async function playTtsFloor(messageId) {
  * Makes a floor's audio without playing it: the whole floor as one unit, or paragraph after paragraph
  * in the stream. Nothing is made twice; a floor already recorded returns at once.
  */
-async function pregenerateTtsFloor(messageId, { quiet = false } = {}) {
+async function pregenerateTtsFloor(messageId, { quiet = false, side = null } = {}) {
   const settings = runtime.settings;
   const tts = ttsSettings(settings);
-  const floor = await collectTtsFloor(messageId, settings);
+  // Both languages: one after the other, the translation first.
+  if (side === null && tts.side === 'both') {
+    let total = 0;
+    for (const each of ttsSides(settings)) total += (await pregenerateTtsFloor(messageId, { quiet: true, side: each })) ?? 0;
+    if (!quiet && total) toast('success', `第 ${messageId} 楼的音频已生成，${total} 段。`);
+    return total;
+  }
+  const floor = await collectTtsFloor(messageId, settings, side);
   if (!floor) return null;
   const key = `${ttsLabelKey(floor)}|pregen`;
   return dedupeTtsJob(key, messageId, async () => {
+    beginTtsProgress(floor, tts);
     const { segments } = await prepareTtsSegments(floor, settings, {
       onStatus: text => setTtsStatus(messageId, text, 'busy'),
+      onStep: (id, patch) => ttsStep(floor, id, patch),
     });
     const { items } = await ttsItemsFor(floor, segments, settings);
     if (!items.length) return null;
-    const units = tts.mode === 'stream'
-      ? groupSegmentsByLine(items.map(item => item.segment)).map(line => ({ unit: `line:${line.lineId}`, items: items.filter(item => item.segment.lineId === line.lineId) }))
-      : [{ unit: `floor:${tts.range}`, items }];
+    const units = ttsUnitsOf(tts, items);
+    // Every unit is announced first, so the list shows what is still to come.
+    for (const target of units) ttsStep(floor, `record:${target.unit}`, { state: 'pending', label: ttsUnitLabel(target.unit) });
     let made = 0;
     for (const [index, target] of units.entries()) {
       // A unit whose sentences are all already recorded, in any unit, is not made again.
       const covered = await Promise.all(target.items.map(item => findTtsEntry(floor, item, settings)));
-      if (covered.every(Boolean)) continue;
-      const { cached } = await ensureTtsRecording(floor, target.unit, target.items, settings, text => setTtsStatus(messageId, units.length > 1 ? `${text}（${index + 1}/${units.length}）` : text, 'busy'));
+      if (covered.every(Boolean)) {
+        ttsStep(floor, `record:${target.unit}`, { state: 'done', detail: '已有音频' });
+        continue;
+      }
+      const { cached } = await ensureTtsRecording(floor, target.unit, target.items, settings,
+        text => setTtsStatus(messageId, units.length > 1 ? `${text}（${index + 1}/${units.length}）` : text, 'busy'),
+        (id, patch) => ttsStep(floor, id, patch));
       if (!cached) made += 1;
     }
+    runtime.tts.pregenerated.add(ttsLabelKey(floor));
     if (runtime.tts.transport?.messageId !== messageId) setTtsStatus(messageId, made ? '音频已生成，未播放' : '', 'idle');
     if (!quiet && made) toast('success', `第 ${messageId} 楼的音频已生成，${made} 段。`);
     return made;
   });
 }
 
-// After a floor's translation lands, its audio follows, without playing. Only the latest floor:
-// scrolling back through an old chat must not start a bill.
+// A floor's translation just landed: the redraw that follows decides whether its audio is made.
 function scheduleTtsPregenerate(messageId) {
   const tts = ttsSettings();
   if (!tts.enabled || !tts.autoGenerate) return;
-  const context = getContext();
-  if (latestAssistantMessageId(context) !== Number(messageId)) return;
-  const timer = globalThis.setTimeout(() => {
-    runtime.timers.delete(timer);
-    void pregenerateTtsFloor(Number(messageId), { quiet: true }).catch(error => {
-      if (!isAbortError(error)) recordDiagnostic('warn', 'tts.pregenerate', `自动生成第 ${messageId} 楼音频失败：${safeError(error)}`, { floor: messageId });
-    });
-  }, 800);
-  runtime.timers.add(timer);
+  scheduleTtsDecorate(Number(messageId), { force: true, delay: 400 });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3478,23 +3761,25 @@ async function downloadTtsAudio(scope = null) {
 // The inspector: what one sentence was read as, what is sent for it, and the reader's own version.
 // ---------------------------------------------------------------------------------------------
 
-async function ttsPrepared(messageId, { fresh = false } = {}) {
-  const known = runtime.tts.floors.get(messageId);
+async function ttsPrepared(messageId, side = null, { fresh = false } = {}) {
   const settings = runtime.settings;
+  const which = side ?? primaryTtsSide(settings);
+  const key = ttsPreparedKey(messageId, which);
+  const known = runtime.tts.floors.get(key);
   if (known && !fresh && known.settings === settings) return known;
-  const floor = await collectTtsFloor(messageId, settings);
-  if (!floor) throw new Error('这一楼没有可朗读的文字。');
-  const { segments } = await prepareTtsSegments(floor, settings);
+  const floor = await collectTtsFloor(messageId, settings, which);
+  if (!floor) throw new Error(which === 'source' ? '这一楼没有可朗读的原文。' : '这一楼没有可朗读的译文。');
+  const { segments } = await prepareTtsSegments(floor, settings, { onStep: (id, patch) => ttsStep(floor, id, patch) });
   const { items } = await ttsItemsFor(floor, segments, settings);
   const prepared = { floor, segments, items, settings };
-  runtime.tts.floors.set(messageId, prepared);
+  runtime.tts.floors.set(key, prepared);
   if (runtime.tts.floors.size > 40) runtime.tts.floors.delete(runtime.tts.floors.keys().next().value);
   return prepared;
 }
 
 /** Everything the inspector shows for one sentence. */
-async function ttsInspect(messageId, utteranceId) {
-  const prepared = await ttsPrepared(messageId);
+async function ttsInspect(messageId, utteranceId, side = null) {
+  const prepared = await ttsPrepared(messageId, side);
   const tts = ttsSettings(prepared.settings);
   const segment = prepared.segments.find(item => item.id === utteranceId);
   if (!segment) throw new Error('这一句已经变了，等楼层重新渲染后再看。');
@@ -3505,14 +3790,14 @@ async function ttsInspect(messageId, utteranceId) {
   const entry = await findTtsEntry(prepared.floor, item, prepared.settings);
   return {
     messageId,
+    side: prepared.floor.side,
     segment,
     voiceId: item.voiceId,
     voice: segment.voice,
     summary: voiceSummary(segment.voice ?? (segment.emotion ? { emotion: segment.emotion, intensity: segment.intensity } : null)),
     depth: analysis?.depth ?? (tts.analysis === 'annotations' ? 'annotations' : null),
-    scene: analysis?.scene ?? '',
-    character: analysis?.characters?.find(person => person.name === segment.speaker) ?? null,
-    text: sentenceFishText(automatic, tts.fish, { emotionCues: tts.emotionCues }),
+    derived: analysis?.derived === true,
+    text: sentenceFishText(automatic, tts.fish, { emotionCues: tts.emotionCues, tamePunctuation: tts.tamePunctuation }),
     prosody: sentenceProsody(automatic, tts.fish, { prosodySplit: tts.prosodySplit }),
     override: item.override ?? null,
     recorded: Boolean(entry),
@@ -3521,14 +3806,34 @@ async function ttsInspect(messageId, utteranceId) {
 }
 
 function forgetTtsItems(messageId) {
-  const prepared = runtime.tts.floors.get(messageId);
-  if (prepared) runtime.tts.overrides.delete(ttsLabelKey(prepared.floor));
-  runtime.tts.floors.delete(messageId);
+  for (const [key, prepared] of [...runtime.tts.floors]) {
+    if (!key.startsWith(`${messageId}|`)) continue;
+    runtime.tts.overrides.delete(ttsLabelKey(prepared.floor));
+    runtime.tts.floors.delete(key);
+  }
   const transport = runtime.tts.transport;
   if (transport?.messageId === messageId) {
     stopTtsTransport(transport);
     runtime.tts.transport = null;
   }
+}
+
+/** Throws away the floor's reading and asks the model again, every sentence from scratch. */
+async function reanalyzeTtsFloor(messageId, side = null) {
+  const settings = runtime.settings;
+  const floor = await collectTtsFloor(messageId, settings, side ?? primaryTtsSide(settings));
+  if (!floor) throw new Error('这一楼没有可朗读的文字。');
+  forgetTtsItems(messageId);
+  runtime.tts.analysis.delete(ttsLabelKey(floor));
+  beginTtsProgress(floor);
+  await prepareTtsSegments(floor, settings, {
+    force: true,
+    onStatus: text => setTtsStatus(messageId, text, text ? 'busy' : 'idle'),
+    onStep: (id, patch) => ttsStep(floor, id, patch),
+  });
+  setTtsStatus(messageId, '', 'idle');
+  scheduleTtsDecorate(messageId, { force: true });
+  return floor;
 }
 
 /**
@@ -3538,8 +3843,8 @@ function forgetTtsItems(messageId) {
  * The recording is remembered on the override, so playing the sentence — alone or as part of the
  * floor — finds this take rather than the automatic one.
  */
-async function saveTtsOverride(messageId, utteranceId, { text, speed, volume }) {
-  const prepared = await ttsPrepared(messageId);
+async function saveTtsOverride(messageId, utteranceId, { text, speed, volume }, side = null) {
+  const prepared = await ttsPrepared(messageId, side);
   const segment = prepared.segments.find(item => item.id === utteranceId);
   if (!segment) throw new Error('这一句已经变了。');
   const cleaned = String(text ?? '').trim();
@@ -3553,18 +3858,19 @@ async function saveTtsOverride(messageId, utteranceId, { text, speed, volume }) 
   };
   await ttsStore().putOverride(record);
   forgetTtsItems(messageId);
-  const fresh = await ttsPrepared(messageId, { fresh: true });
+  const fresh = await ttsPrepared(messageId, prepared.floor.side, { fresh: true });
   const item = fresh.items.find(candidate => candidate.segment.id === utteranceId)
     ?? { segment, voiceId: resolveSegmentVoice(segment, ttsVoiceConfig(fresh.settings)), override: { text: cleaned, speed: record.speed, volume: record.volume } };
-  const { record: made } = await ensureTtsRecording(fresh.floor, `sentence:${utteranceId}`, [item], fresh.settings, text => setTtsStatus(messageId, text, 'busy'));
+  const { record: made } = await ensureTtsRecording(fresh.floor, `sentence:${utteranceId}`, [item], fresh.settings,
+    text => setTtsStatus(messageId, text, 'busy'), (id, patch) => ttsStep(fresh.floor, id, patch));
   await ttsStore().putOverride({ ...record, recordKey: made.key });
   forgetTtsItems(messageId);
   setTtsStatus(messageId, '', 'idle');
   return made;
 }
 
-async function clearTtsOverride(messageId, utteranceId) {
-  const prepared = await ttsPrepared(messageId);
+async function clearTtsOverride(messageId, utteranceId, side = null) {
+  const prepared = await ttsPrepared(messageId, side);
   await ttsStore().deleteOverride(prepared.floor.floorId, prepared.floor.version, utteranceId);
   forgetTtsItems(messageId);
 }
@@ -3609,16 +3915,17 @@ function insertAfterRange(range, element, root) {
   marker.insertNode(element);
 }
 
-function makeTtsPlayButton(messageId, segment) {
+function makeTtsPlayButton(messageId, segment, side) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'jy-tts-play';
   button.dataset.jyTtsAction = 'play';
   button.dataset.jyTtsMes = String(messageId);
   button.dataset.jyTtsUtt = String(segment.id);
+  button.dataset.jyTtsSide = side;
   button.dataset.jyTtsType = segment.type;
   button.setAttribute('contenteditable', 'false');
-  const label = segment.type === 'narration' ? '朗读这句旁白' : `朗读这句对白${segment.speaker ? `（${segment.speaker}）` : ''}`;
+  const label = `${segment.type === 'narration' ? '朗读这句旁白' : `朗读这句对白${segment.speaker ? `（${segment.speaker}）` : ''}`}${side === 'source' ? '（原文）' : ''}`;
   button.setAttribute('aria-label', label);
   button.title = label;
   button.innerHTML = TTS_ICON_PLAY;
@@ -3627,13 +3934,14 @@ function makeTtsPlayButton(messageId, segment) {
 
 // Beside every play button, the way in to what the sentence was read as. It opens the floating window's
 // reading panel on that sentence, where the cues can be seen, edited and re-made.
-function makeTtsEditButton(messageId, segment) {
+function makeTtsEditButton(messageId, segment, side) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'jy-tts-edit';
   button.dataset.jyTtsAction = 'inspect';
   button.dataset.jyTtsMes = String(messageId);
   button.dataset.jyTtsUtt = String(segment.id);
+  button.dataset.jyTtsSide = side;
   button.setAttribute('contenteditable', 'false');
   const label = '查看这句的情绪分析，可修改发给 Fish 的内容';
   button.setAttribute('aria-label', label);
@@ -3651,26 +3959,31 @@ function readingStyleOf(root) {
   return '';
 }
 
-function makeTtsBar(messageId, tts, count, readingStyle = '') {
+function makeTtsBar(messageId, tts, count, readingStyle = '', sides = [tts.side]) {
   const bar = document.createElement('div');
   bar.className = 'jy-tts-bar';
   bar.dataset.jyTtsMes = String(messageId);
   if (readingStyle) bar.dataset.jyReading = readingStyle;
   bar.setAttribute('contenteditable', 'false');
-  const control = (action, className, html, hidden = false) => {
+  const control = (action, className, html, hidden = false, side = null) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = className;
     button.dataset.jyTtsAction = action;
     button.dataset.jyTtsMes = String(messageId);
+    if (side) button.dataset.jyTtsSide = side;
     button.hidden = hidden;
     button.innerHTML = html;
     return button;
   };
-  const play = control('play-floor', 'jy-tts-bar-play', `${TTS_ICON_PLAY}<span>朗读本楼</span>`);
+  const both = sides.length > 1;
+  const play = control('play-floor', 'jy-tts-bar-play', `${TTS_ICON_PLAY}<span>${both ? '朗读译文' : '朗读本楼'}</span>`, false, sides[0]);
+  const playOther = both ? control('play-floor', 'jy-tts-bar-play', `${TTS_ICON_PLAY}<span>朗读原文</span>`, false, sides[1]) : null;
   const meta = document.createElement('span');
   meta.className = 'jy-tts-bar-meta';
-  meta.textContent = `${tts.side === 'source' ? '读原文' : '读译文'} · ${TTS_MODE_LABELS[tts.mode]} · ${TTS_RANGE_LABELS[tts.range]} · ${count} 句`;
+  const sideLabel = both ? '读译文 + 原文' : tts.side === 'source' ? '读原文' : '读译文';
+  const unitLabel = tts.mode === 'stream' ? `${TTS_MODE_LABELS[tts.mode]}（按${tts.streamUnit === 'sentence' ? '句' : '段'}）` : TTS_MODE_LABELS[tts.mode];
+  meta.textContent = `${sideLabel} · ${unitLabel} · ${TTS_RANGE_LABELS[tts.range]} · ${count} 句`;
   const status = document.createElement('span');
   status.className = 'jy-tts-bar-status';
   status.dataset.jyTtsStatus = '';
@@ -3678,8 +3991,8 @@ function makeTtsBar(messageId, tts, count, readingStyle = '') {
   const pause = control('pause', 'jy-tts-bar-stop', `${TTS_ICON_PAUSE}<span>暂停</span>`, true);
   const stop = control('stop', 'jy-tts-bar-stop', `${TTS_ICON_STOP}<span>停止</span>`, true);
   const panel = control('panel', 'jy-tts-bar-panel', '<span>朗读面板</span>');
-  panel.title = '打开悬浮窗的朗读面板：上一段、下一段、暂停、保存到本地';
-  bar.append(play, meta, status, pause, stop, panel);
+  panel.title = '打开悬浮窗的朗读面板：进度、上一段、下一段、暂停、保存到本地';
+  bar.append(play, ...(playOther ? [playOther] : []), meta, status, pause, stop, panel);
   return bar;
 }
 
@@ -3708,78 +4021,129 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     inflight.promise.catch(() => {}).finally(() => scheduleTtsDecorate(messageId, { force: true }));
     return;
   }
-  const floor = await collectTtsFloor(messageId, settings);
+  // The same text, the same settings and a bar still in place: nothing to do, and no snapshot taken.
+  const cheapKey = `${Number(message?.swipe_id ?? 0)}|${ttsSides(settings).join('+')}|${tts.mode}|${tts.range}|${tts.streamUnit}|${tts.quotePairs.join('')}|${tts.skipPairs.join('')}`;
+  const seen = runtime.tts.mesSeen.get(messageId);
+  if (!force && seen && seen.mes === message?.mes && seen.key === cheapKey && root.dataset.jyTts && root.querySelector(':scope > .jy-tts-bar')) return;
+  const floors = [];
+  for (const side of ttsSides(settings)) {
+    const floor = await collectTtsFloor(messageId, settings, side);
+    if (floor) floors.push(floor);
+  }
   if (ttsMessageText(messageId) !== root) return;
-  if (!floor) {
+  if (!floors.length) {
     if (root.dataset.jyTts) clearTtsDecoration(root);
+    runtime.tts.mesSeen.set(messageId, { mes: message?.mes ?? '', key: cheapKey });
     return;
   }
-  // A floor whose text changed still has recordings and labels of the old text in the store. They can
-  // never be played again, so they go the first time the new text is seen.
-  if (runtime.tts.pruned.get(floor.floorId) !== floor.version) {
-    runtime.tts.pruned.set(floor.floorId, floor.version);
-    void ttsStore().pruneFloor(floor.floorId, floor.version).catch(() => {});
-    for (const key of [...runtime.tts.recordings.keys(), ...runtime.tts.overrides.keys()]) {
-      if (key.startsWith(`${floor.floorId}|`) && key !== ttsLabelKey(floor)) {
-        runtime.tts.recordings.delete(key);
-        runtime.tts.overrides.delete(key);
+  for (const floor of floors) {
+    // A floor whose text changed still has recordings and labels of the old text in the store. They can
+    // never be played again, so they go the first time the new text is seen.
+    if (runtime.tts.pruned.get(floor.floorId) !== floor.version) {
+      runtime.tts.pruned.set(floor.floorId, floor.version);
+      void ttsStore().pruneFloor(floor.floorId, floor.version).catch(() => {});
+      for (const key of [...runtime.tts.recordings.keys(), ...runtime.tts.overrides.keys()]) {
+        if (key.startsWith(`${floor.floorId}|`) && key !== ttsLabelKey(floor)) {
+          runtime.tts.recordings.delete(key);
+          runtime.tts.overrides.delete(key);
+        }
       }
+      const prepared = runtime.tts.floors.get(ttsPreparedKey(messageId, floor.side));
+      if (prepared && prepared.floor.version !== floor.version) runtime.tts.floors.delete(ttsPreparedKey(messageId, floor.side));
     }
-    if (runtime.tts.floors.get(messageId)?.floor.version !== floor.version) runtime.tts.floors.delete(messageId);
   }
-  const utterances = ttsUtterances(floor, settings);
-  const analysis = runtime.tts.analysis.get(ttsLabelKey(floor));
-  const labels = analysis?.labels ?? labelsFromAnnotations(utterances, floor.annotations);
-  const signature = `${floor.side}|${floor.version}|${tts.mode}|${tts.range}|${tts.quotePairs.join('')}|${tts.skipPairs.join('')}|${analysis ? analysis.depth : 'plain'}`;
-  if (!force && root.dataset.jyTts === signature && root.querySelector(':scope > .jy-tts-bar')) return;
+  const analyses = floors.map(floor => runtime.tts.analysis.get(ttsLabelKey(floor)) ?? null);
+  const signature = `${floors.map((floor, index) => `${floor.side}|${floor.version}|${analyses[index] ? analyses[index].depth : 'plain'}`).join('#')}|${cheapKey}`;
+  if (!force && root.dataset.jyTts === signature && root.querySelector(':scope > .jy-tts-bar')) {
+    runtime.tts.mesSeen.set(messageId, { mes: message?.mes ?? '', key: cheapKey });
+    return;
+  }
 
   clearTtsDecoration(root);
-  const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices: analysis?.voices ?? null });
-  const visible = segmentsInRange(segments, tts.range);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode: node => (node.parentElement?.closest('.jy-tts-play, .jy-tts-edit, .jy-tts-bar, script, style') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
   });
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
-  const found = locateAnchors(nodes.map(node => node.data), floor.lines, utterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
+  const nodeTexts = nodes.map(node => node.data);
   // Ranges are made before anything is inserted; they are live, so the insertions below move them along.
   const ranges = new Map();
-  for (const utterance of utterances) {
-    const hit = found.get(utterance.id);
-    if (!hit) continue;
-    const range = document.createRange();
-    range.setStart(nodes[hit.start.node], hit.start.offset);
-    range.setEnd(nodes[hit.end.node], hit.end.offset);
-    ranges.set(utterance.id, range);
-  }
-  let placed = 0;
-  for (const segment of [...visible].reverse()) {
-    const range = ranges.get(segment.id);
-    if (!range) continue;
-    const play = makeTtsPlayButton(messageId, segment);
+  const buttons = [];
+  let visibleTotal = 0;
+  const unplaced = [];
+  floors.forEach((floor, index) => {
+    const utterances = ttsUtterances(floor, settings);
+    const labels = analyses[index]?.labels ?? labelsFromAnnotations(utterances, floor.annotations);
+    const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices: analyses[index]?.voices ?? null });
+    const visible = segmentsInRange(segments, tts.range);
+    visibleTotal += visible.length;
+    const found = locateAnchors(nodeTexts, floor.lines, utterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
+    for (const utterance of utterances) {
+      const hit = found.get(utterance.id);
+      if (!hit) continue;
+      const range = document.createRange();
+      range.setStart(nodes[hit.start.node], hit.start.offset);
+      range.setEnd(nodes[hit.end.node], hit.end.offset);
+      ranges.set(`${floor.side}:${utterance.id}`, range);
+    }
+    for (const segment of visible) {
+      const range = ranges.get(`${floor.side}:${segment.id}`);
+      if (range) buttons.push({ range, segment, side: floor.side });
+      else unplaced.push({ side: floor.side, id: segment.id, text: segment.text.slice(0, 24) });
+    }
+  });
+  // Later ranges first, so an insertion never sits between an earlier range and its own end.
+  buttons.sort((left, right) => right.range.compareBoundaryPoints(Range.END_TO_END, left.range));
+  for (const { range, segment, side } of buttons) {
+    const play = makeTtsPlayButton(messageId, segment, side);
     insertAfterRange(range, play, root);
-    play.after(makeTtsEditButton(messageId, segment));
-    placed += 1;
+    play.after(makeTtsEditButton(messageId, segment, side));
   }
-  root.appendChild(makeTtsBar(messageId, tts, visible.length, readingStyleOf(root)));
+  root.appendChild(makeTtsBar(messageId, tts, visibleTotal, readingStyleOf(root), floors.map(floor => floor.side)));
   root.dataset.jyTts = signature;
+  runtime.tts.mesSeen.set(messageId, { mes: message?.mes ?? '', key: cheapKey });
   runtime.tts.ranges.set(messageId, ranges);
   const status = runtime.tts.status.get(messageId);
   if (status) setTtsStatus(messageId, status.text, status.state);
   // A floor redrawn mid-sentence gets its highlight back on the new text.
   const highlighted = runtime.tts.highlighted;
   if (highlighted?.messageId === messageId && runtime.tts.transport?.messageId === messageId) {
-    highlightTtsUtterance(messageId, highlighted.utteranceId);
+    highlightTtsUtterance(messageId, highlighted.utteranceId, highlighted.side);
   }
-  const warnKey = `${floor.floorId}|${signature}`;
-  if (placed < visible.length && !runtime.tts.anchorWarned.has(warnKey)) {
+  const warnKey = `${floors.map(floor => floor.floorId).join('+')}|${signature}`;
+  if (unplaced.length && !runtime.tts.anchorWarned.has(warnKey)) {
     runtime.tts.anchorWarned.add(warnKey);
-    recordDiagnostic('warn', 'tts.anchors', `第 ${messageId} 楼有 ${visible.length - placed} 句没在渲染后的楼层里找到位置，这几句没有单独的播放按钮，「朗读本楼」照常能读到。`, {
-      floor: floor.floorId,
-      readable: visible.length,
-      placed,
-      source: floor.source,
+    recordDiagnostic('warn', 'tts.anchors', `第 ${messageId} 楼有 ${unplaced.length} 句没在渲染后的楼层里找到位置，这几句没有单独的播放按钮，「朗读本楼」照常能读到。`, {
+      floor: floors.map(floor => floor.floorId),
+      readable: visibleTotal,
+      placed: buttons.length,
+      sources: floors.map(floor => floor.source),
+      unplaced: unplaced.slice(0, 5),
     });
+  }
+  maybeAutoGenerateTts(messageId, floors);
+}
+
+// After the latest floor's translation lands, its audio follows in the background when asked to. In
+// the whole-floor mode only a finished translation is worth a request; the stream takes each new
+// version as it comes, since paragraphs already made are found again and skipped.
+function maybeAutoGenerateTts(messageId, floors) {
+  const tts = ttsSettings();
+  if (!tts.enabled || !tts.autoGenerate) return;
+  if (latestAssistantMessageId(getContext()) !== Number(messageId)) return;
+  for (const floor of floors) {
+    if (tts.mode === 'floor' && !floor.complete) continue;
+    const key = ttsLabelKey(floor);
+    if (runtime.tts.pregenerated.has(key)) continue;
+    runtime.tts.pregenerated.add(key);
+    const timer = globalThis.setTimeout(() => {
+      runtime.timers.delete(timer);
+      void pregenerateTtsFloor(messageId, { quiet: true, side: floor.side }).catch(error => {
+        runtime.tts.pregenerated.delete(key);
+        if (!isAbortError(error)) recordDiagnostic('warn', 'tts.pregenerate', `自动生成第 ${messageId} 楼音频失败：${safeError(error)}`, { floor: floor.floorId });
+      });
+    }, 600);
+    runtime.timers.add(timer);
   }
 }
 
@@ -3799,9 +4163,44 @@ function scheduleTtsDecorate(messageId, { force = false, delay = 150 } = {}) {
   timers.set(id, { timer, force: force || previous?.force === true });
 }
 
+/**
+ * Every floor on the page, the ones in view now and the last few at once, the rest when they scroll
+ * into view. A long chat has hundreds of floors, and reading every one of them just to put buttons on
+ * text nobody is looking at is what made the page stutter.
+ */
 function scheduleTtsDecorateAll(options = {}) {
   if (typeof document === 'undefined') return;
-  for (const element of document.querySelectorAll('#chat .mes[mesid]')) scheduleTtsDecorate(Number(element.getAttribute('mesid')), options);
+  const floors = [...document.querySelectorAll('#chat .mes[mesid]')];
+  const viewer = ttsViewer();
+  const height = globalThis.innerHeight || 0;
+  floors.forEach((element, index) => {
+    const id = Number(element.getAttribute('mesid'));
+    const rect = element.getBoundingClientRect?.();
+    const near = !viewer || index >= floors.length - 3 || (rect && rect.bottom > -height && rect.top < height * 2);
+    if (near) {
+      scheduleTtsDecorate(id, options);
+      return;
+    }
+    // Out of view: the observer calls when it comes in; a forced pass must still reach it then.
+    element.dataset.jyTtsPending = options.force ? 'force' : 'plain';
+    viewer.observe(element);
+  });
+}
+
+function ttsViewer() {
+  if (typeof IntersectionObserver !== 'function') return null;
+  if (runtime.tts.viewer) return runtime.tts.viewer;
+  runtime.tts.viewer = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const element = entry.target;
+      runtime.tts.viewer.unobserve(element);
+      const force = element.dataset.jyTtsPending === 'force';
+      delete element.dataset.jyTtsPending;
+      if (ttsSettings().enabled) scheduleTtsDecorate(Number(element.getAttribute('mesid')), { force });
+    }
+  }, { rootMargin: '600px 0px' });
+  return runtime.tts.viewer;
 }
 
 function clearAllTtsDecorations() {
@@ -3832,15 +4231,17 @@ function bindTtsDom() {
       event.stopPropagation();
       const messageId = Number(target.dataset.jyTtsMes);
       const action = target.dataset.jyTtsAction;
+      const side = target.dataset.jyTtsSide || null;
       if (action === 'stop') stopTts(messageId);
       else if (action === 'pause') toggleTtsPause();
-      else if (action === 'play-floor') void playTtsFloor(messageId);
-      else if (action === 'panel') void openTtsPanel(messageId, null);
-      else if (action === 'inspect') void openTtsPanel(messageId, Number(target.dataset.jyTtsUtt));
+      else if (action === 'play-floor') void playTtsFloor(messageId, side);
+      else if (action === 'panel') void openTtsPanel(messageId, null, side);
+      else if (action === 'inspect') void openTtsPanel(messageId, Number(target.dataset.jyTtsUtt), side);
       else if (action === 'play') {
         const utteranceId = Number(target.dataset.jyTtsUtt);
-        if (target.dataset.state === 'playing' && runtime.tts.transport?.messageId === messageId) stopTts(messageId);
-        else void playTtsUtterance(messageId, utteranceId);
+        const transport = runtime.tts.transport;
+        if (target.dataset.state === 'playing' && transport?.messageId === messageId && transport.state === 'playing') pauseTts();
+        else void playTtsUtterance(messageId, utteranceId, side);
       }
     };
     document.addEventListener('click', onClick, true);
@@ -3874,6 +4275,8 @@ function unbindTtsDom() {
   runtime.tts.timers.clear();
   runtime.tts.observer?.disconnect();
   runtime.tts.observer = null;
+  runtime.tts.viewer?.disconnect();
+  runtime.tts.viewer = null;
   runtime.tts.clickCleanup?.();
   runtime.tts.clickCleanup = null;
 }
@@ -4879,7 +5282,7 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   summaryName.textContent = voice.name || '（未命名）';
   const summaryMeta = doc.createElement('span');
   summaryMeta.className = 'jy-tts-voice-summary-meta';
-  summaryMeta.textContent = ttsVoiceRowMeta(voice);
+  summaryMeta.textContent = ttsVoiceRowMeta(voice, settings);
   summary.append(summaryName, lock, summaryMeta);
   const body = doc.createElement('div');
   body.className = 'jy-tts-voice-body';
@@ -4888,13 +5291,49 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   return row;
 }
 
-function ttsVoiceRowMeta(voice) {
+// A voice id as a reader knows it: the name it has in the library, else Fish's title, else its head.
+function ttsVoiceName(voiceId, settings = runtime.settings, title = '') {
+  const id = String(voiceId ?? '');
+  if (!id) return '';
+  const known = normalizeVoiceLibrary(settings?.voiceLibrary).find(entry => entry.voiceId === id);
+  return known?.name || title || `${id.slice(0, 6)}…`;
+}
+
+function ttsVoiceRowMeta(voice, settings = runtime.settings) {
   const parts = [];
-  if (voice.voiceId) parts.push(voice.title || `${voice.voiceId.slice(0, 6)}…`);
-  const langs = Object.keys(voice.voices ?? {});
-  if (langs.length) parts.push(langs.map(code => languageLabel(code)).join('、'));
+  if (voice.voiceId) parts.push(ttsVoiceName(voice.voiceId, settings, voice.title));
+  const langs = Object.entries(voice.voices ?? {});
+  if (langs.length) parts.push(langs.map(([code, id]) => `${languageLabel(code)}：${ttsVoiceName(id, settings)}`).join('、'));
   if ((voice.aliases ?? []).length) parts.push(`别名 ${voice.aliases.length}`);
   return parts.join(' · ');
+}
+
+/**
+ * A voice field whose id is in the library shows the library's name instead of the id: a chip that
+ * stands in for the input until it is clicked, when the input comes back for editing. The input keeps
+ * its value the whole time, so saving reads the same thing either way.
+ */
+function syncKnownVoices(root, settings = runtime.settings) {
+  const library = normalizeVoiceLibrary(settings?.voiceLibrary);
+  const doc = root.ownerDocument;
+  for (const scope of root.querySelectorAll('[data-jy-tts-pick-scope]')) {
+    const input = scope.querySelector('input');
+    if (!input) continue;
+    scope.querySelector('.jy-tts-known')?.remove();
+    const known = library.find(entry => entry.voiceId === input.value.trim());
+    if (!known) {
+      input.hidden = false;
+      continue;
+    }
+    const chip = doc.createElement('button');
+    chip.type = 'button';
+    chip.className = 'jy-tts-known';
+    chip.dataset.jyAction = 'tts-edit-voice';
+    chip.title = `${known.voiceId}\n点一下改成填 ID`;
+    chip.textContent = known.lang ? `${known.name} · ${languageLabel(known.lang)}` : known.name;
+    input.hidden = true;
+    scope.insertBefore(chip, input);
+  }
 }
 
 function renderTtsVoiceList(root, settings = runtime.settings) {
@@ -5095,6 +5534,28 @@ function syncTtsFields(root, settings = runtime.settings) {
     if (element.type === 'checkbox') element.checked = value === true;
     else element.value = value ?? '';
   }
+  // The built-in prompt shows as the placeholder, so an empty box means "the default, whatever it is".
+  for (const element of root.querySelectorAll('[data-jy-tts-prompt]')) {
+    element.value = tts.prompts[element.dataset.jyTtsPrompt] ?? '';
+    element.placeholder = DEFAULT_TTS_PROMPTS[element.dataset.jyTtsPrompt] ?? '';
+  }
+  // The saved connections, for the reading's own choice of model.
+  const channelSelect = root.querySelector('[data-jy-tts-field="channelId"]');
+  if (channelSelect) {
+    const doc = root.ownerDocument;
+    channelSelect.replaceChildren();
+    const follow = doc.createElement('option');
+    follow.value = '';
+    follow.textContent = settings.apiMode === 'independent' ? `跟随翻译的模型设置（${getActiveChannel(settings).name}）` : '跟随翻译的模型设置（酒馆当前连接）';
+    channelSelect.appendChild(follow);
+    for (const channel of Array.isArray(settings.channels) ? settings.channels : []) {
+      const option = doc.createElement('option');
+      option.value = channel.id;
+      option.textContent = channel.model ? `${channel.name} · ${channel.model}` : channel.name;
+      channelSelect.appendChild(option);
+    }
+    channelSelect.value = (settings.channels ?? []).some(channel => channel.id === tts.channelId) ? tts.channelId : '';
+  }
   setText(root, '[data-jy-tts-title="narrator"]', tts.narratorTitle ? `· ${tts.narratorTitle}` : '');
   setText(root, '[data-jy-tts-title="dialogue"]', tts.dialogueTitle ? `· ${tts.dialogueTitle}` : '');
   syncTtsPickers(root, settings);
@@ -5103,6 +5564,7 @@ function syncTtsFields(root, settings = runtime.settings) {
   renderTtsLibrary(root, settings);
   syncTtsFolds(root, settings);
   syncTtsFoldSummaries(root, settings);
+  syncKnownVoices(root, settings);
   updateTtsProxyHelp(root);
   updateTtsModeHelp(root);
   renderTtsPreview(root);
@@ -5173,6 +5635,8 @@ function collectTtsFields(root, current) {
     const key = element.dataset.jyTtsContext;
     next.context[key] = element.type === 'checkbox' ? element.checked : Number(element.value);
   }
+  next.prompts = { ...previous.prompts };
+  for (const element of root.querySelectorAll('[data-jy-tts-prompt]')) next.prompts[element.dataset.jyTtsPrompt] = element.value;
   for (const [field, title] of [['narratorVoice', 'narratorTitle'], ['dialogueVoice', 'dialogueTitle']]) {
     if (next[field] && next[field] !== normalizeTts({ [field]: next[field] })[field]) throw new Error(`「${field === 'narratorVoice' ? '旁白音色' : '对白默认音色'}」不是有效的 Voice ID。`);
     if (next[field] !== previous[field]) next[title] = '';
@@ -5258,12 +5722,13 @@ async function importCastFromWorldbook(settings = runtime.settings, { signal } =
     { role: 'user', content: JSON.stringify({ task: 'list_characters_from_worldbook', entries: [card, ...digest].filter(Boolean) }) },
   ];
   let raw;
+  const request = ttsRequestSettings(settings);
   try {
-    raw = await requestSubModelRaw(messages, settings, signal);
+    raw = await requestSubModelRaw(messages, request, signal);
   } catch (error) {
     if (isAbortError(error)) throw error;
     recordDiagnostic('error', 'tts.cast-import', `副模型识别角色失败：${safeError(error)}`, {
-      entries: digest.length, card: Boolean(card), apiMode: settings.apiMode, endpoint: describeChannelEndpoint(settings),
+      entries: digest.length, card: Boolean(card), apiMode: request.apiMode, endpoint: describeChannelEndpoint(request),
     }, describeRequestFailure(error), { fullRequest: messages });
     throw new Error(`识别角色需要副模型，这次没有回应：${safeError(error)} 酒馆当前没连上模型的话，先在「模型连接」里连一个，或者配一个独立副 API。`);
   }
@@ -6148,6 +6613,30 @@ function createControlCenter(rootDocument = document) {
         renderTtsVoiceList(root, runtime.settings);
         syncTtsFoldSummaries(root, runtime.settings);
         toast('success', `删掉了 ${removed} 个没绑音色的角色，留下 ${kept.length} 个。`);
+      } else if (action === 'tts-reset-prompt') {
+        const textarea = root.querySelector(`[data-jy-tts-prompt="${button.dataset.prompt}"]`);
+        if (textarea) textarea.value = '';
+        saveSettings(collectSettings(root));
+        syncTtsFields(root, runtime.settings);
+        toast('success', '已恢复内置提示词。');
+      } else if (action === 'tts-copy-prompt') {
+        await copyText(DEFAULT_TTS_PROMPTS[button.dataset.prompt] ?? '');
+        toast('success', `${button.dataset.prompt === 'deep' ? '深度' : '轻量'}分析的内置提示词已复制。`);
+      } else if (action === 'tts-fill-prompt') {
+        const textarea = root.querySelector(`[data-jy-tts-prompt="${button.dataset.prompt}"]`);
+        if (textarea) {
+          textarea.value = DEFAULT_TTS_PROMPTS[button.dataset.prompt] ?? '';
+          textarea.focus();
+        }
+        toast('info', '内置提示词已填进去，改完记得保存。');
+      } else if (action === 'tts-edit-voice') {
+        const scope = button.closest('[data-jy-tts-pick-scope]');
+        const input = scope?.querySelector('input');
+        button.remove();
+        if (input) {
+          input.hidden = false;
+          input.focus();
+        }
       } else if (action === 'tts-pregenerate') {
         saveSettings(collectSettings(root));
         const messageId = latestAssistantMessageId(getContext());
@@ -6391,7 +6880,7 @@ function createControlCenter(rootDocument = document) {
       }
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="analysis"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="analysis"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="streamUnit"], [data-jy-tts-field="channelId"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
       // The feature switch lives on two pages; the one just clicked decides, the other follows.
       if (event.target.matches('[data-jy-tts-field="enabled"]')) {
         for (const twin of root.querySelectorAll('[data-jy-tts-field="enabled"]')) twin.checked = event.target.checked;
@@ -6930,7 +7419,7 @@ async function openMiniWindow() {
 <div class="jy-mini-body jy-mini-reading" data-jy-mini-page="reading" hidden>
   <div class="jy-mini-status">
     <div class="jy-mini-status-top"><strong data-jy-tts-title>没有在读</strong><span data-jy-tts-floor>—</span></div>
-    <div class="jy-progress" aria-hidden="true"><span data-jy-tts-progress></span></div>
+    <div class="jy-progress jy-progress-seek" data-jy-tts-seek role="slider" aria-label="播放进度，拖动或点击跳转" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><span data-jy-tts-progress></span></div>
     <p class="jy-muted" data-jy-tts-message>点楼层里的播放按钮，或者「朗读本楼」。</p>
   </div>
   <div class="jy-mini-transport">
@@ -6940,6 +7429,7 @@ async function openMiniWindow() {
     <button type="button" class="jy-button" data-jy-action="tts-download" title="把这段音频保存到本地" aria-label="保存到本地">⤓</button>
     <button type="button" class="jy-button" data-jy-action="tts-read-floor" title="从头朗读这一楼" aria-label="朗读本楼">全楼</button>
   </div>
+  <ul class="jy-mini-steps" data-jy-tts-steps hidden></ul>
   <div class="jy-mini-inspect" data-jy-tts-inspect hidden>
     <div class="jy-mini-inspect-head"><strong data-jy-tts-who>—</strong><span class="jy-muted" data-jy-tts-depth></span></div>
     <p class="jy-mini-inspect-text" data-jy-tts-text></p>
@@ -6951,6 +7441,8 @@ async function openMiniWindow() {
       <button type="button" class="jy-button jy-button-primary" data-jy-action="tts-apply">用这个重新生成</button>
       <button type="button" class="jy-button" data-jy-action="tts-play-this">播放这句</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-reset" hidden>恢复自动</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="丢掉这一楼的分析结果，让副模型重新细读一遍">重新细读这一楼</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-copy-analysis" title="把这一楼的分析结果（每句的说话人、情绪、配音指令）复制成 JSON">复制这一楼的分析</button>
     </div>
     <p class="jy-muted" data-jy-tts-note></p>
   </div>
@@ -7160,23 +7652,25 @@ async function openMiniWindow() {
     emotionPicker.value = '';
   };
   const onFishInput = () => { inspectDirty = true; };
-  const renderInspector = async (messageId, utteranceId, { pinned = true } = {}) => {
+  const renderInspector = async (messageId, utteranceId, { pinned = true, side = null } = {}) => {
     const token = ++inspectToken;
-    inspecting = { messageId, utteranceId, pinned };
+    const which = side ?? primaryTtsSide();
+    inspecting = { messageId, utteranceId, pinned, side: which };
     inspectDirty = false;
     inspectBox.hidden = false;
     setText(win, '[data-jy-tts-who]', '读取中…');
     let data;
     try {
-      data = await ttsInspect(messageId, utteranceId);
+      data = await ttsInspect(messageId, utteranceId, which);
     } catch (error) {
       if (token === inspectToken) setText(win, '[data-jy-tts-who]', safeError(error));
       return;
     }
     if (token !== inspectToken || !win.isConnected) return;
     const { segment } = data;
+    const voiceName = data.voiceId ? (normalizeVoiceLibrary(runtime.settings.voiceLibrary).find(entry => entry.voiceId === data.voiceId)?.name ?? `${data.voiceId.slice(0, 6)}…`) : '';
     setText(win, '[data-jy-tts-who]', `${segment.type === 'narration' ? '旁白' : (segment.speaker || '未知说话人')}${segment.lang && segment.lang !== 'zh' ? ` · ${languageLabel(segment.lang)}` : ''}`);
-    setText(win, '[data-jy-tts-depth]', `第 ${messageId} 楼 · 第 ${utteranceId} 句 · ${data.depth === 'deep' ? '深度分析' : data.depth === 'light' ? '轻量分析' : '翻译标注'}${data.voiceId ? ` · 音色 ${data.voiceId.slice(0, 6)}…` : ' · Fish 默认音色'}${data.recorded ? ' · 已有音频' : ''}`);
+    setText(win, '[data-jy-tts-depth]', `第 ${messageId} 楼${which === 'source' ? '（原文）' : ''} · 第 ${utteranceId} 句 · ${data.depth === 'deep' ? '深度分析' : data.depth === 'light' ? '轻量分析' : '翻译标注'}${data.derived ? '（由译文推出）' : ''}${voiceName ? ` · 音色 ${voiceName}` : ' · Fish 默认音色'}${data.recorded ? ' · 已有音频' : ''}`);
     setText(win, '[data-jy-tts-text]', segment.text);
     const summary = win.querySelector('[data-jy-tts-summary]');
     summary.replaceChildren();
@@ -7215,7 +7709,11 @@ async function openMiniWindow() {
     if (!info) {
       if (title) title.textContent = '没有在读';
       if (floorLabel) floorLabel.textContent = '—';
-      if (progress) progress.style.transform = 'scaleX(0)';
+      if (progress) progress.style.width = '0%';
+      if (seekBar) {
+        seekBar.setAttribute('aria-valuenow', '0');
+        seekBar.dataset.live = 'false';
+      }
       if (message) message.textContent = '点楼层里的播放按钮，或者「朗读本楼」。';
       if (toggle) toggle.textContent = '▶';
       for (const button of stepButtons) if (button) button.disabled = true;
@@ -7225,7 +7723,12 @@ async function openMiniWindow() {
       title.textContent = info.state === 'loading' ? '准备中…' : info.state === 'playing' ? '正在朗读' : info.state === 'paused' ? '已暂停' : info.state === 'error' ? '出错了' : '待播放';
     }
     if (floorLabel) floorLabel.textContent = `第 ${info.messageId} 楼 · 第 ${info.lineIndex + 1}/${info.lineCount} 段 · ${TTS_MODE_LABELS[info.mode]}`;
-    if (progress) progress.style.transform = `scaleX(${info.duration ? Math.max(0, Math.min(1, info.time / info.duration)) : 0})`;
+    const fraction = info.duration ? Math.max(0, Math.min(1, info.time / info.duration)) : 0;
+    if (progress && !seekDragging) progress.style.width = `${(fraction * 100).toFixed(2)}%`;
+    if (seekBar) {
+      seekBar.setAttribute('aria-valuenow', String(Math.round(fraction * 100)));
+      seekBar.dataset.live = transport.current ? 'true' : 'false';
+    }
     if (message) {
       message.textContent = info.state === 'loading' || info.state === 'error'
         ? (info.message || '')
@@ -7234,21 +7737,129 @@ async function openMiniWindow() {
     if (toggle) toggle.textContent = info.state === 'playing' ? '⏸' : '▶';
     for (const button of stepButtons) if (button) button.disabled = false;
     // The panel follows the sentence being read unless someone pinned one, or is mid-edit.
+    const side = runtime.tts.transport?.side ?? null;
     if (info.segment && !inspecting?.pinned && !inspectDirty && shadow.activeElement !== fishInput
-      && (inspecting?.messageId !== info.messageId || inspecting?.utteranceId !== info.segment.id)) {
-      void renderInspector(info.messageId, info.segment.id, { pinned: false });
+      && (inspecting?.messageId !== info.messageId || inspecting?.utteranceId !== info.segment.id || inspecting?.side !== side)) {
+      void renderInspector(info.messageId, info.segment.id, { pinned: false, side });
     }
   };
-  const unsubscribeTts = subscribeTts(renderTransport);
-  const showReading = (messageId, utteranceId = null) => {
-    selectMiniTab('reading');
-    if (utteranceId !== null && utteranceId !== undefined) {
-      void renderInspector(messageId, utteranceId, { pinned: true });
+  // The steps of the last run on the floor being read, or looked at, or the latest one touched.
+  let stepTicker = null;
+  const renderSteps = () => {
+    const list = win.querySelector('[data-jy-tts-steps]');
+    if (!list) return;
+    const transport = runtime.tts.transport;
+    let record = transport?.floor ? ttsProgressFor(transport.messageId, transport.side) : null;
+    if (!record && inspecting) record = ttsProgressFor(inspecting.messageId, inspecting.side);
+    if (!record) record = [...runtime.tts.progress.values()].at(-1) ?? null;
+    list.replaceChildren();
+    if (!record?.steps.length) {
+      list.hidden = true;
+      if (stepTicker !== null) {
+        globalThis.clearInterval(stepTicker);
+        stepTicker = null;
+      }
       return;
     }
+    list.hidden = false;
+    const head = document.createElement('li');
+    head.className = 'jy-mini-steps-head';
+    const done = record.steps.filter(step => step.state === 'done').length;
+    head.textContent = `第 ${record.messageId} 楼${record.side === 'source' ? '（原文）' : ''} · ${TTS_MODE_LABELS[record.mode] ?? ''} · ${done}/${record.steps.length}`;
+    list.appendChild(head);
+    for (const step of record.steps) {
+      const item = document.createElement('li');
+      item.dataset.state = step.state;
+      const mark = document.createElement('span');
+      mark.className = 'jy-mini-step-mark';
+      const label = document.createElement('span');
+      label.className = 'jy-mini-step-label';
+      label.textContent = step.label;
+      const detail = document.createElement('span');
+      detail.className = 'jy-mini-step-detail';
+      detail.textContent = step.state === 'active'
+        ? `${step.detail ? `${step.detail} · ` : ''}${Math.max(0, Math.round((Date.now() - (step.since ?? Date.now())) / 1000))} 秒`
+        : (step.detail ?? '');
+      item.append(mark, label, detail);
+      list.appendChild(item);
+    }
+    const active = record.steps.some(step => step.state === 'active');
+    if (active && stepTicker === null) {
+      stepTicker = globalThis.setInterval(() => {
+        if (!win.isConnected) {
+          globalThis.clearInterval(stepTicker);
+          stepTicker = null;
+          return;
+        }
+        renderSteps();
+      }, 1000);
+    } else if (!active && stepTicker !== null) {
+      globalThis.clearInterval(stepTicker);
+      stepTicker = null;
+    }
+  };
+  // The progress bar is a slider: a tap jumps, a drag scrubs, the arrow keys nudge by five percent.
+  const seekBar = win.querySelector('[data-jy-tts-seek]');
+  let seekDragging = false;
+  let seekPointer = null;
+  const seekFraction = event => {
+    const rect = seekBar.getBoundingClientRect();
+    return rect.width ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) : 0;
+  };
+  const onSeekDown = event => {
+    if (!runtime.tts.transport?.current || event.button !== 0) return;
+    event.preventDefault();
+    seekDragging = true;
+    seekPointer = event.pointerId;
+    try {
+      seekBar.setPointerCapture?.(event.pointerId);
+    } catch {
+      // A pointer the browser does not know (a synthetic event) still seeks, it just cannot be captured.
+    }
+    const fraction = seekFraction(event);
+    const fill = win.querySelector('[data-jy-tts-progress]');
+    if (fill) fill.style.width = `${(fraction * 100).toFixed(2)}%`;
+    seekTts(fraction);
+  };
+  const onSeekMove = event => {
+    if (!seekDragging || event.pointerId !== seekPointer) return;
+    const fraction = seekFraction(event);
+    const fill = win.querySelector('[data-jy-tts-progress]');
+    if (fill) fill.style.width = `${(fraction * 100).toFixed(2)}%`;
+    seekTts(fraction);
+  };
+  const onSeekUp = event => {
+    if (event.pointerId !== seekPointer) return;
+    seekDragging = false;
+    seekPointer = null;
+  };
+  const onSeekKey = event => {
+    const info = ttsTransportDescription();
+    if (!info?.duration) return;
+    const step = event.key === 'ArrowLeft' ? -0.05 : event.key === 'ArrowRight' ? 0.05 : null;
+    if (step === null) return;
+    event.preventDefault();
+    seekTts(Math.max(0, Math.min(1, info.time / info.duration + step)));
+  };
+  seekBar.addEventListener('pointerdown', onSeekDown);
+  seekBar.addEventListener('pointermove', onSeekMove);
+  seekBar.addEventListener('pointerup', onSeekUp);
+  seekBar.addEventListener('pointercancel', onSeekUp);
+  seekBar.addEventListener('keydown', onSeekKey);
+  const unsubscribeTts = subscribeTts(transport => {
+    renderTransport(transport);
+    renderSteps();
+  });
+  const showReading = (messageId, utteranceId = null, side = null) => {
+    selectMiniTab('reading');
+    if (utteranceId !== null && utteranceId !== undefined) {
+      void renderInspector(messageId, utteranceId, { pinned: true, side });
+      return;
+    }
+    renderSteps();
     if (inspecting) return;
     const info = ttsTransportDescription();
-    if (info?.segment) void renderInspector(info.messageId, info.segment.id, { pinned: false });
+    if (info?.segment) void renderInspector(info.messageId, info.segment.id, { pinned: false, side: runtime.tts.transport?.side ?? side });
   };
   tabs.addEventListener('click', onTabClick);
   tagBox.addEventListener('pointerdown', onTagPointerDown);
@@ -7358,6 +7969,15 @@ async function openMiniWindow() {
     fishInput.removeEventListener('input', onFishInput);
     unsubscribe();
     unsubscribeTts();
+    seekBar.removeEventListener('pointerdown', onSeekDown);
+    seekBar.removeEventListener('pointermove', onSeekMove);
+    seekBar.removeEventListener('pointerup', onSeekUp);
+    seekBar.removeEventListener('pointercancel', onSeekUp);
+    seekBar.removeEventListener('keydown', onSeekKey);
+    if (stepTicker !== null) {
+      globalThis.clearInterval(stepTicker);
+      stepTicker = null;
+    }
     if (runtime.mini?.host === host) runtime.mini = null;
     holdFloatingPill(1800);
     const timer = setTimeout(() => { host.remove(); runtime.timers.delete(timer); }, 160);
@@ -7441,12 +8061,43 @@ async function openMiniWindow() {
       else {
         const messageId = inspecting?.messageId ?? latestAssistantMessageId(getContext());
         if (messageId === null) toast('error', '当前聊天里还没有 AI 楼层。');
-        else void playTtsFloor(messageId);
+        else void playTtsFloor(messageId, inspecting?.side ?? null);
       }
       return;
     }
     if (action === 'tts-play-this') {
-      if (inspecting) void playTtsUtterance(inspecting.messageId, inspecting.utteranceId);
+      if (inspecting) void playTtsUtterance(inspecting.messageId, inspecting.utteranceId, inspecting.side);
+      return;
+    }
+    if (action === 'tts-download') {
+      // Two taps: the first asks, the second saves. A browser's own save dialog, once dismissed, is
+      // not shown again, which made the second tap save without asking.
+      if (button.dataset.armed !== '1') {
+        const label = button.textContent;
+        button.dataset.armed = '1';
+        button.textContent = '确认保存?';
+        button.title = '再点一次，把音频保存到本地';
+        const timer = globalThis.setTimeout(() => {
+          runtime.timers.delete(timer);
+          delete button.dataset.armed;
+          button.textContent = label;
+          button.title = '把这段音频保存到本地';
+        }, 6000);
+        runtime.timers.add(timer);
+        return;
+      }
+      delete button.dataset.armed;
+      button.textContent = '⤓';
+      button.title = '把这段音频保存到本地';
+      button.disabled = true;
+      try {
+        const saved = await downloadTtsAudio();
+        toast('success', `已保存 ${saved.name}（${formatBytes(saved.bytes)}）。`);
+      } catch (error) {
+        toast('error', safeError(error));
+      } finally {
+        button.disabled = false;
+      }
       return;
     }
     const original = button.textContent;
@@ -7455,27 +8106,47 @@ async function openMiniWindow() {
       if (action === 'tts-read-floor') {
         const messageId = inspecting?.messageId ?? latestAssistantMessageId(getContext());
         if (messageId === null) throw new Error('当前聊天里还没有 AI 楼层。');
-        void playTtsFloor(messageId);
-      } else if (action === 'tts-download') {
-        button.textContent = '…';
-        const saved = await downloadTtsAudio();
-        toast('success', `已保存 ${saved.name}（${formatBytes(saved.bytes)}）。`);
+        void playTtsFloor(messageId, inspecting?.side ?? null);
       } else if (action === 'tts-apply') {
         if (!inspecting) throw new Error('先选一句。');
         button.textContent = '生成中…';
-        const { messageId, utteranceId } = inspecting;
-        await saveTtsOverride(messageId, utteranceId, { text: fishInput.value, speed: speedInput.value, volume: volumeInput.value });
+        const { messageId, utteranceId, side } = inspecting;
+        await saveTtsOverride(messageId, utteranceId, { text: fishInput.value, speed: speedInput.value, volume: volumeInput.value }, side);
         inspectDirty = false;
-        await renderInspector(messageId, utteranceId, { pinned: true });
+        await renderInspector(messageId, utteranceId, { pinned: true, side });
         toast('success', '这一句已按你的版本重新生成。');
-        void playTtsUtterance(messageId, utteranceId);
+        void playTtsUtterance(messageId, utteranceId, side);
       } else if (action === 'tts-reset') {
         if (!inspecting) throw new Error('先选一句。');
-        const { messageId, utteranceId } = inspecting;
-        await clearTtsOverride(messageId, utteranceId);
+        const { messageId, utteranceId, side } = inspecting;
+        await clearTtsOverride(messageId, utteranceId, side);
         inspectDirty = false;
-        await renderInspector(messageId, utteranceId, { pinned: true });
+        await renderInspector(messageId, utteranceId, { pinned: true, side });
         toast('success', '已恢复为副模型的分析。');
+      } else if (action === 'tts-copy-analysis') {
+        const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? latestAssistantMessageId(getContext());
+        if (messageId === null) throw new Error('当前聊天里还没有 AI 楼层。');
+        const prepared = await ttsPrepared(messageId, inspecting?.side ?? runtime.tts.transport?.side ?? null);
+        const analysis = runtime.tts.analysis.get(ttsLabelKey(prepared.floor));
+        const payload = {
+          floor: messageId,
+          side: prepared.floor.side,
+          depth: analysis?.depth ?? 'annotations',
+          sentences: prepared.segments.map(segment => ({
+            id: segment.id, type: segment.type, speaker: segment.speaker, lang: segment.lang, text: segment.text,
+            emotion: segment.emotion, intensity: segment.intensity, voice: segment.voice ?? null,
+            fish: sentenceFishText({ segment, voiceId: '' }, ttsSettings().fish, { emotionCues: ttsSettings().emotionCues, tamePunctuation: ttsSettings().tamePunctuation }),
+          })),
+        };
+        await copyText(JSON.stringify(payload, null, 2));
+        toast('success', `第 ${messageId} 楼的分析已复制（${payload.sentences.length} 句）。`);
+      } else if (action === 'tts-reanalyze') {
+        const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? latestAssistantMessageId(getContext());
+        if (messageId === null) throw new Error('当前聊天里还没有 AI 楼层。');
+        button.textContent = '细读中…';
+        await reanalyzeTtsFloor(messageId, inspecting?.side ?? null);
+        if (inspecting?.messageId === messageId) await renderInspector(messageId, inspecting.utteranceId, { pinned: true, side: inspecting.side });
+        toast('success', `第 ${messageId} 楼重新分析完了，已有的音频保留，改了的句子下次播放时重做。`);
       }
       // The mini window used to bypass streaming entirely, so the writeback toggle looked dead
       // whenever a translation was started from the floating entry instead of the control centre.
@@ -7533,12 +8204,12 @@ async function openMiniWindow() {
 
 // The reading panel, opened from a floor: on the sentence whose cue button was pressed, or on whatever
 // is being read.
-async function openTtsPanel(messageId, utteranceId = null) {
+async function openTtsPanel(messageId, utteranceId = null, side = null) {
   if (runtime.miniOpening) return;
   runtime.miniOpening = true;
   try {
     const mini = await openMiniWindow();
-    mini.showReading?.(messageId, utteranceId);
+    mini.showReading?.(messageId, utteranceId, side);
   } catch (error) {
     toast('error', safeError(error));
   } finally {
@@ -7711,13 +8382,15 @@ function registerRuntimeEvents() {
   // Floor buttons follow every redraw the host announces; the observer in bindTtsDom catches the rest.
   bindEvent(eventTypes.CHARACTER_MESSAGE_RENDERED, messageId => scheduleTtsDecorate(Number(messageId)));
   bindEvent(eventTypes.MESSAGE_UPDATED, messageId => {
+    // The text changed under whatever was prepared or playing on this floor.
+    forgetTtsItems(Number(messageId));
     scheduleTtsDecorate(Number(messageId), { force: true });
     // A translation just landed on this floor; with auto-generate on, its audio follows.
     scheduleTtsPregenerate(Number(messageId));
   });
   bindEvent(eventTypes.MESSAGE_SWIPED, messageId => {
     if (runtime.tts.transport?.messageId === Number(messageId)) stopTts(Number(messageId));
-    runtime.tts.floors.delete(Number(messageId));
+    forgetTtsItems(Number(messageId));
     scheduleTtsDecorate(Number(messageId), { force: true, delay: 300 });
   });
   bindEvent(eventTypes.MESSAGE_DELETED, () => {
@@ -7954,4 +8627,7 @@ export const __testing = Object.freeze({
   clearTtsOverride,
   importCastFromWorldbook,
   ttsStore,
+  chunkTtsUtterances,
+  ttsRequestSettings,
+  seekTts,
 });

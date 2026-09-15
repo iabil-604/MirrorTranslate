@@ -64,6 +64,11 @@ async function translatedFloor(source, translations, settings, annotations = und
 const FISH = { key: 'sk-test', viaProxy: true };
 const CHANNEL = normalizeChannel({ id: 'c1', name: 'test', url: 'https://relay.example/v1', key: 'k', model: 'labeler' });
 
+// The settings as the runtime holds them after configureForTest, for a second call on the same floor.
+function runtime() {
+  return __testing.configureForTest({});
+}
+
 function restoreGlobals(t) {
   const host = globalThis.SillyTavern;
   const fetchBefore = globalThis.fetch;
@@ -216,10 +221,14 @@ test('the deep reading carries the card and the recent floors, and every sentenc
   const inspected = await __testing.ttsInspect(1, 2);
   assert.equal(inspected.text, '[very frustrated][shouting] 我操 [break] 好 [emphasis] 热啊！');
   assert.deepEqual(inspected.prosody, { speed: 1.12, volume: 3 });
-  assert.equal(inspected.scene, '闷热的教室');
-  assert.equal(inspected.character.habit, '句尾拖长');
   assert.ok(inspected.summary.some(([term]) => term === '潜台词'));
   assert.equal(inspected.depth, 'deep');
+  assert.equal(requests.length, 1);
+  // A longer cast list or another floor on top is no reason to read this floor again.
+  __testing.configureForTest({ settings: { ttsVoices: { 'taro.png': [{ name: '佐菲', voiceId: 'voice-zoffy' }] } } });
+  context.chat.push({ mes: '<story_scene>\n后一楼。\n</story_scene>', is_user: false, swipe_id: 0, extra: {} });
+  await __testing.prepareTtsSegments(floor, runtime());
+  assert.equal(requests.length, 1, 'the reading is keyed by the text alone');
 
   // The fast, loud sentence is its own request: Fish's prosody is per request.
   const calls = mockFish();
@@ -231,6 +240,82 @@ test('the deep reading carries the card and the recent floors, and every sentenc
   assert.equal(calls[1].body.text, '[very frustrated][shouting] 我操 [break] 好 [emphasis] 热啊！');
   assert.equal(record.parts.length, 2);
   assert.deepEqual(record.timeline.map(entry => [entry.id, entry.part]), [[1, 0], [2, 1]]);
+});
+
+test('the deep reading leans on the translation\'s labels: an id alone keeps the hint, and the hints travel in the request', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-hints', {
+    async processRequest(payload) {
+      requests.push(payload);
+      return { content: JSON.stringify({ voices: [{ id: 1 }, { id: 2, restraint: 2, volume: 'quiet' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'floor', analysis: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('風。\n\n「暑い！」', [[1, '风停了。'], [2, '「好热！」']], settings, { 2: { speaker: '泰罗', emotion: 'happy', intensity: 1 } }));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const input = JSON.parse(requests[0].messages.at(-1).content);
+  assert.deepEqual(input.hints, [{ id: 2, speaker: '泰罗', emotion: 'happy', intensity: 1 }]);
+  assert.equal('references' in input, false, 'no context asked for, none sent');
+  assert.deepEqual(segments.map(item => [item.type, item.speaker, item.emotion]), [['narration', 'narrator', null], ['dialogue', '泰罗', 'happy']]);
+  assert.deepEqual(segments[1].voice, { emotion: 'happy', intensity: 1, restraint: 2, volume: 'quiet' }, 'the hint\'s mood sits under the model\'s restraint');
+  const inspected = await __testing.ttsInspect(0, 2);
+  assert.equal(inspected.text, '[happy][whispering] 好热！', 'the hint\'s mood and the model\'s restraint together');
+});
+
+test('reading both languages: the original is labelled from the translation\'s reading, each side has its own audio', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-both', {
+    async processRequest(payload) {
+      requests.push(payload);
+      return { content: JSON.stringify({ voices: [{ id: 1 }, { id: 2, type: 'dialogue', speaker: '樱井', emotion: 'tender', speed: 'slow', stress: ['来'] }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'floor', side: 'both', analysis: 'deep', narratorVoice: 'voice-narrator', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '樱井', voiceId: 'voice-zh', voices: { ja: 'voice-ja' } }] },
+    },
+  });
+  context.chat.push(await translatedFloor('桜井は振り返った。\n\n「来たんだね」', [[1, '樱井回过头。'], [2, '「你来了啊」']], settings));
+  const source = await __testing.collectTtsFloor(0, settings, 'source');
+  const read = await __testing.prepareTtsSegments(source, settings);
+  assert.equal(requests.length, 1, 'one reading, of the translation');
+  assert.equal(JSON.parse(requests[0].messages.at(-1).content).utterances[1].text, '「你来了啊」');
+  assert.deepEqual(read.segments.map(item => [item.type, item.speaker, item.lang, item.emotion]), [['narration', 'narrator', 'ja', null], ['dialogue', '樱井', 'ja', 'tender']]);
+  assert.deepEqual(read.segments[1].voice, { emotion: 'tender', speed: 'slow' }, 'the stress word belongs to the translation and stays there');
+  const { items } = await __testing.ttsItemsFor(source, read.segments, settings);
+  assert.deepEqual(items.map(item => item.voiceId), ['voice-narrator', 'voice-ja'], 'the Japanese voice for the Japanese line');
+  const translation = await __testing.collectTtsFloor(0, settings, 'translation');
+  const other = await __testing.prepareTtsSegments(translation, settings);
+  assert.equal(requests.length, 1, 'the translation\'s reading was already made');
+  assert.deepEqual((await __testing.ttsItemsFor(translation, other.segments, settings)).items.map(item => item.voiceId), ['voice-narrator', 'voice-zh']);
+  assert.notEqual(source.floorId, translation.floorId, 'each language keeps its own recordings');
+});
+
+test('the stream can carry one sentence per request', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-stream-sentence');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'stream', streamUnit: 'sentence', analysis: 'annotations', narratorVoice: 'voice-narrator', fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('一。二。', [[1, '第一句。第二句。']], settings));
+  const calls = mockFish();
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.equal(items.length, 2);
+  const first = await __testing.resolveTtsEntry(floor, items, items[1], settings);
+  assert.equal(first.record.unit, 'sentence:2');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, '第二句。');
+  assert.equal(await __testing.pregenerateTtsFloor(0, { quiet: true }), 1, 'only the sentence not yet made');
+  assert.equal(calls.length, 2);
 });
 
 test('a failed analysis reads with the translation annotations and asks again next time', async t => {
@@ -449,4 +534,81 @@ test('the cast is read out of the card and the worldbook by the model, and never
   context.characters = [];
   const bare = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1' }, worldInfoEntries: { globalLore: [], characterLore: [], chatLore: [], personaLore: [] } });
   await assert.rejects(__testing.importCastFromWorldbook(bare), /没有可读的世界书条目/);
+});
+
+test('batches cut at paragraph ends, and a short floor or a single lane is one batch', () => {
+  const utterances = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, lineId: Math.floor(index / 5) + 1, text: `句${index + 1}` }));
+  assert.equal(__testing.chunkTtsUtterances(utterances, 1).length, 1, 'one lane, one request');
+  assert.equal(__testing.chunkTtsUtterances(utterances.slice(0, 30), 4).length, 1, 'thirty sentences are one request');
+  const chunks = __testing.chunkTtsUtterances(utterances, 3);
+  assert.deepEqual(chunks.map(chunk => chunk.items.length), [15, 15, 10], 'ceil(40 / 3) = 14 rounds up to the paragraph end');
+  assert.deepEqual(chunks.map(chunk => chunk.lead.map(item => item.id)), [[], [13, 14, 15], [28, 29, 30]], 'each batch sees the three sentences before it');
+  assert.deepEqual(__testing.chunkTtsUtterances(utterances, 8).map(chunk => chunk.items.length), [15, 15, 10], 'more lanes never mean batches under about sixteen sentences');
+});
+
+test('a long floor is read in batches, as many at once as the connection allows, each seeing the sentences before it', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  let inFlight = 0;
+  let peak = 0;
+  const { context } = mockHost('tts-batches', {
+    async processRequest(payload) {
+      requests.push(payload);
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      inFlight -= 1;
+      const input = JSON.parse(payload.messages.at(-1).content);
+      return { content: JSON.stringify({ voices: input.utterances.map(item => ({ id: item.id, type: 'dialogue', speaker: '泰罗', emotion: 'tired' })) }) };
+    },
+  });
+  const wide = normalizeChannel({ id: 'c1', name: 'wide', url: 'https://relay.example/v1', key: 'k', model: 'labeler', concurrency: 3 });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [wide], selectedChannelId: 'c1', tts: { enabled: true, mode: 'floor', analysis: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+  });
+  const lines = Array.from({ length: 36 }, (_, index) => `「第${index + 1}句。」`);
+  context.chat.push(await translatedFloor(lines.map((_, index) => `「${index + 1}」`).join('\n\n'), lines.map((text, index) => [index + 1, text]), settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests.length, 3, '36 sentences over three lanes: three batches');
+  assert.equal(peak, 3, 'the batches went out together');
+  const inputs = requests.map(request => JSON.parse(request.messages.at(-1).content)).sort((left, right) => left.utterances[0].id - right.utterances[0].id);
+  assert.deepEqual(inputs.map(input => input.utterances.length), [12, 12, 12]);
+  assert.equal('lead' in inputs[0], false);
+  assert.deepEqual(inputs[1].lead.map(item => item.id), [10, 11, 12]);
+  assert.deepEqual(inputs[2].lead.map(item => item.id), [22, 23, 24]);
+  assert.equal(segments.length, 36);
+  assert.ok(segments.every(item => item.speaker === '泰罗' && item.emotion === 'tired'), 'the batches merged into one reading');
+  // The merged reading is cached as one: preparing the floor again asks nothing.
+  await __testing.prepareTtsSegments(floor, runtime());
+  assert.equal(requests.length, 3);
+});
+
+test('the reading goes to its own connection when one is chosen, and follows the translation otherwise', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-channel', {
+    async processRequest(payload) {
+      requests.push(payload);
+      return { content: JSON.stringify({ labels: [{ id: 1, type: 'dialogue', speaker: '泰罗' }] }) };
+    },
+  });
+  const cheap = normalizeChannel({ id: 'c2', name: 'cheap', url: 'https://cheap.example/v1', key: 'k2', model: 'flash' });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [CHANNEL, cheap], selectedChannelId: 'c1', tts: { enabled: true, mode: 'stream', analysis: 'light', channelId: 'c2', fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('「暑い」', [[1, '「好热」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(segments[0].speaker, '泰罗');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].model, 'flash', 'the reading\'s own model');
+  assert.match(requests[0].reverse_proxy, /cheap\.example/);
+  const chosen = __testing.ttsRequestSettings(settings);
+  assert.equal(chosen.selectedChannelId, 'c2');
+  assert.equal(chosen.apiMode, 'independent');
+  const gone = { ...settings, tts: { ...settings.tts, channelId: 'nowhere' } };
+  assert.equal(__testing.ttsRequestSettings(gone), gone, 'a connection that no longer exists means following the translation');
+  const unset = { ...settings, tts: { ...settings.tts, channelId: '' } };
+  assert.equal(__testing.ttsRequestSettings(unset), unset);
 });
