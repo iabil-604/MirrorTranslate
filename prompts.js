@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.21.0';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.22.0';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 
@@ -695,7 +695,7 @@ export function findForbiddenPhraseHits(translations, profile) {
  * colour, invent a vocabulary or emit markup — only to pick a name off a list it is given and a
  * label out of a closed set, with an explicit "leave it out if unsure" escape.
  */
-export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], emotionLabels = [], voice = false, tones = [], quoteMarks = [] } = {}) {
+export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], emotionLabels = [], voice = false, tones = [], quoteMarks = [], sounds = [], styles = [] } = {}) {
   if (!speakers && !emotions) return '';
   const fields = [];
   const rules = [];
@@ -726,8 +726,13 @@ export function composeAnnotationSection({ speakers = false, emotions = false, r
     // says so. The head is what places a mark on its run; a model that miscounts still lands most.
     const marks = quoteMarks.length ? `（${quoteMarks.join(' ')} 这些符号里的话）` : '';
     example.tone = '可选';
-    example.quotes = [{ head: '这句台词开头几个字', speaker: '名单中的名字', emotion: '下列标签之一', intensity: 1 }];
-    fields.push('tone：可选的说法；quotes：这一段里每一处台词各自的标注');
+    example.direction = '这一段该怎么念的中文指令';
+    example.quotes = [{ head: '这句台词开头几个字', speaker: '名单中的名字', emotion: '下列标签之一', intensity: 1, direction: '这句台词该怎么念的中文指令' }];
+    fields.push('direction：这一段该怎么念；tone：可选的说法；quotes：这一段里每一处台词各自的标注');
+    rules.push('direction：一句 20 字左右、最多 40 字的中文配音指令，写这句真正该怎么念：基础情绪、情绪的变化、语气（压着、装冷淡、带笑、发抖……）、语速倾向、必要的停顿感。要写成配音演员能照着演的话，不要只写一个情绪词。平淡的句子省略。旁白段也可以给，写叙述的口吻。');
+    rules.push(`quotes 里每一项还可以带这些细节，只在真的需要时写：speed（slow / fast，明显时才写）、volume（quiet / loud）、stress（要重读的词，最多 3 个）、pauses（[{"after":"词","length":"short|long"}]，最多 4 处）、sounds（[{"at":"start|end|after","tag":"声音词","after":"词"}]，tag 取 ${sounds.length ? sounds.join(' / ') : '简短的中文声音词'} 之一）、shift（{"at":"从这个词起","direction":"转变后的指令"}）。这些词必须逐字出现在这句台词里。`);
+    const styleLines = (Array.isArray(styles) ? styles : []).map(style => `${style.name}：${(style.rules ?? []).join(' ')}`).filter(line => line.length > 2).slice(0, 40);
+    if (styleLines.length) rules.push(`写 direction 时要遵守下面这些角色的表达习惯和用户定下的规则（「默认」一条对所有人和旁白生效）：${styleLines.join('；')}`);
     rules.push(`tone 可选，只能取 ${tones.join(' / ')} 之一，只在原文明确写了小声、耳语、喊、尖叫、急促这类说法时写，其余省略。`);
     rules.push(`quotes：这一段的译文里有几处台词${marks}就写几项，按出现顺序；每项的 head 逐字照抄这句台词开头的 2 到 6 个字（不含引号），speaker、emotion、intensity、tone 只针对这一句台词，规则同上。整段没有台词就不写 quotes；只有一处台词时也可以不写，段级的字段就是它的。段级的 speaker 和 emotion 照常写，一段里有几个人说话时写主要的那一位。`);
   }

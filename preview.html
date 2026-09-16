@@ -67,9 +67,9 @@
     const previewTranslations = new Map([
       ['夕暮れの教室には、誰もいなかった。', { text: '傍晚的教室里，一个人也没有。' }],
       ['窓から差し込む光が、机を淡く照らしている。', { text: '从窗外照进来的光，淡淡地照着桌面。' }],
-      ['桜井は振り返って、「来たんだね」と小さく笑った。', { text: '樱井回过头，「你来了啊」，轻轻笑了一下。', speaker: '樱井', emotion: 'happy', intensity: 1 }],
-      ['「明日も、ここで会える？」', { text: '「明天，也能在这里见面吗？」', speaker: '玩家', emotion: 'fear', intensity: 1 }],
-      ['「……うん。約束する」', { text: '「……嗯。我保证。」', speaker: '樱井', emotion: 'tender', intensity: 1 }],
+      ['桜井は振り返って、「来たんだね」と小さく笑った。', { text: '樱井回过头，「你来了啊」，轻轻笑了一下。', speaker: '樱井', emotion: 'happy', intensity: 1, direction: '平静叙述，句尾带一点暖意', quotes: [{ head: '你来了', speaker: '樱井', emotion: 'happy', intensity: 1, direction: '见到人就开心，声音亮起来，带一点笑', sounds: [{ at: 'end', tag: '轻笑' }] }] }],
+      ['「明日も、ここで会える？」', { text: '「明天，也能在这里见面吗？」', speaker: '玩家', emotion: 'fear', intensity: 1, direction: '怕被拒绝的试探，压着期待，语速放慢', speed: 'slow', stress: ['见面'] }],
+      ['「……うん。約束する」', { text: '「……嗯。我保证。」', speaker: '樱井', emotion: 'tender', intensity: 1, direction: '被打动后的轻声承诺，先叹一口气，尾音放软', volume: 'quiet', sounds: [{ at: 'start', tag: '叹气' }] }],
     ]);
     const chat = [{
       mes: original,
@@ -115,7 +115,7 @@
       const body = user ? JSON.parse(user.content) : { segments: [{ id: 1 }] };
       // The read-aloud analysis: labels by id, the speaker taken from a name in the narration before a
       // quote, and a mood from the closing punctuation.
-      if (body.task === 'label_utterances_for_audiobook' || body.task === 'direct_voices_for_audiobook') {
+      if (body.task === 'label_utterances_for_audiobook' || body.task === 'sketch_voices_for_audiobook' || body.task === 'direct_voices_for_audiobook') {
         const deep = body.task === 'direct_voices_for_audiobook';
         let lastName = '樱井';
         const labels = body.utterances.map(item => {
@@ -127,17 +127,19 @@
           const speaker = lastName;
           lastName = lastName === '樱井' ? '玩家' : '樱井';
           if (!deep) {
-            const emotion = /？」?$/.test(item.text) ? 'surprise' : /……/.test(item.text) ? 'tender' : 'happy';
-            return { id: item.id, type: 'dialogue', speaker, emotion, intensity: 1 };
+            // The simple sketch: a mood word for the colouring and a short direction for the voice.
+            const emotion = /？」?$/.test(item.text) ? 'nervous' : /……/.test(item.text) ? 'tender' : 'happy';
+            const direction = /？」?$/.test(item.text) ? '小心翼翼地问，语速放慢，句尾轻轻抬起' : /……/.test(item.text) ? '轻声承诺，前面停一下，尾音放软' : '见到人就开心，声音亮一点';
+            return { id: item.id, type: 'dialogue', speaker, emotion, intensity: 1, direction };
           }
           // The deep reading: a voice per line, shaped like a real reply, so the panel has something to show.
           if (/？」?$/.test(item.text)) {
-            return { id: item.id, type: 'dialogue', speaker, emotion: 'nervous', secondary: 'hopeful', intensity: 1, trend: 'rising', state: '怕对方拒绝', intent: '试探', subtext: '想再见面', restraint: 1, speed: 'slow', volume: 'quiet', tension: 1, hesitation: 2, ending: 'rising', pauses: [{ after: '明天', length: 'short' }], stress: ['见面'], delivery: '小心翼翼', focus: '见面' };
+            return { id: item.id, type: 'dialogue', speaker, emotion: 'nervous', intensity: 1, direction: '怕被拒绝的试探，压着期待，语速放慢，句尾轻轻抬起', speed: 'slow', volume: 'quiet', pauses: [{ after: '明天', length: 'short' }], stress: ['见面'], sounds: [{ at: 'start', tag: '吸气' }] };
           }
           if (/……/.test(item.text)) {
-            return { id: item.id, type: 'dialogue', speaker, emotion: 'tender', intensity: 1, trend: 'steady', state: '被打动了', intent: '承诺', restraint: 1, speed: 'slow', volume: 'quiet', sounds: [{ at: 'start', tag: 'sighing' }], stress: ['保证'], ending: 'falling', delivery: '轻声承诺' };
+            return { id: item.id, type: 'dialogue', speaker, emotion: 'tender', intensity: 1, direction: '被打动后的轻声承诺，先叹一口气，尾音放软', speed: 'slow', volume: 'quiet', sounds: [{ at: 'start', tag: '叹气' }], stress: ['保证'] };
           }
-          return { id: item.id, type: 'dialogue', speaker, emotion: 'happy', intensity: 1, state: '见到人就开心', intent: '打招呼', speed: 'normal' };
+          return { id: item.id, type: 'dialogue', speaker, emotion: 'happy', intensity: 1, direction: '见到人就开心，声音亮起来，带一点笑', sounds: [{ at: 'end', tag: '轻笑' }] };
         });
         if (!deep) return JSON.stringify({ labels });
         return JSON.stringify({ scene: '傍晚，空教室，光很淡。', characters: [{ name: '樱井', state: '安静，但一直在等', habit: '说话轻，句尾常带笑' }], voices: labels });

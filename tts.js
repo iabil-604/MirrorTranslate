@@ -8,8 +8,9 @@ import {
   parseJsonCandidates,
   parsePairList,
   unifySpeakerNames,
-} from './core.js?v=0.21.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.21.0';
+} from './core.js?v=0.22.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.22.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.22.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -30,7 +31,7 @@ import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } fr
 // ---------------------------------------------------------------------------------------------
 
 export const TTS_DOCUMENT_VERSION = 2;
-export const TTS_ANALYSIS_VERSION = 3;
+export const TTS_ANALYSIS_VERSION = 4;
 export const NARRATOR = 'narrator';
 
 const INVISIBLE_RE = /[\u200b-\u200f\u2060-\u2064\ufeff]/g;
@@ -46,11 +47,9 @@ function decodeEntities(text) {
   });
 }
 
-// Markup that reached a line is presentation, not speech.
+// Markup that reached a line is presentation, not speech: the copy the voice gets loses it whole.
 export function plainLineText(text) {
-  return decodeEntities(String(text ?? '').replace(INVISIBLE_RE, '').replace(/<[^<>]*>/g, ''))
-    .replace(/[ \t]+/g, ' ')
-    .trim();
+  return sanitizeForTts(String(text ?? '').replace(INVISIBLE_RE, ''));
 }
 
 function escapeRegex(value) {
@@ -312,7 +311,7 @@ export function annotationReading(utterances, annotations) {
       const source = own ? (quoted.length === 1 ? { ...mark, ...own } : own) : mark;
       const label = readTtsLabel({ type: 'dialogue', speaker: source.speaker, emotion: source.emotion, intensity: source.intensity });
       if (label) labels.set(utterance.id, label);
-      const voice = annotationVoice(source);
+      const voice = annotationVoice(source, utterance.text);
       if (voice) voices.set(utterance.id, voice);
     }
   }
@@ -344,15 +343,15 @@ function matchQuoteMarks(quoted, quotes) {
   return matched;
 }
 
-// Fish's words in a mark: the mood when it is one of Fish's rather than one of the palette's, and the tone.
-function annotationVoice(mark) {
-  const voice = {};
-  const word = cueWord(mark?.emotion);
+// The voice a mark carries: the direction and the words it points at, checked against the sentence;
+// the mood when it is one of Fish's rather than one of the palette's; the tone.
+function annotationVoice(mark, text = '') {
+  if (!mark || typeof mark !== 'object') return null;
+  const voice = normalizeVoice({ ...mark, emotion: undefined, intensity: undefined }, text) ?? {};
+  const word = cueWord(mark.emotion);
   if (word && word !== 'neutral' && !Object.hasOwn(EMOTION_STYLES, word)) voice.emotion = word;
-  const tone = cueWord(mark?.tone);
-  if (FISH_TONES.includes(tone)) voice.tone = tone;
   if (!Object.keys(voice).length) return null;
-  const intensity = level(mark?.intensity);
+  const intensity = level(mark.intensity);
   if (intensity !== null) voice.intensity = intensity;
   return voice;
 }
@@ -378,38 +377,33 @@ function referenceLines(translations) {
 // {{user}} the user's role, {{palette}} the light emotion labels, {{sounds}} the Fish sound tags,
 // {{references_rule}} the rule about translations riding along when the original is read.
 export const DEFAULT_TTS_PROMPTS = Object.freeze({
-  light: [
-    '你是有声小说的配音导演助手。下面是一楼正文按顺序切好的句子。你只判断每一句由谁念、用什么情绪念，不改写、不复述、不翻译任何句子。',
-    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text。',
-    '只输出一个 JSON 对象，不要任何解释：{"labels":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","speaker":"名字","emotion":"标签","intensity":1}]}',
-    '1. type 只能是 dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。引号里通常是 dialogue；引号用来标书名、专有名词、强调或引用文字时是 narration。不在引号里、却是角色直接说出的话（例如「樱井：好热」这种写法）是 dialogue。确实是旁白的 narration 句可以不写。',
-    '2. speaker 只给 dialogue。优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人，写正文里对这个人的称呼。{{user}}看不出是谁说的就省略 speaker，不要猜。',
-    '3. emotion 只给 dialogue，只能取下列英文标签之一并逐字照抄：{{palette}}。依据是这句话本身和紧挨着它的叙述（例如「吼道」「小声说」），不是你对剧情的推测。看不出明显情绪写 neutral。',
-    '4. intensity 0 弱、1 中、2 强，默认 1。只有原文明确写了加强或减弱（感叹号连用、吼、尖叫、低声、颤抖）才写 2 或 0。',
-    '5. lang 是这一句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。只在这一句的语言和整楼主要语言不同、或人物设定明确了口音时写，其余省略。',
-    '6. 每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。输入里如果有 lead，那是这一批前面紧挨着的几句，只用来认人和判断语气，不用回答。',
+  simple: [
+    '你是有声小说的配音导演助手。下面是一楼正文按顺序切好的句子。你为每一句搭一个「情绪骨架」：由谁念、带什么情绪念、情绪在句中怎么变、语气语速如何、哪里该停顿或重读、有没有笑声喘息这类声音。不改写、不复述、不翻译任何句子。',
+    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text；styles 是每个角色的表达习惯和用户定下的规则，指令必须遵守。',
+    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","direction":"中文配音指令","speed":"slow","stress":["句中的词"],"pauses":[{"after":"句中的词","length":"long"}],"sounds":[{"at":"start","tag":"声音词"}],"shift":{"at":"句中的词","direction":"中文指令"}}]}',
+    '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。引号用来标书名、专有名词、强调或引用时是 narration；不在引号里却明显是角色在说的话也是 dialogue。',
+    '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。{{user}}看不出是谁说的就省略，不要猜。',
+    '3. direction：一句中文配音指令，20 字左右、最多 40 字，写这一句真正该怎么念：基础情绪、情绪的变化、语气（压着、装冷淡、带笑、发抖……）、语速倾向、必要的停顿感。要写出配音演员能照着演的话，不要只写一个情绪词。旁白也可以写，写旁白的口吻（平静叙述、轻声、带一点紧张……）；平淡的句子省略 direction。',
+    '4. emotion：可选，英文，取 emotions 列表里最接近的一个词，给界面着色用；direction 才是配音的依据。intensity 0 弱、1 中、2 强，只在原文明确加强或减弱时写。',
+    '5. speed：slow / fast，只在明显比平常快或慢时写；volume：quiet / loud，同理。这两项会变成语音模型的语速音量参数。',
+    '6. stress：要重读的词（最多 3 个）；pauses：某个词后面要停顿，length 是 short 或 long（最多 4 处）；shift：句子从某个词起情绪转变，写那个词和转变后的中文指令；sounds：笑声、叹气、喘息这类非语言声音，tag 取 {{sounds}} 之一或一个简短的中文声音词，at 是 start（句首）、end（句尾）或 after（某个词后面，配 after 字段写那个词）。这几项里的词必须逐字出现在这句里，只在这个人此刻真的会这样时写，不要每句都加。',
+    '7. lang：这一句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。与整楼主要语言相同、人物设定又没说口音时省略。',
+    '8. 每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。输入里如果有 lead，那是这一批前面紧挨着的几句，只用来认人和判断语气，不用回答。',
     '{{references_rule}}',
   ].join('\n'),
   deep: [
-    '你是有声小说的配音导演。下面是一楼正文按顺序切好的句子，以及这一楼的背景资料。你为每一句写配音指令：由谁念、用什么声音念。不改写、不复述、不翻译任何句子。',
-    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text；references 里是角色卡、世界书和前几楼的正文，只用来理解人物和剧情；hints 是翻译时已经标好的每句说话人、情绪底色，有的还带 tone（语气）。',
-    '只输出一个 JSON 对象：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","emotion":"frustrated","intensity":2,"speed":"fast","stress":["热"]}]}',
-    '省力原则：一句话的情绪和 hints 里的底色一样、和上一句没有转折、也不需要停顿重音的，只写 {"id":N}，底色会自动沿用。只有情绪有转折、有压抑或爆发、需要停顿重音、有非语言声音的句子才展开写。旁白通常只写 id。',
-    '展开写时可用的字段（都可省略，省略就是平常）：',
-    '- type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。引号用来标书名、专有名词、强调时是 narration；「樱井：好热」这种没有引号的台词是 dialogue。',
-    '- speaker：只给 dialogue，优先从 roster 里逐字照抄，不加敬称；roster 里没有的人写正文里对这个人的称呼。{{user}}看不出是谁说的就省略。',
-    '- lang：这句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。与整楼主要语言相同、人物设定又没说口音时省略。',
-    '- emotion：基础情绪，英文，优先取 emotions 列表里的词；都不合适时用 1–3 个英文词描述。secondary：次级情绪。intensity：0 弱、1 中、2 强。',
-    '- restraint：自我克制 0 放开、1 一般、2 压着（压着会转成气声、耳语）。tension：紧张 0–2。hesitation：犹豫 0–2。rasp：嘶哑 0–2。',
-    '- speed：slow / normal / fast。volume：quiet / normal / loud。breath：none / audible / panting。tone：whispering / soft tone / shouting / screaming / in a hurry tone 之一，只在这句明确是这种说法时写。',
-    '- pauses：[{"after":"句中的词","length":"short|long"}]。stress：重音词 ["词"]。shifts：句内情绪变化 [{"at":"从这个词起","emotion":"英文"}]。这三项里的词必须逐字出现在这句里。',
-    '- sounds：非语言声音 [{"at":"start|end","tag":"标签"}]，tag 取 {{sounds}}。只在这个人此刻真的会发出这个声音时写。',
-    '- subtext：言不由衷时写真正想说的（中文 ≤20 字），其余省略。',
-    '判断依据：这句话本身、紧挨着的叙述（吼道、小声说）、这个人的性格和说话习惯、前文的情绪惯性（上一句还在哭，这一句不会立刻平静）、场景与人物关系。同一句最多三种情绪相关的词。',
-    '输入里如果有 lead，那是这一批前面紧挨着的几句，只用来判断情绪惯性，不要给它们写指令。',
+    '你是有声小说的配音导演。下面是一楼正文按顺序切好的句子，附带这一楼的背景资料，还有已经搭好的情绪骨架（skeleton）。骨架说的是每一句「是什么感觉」；你的工作是弄清「为什么是这种感觉、该怎么演」，把骨架润色成配音演员能直接照着演的指令。不改写、不复述、不翻译任何句子。',
+    '输入：utterances 每项有 id、kind（quoted 表示在引号里，narration 表示不在引号里）和 text；skeleton 是每句已有的说话人、情绪和指令，没有骨架的句子由你从头判断；references 里是角色卡、世界书和前几楼的正文，只用来理解人物和剧情；previous 是相关角色在前几楼最后说过的话和当时的指令；styles 是每个角色的表达习惯和用户定下的规则，指令必须遵守；lead 是这一批前面紧挨着的几句，只看不答。',
+    '只输出一个 JSON 对象：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","direction":"中文配音指令","speed":"slow","volume":"quiet","stress":["句中的词"],"pauses":[{"after":"句中的词","length":"long"}],"shift":{"at":"句中的词","direction":"中文指令"},"sounds":[{"at":"end","tag":"声音词"}]}]}',
+    '省力原则：骨架已经对、没有转折、不需要停顿重音、没有非语言声音的句子，只写 {"id":N}，骨架自动沿用。展开写的句子给出改过之后的完整指令，不要只写差异。',
+    '每一句想清楚：这句为什么这样说；表面情绪和底下的情绪；和上一句的关系，是延续、转折还是爆发；说话的目的（试探、掩饰、安抚、挑衅……）；角色之间的关系；哪些词该重读、哪里该停顿、哪里该变语速；哪里会自然出现呼吸、笑声、迟疑、咳嗽；这个角色会不会这样表现，不要让角色 OOC。',
+    'direction：中文，20 字左右、最多 40 字，写演法而不是情绪名：压着的、装出来的、带着什么余味、语速怎么走。其余字段的写法和取值同骨架：type 是 dialogue 或 narration；speaker 从 roster 逐字照抄，{{user}}看不出就省略；emotion 可选，取 emotions 里的英文词给界面着色；speed slow / fast、volume quiet / loud 只在明显时写；stress 最多 3 个词，pauses 最多 4 处，sounds 的 tag 取 {{sounds}} 之一或简短中文声音词，at 是 start、end 或 after（配 after 字段）；这些词必须逐字出现在这句里。',
+    '上一句的情绪只是参考，不是惯性：剧情已经跳过时间、换了场景、事情已经解决，情绪就不延续；只有剧情上有连续的依据（同一场对话、同一件没解决的事）才延续。',
     '每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。',
     '{{references_rule}}',
   ].join('\n'),
+  // The older name of the simple prompt, for settings that still say it.
+  get light() { return this.simple; },
 });
 
 const REFERENCES_RULE = '输入里的 translations 是这些原文行（按 line 对应）的译文，只用来帮你认人、理解语气。speaker 按 roster 或译文里的写法写，不要写原文里的名字。';
@@ -418,7 +412,7 @@ function fillPrompt(template, { userName = '', references = false } = {}) {
   return String(template ?? '')
     .replaceAll('{{user}}', userName ? `用户扮演的角色叫 ${userName}。` : '')
     .replaceAll('{{palette}}', EMOTION_GLOSS)
-    .replaceAll('{{sounds}}', FISH_SOUNDS.join(' / '))
+    .replaceAll('{{sounds}}', SOUND_TAGS.join(' / '))
     .replaceAll('{{references_rule}}', references ? REFERENCES_RULE : '')
     .replace(/\n{2,}/g, '\n')
     .trim();
@@ -436,19 +430,22 @@ function leadList(lead) {
   return (Array.isArray(lead) ? lead : []).map(item => ({ id: item.id, text: item.anchor ?? item.text })).filter(item => item.text);
 }
 
-export function buildTtsAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, systemPrompt = '', lead = null } = {}) {
+export function buildTtsAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, systemPrompt = '', lead = null, styles = null } = {}) {
   // Reading the original: the roster holds the names as the translation spells them (樱井), the text
   // says 桜井. Each line's translation rides along so the model can name people the way the voices are
   // registered, and the rule below says so.
   const references = referenceLines(translations);
-  const system = fillPrompt(String(systemPrompt ?? '').trim() || DEFAULT_TTS_PROMPTS.light, { userName, references: references.length > 0 });
+  const system = fillPrompt(String(systemPrompt ?? '').trim() || DEFAULT_TTS_PROMPTS.simple, { userName, references: references.length > 0 });
   const leads = leadList(lead);
+  const styleList = styleEntries(styles);
   const input = {
-    task: 'label_utterances_for_audiobook',
+    task: 'sketch_voices_for_audiobook',
     ...(characterName ? { character: characterName } : {}),
     ...(userName ? { user: userName } : {}),
     roster: rosterList(roster),
-    emotions: EMOTION_KEYS,
+    emotions: FISH_EMOTIONS,
+    sounds: SOUND_TAGS,
+    ...(styleList.length ? { styles: styleList } : {}),
     ...(leads.length ? { lead: leads } : {}),
     utterances: (Array.isArray(utterances) ? utterances : []).map(item => (references.length
       ? { id: item.id, line: item.lineId, kind: item.kind, text: item.anchor }
@@ -503,6 +500,31 @@ export const FISH_EMOTIONS = Object.freeze([
 export const FISH_SOUNDS = Object.freeze(['sighing', 'gasping', 'sobbing', 'laughing', 'chuckling', 'groaning', 'panting', 'crying loudly', 'clear throat', 'yawning']);
 // The ways of delivering a line Fish names. One optional choice, for the translation and the deep reading alike.
 export const FISH_TONES = Object.freeze(['whispering', 'soft tone', 'shouting', 'screaming', 'in a hurry tone']);
+// The sounds a sentence can carry, in the reader's own words, each with Fish's fixed tag for the S1
+// model that only knows its set; the S2 models read the word as written. An empty tag has no S1 twin.
+export const SOUND_WORDS = Object.freeze({
+  轻笑: 'chuckling', 笑: 'laughing', 大笑: 'laughing', 叹气: 'sighing', 叹息: 'sighing', 喘息: 'panting', 喘气: 'panting',
+  倒吸气: 'gasping', 吸气: 'gasping', 抽泣: 'sobbing', 哽咽: 'sobbing', 大哭: 'crying loudly', 咳嗽: '', 清嗓: 'clear throat',
+  清嗓子: 'clear throat', 呻吟: 'groaning', 哈欠: 'yawning', 打哈欠: 'yawning', 冷哼: '', 哼: '', 吞咽: '', 深呼吸: '',
+});
+export const SOUND_TAGS = Object.freeze(Object.keys(SOUND_WORDS));
+
+// A sound as a mark names it: one of the Chinese words, one of Fish's English tags, or any short
+// Chinese word for a sound the S2 models can read as written.
+function soundWord(value) {
+  const raw = String(value ?? '').trim().replace(/^[[(（【]|[\])）】]$/g, '').trim();
+  if (!raw) return '';
+  if (Object.hasOwn(SOUND_WORDS, raw)) return raw;
+  const english = cueWord(raw);
+  if (english && FISH_SOUNDS.includes(english)) return english;
+  return /^[\u4e00-\u9fff]{1,6}$/.test(raw) ? raw : '';
+}
+
+// The tag a sound goes out as: S1 wants Fish's own word, the S2 models take the Chinese.
+function soundTagFor(tag, model) {
+  if (model !== 's1') return tag;
+  return Object.hasOwn(SOUND_WORDS, tag) ? SOUND_WORDS[tag] : tag;
+}
 
 // Chinese for the cues, for the summary a reader sees beside a sentence. Unknown cues show as written.
 export const FISH_TAG_LABELS = Object.freeze({
@@ -555,6 +577,9 @@ export function normalizeVoice(item, text = '') {
   if (intensity !== null) voice.intensity = intensity;
   const subtext = shortText(item.subtext, 40);
   if (subtext) voice.subtext = subtext;
+  // The reading's own words for how the sentence is said; this is what the S2 models are handed.
+  const direction = shortText(item.direction ?? item.instruction, 60);
+  if (direction) voice.direction = direction;
   // Only what the compiler turns into a cue or a prosody step is kept; the rest was thinking aloud.
   for (const key of ['restraint', 'tension', 'rasp', 'hesitation']) {
     const value = level(item[key]);
@@ -573,37 +598,65 @@ export function normalizeVoice(item, text = '') {
   if (pauses.length) voice.pauses = pauses;
   const stress = [...new Set((Array.isArray(item.stress) ? item.stress : [item.stress]).map(word => shortText(word, 20)).filter(inSentence))].slice(0, 3);
   if (stress.length) voice.stress = stress;
-  const shifts = (Array.isArray(item.shifts) ? item.shifts : [])
-    .map(shift => ({ at: shortText(shift?.at ?? shift?.word, 20), emotion: cueWord(shift?.emotion) }))
-    .filter(shift => shift.emotion && inSentence(shift.at))
+  // A turn mid-sentence: from a word on, a new direction in the reader's words, or one of Fish's moods.
+  const shiftSource = Array.isArray(item.shifts) ? item.shifts : (item.shift && typeof item.shift === 'object' ? [item.shift] : []);
+  const shifts = shiftSource
+    .map(shift => {
+      const emotion = cueWord(shift?.emotion);
+      const direction = shortText(shift?.direction ?? (emotion ? '' : shift?.emotion), 40);
+      const out = { at: shortText(shift?.at ?? shift?.word, 20) };
+      if (direction) out.direction = direction;
+      if (emotion) out.emotion = emotion;
+      return out;
+    })
+    .filter(shift => (shift.direction || shift.emotion) && inSentence(shift.at))
     .slice(0, 2);
   if (shifts.length) voice.shifts = shifts;
   const sounds = (Array.isArray(item.sounds) ? item.sounds : [])
-    .map(sound => ({ at: sound?.at === 'end' ? 'end' : 'start', tag: cueWord(sound?.tag ?? sound?.sound) }))
+    .map(sound => {
+      const after = shortText(sound?.after, 20);
+      const at = sound?.at === 'end' ? 'end' : (after && inSentence(after)) ? 'after' : 'start';
+      return { at, tag: soundWord(sound?.tag ?? sound?.sound), ...(at === 'after' ? { after } : {}) };
+    })
     .filter(sound => sound.tag)
-    .slice(0, 2);
+    .slice(0, 3);
   if (sounds.length) voice.sounds = sounds;
   return Object.keys(voice).length ? voice : null;
 }
 
 // The translation's own labels, as the base the deep reading may leave alone. Where the translation
 // chose one of Fish's words, that word goes rather than the palette's fold of it, and so does the tone.
-function hintsFor(utterances, hints, voices = null) {
-  if (!(hints instanceof Map)) return [];
-  return (Array.isArray(utterances) ? utterances : [])
-    .filter(item => hints.has(item.id))
+function skeletonFor(utterances, hints, voices = null) {
+  const list = Array.isArray(utterances) ? utterances : [];
+  return list
+    .filter(item => (hints instanceof Map && hints.has(item.id)) || (voices instanceof Map && voices.has(item.id)))
     .map(item => {
-      const hint = hints.get(item.id);
-      const voice = voices instanceof Map ? voices.get(item.id) : null;
-      const emotion = voice?.emotion || hint.emotion;
-      return {
-        id: item.id,
-        ...(hint.speaker ? { speaker: hint.speaker } : {}),
-        ...(emotion ? { emotion } : {}),
-        ...(hint.intensity !== undefined ? { intensity: hint.intensity } : {}),
-        ...(voice?.tone ? { tone: voice.tone } : {}),
-      };
+      const hint = hints instanceof Map ? (hints.get(item.id) ?? {}) : {};
+      const voice = voices instanceof Map ? (voices.get(item.id) ?? {}) : {};
+      const emotion = voice.emotion || hint.emotion;
+      const entry = { id: item.id };
+      if (hint.speaker) entry.speaker = hint.speaker;
+      if (emotion) entry.emotion = emotion;
+      if (hint.intensity !== undefined) entry.intensity = hint.intensity;
+      for (const key of ['direction', 'tone', 'speed', 'volume', 'stress', 'pauses', 'sounds', 'shifts']) if (voice[key] !== undefined) entry[key] = voice[key];
+      return entry;
     });
+}
+
+// The consoles as the request carries them: a name and the sentences its sliders and rules became.
+function styleEntries(styles) {
+  return (Array.isArray(styles) ? styles : [])
+    .map(style => ({ name: String(style?.name ?? '').trim().slice(0, 60), rules: (Array.isArray(style?.rules) ? style.rules : []).map(rule => String(rule ?? '').trim()).filter(Boolean).slice(0, 20) }))
+    .filter(style => style.name && style.rules.length)
+    .slice(0, 40);
+}
+
+// What each speaker said last, before this floor, with the direction it was read in.
+function previousEntries(previous) {
+  return (Array.isArray(previous) ? previous : [])
+    .map(item => ({ speaker: String(item?.speaker ?? '').trim().slice(0, 60), text: String(item?.text ?? '').trim().slice(0, 120), ...(item?.direction ? { direction: String(item.direction).trim().slice(0, 60) } : {}) }))
+    .filter(item => item.speaker && item.text)
+    .slice(0, 12);
 }
 
 /**
@@ -613,7 +666,7 @@ function hintsFor(utterances, hints, voices = null) {
  * its id alone, and the hint stands. Speaker, type and language come back the same way the light
  * request returns them; the rest is the voice.
  */
-export function buildVoiceAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, packet = {}, hints = null, hintVoices = null, systemPrompt = '', lead = null } = {}) {
+export function buildVoiceAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, packet = {}, hints = null, hintVoices = null, systemPrompt = '', lead = null, styles = null, previous = null } = {}) {
   const references = referenceLines(translations);
   const system = fillPrompt(String(systemPrompt ?? '').trim() || DEFAULT_TTS_PROMPTS.deep, { userName, references: references.length > 0 });
   const referencesBlock = {};
@@ -621,16 +674,21 @@ export function buildVoiceAnalysisMessages(utterances, { roster = [], characterN
     const value = String(packet?.[key] ?? '').trim();
     if (value) referencesBlock[key] = value;
   }
-  const hintList = hintsFor(utterances, hints, hintVoices);
+  const skeleton = skeletonFor(utterances, hints, hintVoices);
   const leads = leadList(lead);
+  const styleList = styleEntries(styles);
+  const previousList = previousEntries(previous);
   const input = {
     task: 'direct_voices_for_audiobook',
     ...(characterName ? { character: characterName } : {}),
     ...(userName ? { user: userName } : {}),
     roster: rosterList(roster),
     emotions: FISH_EMOTIONS,
+    sounds: SOUND_TAGS,
     ...(Object.keys(referencesBlock).length ? { references: referencesBlock } : {}),
-    ...(hintList.length ? { hints: hintList } : {}),
+    ...(styleList.length ? { styles: styleList } : {}),
+    ...(previousList.length ? { previous: previousList } : {}),
+    ...(skeleton.length ? { skeleton } : {}),
     ...(leads.length ? { lead: leads } : {}),
     utterances: (Array.isArray(utterances) ? utterances : []).map(item => (references.length
       ? { id: item.id, line: item.lineId, kind: item.kind, text: item.anchor }
@@ -718,7 +776,9 @@ export function deriveLabelsForSide(primaryUtterances, primaryLabels, primaryVoi
     }
     const voice = primaryVoices instanceof Map ? primaryVoices.get(source) : null;
     if (voice) {
-      const { pauses, stress, shifts, ...rest } = voice;
+      const { pauses, stress, shifts, sounds, ...rest } = voice;
+      const kept = (sounds ?? []).filter(sound => sound.at !== 'after');
+      if (kept.length) rest.sounds = kept;
       if (Object.keys(rest).length) voices.set(utterance.id, rest);
     }
   }
@@ -750,6 +810,7 @@ export function cueLabel(cue) {
 export function voiceSummary(voice) {
   if (!voice || typeof voice !== 'object') return [];
   const lines = [];
+  if (voice.direction) lines.push(['指令', voice.direction]);
   if (voice.emotion) lines.push(['情绪', `${cueLabel(voice.emotion)}${voice.intensity !== undefined && voice.intensity !== null ? `（${LEVEL_WORDS[voice.intensity]}）` : ''}${voice.secondary ? ` · ${cueLabel(voice.secondary)}` : ''}`]);
   if (voice.tone) lines.push(['语气', cueLabel(voice.tone)]);
   if (voice.subtext) lines.push(['潜台词', voice.subtext]);
@@ -765,8 +826,8 @@ export function voiceSummary(voice) {
   if (texture.length) lines.push(['质感', texture.join(' · ')]);
   if (voice.pauses?.length) lines.push(['停顿', voice.pauses.map(pause => `「${pause.after}」后${pause.length === 'long' ? '长停' : '短停'}`).join('，')]);
   if (voice.stress?.length) lines.push(['重音', voice.stress.join('、')]);
-  if (voice.shifts?.length) lines.push(['句内变化', voice.shifts.map(shift => `「${shift.at}」起转${cueLabel(shift.emotion)}`).join('，')]);
-  if (voice.sounds?.length) lines.push(['非语言声', voice.sounds.map(sound => `${sound.at === 'end' ? '句尾' : '开头'}${cueLabel(sound.tag)}`).join('，')]);
+  if (voice.shifts?.length) lines.push(['句内变化', voice.shifts.map(shift => `「${shift.at}」起转${shift.direction || cueLabel(shift.emotion)}`).join('，')]);
+  if (voice.sounds?.length) lines.push(['非语言声', voice.sounds.map(sound => `${sound.at === 'end' ? '句尾' : sound.at === 'after' ? `「${sound.after}」后` : '开头'}${cueLabel(sound.tag)}`).join('，')]);
   return lines;
 }
 
@@ -995,6 +1056,7 @@ export function compileVoiceCues(segment, { model = 's2-pro', emotionCues = true
   result.volume = VOLUMES.has(voice.volume) ? voice.volume : 'normal';
   if (!emotionCues) return result;
   const s1 = model === 's1';
+  if (voice.direction && !s1) return compileDirection(voice, text, result);
   const cues = [];
   const push = cue => {
     if (cue && !cues.includes(cue)) cues.push(cue);
@@ -1012,7 +1074,7 @@ export function compileVoiceCues(segment, { model = 's2-pro', emotionCues = true
   if (tone) push(wrapCue(tone, model));
   // A sound the sentence opens on is more audible than a descriptor, so it comes before them.
   if (voice.breath === 'panting') push(wrapCue('panting', model));
-  for (const sound of voice.sounds ?? []) if (sound.at !== 'end') push(wrapCue(sound.tag, model));
+  for (const sound of voice.sounds ?? []) if (sound.at === 'start') push(wrapCue(soundTagFor(sound.tag, model), model));
   if (!s1) {
     if (voice.restraint >= 2 && voice.volume !== 'quiet') push('[holding back]');
     if (voice.hesitation >= 2) push('[hesitant]');
@@ -1040,13 +1102,81 @@ export function compileVoiceCues(segment, { model = 's2-pro', emotionCues = true
   }
   for (const shift of voice.shifts ?? []) {
     const index = find(shift.at);
-    const cue = emotionCue(shift.emotion, 1, model);
+    const cue = shift.emotion ? emotionCue(shift.emotion, 1, model) : (s1 ? '' : `[${shift.direction}]`);
     if (index >= 0 && cue) insertions.push({ index, value: ` ${cue} ` });
   }
+  for (const sound of voice.sounds ?? []) {
+    if (sound.at !== 'after') continue;
+    const index = find(sound.after);
+    const cue = wrapCue(soundTagFor(sound.tag, model), model);
+    if (index >= 0 && cue) insertions.push({ index: index + sound.after.length, value: ` ${cue} ` });
+  }
   result.text = insertAll(text, insertions).replace(/\s{2,}/g, ' ').trim();
-  const tail = (voice.sounds ?? []).filter(sound => sound.at === 'end').map(sound => wrapCue(sound.tag, model)).filter(Boolean);
+  const tail = (voice.sounds ?? []).filter(sound => sound.at === 'end').map(sound => wrapCue(soundTagFor(sound.tag, model), model)).filter(Boolean);
   result.tail = tail.join('');
   return result;
+}
+
+/**
+ * The reading's own words, as the S2 models read them: the direction up front, a sound the sentence
+ * opens on, then the pauses, stresses, turns and sounds at the words they belong to, and a sound at
+ * the end. The words of the sentence never change.
+ */
+function compileDirection(voice, text, result) {
+  const cues = [`[${voice.direction}]`];
+  for (const sound of voice.sounds ?? []) if (sound.at === 'start' && !cues.includes(`[${sound.tag}]`)) cues.push(`[${sound.tag}]`);
+  result.cues = cues.slice(0, 3);
+  const insertions = [];
+  const find = word => (word ? text.indexOf(word) : -1);
+  const afterWord = (index, word) => index + word.length + (text.slice(index + word.length).match(/^[s，。、；：！？…—～~,.;:!?]*/)?.[0].length ?? 0);
+  for (const pause of voice.pauses ?? []) {
+    const index = find(pause.after);
+    if (index >= 0) insertions.push({ index: afterWord(index, pause.after), value: ` [${pause.length === 'long' ? '长停顿' : '停顿'}] ` });
+  }
+  for (const word of voice.stress ?? []) {
+    const index = find(word);
+    if (index >= 0) insertions.push({ index, value: ' [重读] ' });
+  }
+  for (const shift of voice.shifts ?? []) {
+    const index = find(shift.at);
+    const cue = shift.direction || cueLabel(shift.emotion);
+    if (index >= 0 && cue) insertions.push({ index, value: ` [${cue}] ` });
+  }
+  for (const sound of voice.sounds ?? []) {
+    if (sound.at !== 'after') continue;
+    const index = find(sound.after);
+    if (index >= 0) insertions.push({ index: afterWord(index, sound.after), value: ` [${sound.tag}] ` });
+  }
+  result.text = insertAll(text, insertions).replace(/\s{2,}/g, ' ').trim();
+  result.tail = (voice.sounds ?? []).filter(sound => sound.at === 'end').map(sound => `[${sound.tag}]`).join('');
+  return result;
+}
+
+const CONSOLE_LINES = Object.freeze({
+  pause: ['说话连贯，少停顿，句内不加停顿标记。', '停顿感强：句间留白多，转折、犹豫处加停顿，允许长停顿。'],
+  breath: ['几乎不带呼吸声，不写喘息、吸气。', '呼吸感明显但自然：紧张、害羞、疲惫、犹豫时可以加入呼吸或喘息，不要每句都加。'],
+  grain: ['口语颗粒度低：说话顺畅，少迟疑和口语化的毛边。', '口语颗粒度高：允许迟疑、重复、吞吞吐吐、小声嘀咕这类真人说话的毛边。'],
+  intensity: ['情感强度低：情绪写得克制、含蓄，强度多用弱。', '情感强度高：情绪写得饱满，强度多用强，允许爆发。'],
+  range: ['情绪表现幅度小：整体平稳，句内少转折。', '情绪表现幅度大：情绪起伏明显，允许句内转折和明显变化。'],
+  speed: ['语速偏慢：多用 slow，很少用 fast。', '语速偏快：多用 fast，急的时候更快。'],
+  expression: ['声音表现克制：少用笑声、叹气、咳嗽这类非语言声音。', '声音表现外放：合适的地方多用笑声、叹气、喘息等非语言声音，但要贴合当下情境。'],
+});
+
+/**
+ * A console as sentences a model can follow. Sliders near the middle say nothing; the far ends speak;
+ * the reader's own rules ride along as written. The numbers themselves never go out.
+ */
+export function consoleDirections(console) {
+  if (!console || typeof console !== 'object') return [];
+  const lines = [];
+  for (const [key, pair] of Object.entries(CONSOLE_LINES)) {
+    const value = Number(console[key]);
+    if (!Number.isFinite(value)) continue;
+    if (value <= 30) lines.push(pair[0]);
+    else if (value >= 70) lines.push(pair[1]);
+  }
+  for (const rule of String(console.rules ?? '').split('\n').map(line => line.trim()).filter(Boolean).slice(0, 12)) lines.push(rule.slice(0, 120));
+  return lines;
 }
 
 /** The text one sentence sends: the reader's own version when there is one, else the compiled voice. */
@@ -1191,11 +1321,24 @@ export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit
 
 export const FISH_MIME = Object.freeze({ mp3: 'audio/mpeg', opus: 'audio/ogg', wav: 'audio/wav', pcm: 'audio/L16' });
 
-export function fishEndpoint(fish, path) {
+/**
+ * Which host page the reader is running in. TauriTavern serves the same SillyTavern frontend from a
+ * Rust backend that answers only its own /api routes; the /proxy route of the Node server does not
+ * exist there, so a Fish call has to go direct.
+ */
+export function detectTtsHost(scope = globalThis) {
+  return scope?.__TAURITAVERN__ || scope?.__TAURITAVERN_MAIN_READY__ ? 'tauritavern' : 'sillytavern';
+}
+
+export function fishGoesDirect(fish, host = 'sillytavern') {
+  return fish?.viaProxy === false || host === 'tauritavern';
+}
+
+export function fishEndpoint(fish, path, { host = 'sillytavern' } = {}) {
   const base = String(fish?.baseUrl || 'https://api.fish.audio').replace(/\/+$/, '');
   const target = `${base}${path}`;
   // The host's proxy takes the full target URL as its path.
-  return fish?.viaProxy === false ? target : `/proxy/${target}`;
+  return fishGoesDirect(fish, host) ? target : `/proxy/${target}`;
 }
 
 /**
@@ -1205,8 +1348,8 @@ export function fishEndpoint(fish, path) {
  * with its own explanation instead of a bare 403, and the proxy strips it before forwarding. A direct
  * call never carries the host's session token to a third party.
  */
-export function fishHeaders(fish, hostHeaders = {}) {
-  const base = fish?.viaProxy === false ? {} : { ...hostHeaders };
+export function fishHeaders(fish, hostHeaders = {}, { host = 'sillytavern' } = {}) {
+  const base = fishGoesDirect(fish, host) ? {} : { ...hostHeaders };
   return {
     ...base,
     'Content-Type': 'application/json',
@@ -1215,7 +1358,10 @@ export function fishHeaders(fish, hostHeaders = {}) {
   };
 }
 
-export function describeFishFailure({ status = 0, body = '', viaProxy = true, network = false } = {}) {
+export function describeFishFailure({ status = 0, body = '', viaProxy = true, network = false, host = 'sillytavern' } = {}) {
+  if (network && host === 'tauritavern') {
+    return 'TauriTavern 里没有酒馆那条 CORS 代理，api.fish.audio 又不让网页直接访问，所以请求发不出去。在「接口地址」填一个自己的、带跨域头的转发地址（使用手册里有现成的 Cloudflare Worker 脚本），或者等 TauriTavern 加上通用代理。config.yaml 那一步在 TauriTavern 里不存在，不用做。';
+  }
   if (network) {
     return viaProxy
       ? '连不上酒馆的代理接口，检查酒馆是否还在运行。'

@@ -178,7 +178,7 @@ test('the light analysis labels utterances once per text version and never rewri
     { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2, text: '我操好热啊！' },
   ]);
   const input = JSON.parse(requests[0].messages.at(-1).content);
-  assert.equal(input.task, 'label_utterances_for_audiobook', 'the stream reads lightly by default');
+  assert.equal(input.task, 'sketch_voices_for_audiobook', 'a floor without a skeleton gets the simple reading');
   assert.deepEqual(input.utterances.map(item => item.text), ['蓝蓝的天空，泰罗说：', '「我操好热啊！」']);
 
   await __testing.prepareTtsSegments(floor, settings);
@@ -259,7 +259,7 @@ test('the deep reading leans on the translation\'s labels: an id alone keeps the
   const floor = await __testing.collectTtsFloor(0, settings);
   const { segments } = await __testing.prepareTtsSegments(floor, settings);
   const input = JSON.parse(requests[0].messages.at(-1).content);
-  assert.deepEqual(input.hints, [{ id: 2, speaker: '泰罗', emotion: 'happy', intensity: 1 }]);
+  assert.deepEqual(input.skeleton, [{ id: 2, speaker: '泰罗', emotion: 'happy', intensity: 1 }]);
   assert.equal('references' in input, false, 'no context asked for, none sent');
   assert.deepEqual(segments.map(item => [item.type, item.speaker, item.emotion]), [['narration', 'narrator', null], ['dialogue', '泰罗', 'happy']]);
   assert.deepEqual(segments[1].voice, { emotion: 'happy', intensity: 1, restraint: 2, volume: 'quiet' }, 'the hint\'s mood sits under the model\'s restraint');
@@ -299,11 +299,11 @@ test('reading both languages: the original is labelled from the translation\'s r
   assert.notEqual(source.floorId, translation.floorId, 'each language keeps its own recordings');
 });
 
-test('the stream can carry one sentence per request', async t => {
+test('a sentence clicked alone gets its paragraph, and the paragraph is never made twice', async t => {
   restoreGlobals(t);
   const { context } = mockHost('tts-stream-sentence');
   const settings = __testing.configureForTest({
-    settings: { tts: { enabled: true, mode: 'stream', streamUnit: 'sentence', analysis: 'annotations', narratorVoice: 'voice-narrator', fish: FISH } },
+    settings: { tts: { enabled: true, mode: 'simple', narratorVoice: 'voice-narrator', fish: FISH } },
   });
   context.chat.push(await translatedFloor('一。二。', [[1, '第一句。第二句。']], settings));
   const calls = mockFish();
@@ -311,12 +311,12 @@ test('the stream can carry one sentence per request', async t => {
   const { segments } = await __testing.prepareTtsSegments(floor, settings);
   const { items } = await __testing.ttsItemsFor(floor, segments, settings);
   assert.equal(items.length, 2);
-  const first = await __testing.resolveTtsEntry(floor, items, items[1], settings);
-  assert.equal(first.record.unit, 'sentence:2');
+  const first = await __testing.resolveTtsEntry(floor, items, items[1], settings, null, null, { single: true });
+  assert.equal(first.record.unit, 'line:1', 'the paragraph is the unit');
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].body.text, '第二句。');
-  assert.equal(await __testing.pregenerateTtsFloor(0, { quiet: true }), 1, 'only the sentence not yet made');
-  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.text, '第一句。\n第二句。');
+  assert.equal(await __testing.pregenerateTtsFloor(0, { quiet: true }), 0, 'the whole floor is already made');
+  assert.equal(calls.length, 1);
 });
 
 test('a failed analysis reads with the translation annotations and asks again next time', async t => {
@@ -379,23 +379,25 @@ test('the stream records one paragraph per request, and a sentence already recor
   assert.equal(again.cached, true);
   assert.equal(calls.length, 1);
 
-  // Switching to the whole-floor mode still finds it, and the rest of the floor is one more request.
-  const wholeFloor = __testing.configureForTest({ settings: { tts: { ...settings.tts, mode: 'floor' } } });
-  const found = await __testing.findTtsEntry(floor, items[1], wholeFloor);
-  assert.equal(found.record.unit, 'line:2', 'the paragraph recording answers for the sentence in floor mode too');
-  const third = await __testing.resolveTtsEntry(floor, items, items[2], wholeFloor);
+  // The deep reading finds it too, and the next paragraph is its own request in either reading.
+  const deep = __testing.configureForTest({ settings: { tts: { ...settings.tts, mode: 'deep' } } });
+  const found = await __testing.findTtsEntry(floor, items[1], deep);
+  assert.equal(found.record.unit, 'line:2', 'the paragraph recording answers for the sentence in the deep reading too');
+  const third = await __testing.resolveTtsEntry(floor, items, items[2], deep);
   assert.equal(third.cached, false);
   assert.equal(calls.length, 2);
-  assert.match(calls[1].body.text, /<\|speaker:0\|>蓝蓝的天空上有红红的太阳。\n<\|speaker:1\|>\[surprised\] 你怎么来了？\n<\|speaker:0\|>泰罗放下了杯子。/);
-  assert.deepEqual(calls[1].body.reference_id, ['voice-narrator', 'voice-taro']);
-  assert.equal(third.record.unit, 'floor:all');
-  assert.equal(third.record.timeline.length, 3);
+  assert.equal(calls[1].body.text, '泰罗放下了杯子。');
+  assert.equal(calls[1].body.reference_id, 'voice-narrator');
+  assert.equal(third.record.unit, 'line:3');
+  assert.equal(third.record.timeline.length, 1);
   assert.ok(third.record.timeline.every(entry => entry.coverage === 1));
 
-  // Back in the stream, every sentence is covered by the floor recording: nothing more is requested.
+  // Making the floor ahead of time only makes the paragraph still missing; then nothing is left.
+  assert.equal(await __testing.pregenerateTtsFloor(0, { quiet: true }), 1);
+  assert.equal(calls.length, 3);
   for (const item of items) assert.ok(await __testing.findTtsEntry(floor, item, settings));
   assert.equal(await __testing.pregenerateTtsFloor(0, { quiet: true }), 0);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
 });
 
 test('nobody is silenced for want of a voice: no ids means Fish\'s own default, and Fish failures read plainly', async t => {
@@ -661,7 +663,7 @@ test('the stream reads from the translation\'s own labels and asks the sub-model
   const bare = await __testing.collectTtsFloor(1, settings);
   const read = await __testing.prepareTtsSegments(bare, settings);
   assert.equal(requests, 1);
-  assert.equal(read.depth, 'light');
+  assert.equal(read.depth, 'simple');
   assert.equal(read.segments[0].speaker, '泰罗');
 });
 
@@ -680,12 +682,12 @@ test('one sentence clicked on an unrecorded floor gets its paragraph now, not th
   assert.equal(clicked.record.unit, 'line:2');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].body.text, '第二段。');
-  // Once made, the sentence is found whatever asks for it; the whole floor is still one request when played.
+  // Once made, the sentence is found whatever asks for it; playing the floor makes the other paragraphs each on their own.
   assert.ok(await __testing.findTtsEntry(floor, items[1], settings));
   const whole = await __testing.resolveTtsEntry(floor, items, items[0], settings);
-  assert.equal(whole.record.unit, 'floor:all');
+  assert.equal(whole.record.unit, 'line:1');
   assert.equal(calls.length, 2);
-  assert.equal(calls[1].body.text, '第一段。\n第二段。\n第三段。');
+  assert.equal(calls[1].body.text, '第一段。');
 });
 
 test('the parts of one recording go to Fish side by side and are stored in order', async t => {

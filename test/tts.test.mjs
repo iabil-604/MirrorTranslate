@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { DEFAULT_TTS, formatPairList, mergeSettings, normalizeTts, normalizeVoiceLibrary, normalizeVoiceList, parsePairList } from '../core.js';
 import {
   FISH_EMOTIONS,
+  SOUND_TAGS,
   FISH_TONES,
   NARRATOR,
   alignSpansToTimeline,
@@ -15,6 +16,7 @@ import {
   buildTtsAnalysisMessages,
   buildVoiceAnalysisMessages,
   compileVoiceCues,
+  consoleDirections,
   createSseParser,
   createTimestampCollector,
   cueLabel,
@@ -38,6 +40,7 @@ import {
   parseVoiceAnalysis,
   planFishParts,
   planVoices,
+  plainLineText,
   playbackWindow,
   recordCovers,
   recordingCacheKey,
@@ -133,12 +136,19 @@ test('the analysis request carries ids and never offers the model a place to ret
   const messages = buildTtsAnalysisMessages(utterances, { roster: ['泰罗', '佐菲'], characterName: '泰罗', userName: '玩家' });
   assert.equal(messages.length, 2);
   const input = JSON.parse(messages[1].content);
-  assert.equal(input.task, 'label_utterances_for_audiobook');
+  assert.equal(input.task, 'sketch_voices_for_audiobook');
   assert.deepEqual(input.roster, ['泰罗', '佐菲']);
+  assert.deepEqual(input.emotions, FISH_EMOTIONS);
+  assert.deepEqual(input.sounds, SOUND_TAGS);
+  assert.equal('styles' in input, false, 'no console set, none sent');
   assert.deepEqual(input.utterances, [{ id: 1, kind: 'narration', text: '泰罗说：' }, { id: 2, kind: 'quoted', text: '「我操好热啊！」' }]);
   assert.match(messages[0].content, /不要输出 text/);
-  assert.match(messages[0].content, /lang 是这一句的语言代码/);
+  assert.match(messages[0].content, /direction：一句中文配音指令/);
+  assert.match(messages[0].content, /lang：这一句的语言代码/);
   assert.doesNotMatch(messages[0].content, /"text":/);
+  // The consoles ride along as sentences under each name.
+  const styled = JSON.parse(buildTtsAnalysisMessages(utterances, { styles: [{ name: '泰罗', rules: ['语速偏快：多用 fast，急的时候更快。'] }, { name: '', rules: ['x'] }] })[1].content);
+  assert.deepEqual(styled.styles, [{ name: '泰罗', rules: ['语速偏快：多用 fast，急的时候更快。'] }]);
 });
 
 test('analysis labels are validated and any text the model sends back is ignored', () => {
@@ -261,16 +271,22 @@ test('the deep request carries the cast, the references and the voice fields, st
   assert.deepEqual(input.references, { character: '泰罗：怕热，嘴硬。', worldbook: '教室没有空调。', recent: '【第 3 楼】泰罗擦汗。' });
   assert.deepEqual(input.emotions, FISH_EMOTIONS);
   assert.deepEqual(input.utterances.map(item => item.text), ['泰罗压低了声音：', '「我……我要裸奔啦。」']);
-  for (const field of ['subtext', 'restraint', 'pauses', 'stress', 'shifts', 'sounds', 'breath', 'hesitation']) assert.match(messages[0].content, new RegExp(field));
+  for (const field of ['direction', 'pauses', 'stress', 'shift', 'sounds', 'speed', 'volume', 'skeleton', 'previous', 'styles']) assert.match(messages[0].content, new RegExp(field));
   for (const gone of ['trend', 'pitch', 'energy', 'rhythm', 'ending', 'urgency', 'delivery', 'focus']) assert.doesNotMatch(messages[0].content, new RegExp(`- ${gone}`));
-  assert.match(messages[0].content, /情绪惯性/);
+  assert.match(messages[0].content, /不是惯性/);
   assert.match(messages[0].content, /省力原则/);
   assert.match(messages[0].content, /不要输出 text/);
-  assert.equal('hints' in input, false);
-  // The translation's own labels ride along as hints, and a custom prompt replaces the built-in one.
+  assert.match(messages[0].content, /OOC/);
+  assert.equal('skeleton' in input, false);
+  assert.deepEqual(input.sounds, SOUND_TAGS);
+  // The translation's own labels ride along as the skeleton, and a custom prompt replaces the built-in one.
   const hinted = buildVoiceAnalysisMessages(utterances, { userName: '玩家', hints: new Map([[2, { type: 'dialogue', speaker: '泰罗', emotion: 'shy', intensity: 1 }]]), systemPrompt: '自定义提示词，{{user}}标签：{{sounds}}' });
-  assert.deepEqual(JSON.parse(hinted[1].content).hints, [{ id: 2, speaker: '泰罗', emotion: 'shy', intensity: 1 }]);
-  assert.equal(hinted[0].content, '自定义提示词，用户扮演的角色叫 玩家。标签：sighing / gasping / sobbing / laughing / chuckling / groaning / panting / crying loudly / clear throat / yawning');
+  assert.deepEqual(JSON.parse(hinted[1].content).skeleton, [{ id: 2, speaker: '泰罗', emotion: 'shy', intensity: 1 }]);
+  assert.equal(hinted[0].content, `自定义提示词，用户扮演的角色叫 玩家。标签：${SOUND_TAGS.join(' / ')}`);
+  // What the speakers said last, and the consoles, ride along too.
+  const rich = JSON.parse(buildVoiceAnalysisMessages(utterances, { previous: [{ speaker: '泰罗', text: '不热。', direction: '嘴硬' }, { speaker: '', text: 'x' }], styles: [{ name: '默认', rules: ['停顿感强'] }] })[1].content);
+  assert.deepEqual(rich.previous, [{ speaker: '泰罗', text: '不热。', direction: '嘴硬' }]);
+  assert.deepEqual(rich.styles, [{ name: '默认', rules: ['停顿感强'] }]);
 });
 
 test('the deep reply becomes labels plus a checked voice per sentence', () => {
@@ -301,7 +317,7 @@ test('the deep reply becomes labels plus a checked voice per sentence', () => {
   assert.deepEqual(voice.pauses, [{ after: '我', length: 'long' }], 'a pause after a word the sentence lacks is dropped');
   assert.deepEqual(voice.stress, ['裸奔']);
   assert.deepEqual(voice.shifts, [{ at: '我要', emotion: 'shy' }]);
-  assert.deepEqual(voice.sounds, [{ at: 'start', tag: 'sighing' }, { at: 'end', tag: 'nonsense' }]);
+  assert.deepEqual(voice.sounds, [{ at: 'start', tag: 'sighing' }], 'a sound that is neither one of Fish\'s nor a short Chinese word is dropped');
   assert.equal('trend' in voice, false, 'fields that never became a cue are no longer kept');
   assert.equal('state' in voice, false);
   assert.equal(voices.get(1), undefined, 'a plain narration line carries no voice');
@@ -632,8 +648,14 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
     voiceLibrary: [{ name: '少年', voiceId: 'lib-1', lang: 'zh' }],
   });
   assert.equal(settings.tts.enabled, true);
-  assert.equal(settings.tts.mode, 'stream', 'the old sentence mode lives on as the stream');
-  assert.equal(settings.tts.analysis, 'auto', 'the old model analysis follows the mode');
+  assert.equal(settings.tts.mode, 'simple', 'the old sentence and stream modes are the simple reading now');
+  assert.equal('analysis' in settings.tts, false, 'the depth is the mode');
+  assert.equal(mergeSettings({ tts: { mode: 'floor' } }).tts.mode, 'deep', 'the whole-floor mode read deeply');
+  assert.equal(mergeSettings({ tts: { mode: 'stream', analysis: 'deep' } }).tts.mode, 'deep', 'a depth named outright wins');
+  assert.equal(mergeSettings({ tts: { prompts: { light: '旧的' } } }).tts.prompts.simple, '旧的', 'the light prompt is the simple prompt');
+  assert.equal(settings.tts.sanitizeHtml, true);
+  assert.deepEqual(settings.tts.console, { pause: 50, breath: 50, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '' });
+  assert.deepEqual(mergeSettings({ tts: { console: { pause: 150, breath: -3, rules: ' a \n\n b ' } } }).tts.console, { pause: 100, breath: 0, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: 'a\nb' });
   assert.equal(settings.tts.range, 'dialogue');
   assert.deepEqual(settings.tts.quotePairs, ['“”', '** **']);
   assert.deepEqual(settings.tts.skipPairs, ['* *']);
@@ -645,7 +667,9 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.equal(settings.tts.fish.viaProxy, false);
   assert.equal(settings.tts.fish.baseUrl, 'https://api.fish.audio');
   assert.equal(settings.tts.fish.key, 'sk-x');
-  assert.deepEqual(settings.ttsVoices, { 'card.png': [{ name: '泰罗', aliases: [], voiceId: 'abc', voices: {}, locked: true, title: '' }] });
+  assert.deepEqual(settings.ttsVoices, { 'card.png': [{ name: '泰罗', aliases: [], voiceId: 'abc', voices: {}, locked: true, title: '', console: null }] });
+  assert.deepEqual(normalizeVoiceList([{ name: '樱井', console: { breath: 80, rules: '害羞时别太娇' } }])[0].console, { pause: 50, breath: 80, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '害羞时别太娇' });
+  assert.equal(normalizeVoiceList([{ name: '樱井', console: { breath: 50 } }])[0].console, null, 'a console left in the middle is no console');
   assert.deepEqual(settings.voiceLibrary, [{ id: 'voice-1', name: '少年', voiceId: 'lib-1', lang: 'zh', title: '' }]);
   assert.deepEqual(mergeSettings({}).tts, normalizeTts(undefined));
   assert.deepEqual(mergeSettings({}).tts.sourceTags, ['jy-translation']);
@@ -748,7 +772,7 @@ test('the sentences before a batch ride along as lead, to be read and never answ
   assert.equal(deepInput.lead.length, 1);
   assert.equal(deepInput.lead[0].id, 1);
   assert.match(deepInput.lead[0].text, /空调/);
-  assert.match(deep[0].content, /lead，那是这一批前面紧挨着的几句/);
+  assert.match(deep[0].content, /lead 是这一批前面紧挨着的几句/);
   const light = buildTtsAnalysisMessages(batch, { lead });
   const lightInput = JSON.parse(light[1].content);
   assert.deepEqual(lightInput.lead.map(item => item.id), [1]);
@@ -809,8 +833,98 @@ test('the deep request hands the translation\'s own Fish words and tones on as h
   const hints = new Map([[1, { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 1 }]]);
   const hintVoices = new Map([[1, { emotion: 'frustrated', tone: 'soft tone', intensity: 1 }]]);
   const input = JSON.parse(buildVoiceAnalysisMessages(utterances, { hints, hintVoices })[1].content);
-  assert.deepEqual(input.hints, [{ id: 1, speaker: '泰罗', emotion: 'frustrated', intensity: 1, tone: 'soft tone' }]);
-  assert.deepEqual(JSON.parse(buildVoiceAnalysisMessages(utterances, { hints })[1].content).hints, [{ id: 1, speaker: '泰罗', emotion: 'angry', intensity: 1 }]);
+  assert.deepEqual(input.skeleton, [{ id: 1, speaker: '泰罗', emotion: 'frustrated', intensity: 1, tone: 'soft tone' }]);
+  assert.deepEqual(JSON.parse(buildVoiceAnalysisMessages(utterances, { hints })[1].content).skeleton, [{ id: 1, speaker: '泰罗', emotion: 'angry', intensity: 1 }]);
+  // A direction from the translation rides in the skeleton with the words it points at.
+  const directed = new Map([[1, { direction: '压着火，装冷淡', speed: 'slow', stress: ['走'], sounds: [{ at: 'end', tag: '叹气' }] }]]);
+  assert.deepEqual(JSON.parse(buildVoiceAnalysisMessages(utterances, { hints, hintVoices: directed })[1].content).skeleton, [{ id: 1, speaker: '泰罗', emotion: 'angry', intensity: 1, direction: '压着火，装冷淡', speed: 'slow', stress: ['走'], sounds: [{ at: 'end', tag: '叹气' }] }]);
   assert.equal(normalizeTts({ fish: { concurrency: 9 } }).fish.concurrency, 4);
   assert.equal(normalizeTts({}).fish.concurrency, 2);
+});
+
+test('a direction goes to the S2 models in the reader\'s own words, with the marks at their words', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '「热死了，我才不想喝，你去给别人喝吧……也不是不行。」' }]);
+  const voice = normalizeVoice({
+    direction: ' 压着火，装冷淡，语速稍慢 ', emotion: 'frustrated', speed: 'slow', volume: 'quiet',
+    stress: ['别人', '不在句里'], pauses: [{ after: '也', length: 'long' }], shift: { at: '也不是', direction: '松下来，带一点期待' },
+    sounds: [{ at: 'start', tag: '轻笑' }, { at: 'after', after: '喝吧', tag: '叹气' }, { at: 'end', tag: 'chuckling' }, { at: 'end', tag: 'nonsense' }],
+  }, utterances[0].text);
+  assert.equal(voice.direction, '压着火，装冷淡，语速稍慢');
+  assert.deepEqual(voice.shifts, [{ at: '也不是', direction: '松下来，带一点期待' }]);
+  assert.deepEqual(voice.sounds, [{ at: 'start', tag: '轻笑' }, { at: 'after', tag: '叹气', after: '喝吧' }, { at: 'end', tag: 'chuckling' }]);
+  const segment = { ...utterances[0], type: 'dialogue', speaker: '泰罗', voice };
+  const compiled = compileVoiceCues(segment, { model: 's2-pro' });
+  assert.deepEqual(compiled.cues, ['[压着火，装冷淡，语速稍慢]', '[轻笑]']);
+  assert.equal(compiled.text, '热死了，我才不想喝，你去给 [重读] 别人喝吧…… [叹气] [松下来，带一点期待] 也 [长停顿] 不是不行。');
+  assert.equal(compiled.tail, '[chuckling]');
+  assert.equal(compiled.speed, 'slow');
+  assert.equal(compiled.volume, 'quiet');
+  assert.equal(sentenceFishText({ segment }, { model: 's2-pro' }), '[压着火，装冷淡，语速稍慢][轻笑] 热死了，我才不想喝，你去给 [重读] 别人喝吧…… [叹气] [松下来，带一点期待] 也 [长停顿] 不是不行。 [chuckling]');
+  assert.equal(stripCues(sentenceFishText({ segment }, { model: 's2-pro' })), '热死了，我才不想喝，你去给 别人喝吧…… 也 不是不行。', 'every mark comes off again for alignment');
+  // S1 cannot read free-form words: the mood word and Fish\'s own sound tags stand in.
+  const s1 = compileVoiceCues(segment, { model: 's1' });
+  assert.deepEqual(s1.cues, ['(frustrated)', '(soft tone)', '(chuckling)'], 'quiet without restraint is a soft tone');
+  assert.equal(s1.text, '热死了，我才不想喝，你去给别人喝吧 (sighing) ……也 (long-break) 不是不行。');
+  assert.equal(s1.tail, '(chuckling)');
+  assert.ok(voiceSummary(voice).some(([term, value]) => term === '指令' && value === '压着火，装冷淡，语速稍慢'));
+  assert.ok(voiceSummary(voice).some(([term, value]) => term === '非语言声' && value === '开头轻笑，「喝吧」后叹气，句尾轻笑'));
+});
+
+test('the translation\'s marks carry the direction and its words into the reading, checked against the sentence', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '泰罗说：「热死了，我才不想喝。」' }]);
+  const annotations = new Map([[1, { speaker: '泰罗', emotion: 'frustrated', intensity: 2, direction: '压着火，装冷淡', speed: 'slow', stress: ['不想'], pauses: [{ after: '不存在', length: 'long' }], sounds: [{ at: 'end', tag: '叹气' }] }]]);
+  const { labels, voices } = annotationReading(utterances, annotations);
+  assert.deepEqual(labels.get(2), { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2 });
+  assert.deepEqual(voices.get(2), { direction: '压着火，装冷淡', speed: 'slow', stress: ['不想'], sounds: [{ at: 'end', tag: '叹气' }], emotion: 'frustrated', intensity: 2 });
+  const segments = buildSegments(utterances, labels, { voices });
+  assert.equal(sentenceFishText({ segment: segments[1] }, { model: 's2-pro' }), '[压着火，装冷淡] 热死了，我才 [重读] 不想喝。 [叹气]');
+  // The other language keeps the direction and the sounds at either end, not the words it points at.
+  const other = splitUtterances([{ lineId: 1, text: 'タロウ：「暑い、飲みたくない。」' }]);
+  const derived = deriveLabelsForSide(utterances, labels, voices, other);
+  assert.deepEqual(derived.voices.get(2), { direction: '压着火，装冷淡', speed: 'slow', sounds: [{ at: 'end', tag: '叹气' }], emotion: 'frustrated', intensity: 2 });
+});
+
+test('a console becomes sentences at its ends and says nothing in the middle', () => {
+  assert.deepEqual(consoleDirections({ pause: 50, breath: 50, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '' }), []);
+  const lines = consoleDirections({ pause: 80, breath: 20, grain: 50, intensity: 70, range: 30, speed: 100, expression: 0, rules: '害羞时不要过度娇柔\n\n生气时保持克制' });
+  assert.equal(lines.length, 8);
+  assert.match(lines[0], /^停顿感强/);
+  assert.match(lines[1], /^几乎不带呼吸声/);
+  assert.match(lines[2], /^情感强度高/);
+  assert.match(lines[3], /^情绪表现幅度小/);
+  assert.match(lines[4], /^语速偏快/);
+  assert.match(lines[5], /^声音表现克制/);
+  assert.deepEqual(lines.slice(6), ['害羞时不要过度娇柔', '生气时保持克制']);
+  assert.deepEqual(consoleDirections(null), []);
+});
+
+test('the lines a floor reads lose their markup before anything hears them', () => {
+  assert.equal(plainLineText('<span style="color:#78B750;font-size:0.85em;">真的可以用……<strong>帮您</strong>吗……？</span>'), '真的可以用……帮您吗……？');
+  assert.equal(plainLineText('第一句<br>第二句 &amp; 第三句'), '第一句\n第二句 & 第三句');
+  const utterances = splitUtterances([{ lineId: 1, text: plainLineText('<p>泰罗说：<q>「<em>好热</em>！」</q></p>') }]);
+  assert.deepEqual(utterances.map(item => item.text), ['泰罗说：', '好热！'], 'the quoted run keeps its words, the marks stay on the anchor');
+  assert.equal(utterances[1].anchor, '「好热！」');
+});
+
+import { detectTtsHost, fishGoesDirect, fishEndpoint as fishEndpointOnHost, fishHeaders as fishHeadersOnHost, describeFishFailure as describeFishFailureOnHost } from '../tts.js';
+
+test('on TauriTavern a Fish call goes direct, carries no host headers, and fails with that host in mind', () => {
+  assert.equal(detectTtsHost({}), 'sillytavern');
+  assert.equal(detectTtsHost({ __TAURITAVERN__: { abiVersion: 1 } }), 'tauritavern');
+  assert.equal(detectTtsHost({ __TAURITAVERN_MAIN_READY__: Promise.resolve() }), 'tauritavern');
+  const fish = { baseUrl: 'https://api.fish.audio', viaProxy: true, key: 'k', model: 's2-pro' };
+  assert.equal(fishGoesDirect(fish, 'sillytavern'), false);
+  assert.equal(fishGoesDirect(fish, 'tauritavern'), true);
+  assert.equal(fishEndpointOnHost(fish, '/v1/tts'), '/proxy/https://api.fish.audio/v1/tts');
+  assert.equal(fishEndpointOnHost(fish, '/v1/tts', { host: 'tauritavern' }), 'https://api.fish.audio/v1/tts');
+  assert.equal(fishEndpointOnHost({ ...fish, baseUrl: 'https://relay.example/fish/' }, '/v1/tts', { host: 'tauritavern' }), 'https://relay.example/fish/v1/tts');
+  const headers = fishHeadersOnHost(fish, { 'X-CSRF-Token': 't' }, { host: 'tauritavern' });
+  assert.equal(headers['X-CSRF-Token'], undefined);
+  assert.equal(headers.Authorization, 'Bearer k');
+  assert.ok(fishHeadersOnHost(fish, { 'X-CSRF-Token': 't' })['X-CSRF-Token']);
+  const message = describeFishFailureOnHost({ network: true, viaProxy: true, host: 'tauritavern' });
+  assert.match(message, /TauriTavern/);
+  assert.match(message, /转发地址/);
+  assert.doesNotMatch(message, /检查酒馆是否还在运行/);
+  assert.match(describeFishFailureOnHost({ network: true, viaProxy: true }), /检查酒馆是否还在运行/);
 });

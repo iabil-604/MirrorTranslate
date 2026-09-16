@@ -1,7 +1,7 @@
-import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.21.0';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.21.0';
-import { EMOTION_KEYS } from './palette.js?v=0.21.0';
-import { FISH_EMOTIONS, FISH_TONES } from './tts.js?v=0.21.0';
+import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.22.0';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.22.0';
+import { EMOTION_KEYS } from './palette.js?v=0.22.0';
+import { FISH_EMOTIONS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.22.0';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -189,7 +189,7 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
       emotion: annotate.emotions,
       ...(annotate.speakers && annotate.roster.length ? { roster: annotate.roster } : {}),
       ...(annotate.emotions ? { emotions: annotate.emotionLabels } : {}),
-      ...(annotate.voice ? { quotes: true, tones: annotate.tones } : {}),
+      ...(annotate.voice ? { quotes: true, direction: true, tones: annotate.tones, sounds: annotate.sounds } : {}),
     };
   }
   if (phase === 'style_repair') {
@@ -231,7 +231,9 @@ function annotationRequest(settings, phase, requestMeta) {
     emotionLabels: reading ? FISH_EMOTIONS : EMOTION_KEYS,
     voice: reading,
     tones: reading ? FISH_TONES : [],
+    sounds: reading ? SOUND_TAGS : [],
     quoteMarks: reading ? normalizeTts(settings.tts).quotePairs : [],
+    styles: reading && Array.isArray(requestMeta?.styles) ? requestMeta.styles : [],
   };
 }
 

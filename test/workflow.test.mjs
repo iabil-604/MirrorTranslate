@@ -230,10 +230,17 @@ test('the reading asks the translation for Fish\'s own words and one mark per qu
   assert.match(section.content, /不要把标注、情绪词或任何方括号标签写进 text/);
   const example = section.content.split('\n').find(line => line.startsWith('{"translations"'));
   const [item] = JSON.parse(example).translations;
-  assert.deepEqual(Object.keys(item), ['id', 'text', 'speaker', 'emotion', 'intensity', 'tone', 'quotes']);
-  assert.deepEqual(Object.keys(item.quotes[0]), ['head', 'speaker', 'emotion', 'intensity']);
+  assert.deepEqual(Object.keys(item), ['id', 'text', 'speaker', 'emotion', 'intensity', 'tone', 'direction', 'quotes']);
+  assert.deepEqual(Object.keys(item.quotes[0]), ['head', 'speaker', 'emotion', 'intensity', 'direction']);
+  assert.match(section.content, /direction：一句 20 字左右/);
+  assert.match(section.content, /轻笑/);
   const input = JSON.parse(messages.find(message => message.role === 'user').content);
   assert.equal(input.annotate.quotes, true);
+  assert.equal(input.annotate.direction, true);
+  assert.ok(input.annotate.sounds.includes('叹气'));
+  // The consoles reach the translation as rules under each name.
+  const styled = buildTranslationMessages(segments, reading, {}, 'primary', { roster: ['樱井'], styles: [{ name: '樱井', rules: ['气息感明显但自然。'] }] });
+  assert.match(styled.find(message => message.content.includes('附加标注')).content, /樱井：气息感明显但自然。/);
   assert.ok(input.annotate.emotions.includes('sarcastic'));
   assert.deepEqual(input.annotate.tones, ['whispering', 'soft tone', 'shouting', 'screaming', 'in a hurry tone']);
   assert.equal(buildTranslationMessages(segments, reading, {}, 'style_repair', {}).some(message => message.content.includes('附加标注')), false);

@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.21.0';
+} from './prompts.js?v=0.22.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.21.0';
+export const APP_VERSION = '0.22.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -273,7 +273,9 @@ export const DEFAULT_COLORING = Object.freeze({
 // 'floor' sends the whole floor as one recording after a deep reading of it; 'stream' sends one
 // paragraph at a time and starts playing as soon as the first one is back. The old 'sentence' mode is
 // folded into 'stream': a single sentence is found inside whichever recording already holds it.
-export const TTS_MODES = Object.freeze(['floor', 'stream']);
+// The two readings: the simple one gives every sentence its feeling, the deep one asks a model why
+// and how to play it, on top of the simple one.
+export const TTS_MODES = Object.freeze(['simple', 'deep']);
 export const TTS_RANGES = Object.freeze(['all', 'dialogue', 'narration']);
 // Which language is read: the translation, the original the floor was written in, or both — each
 // made on its own, every line getting a button in either language.
@@ -282,6 +284,22 @@ export const TTS_SIDES = Object.freeze(['translation', 'source', 'both']);
 export const TTS_STREAM_UNITS = Object.freeze(['line', 'sentence']);
 // 'auto' reads deeply for a whole floor and lightly for a stream; the rest pin one depth.
 export const TTS_ANALYSIS_MODES = Object.freeze(['auto', 'deep', 'light', 'annotations']);
+
+// A character's console: how its voice tends to pause, breathe, fray, feel, swing, hurry and sound.
+// Sliders run 0–100 with 50 as the ordinary setting. The numbers never reach a model as numbers; they
+// become sentences about the character's habits first.
+export const CONSOLE_KEYS = Object.freeze(['pause', 'breath', 'grain', 'intensity', 'range', 'speed', 'expression']);
+export const DEFAULT_CONSOLE = Object.freeze({ pause: 50, breath: 50, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '' });
+
+/** A console with every slider clamped and the rules trimmed; `sparse` returns null for an untouched one. */
+export function normalizeConsole(value, { sparse = false } = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const console = {};
+  for (const key of CONSOLE_KEYS) console[key] = clampInteger(source[key], 0, 100, DEFAULT_CONSOLE[key]);
+  console.rules = normalizeNewlines(String(source.rules ?? '')).split('\n').map(line => line.trim()).filter(Boolean).slice(0, 12).join('\n').slice(0, 800);
+  if (sparse && !console.rules && CONSOLE_KEYS.every(key => console[key] === 50)) return null;
+  return console;
+}
 export const TTS_DOWNLOAD_SCOPES = Object.freeze(['auto', 'floor', 'current']);
 // Where the character voice table lives: one per character card (every chat of the card shares it),
 // or one per chat, for a card played through several times with different casts.
@@ -405,10 +423,13 @@ export const DEFAULT_TTS = Object.freeze({
   // listening in the background and no audio store opened.
   enabled: false,
   side: 'translation',
-  mode: 'floor',
+  mode: 'simple',
   range: 'all',
-  analysis: 'auto',
   emotionCues: true,
+  // The copy sent to the voice loses the markup a preset or the colouring wrapped around the words.
+  sanitizeHtml: true,
+  // The console every character reads by unless a row has one of its own; the narrator's too.
+  console: DEFAULT_CONSOLE,
   // Sentences whose analysis asks for another speed or volume become their own request, since Fish
   // sets prosody per request; off keeps one request and says it with cues alone.
   prosodySplit: true,
@@ -417,13 +438,12 @@ export const DEFAULT_TTS = Object.freeze({
   // What 「保存到本地」 saves: the whole floor, the paragraph being read, or one or the other by mode.
   downloadScope: 'auto',
   voiceScope: 'character',
-  streamUnit: 'line',
   // Off means a click makes the audio and stops there; a second click on a made sentence plays it.
   playAfterGenerate: true,
   // Runs of ！！！ become one mark; the cue carries the strength instead of the voice shrieking.
   tamePunctuation: true,
   // The reader's own system prompts for the two readings; empty means the built-in ones.
-  prompts: Object.freeze({ deep: '', light: '' }),
+  prompts: Object.freeze({ simple: '', deep: '' }),
   // The saved connection the readings go to; empty follows the translation's own setting.
   channelId: '',
   quotePairs: DEFAULT_QUOTE_PAIRS,
@@ -802,7 +822,8 @@ export function normalizeVoiceList(value) {
       const voices = normalizeLanguageVoices(item.voices);
       // A row written before locks existed is locked exactly when it carries a voice of its own.
       const locked = item.locked === undefined ? Boolean(voiceId || Object.keys(voices).length) : item.locked === true;
-      return { name, aliases, voiceId, voices, locked, title: normalizeVoiceTitle(item.title) };
+      // A console of its own only when something on it was moved; null means the default console.
+      return { name, aliases, voiceId, voices, locked, title: normalizeVoiceTitle(item.title), console: normalizeConsole(item.console, { sparse: true }) };
     })
     .filter(item => {
       if (!item || seen.has(item.name)) return false;
@@ -874,26 +895,32 @@ function normalizeTtsContext(value) {
 export function normalizeTts(value) {
   const source = value && typeof value === 'object' ? value : {};
   const tags = parseTagNames(source.sourceTags ?? DEFAULT_TTS.sourceTags);
-  // 0.17 had a 'sentence' mode and a 'model' analysis; both have a home in the new choices.
-  const mode = source.mode === 'sentence' ? 'stream' : source.mode;
-  const analysis = source.analysis === 'model' ? 'auto' : source.analysis;
+  // Older settings named how the audio was made (whole floor, stream, sentence) and how deeply the
+  // floor was read (auto, deep, light, annotations). Only the depth survives as the mode: the whole
+  // floor read deeply, the stream read simply, and a depth named outright wins over either.
+  const legacyMode = source.mode === 'floor' ? 'deep' : ['stream', 'sentence'].includes(source.mode) ? 'simple' : source.mode;
+  const mode = TTS_MODES.includes(source.mode)
+    ? source.mode
+    : source.analysis === 'deep' ? 'deep' : ['light', 'annotations'].includes(source.analysis) ? 'simple' : legacyMode;
   return {
     enabled: source.enabled === true,
     side: TTS_SIDES.includes(source.side) ? source.side : DEFAULT_TTS.side,
     mode: TTS_MODES.includes(mode) ? mode : DEFAULT_TTS.mode,
     range: TTS_RANGES.includes(source.range) ? source.range : DEFAULT_TTS.range,
-    analysis: TTS_ANALYSIS_MODES.includes(analysis) ? analysis : DEFAULT_TTS.analysis,
     emotionCues: source.emotionCues === undefined ? DEFAULT_TTS.emotionCues : source.emotionCues !== false,
+    sanitizeHtml: source.sanitizeHtml === undefined ? DEFAULT_TTS.sanitizeHtml : source.sanitizeHtml !== false,
+    console: normalizeConsole(source.console),
     prosodySplit: source.prosodySplit === undefined ? DEFAULT_TTS.prosodySplit : source.prosodySplit !== false,
     autoGenerate: source.autoGenerate === true,
     downloadScope: TTS_DOWNLOAD_SCOPES.includes(source.downloadScope) ? source.downloadScope : DEFAULT_TTS.downloadScope,
     voiceScope: TTS_VOICE_SCOPES.includes(source.voiceScope) ? source.voiceScope : DEFAULT_TTS.voiceScope,
-    streamUnit: TTS_STREAM_UNITS.includes(source.streamUnit) ? source.streamUnit : DEFAULT_TTS.streamUnit,
     playAfterGenerate: source.playAfterGenerate === undefined ? DEFAULT_TTS.playAfterGenerate : source.playAfterGenerate !== false,
     tamePunctuation: source.tamePunctuation === undefined ? DEFAULT_TTS.tamePunctuation : source.tamePunctuation !== false,
     prompts: {
+      // The light reading's prompt of earlier versions is the simple reading's now.
+      simple: typeof source.prompts?.simple === 'string' ? normalizeNewlines(source.prompts.simple).slice(0, 12000)
+        : typeof source.prompts?.light === 'string' ? normalizeNewlines(source.prompts.light).slice(0, 12000) : '',
       deep: typeof source.prompts?.deep === 'string' ? normalizeNewlines(source.prompts.deep).slice(0, 12000) : '',
-      light: typeof source.prompts?.light === 'string' ? normalizeNewlines(source.prompts.light).slice(0, 12000) : '',
     },
     channelId: String(source.channelId ?? '').trim().slice(0, 80),
     quotePairs: normalizePairStrings(source.quotePairs, DEFAULT_QUOTE_PAIRS),
@@ -2074,20 +2101,53 @@ export function isPlaceholderSpeaker(name) {
   return NON_SPEAKERS.has(String(name ?? '').trim().toLowerCase());
 }
 
-function readAnnotationFields(object) {
+/**
+ * One mark as a model wrote it, field by field: who, in what mood, and the reading's own words for how
+ * the line is said. The words a mark points at (stress, pauses, sounds, the turn) are kept as written
+ * here and checked against the sentence where the mark is placed on it.
+ */
+export function readAnnotationFields(object) {
   if (!object || typeof object !== 'object') return null;
   const reportedSpeaker = String(object.speaker ?? object.who ?? object.name ?? object.character ?? '').trim().slice(0, 60);
   const speaker = isPlaceholderSpeaker(reportedSpeaker) ? '' : reportedSpeaker;
   const tone = String(object.tone ?? '').trim().slice(0, 30);
   // `tone` used to be read as the mood; a mark with a tone and no mood still is.
   const emotion = String(object.emotion ?? object.emo ?? object.mood ?? (tone || '')).trim().slice(0, 40);
-  if (!speaker && !emotion) return null;
+  const direction = String(object.direction ?? object.instruction ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!speaker && !emotion && !direction) return null;
   const intensity = Number(object.intensity ?? object.level ?? object.strength);
   const annotation = {};
   if (speaker) annotation.speaker = speaker;
   if (emotion) annotation.emotion = emotion;
   if (Number.isFinite(intensity)) annotation.intensity = Math.min(2, Math.max(0, Math.round(intensity)));
   if (tone) annotation.tone = tone;
+  if (direction) annotation.direction = direction;
+  const speed = String(object.speed ?? '').trim().toLowerCase();
+  if (speed === 'slow' || speed === 'fast') annotation.speed = speed;
+  const volume = String(object.volume ?? '').trim().toLowerCase();
+  if (volume === 'quiet' || volume === 'loud') annotation.volume = volume;
+  const word = value => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 20);
+  const stress = [...new Set((Array.isArray(object.stress) ? object.stress : [object.stress]).map(word).filter(Boolean))].slice(0, 3);
+  if (stress.length) annotation.stress = stress;
+  const pauses = (Array.isArray(object.pauses) ? object.pauses : [])
+    .map(pause => ({ after: word(pause?.after ?? pause?.word), length: pause?.length === 'long' ? 'long' : 'short' }))
+    .filter(pause => pause.after)
+    .slice(0, 4);
+  if (pauses.length) annotation.pauses = pauses;
+  const sounds = (Array.isArray(object.sounds) ? object.sounds : [])
+    .map(sound => {
+      const after = word(sound?.after);
+      const at = sound?.at === 'end' ? 'end' : (sound?.at === 'after' && after) ? 'after' : 'start';
+      return { at, tag: word(sound?.tag ?? sound?.sound), ...(at === 'after' ? { after } : {}) };
+    })
+    .filter(sound => sound.tag)
+    .slice(0, 3);
+  if (sounds.length) annotation.sounds = sounds;
+  const shiftSource = object.shift && typeof object.shift === 'object' ? object.shift : (Array.isArray(object.shifts) ? object.shifts[0] : null);
+  if (shiftSource && typeof shiftSource === 'object') {
+    const shift = { at: word(shiftSource.at ?? shiftSource.word), direction: String(shiftSource.direction ?? shiftSource.emotion ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) };
+    if (shift.at && shift.direction) annotation.shift = shift;
+  }
   return annotation;
 }
 
