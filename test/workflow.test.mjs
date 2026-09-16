@@ -218,6 +218,32 @@ test('the annotation section restates the output shape, because §9 shows an id/
   assert.deepEqual(Object.keys(JSON.parse(speakerShape[0]).translations[0]), ['id', 'text', 'speaker']);
 });
 
+test('the reading asks the translation for Fish\'s own words and one mark per quoted run, colouring or not', () => {
+  const reading = mergeSettings({ tts: { enabled: true } });
+  const segments = [{ id: 1, text: '「来たんだね」' }];
+  const messages = buildTranslationMessages(segments, reading, {}, 'primary', { roster: ['樱井'] });
+  const section = messages.find(message => message.content.includes('附加标注'));
+  assert.ok(section, 'the reading alone is reason enough to label');
+  assert.match(section.content, /frustrated/);
+  assert.match(section.content, /whispering \/ soft tone \/ shouting \/ screaming \/ in a hurry tone/);
+  assert.match(section.content, /「」/);
+  assert.match(section.content, /不要把标注、情绪词或任何方括号标签写进 text/);
+  const example = section.content.split('\n').find(line => line.startsWith('{"translations"'));
+  const [item] = JSON.parse(example).translations;
+  assert.deepEqual(Object.keys(item), ['id', 'text', 'speaker', 'emotion', 'intensity', 'tone', 'quotes']);
+  assert.deepEqual(Object.keys(item.quotes[0]), ['head', 'speaker', 'emotion', 'intensity']);
+  const input = JSON.parse(messages.find(message => message.role === 'user').content);
+  assert.equal(input.annotate.quotes, true);
+  assert.ok(input.annotate.emotions.includes('sarcastic'));
+  assert.deepEqual(input.annotate.tones, ['whispering', 'soft tone', 'shouting', 'screaming', 'in a hurry tone']);
+  assert.equal(buildTranslationMessages(segments, reading, {}, 'style_repair', {}).some(message => message.content.includes('附加标注')), false);
+  // Colouring on its own keeps the palette's twelve and asks for nothing per run.
+  const colouring = buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true } }), {}, 'primary', {});
+  const plain = colouring.find(message => message.content.includes('附加标注'));
+  assert.doesNotMatch(plain.content, /quotes/);
+  assert.doesNotMatch(plain.content, /sarcastic/);
+});
+
 test('recent context quotes the extracted body and leaves the surrounding panels behind', async () => {
   // A floor as the presets that prompted this actually build one: the prose is a small part of it,
   // wrapped in reasoning, a status panel and a choice list, all of which used to travel as context.

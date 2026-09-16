@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.19.1';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.21.0';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 
@@ -695,7 +695,7 @@ export function findForbiddenPhraseHits(translations, profile) {
  * colour, invent a vocabulary or emit markup — only to pick a name off a list it is given and a
  * label out of a closed set, with an explicit "leave it out if unsure" escape.
  */
-export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], emotionLabels = [] } = {}) {
+export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], emotionLabels = [], voice = false, tones = [], quoteMarks = [] } = {}) {
   if (!speakers && !emotions) return '';
   const fields = [];
   const rules = [];
@@ -716,8 +716,20 @@ export function composeAnnotationSection({ speakers = false, emotions = false, r
     example.emotion = '下列标签之一';
     example.intensity = 1;
     fields.push('emotion：这一段的情绪；intensity：情绪强度，0 弱、1 中、2 强');
-    rules.push(`emotion 只能取以下之一，逐字照抄：${emotionLabels.join('、')}。判断依据是这一段本身写出来的内容，不是你对剧情的推测。看不出明显情绪就写 neutral 或直接省略；不要为了填满字段而猜。`);
+    rules.push(voice
+      ? `emotion 只能取以下英文词之一，逐字照抄（这些是语音模型认得的情绪词）：${emotionLabels.join('、')}。判断依据是这一段本身写出来的内容，不是你对剧情的推测。看不出明显情绪就写 neutral 或直接省略；不要为了填满字段而猜。`
+      : `emotion 只能取以下之一，逐字照抄：${emotionLabels.join('、')}。判断依据是这一段本身写出来的内容，不是你对剧情的推测。看不出明显情绪就写 neutral 或直接省略；不要为了填满字段而猜。`);
     rules.push('intensity 只在 emotion 不是 neutral 时才有意义，默认 1。只有原文明确用了加强或减弱的写法（惊叹、破折号、省略号、气声、重复、加粗）才写 2 或 0。');
+  }
+  if (voice) {
+    // The reading wants each quoted run told apart, and the way a line is delivered when the text
+    // says so. The head is what places a mark on its run; a model that miscounts still lands most.
+    const marks = quoteMarks.length ? `（${quoteMarks.join(' ')} 这些符号里的话）` : '';
+    example.tone = '可选';
+    example.quotes = [{ head: '这句台词开头几个字', speaker: '名单中的名字', emotion: '下列标签之一', intensity: 1 }];
+    fields.push('tone：可选的说法；quotes：这一段里每一处台词各自的标注');
+    rules.push(`tone 可选，只能取 ${tones.join(' / ')} 之一，只在原文明确写了小声、耳语、喊、尖叫、急促这类说法时写，其余省略。`);
+    rules.push(`quotes：这一段的译文里有几处台词${marks}就写几项，按出现顺序；每项的 head 逐字照抄这句台词开头的 2 到 6 个字（不含引号），speaker、emotion、intensity、tone 只针对这一句台词，规则同上。整段没有台词就不写 quotes；只有一处台词时也可以不写，段级的字段就是它的。段级的 speaker 和 emotion 照常写，一段里有几个人说话时写主要的那一位。`);
   }
   return [
     '# 附加标注（本节替换输出协议里的 JSON 示例）',
@@ -725,6 +737,8 @@ export function composeAnnotationSection({ speakers = false, emotions = false, r
     '输出协议的其余要求全部不变，只有每项的字段变多。以本节的示例为准：',
     JSON.stringify({ translations: [example] }),
     ...rules,
-    '这些字段只影响译文在界面上的显示，不进入正文，也不影响翻译本身。字段缺失、拼错或不在允许取值内时会被忽略，界面按普通样式显示，因此拿不准时省略比猜测更好。绝对不要把标注写进 text，也不要因为要标注而改动译文措辞。',
+    voice
+      ? '这些字段只用于界面显示和朗读配音，不进入正文，也不影响翻译本身。字段缺失、拼错或不在允许取值内时会被忽略，因此拿不准时省略比猜测更好。绝对不要把标注、情绪词或任何方括号标签写进 text，也不要因为要标注而改动译文措辞。'
+      : '这些字段只影响译文在界面上的显示，不进入正文，也不影响翻译本身。字段缺失、拼错或不在允许取值内时会被忽略，界面按普通样式显示，因此拿不准时省略比猜测更好。绝对不要把标注写进 text，也不要因为要标注而改动译文措辞。',
   ].join('\n');
 }

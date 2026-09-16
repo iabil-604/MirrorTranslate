@@ -58,7 +58,7 @@ import {
   formatPairList,
   parseJsonCandidates,
   TTS_LANGUAGES,
-} from './core.js?v=0.19.1';
+} from './core.js?v=0.21.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -83,7 +83,7 @@ import {
   fishFingerprint,
   fishHeaders,
   groupSegmentsByLine,
-  labelsFromAnnotations,
+  annotationReading,
   linesFromTaggedText,
   locateAnchors,
   mergeWavBuffers,
@@ -103,14 +103,14 @@ import {
   toStandardDocument,
   voiceRosterNames,
   voiceSummary,
-} from './tts.js?v=0.19.1';
-import { createTtsStore } from './tts-store.js?v=0.19.1';
+} from './tts.js?v=0.21.0';
+import { createTtsStore } from './tts-store.js?v=0.21.0';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.19.1';
+} from './processing.js?v=0.21.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -127,8 +127,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.19.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.19.1';
+} from './prompts.js?v=0.21.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.21.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.21.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -142,15 +143,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.19.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.19.1';
+} from './palette.js?v=0.21.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.21.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.19.1';
+} from './diagnostics.js?v=0.21.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -187,6 +188,8 @@ const runtime = {
   // What a reasoning model is currently thinking. `text` is the whole thing so the log and the
   // expanded view can show it; the panel only paints the tail while it streams.
   thinking: { text: '', characters: 0, live: false, batch: 0, revision: 0 },
+  // Seconds the last few translation batches, readings and audio parts took, for the wait estimates.
+  timing: { translation: [], analysis: [], parts: [] },
   // null means "follow the default for this phase"; a click pins it either way until the next batch.
   thinkingOpen: null,
   // Who the model reported on the last floor, and whether the palette could paint each of them.
@@ -349,7 +352,7 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 匹配整行。纯边框、纯符号与标签行自动保留。</p></details>
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label></div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层每句后面的按钮</span><select data-jy-field="floorButtons"><option value="auto">自动（电脑显示，手机不显示）</option><option value="on">始终显示</option><option value="off">不显示，只在悬浮窗里点句子</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
 <details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
 <p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。</p>
@@ -369,10 +372,10 @@ const CONTROL_CENTER_MARKUP = `
 <section class="jy-page" data-jy-page="tts" role="tabpanel" hidden>
 <header class="jy-page-heading"><div><h1>朗读</h1><span class="jy-page-context">旁白和每个角色各用各的声音，多国语言各配各的音色，点哪句读哪句</span></div><button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button></header>
 <div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每一句后面会出现播放按钮和情绪按钮，底部有「朗读本楼」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
-<div class="jy-connection-choice" role="radiogroup" aria-label="生成方式"><label><input type="radio" name="jy-tts-mode" value="floor" data-jy-tts-field="mode"><span><strong>全篇发送</strong><small>副模型细读整楼再配音，情绪最饱满；整楼一次生成，点哪句跳哪句</small></span></label><label><input type="radio" name="jy-tts-mode" value="stream" data-jy-tts-field="mode"><span><strong>流式朗读</strong><small>按段生成、先到先播，分析得少、出声快；点哪句只生成那一段</small></span></label></div>
+<div class="jy-connection-choice" role="radiogroup" aria-label="生成方式"><label><input type="radio" name="jy-tts-mode" value="floor" data-jy-tts-field="mode"><span><strong>全篇发送</strong><small>副模型细读整楼再配音，情绪最饱满；「朗读本楼」整楼一次生成，点单句先只做那一段</small></span></label><label><input type="radio" name="jy-tts-mode" value="stream" data-jy-tts-field="mode"><span><strong>流式朗读</strong><small>按段生成、先到先播；用翻译时标好的说话人和情绪，不再请求副模型；点哪句只生成那一段</small></span></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">谁说的、什么情绪</span><select data-jy-tts-field="analysis"><option value="auto">跟随模式（全篇深度，流式轻量）</option><option value="deep">总是深度分析</option><option value="light">总是轻量分析</option><option value="annotations">只用翻译标注，不请求</option></select></label><label><span class="jy-label">分析用的副 API</span><select data-jy-tts-field="channelId"><option value="">跟随翻译的模型设置</option></select></label><label><span class="jy-label">流式朗读按</span><select data-jy-tts-field="streamUnit"><option value="line">段（一个自然段一次请求）</option><option value="sentence">句（一句一次请求，点哪句只做哪句）</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">跟随模式（全篇存整楼，流式存当前段）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">谁说的、什么情绪</span><select data-jy-tts-field="analysis"><option value="auto">跟随模式（全篇深度，流式用翻译标注）</option><option value="deep">总是深度分析</option><option value="light">轻量：用翻译标注，没标注的楼才问副模型</option><option value="annotations">只用翻译标注，从不请求</option></select></label><label><span class="jy-label">分析用的副 API</span><select data-jy-tts-field="channelId"><option value="">跟随翻译的模型设置</option></select></label><label><span class="jy-label">流式朗读按</span><select data-jy-tts-field="streamUnit"><option value="line">段（一个自然段一次请求）</option><option value="sentence">句（一句一次请求，点哪句只做哪句）</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">跟随模式（全篇存整楼，流式存当前段）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把情绪转成 Fish 的情绪标签一起发送</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼翻译完成后自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">生成完自动播放（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
@@ -411,8 +414,9 @@ const CONTROL_CENTER_MARKUP = `
 <label><span class="jy-label">语速（0.5–2）</span><input type="number" data-jy-tts-fish="speed" min="0.5" max="2" step="0.05"></label><label><span class="jy-label">音量调整 / dB</span><input type="number" data-jy-tts-fish="volume" min="-20" max="20" step="1"></label>
 <label><span class="jy-label">temperature</span><input type="number" data-jy-tts-fish="temperature" min="0" max="1" step="0.05"></label><label><span class="jy-label">top_p</span><input type="number" data-jy-tts-fish="topP" min="0" max="1" step="0.05"></label>
 <label><span class="jy-label">整篇发送时每次最多字数</span><input type="number" data-jy-tts-fish="maxChars" min="200" max="10000" step="100"></label><label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-tts-fish="timeoutSec" min="10" max="600" step="10"></label>
+<label><span class="jy-label">同时生成几段</span><select data-jy-tts-fish="concurrency"><option value="1">1（一段一段来，最稳）</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>
 <label class="jy-check"><input type="checkbox" data-jy-tts-fish="normalize">数字与符号规范化（中英文读数更稳）</label>
-</div><p class="jy-muted">改任何一项声音参数，已经缓存的音频都会按新参数重新生成。</p></details>
+</div><p class="jy-muted">改任何一项声音参数，已经缓存的音频都会按新参数重新生成；「同时生成几段」除外，它只影响整楼拆成几段请求时的等待时间，Fish 限流（429）就调回 1。</p></details>
 <details class="jy-advanced" data-jy-tts-preview-panel><summary>当前楼层的朗读结构</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-preview">分析最新一楼</button><button type="button" class="jy-button" data-jy-action="tts-pregenerate">生成最新一楼的音频（不播放）</button><button type="button" class="jy-button" data-jy-action="tts-copy-structure" hidden>复制朗读结构 JSON</button></div><div class="jy-tts-preview" data-jy-tts-preview></div></details>
 <div class="jy-advanced jy-tts-cache"><div class="jy-row-between"><div><h3>缓存</h3><p class="jy-muted" data-jy-tts-usage>正在读取…</p></div><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-clear-chat">清空本聊天的朗读缓存</button><button type="button" class="jy-button" data-jy-action="tts-clear-all">清空全部</button></div></div></div>
 <footer class="jy-footer"><span class="jy-save-note" data-jy-tts-save-note>修改后保存朗读设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-tts">保存朗读设置</button></footer>
@@ -1051,6 +1055,12 @@ function speakerRoster(settings = runtime.settings) {
   return [...new Set(names.filter(Boolean))];
 }
 
+// The names the translation is asked to label speakers with: the colouring's palette, and, with the
+// reading on, the cast the voices are registered under, so a label reaches its voice by name.
+function annotationRoster(settings = runtime.settings) {
+  return ttsSettings(settings).enabled ? ttsKnownNames(settings) : speakerRoster(settings);
+}
+
 // Hair colours cluster: two blondes in one cast would otherwise get near-identical speech. Hues are
 // pushed apart once, in palette order, so adding a character never reshuffles the existing ones.
 /**
@@ -1113,13 +1123,20 @@ function oklchToSrgbSafe(hue, band) {
 // full name out once, would otherwise split a character across colours. Names that cannot be placed
 // are left exactly as written; the stored labels are never rewritten, only read through this.
 function canonicalAnnotations(settings, annotations) {
-  const reported = [...annotations.values()].map(mark => mark?.speaker).filter(Boolean);
+  const quotesOf = mark => (Array.isArray(mark?.quotes) ? mark.quotes : []);
+  const reported = [...annotations.values()].flatMap(mark => [mark?.speaker, ...quotesOf(mark).map(quote => quote?.speaker)]).filter(Boolean);
   if (!reported.length) return annotations;
   const names = unifySpeakerNames(reported, [...speakerRoster(settings), ...runtime.autoSpeakerNames]);
+  const canonical = speaker => (speaker ? names.get(String(speaker).trim()) ?? speaker : speaker);
   const result = new Map();
   for (const [id, mark] of annotations) {
-    const speaker = mark?.speaker ? names.get(String(mark.speaker).trim()) ?? mark.speaker : mark?.speaker;
-    result.set(id, speaker === mark?.speaker ? mark : { ...mark, speaker });
+    const speaker = canonical(mark?.speaker);
+    const quotes = quotesOf(mark).map(quote => {
+      const own = canonical(quote?.speaker);
+      return own === quote?.speaker ? quote : { ...quote, speaker: own };
+    });
+    const changed = speaker !== mark?.speaker || quotes.some((quote, index) => quote !== mark.quotes[index]);
+    result.set(id, changed ? { ...mark, speaker, ...(quotes.length ? { quotes } : {}) } : mark);
   }
   return result;
 }
@@ -1331,13 +1348,28 @@ function readStoredAnnotations(metadata) {
   for (const [id, value] of Object.entries(stored)) {
     const key = Number(id);
     if (!Number.isInteger(key) || !value || typeof value !== 'object') continue;
-    const annotation = {};
-    if (value.speaker) annotation.speaker = String(value.speaker).slice(0, 60);
-    if (value.emotion) annotation.emotion = String(value.emotion).slice(0, 40);
-    if (Number.isFinite(Number(value.intensity))) annotation.intensity = Math.min(2, Math.max(0, Math.round(Number(value.intensity))));
-    if (annotation.speaker || annotation.emotion) map.set(key, annotation);
+    const annotation = storedMark(value) ?? {};
+    // The reading's own marks, one per quoted run of the line, each with the characters that place it.
+    const quotes = (Array.isArray(value.quotes) ? value.quotes : []).slice(0, 12).map(entry => {
+      const mark = storedMark(entry);
+      const head = mark && entry.head ? String(entry.head).slice(0, 20) : '';
+      return mark ? { ...(head ? { head } : {}), ...mark } : null;
+    }).filter(Boolean);
+    if (quotes.length) annotation.quotes = quotes;
+    if (Object.keys(annotation).length) map.set(key, annotation);
   }
   return map;
+}
+
+// One stored mark, field by field: a speaker or a mood makes it one, the rest rides along.
+function storedMark(value) {
+  if (!value || typeof value !== 'object') return null;
+  const mark = {};
+  if (value.speaker) mark.speaker = String(value.speaker).slice(0, 60);
+  if (value.emotion) mark.emotion = String(value.emotion).slice(0, 40);
+  if (Number.isFinite(Number(value.intensity))) mark.intensity = Math.min(2, Math.max(0, Math.round(Number(value.intensity))));
+  if (value.tone) mark.tone = String(value.tone).slice(0, 30);
+  return mark.speaker || mark.emotion ? mark : null;
 }
 
 function storedAnnotations(annotations) {
@@ -1558,8 +1590,8 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
       // Colouring fails silently by design — a bad label costs a line its colour and nothing else.
       // That silence is wrong when every label is missing at once, which means the model ignored the
       // annotation request entirely. Without this the reader sees plain text and no reason for it.
-      if (coloringEnabled(settings) && !annotations.size) {
-        recordDiagnostic('warn', 'translation.no-annotations', '副模型没有返回任何说话人或情绪标注，这一批按普通样式显示。', {
+      if ((coloringEnabled(settings) || ttsSettings(settings).enabled) && !annotations.size) {
+        recordDiagnostic('warn', 'translation.no-annotations', '副模型没有返回任何说话人或情绪标注，这一批按普通样式显示；朗读这一楼时轻量分析会另外问一次。', {
           request: state.requests,
           returned: translations.size,
           roster: state.roster ?? [],
@@ -1585,6 +1617,33 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
 
 function channelConcurrency(channel) {
   return clampInteger(channel?.concurrency, 1, MAX_CHANNEL_CONCURRENCY, 1);
+}
+
+// The batches of the run in progress, counted on the task so the floating window can draw them and
+// say how long the rest should take. The seconds each batch took feed the next run's estimate.
+function beginBatchProgress(total, lanes) {
+  const batches = { total, lanes, done: 0, active: 0, durations: [], startedAt: Date.now(), activeSince: [] };
+  updateTask({ batches });
+  return batches;
+}
+
+async function trackBatch(batches, work) {
+  const started = Date.now();
+  batches.active += 1;
+  batches.activeSince.push(started);
+  updateTask({ batches: { ...batches } });
+  try {
+    return await work();
+  } finally {
+    const seconds = (Date.now() - started) / 1000;
+    batches.active -= 1;
+    batches.activeSince = batches.activeSince.filter(stamp => stamp !== started);
+    batches.done += 1;
+    batches.durations.push(seconds);
+    runtime.timing.translation.push(seconds);
+    if (runtime.timing.translation.length > 20) runtime.timing.translation.shift();
+    updateTask({ batches: { ...batches } });
+  }
 }
 
 /**
@@ -1622,7 +1681,7 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
   const batches = planTranslationBatches(segments, { maxChars: translationCharBudget(channel.maxTokens), parallel: lanes });
   // `seeded` is fixed here rather than read off the map later: with lanes running side by side, a
   // batch starting after another one finished would otherwise take itself for a repair.
-  const state = { requests: 0, roster: speakerRoster(settings), seeded: translations.size > 0 };
+  const state = { requests: 0, roster: annotationRoster(settings), seeded: translations.size > 0 };
   let lastError;
   recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
     segments: segments.length,
@@ -1631,7 +1690,8 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
     maxTokens: channel.maxTokens,
     concurrency: lanes,
   });
-  const failures = await runInLanes(batches, lanes, batch => translateOneBatch(batch, settings, signal, packet, translations, budget, state, annotations));
+  const batchProgress = beginBatchProgress(batches.length, lanes);
+  const failures = await runInLanes(batches, lanes, batch => trackBatch(batchProgress, () => translateOneBatch(batch, settings, signal, packet, translations, budget, state, annotations)));
   for (const failure of failures) if (failure) lastError = failure;
   {
     const pending = segments.filter(segment => !translations.has(segment.id));
@@ -1796,7 +1856,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
   return { bilingual, complete, missingIds, rebased };
 }
 
-async function translateMessage(messageId = null, { force = false, quiet = false } = {}) {
+async function translateMessage(messageId = null, { force = false, quiet = false, only = null } = {}) {
   runtime.activeFloor = Number.isInteger(Number(messageId)) ? Number(messageId) : null;
   const epoch = runtime.epoch;
   const settings = runtime.settings;
@@ -1810,11 +1870,13 @@ async function translateMessage(messageId = null, { force = false, quiet = false
   }
   runtime.activeFloor = snapshot.messageId;
   if (!snapshot.segments.length) throw new Error('当前 AI 回复没有可翻译的正文段落。');
-  if (snapshot.translated && !force) return { skipped: true, reason: 'already-translated', snapshot };
+  // Paragraphs asked for by themselves are re-requested whatever the floor's state.
+  const supersede = force || Boolean(only);
+  if (snapshot.translated && !supersede) return { skipped: true, reason: 'already-translated', snapshot };
 
   const lockKey = `${snapshot.chatId}|${snapshot.messageId}|${snapshot.swipeId}`;
   const existing = runtime.inflight.get(lockKey);
-  if (existing && !force) {
+  if (existing && !supersede) {
     if (!quiet) toast('info', '该楼层翻译正在进行，已沿用本次任务。');
     return existing.promise;
   }
@@ -1848,9 +1910,23 @@ async function translateMessage(messageId = null, { force = false, quiet = false
         getActiveChannel(settings).tokenSaving ? whitelistedWorldbookContent() : null,
       );
       updateTask({ status: 'running', message: '副 API 正在翻译完整正文…', progress: 18 });
-      const seedTranslations = force ? new Map() : snapshot.existingTranslations;
-      const seedAnnotations = force ? new Map() : snapshot.existingAnnotations;
-      result = await invokeWithRetries(snapshot.segments, settings, controller.signal, packet, seedTranslations, retryBudget, seedAnnotations);
+      const seedTranslations = force ? new Map() : new Map(snapshot.existingTranslations);
+      const seedAnnotations = force ? new Map() : new Map(snapshot.existingAnnotations);
+      // Dropped from the seeds, a paragraph is asked for again; the rest of the floor stays as it is.
+      if (only) {
+        for (const id of only) {
+          seedTranslations.delete(id);
+          seedAnnotations.delete(id);
+        }
+      }
+      // Asked for by themselves, only those paragraphs go out; the seeds carry the rest into the write.
+      if (only) {
+        const requested = snapshot.segments.filter(segment => only.has(segment.id));
+        if (!requested.length) throw new Error('这一段已经变了，刷新后再试。');
+        result = await invokeWithRetries(requested, settings, controller.signal, packet, seedTranslations, retryBudget, seedAnnotations);
+      } else {
+        result = await invokeWithRetries(snapshot.segments, settings, controller.signal, packet, seedTranslations, retryBudget, seedAnnotations);
+      }
       await repairForbiddenPhrases(snapshot.segments, result.translations, settings, controller.signal, packet);
 
       updateTask({ status: 'running', message: '正在核对楼层与滑动页…', progress: 95 });
@@ -2079,7 +2155,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     const translations = force ? new Map() : new Map(snapshot.existingTranslations);
     const annotations = force ? new Map() : new Map(snapshot.existingAnnotations);
     const seeded = translations.size > 0;
-    const roster = speakerRoster(settings);
+    const roster = annotationRoster(settings);
     const total = snapshot.segments.length;
 
     // One progressive write at a time. Overlapping runs each snapshot the floor before the other
@@ -2216,7 +2292,8 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       });
       maybeProgress();
     };
-    await runInLanes(batches, lanes, streamBatch);
+    const streamProgress = beginBatchProgress(batches.length, lanes);
+    await runInLanes(batches, lanes, (batch, index) => trackBatch(streamProgress, () => streamBatch(batch, index)));
 
     // The whole-request path asks again for whatever a batch left out. Streaming stopped at one attempt
     // per batch, so a line a small model skipped, or sent back still in Japanese, simply stayed missing
@@ -2279,10 +2356,31 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
 
 // Single entry point for every translation trigger, so the streaming toggle and the force/quiet
 // semantics can never drift apart between the control centre, the mini window and the auto hooks.
-function startTranslation(messageId = null, { force = false, quiet = false } = {}) {
-  return runtime.settings.streamingWriteback
+function startTranslation(messageId = null, { force = false, quiet = false, only = null } = {}) {
+  // A few paragraphs on their own always go the whole-request way: there is nothing to stream.
+  return runtime.settings.streamingWriteback && !only
     ? translateMessageStreaming(messageId, { force, quiet })
-    : translateMessage(messageId, { force, quiet });
+    : translateMessage(messageId, { force, quiet, only });
+}
+
+/**
+ * Writes the reader's own wording of one paragraph into the floor. The other translations and the
+ * labels stay; the floor is re-rendered the way a translation run renders it.
+ */
+async function editTranslationSegment(messageId, segmentId, text) {
+  const wording = String(text ?? '').trim();
+  if (!wording) throw new Error('译文不能是空的。');
+  const settings = runtime.settings;
+  const snapshot = await readMessageSnapshot(messageId, settings);
+  const id = Number(segmentId);
+  if (!snapshot.segments.some(segment => segment.id === id)) throw new Error('这一段已经变了，刷新后再改。');
+  const translations = new Map(snapshot.existingTranslations);
+  translations.set(id, wording);
+  const written = await writeTranslation(snapshot, translations, runtime.epoch, settings, snapshot.existingAnnotations);
+  recordDiagnostic('info', 'translation.edit', `第 ${snapshot.messageId} 楼第 ${id} 段的译文已按手改写回。`, {
+    messageId: snapshot.messageId, segment: id, characters: wording.length, complete: written.complete,
+  });
+  return written;
 }
 
 async function testTranslationChannel() {
@@ -2521,14 +2619,27 @@ function ttsLabelKey(floor) {
 
 // One promise per cache key. A second click on something already being generated waits for the same
 // request instead of paying for another one; each job has its own controller so a stop can cancel it.
-function dedupeTtsJob(key, messageId, work) {
+function dedupeTtsJob(key, messageId, work, { onPrefix = null } = {}) {
   const existing = runtime.tts.jobs.get(key);
-  if (existing) return existing.promise;
+  if (existing) {
+    // A second asker for a reading in progress hears about its batches too, the ones already back at once.
+    if (onPrefix) {
+      existing.prefixListeners.push(onPrefix);
+      if (existing.lastPrefix) onPrefix(existing.lastPrefix);
+    }
+    return existing.promise;
+  }
   const controller = new AbortController();
-  const promise = Promise.resolve().then(() => work(controller.signal)).finally(() => {
+  const job = { controller, messageId, prefixListeners: onPrefix ? [onPrefix] : [], lastPrefix: null };
+  const notify = prefix => {
+    job.lastPrefix = prefix;
+    for (const listener of job.prefixListeners) listener(prefix);
+  };
+  const promise = Promise.resolve().then(() => work(controller.signal, notify)).finally(() => {
     if (runtime.tts.jobs.get(key)?.promise === promise) runtime.tts.jobs.delete(key);
   });
-  runtime.tts.jobs.set(key, { promise, controller, messageId });
+  job.promise = promise;
+  runtime.tts.jobs.set(key, job);
   return promise;
 }
 
@@ -2587,7 +2698,7 @@ async function ttsContextPacket(floor, settings) {
  * Either way the answer is labels keyed by id and never text. `onRequest` is told only when a request
  * actually goes out, so a cached reading never claims to be thinking.
  */
-async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, hints = null } = {}) {
+async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, hints = null, hintVoices = null, onPrefix = null } = {}) {
   const roster = ttsKnownNames(settings);
   const tts = ttsSettings(settings);
   const key = await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side });
@@ -2597,20 +2708,24 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       return { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), depth, cached: true };
     }
   }
-  return dedupeTtsJob(key, floor.messageId, async signal => {
+  return dedupeTtsJob(key, floor.messageId, async (signal, notifyPrefix) => {
     onRequest?.();
     const request = ttsRequestSettings(settings);
     const packet = depth === 'deep' ? await ttsContextPacket(floor, settings) : null;
     const context = getContext();
     const options = {
       roster, characterName: context.name2 ?? '', userName: context.name1 ?? '', translations: floor.references,
-      packet, hints, systemPrompt: depth === 'deep' ? tts.prompts.deep : tts.prompts.light,
+      packet, hints, hintVoices, systemPrompt: depth === 'deep' ? tts.prompts.deep : tts.prompts.light,
     };
     // A long floor goes out in batches, as many at once as the connection allows, each batch seeing
     // the few sentences before it. Wall time drops by about the number of batches.
     const lanes = request.apiMode === 'independent' ? channelConcurrency(getActiveChannel(request)) : 1;
     const chunks = chunkTtsUtterances(utterances, lanes);
     const started = Date.now();
+    // Batches finish in any order; the caller hears about them as an unbroken run from the top.
+    const partials = [];
+    let readyCount = 0;
+    let notified = 0;
     const results = await runInLanes(chunks, lanes, async (chunk, index) => {
       const messages = depth === 'deep'
         ? buildVoiceAnalysisMessages(chunk.items, { ...options, lead: chunk.lead })
@@ -2652,6 +2767,26 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
         contextBytes: packet ? Object.values(packet).reduce((sum, value) => sum + String(value ?? '').length, 0) : undefined,
         seconds: Number(((Date.now() - batchStarted) / 1000).toFixed(1)),
       }, raw, { fullRequest: messages, floor: floor.messageId });
+      if (chunks.length > 1) {
+        partials[index] = parsed;
+        while (partials[readyCount]) readyCount += 1;
+        if (readyCount > notified) {
+          notified = readyCount;
+          const prefixLabels = new Map();
+          const prefixVoices = new Map();
+          const readyIds = new Set();
+          for (let at = 0; at < readyCount; at += 1) {
+            for (const [id, label] of partials[at].labels) prefixLabels.set(id, label);
+            for (const [id, voice] of partials[at].voices) prefixVoices.set(id, voice);
+            for (const item of chunks[at].items) readyIds.add(item.id);
+          }
+          try {
+            notifyPrefix({ labels: prefixLabels, voices: prefixVoices, readyIds, ready: readyCount, total: chunks.length });
+          } catch (error) {
+            recordDiagnostic('warn', 'tts.analysis', `分批出声时处理已回的批次出错：${safeError(error)}`, { floor: floor.floorId, ready: readyCount });
+          }
+        }
+      }
       return parsed;
     });
     const labels = new Map();
@@ -2672,7 +2807,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       await ttsStore().putAnalysis({ key, floorId: floor.floorId, version: floor.version, depth, labels: [...labels], voices: [...voices] });
     }
     return { labels, voices, depth, cached: false };
-  });
+  }, { onPrefix });
 }
 
 // The connection the readings go to: the reading's own saved connection when one is chosen, else
@@ -2725,33 +2860,63 @@ async function ttsPrimaryFloor(floor, settings) {
  * warning rather than refusing to read. When both languages are read, the original is labelled from
  * the translation's reading instead of being read a second time.
  */
-async function prepareTtsSegments(floor, settings, { onStatus = null, force = false, onStep = null } = {}) {
+async function prepareTtsSegments(floor, settings, { onStatus = null, force = false, onStep = null, onPartial = null } = {}) {
   const tts = ttsSettings(settings);
   const utterances = ttsUtterances(floor, settings);
-  let labels = labelsFromAnnotations(utterances, floor.annotations);
-  let voices = null;
-  const depth = ttsAnalysisDepth(tts);
+  // What the translation already said about every quoted run: who, in what mood, in Fish's own words.
+  const reading = annotationReading(utterances, floor.annotations);
+  let labels = reading.labels;
+  let voices = reading.voices.size ? reading.voices : null;
+  let depth = ttsAnalysisDepth(tts);
   const primary = await ttsPrimaryFloor(floor, settings);
   if (primary) {
     const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep });
     const derived = deriveLabelsForSide(read.utterances, read.labels, read.voices, utterances);
     for (const [id, label] of derived.labels) labels.set(id, { ...(labels.get(id) ?? {}), ...label });
     voices = derived.voices;
+    depth = read.depth ?? depth;
     const key = ttsLabelKey(floor);
-    runtime.tts.analysis.set(key, { labels, voices, depth: read.depth ?? depth, derived: true });
+    runtime.tts.analysis.set(key, { labels, voices, depth, derived: true });
   } else if (depth !== 'annotations' && utterances.length) {
     const key = ttsLabelKey(floor);
     const known = force ? null : runtime.tts.analysis.get(key);
-    if (known && (known.depth === depth || (known.depth === 'deep' && depth === 'light'))) {
+    if (known && (known.depth === depth || (depth === 'light' && ['deep', 'annotations'].includes(known.depth)))) {
       labels = known.labels;
       voices = known.voices;
-      onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '细读这一楼' : '分析谁在说话', detail: '已有结果' });
+      depth = known.depth;
+      onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '细读这一楼' : '分析谁在说话', detail: depth === 'annotations' ? '用翻译时的标注' : '已有结果' });
+    } else if (depth === 'light' && labels.size && !force) {
+      // The translation labelled this floor as it was written. The light reading would only ask the
+      // same question again, so the floor reads at once and the model hears nothing.
+      depth = 'annotations';
+      runtime.tts.analysis.set(key, { labels, voices, depth });
+      onStep?.('analysis', { state: 'done', label: '分析谁在说话', detail: `用翻译时的标注，${labels.size} 句` });
+      const noteKey = `${key}|annotations`;
+      if (!runtime.tts.anchorWarned.has(noteKey)) {
+        runtime.tts.anchorWarned.add(noteKey);
+        recordDiagnostic('info', 'tts.analysis', `这一楼用翻译时的标注朗读，没有请求副模型：${labels.size} 句带说话人或情绪，${reading.voices.size} 句带 Fish 的情绪词或语气。`, {
+          floor: floor.floorId, depth, utterances: utterances.length, labeled: labels.size, voiced: reading.voices.size,
+        });
+      }
     } else {
       let requested = false;
       try {
         const analyzed = await analyzeTtsFloor(floor, utterances, settings, depth, {
           force,
           hints: depth === 'deep' ? labels : null,
+          hintVoices: depth === 'deep' ? voices : null,
+          // Each batch that comes back, with the ones before it, becomes segments the floor can start on.
+          onPrefix: onPartial ? partial => {
+            const partialLabels = new Map(reading.labels);
+            for (const [id, label] of partial.labels) partialLabels.set(id, label);
+            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `细读这一楼（${utterances.length} 句）` : `分析谁在说话（${utterances.length} 句）`, detail: `已回 ${partial.ready}/${partial.total} 批` });
+            onPartial({
+              segments: buildSegments(utterances, partialLabels, { knownNames: ttsKnownNames(settings), voices: mergeVoiceMaps(reading.voices, partial.voices) }),
+              readyIds: partial.readyIds,
+              ready: partial.ready,
+              total: partial.total,
+            });
+          } : null,
           onRequest: () => {
             requested = true;
             onStatus?.(depth === 'deep' ? '副模型正在细读这一楼…' : '正在分析谁在说话…');
@@ -2760,8 +2925,9 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
         });
         if (analyzed.labels.size) {
           labels = analyzed.labels;
-          voices = analyzed.voices;
-          runtime.tts.analysis.set(key, { ...analyzed, depth });
+          // The translation's Fish words stay under whatever the model added; an id-only answer keeps them whole.
+          voices = mergeVoiceMaps(reading.voices, analyzed.voices);
+          runtime.tts.analysis.set(key, { ...analyzed, voices, depth });
           if (runtime.tts.analysis.size > 200) runtime.tts.analysis.delete(runtime.tts.analysis.keys().next().value);
           onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '细读这一楼' : '分析谁在说话', detail: analyzed.cached ? '已有结果' : `${labels.size} 句` });
           // Types may have moved: a quoted title is narration, an unquoted order is dialogue.
@@ -2779,6 +2945,24 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   }
   const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices });
   return { utterances, labels, voices, segments, depth };
+}
+
+// The model's voices laid over the translation's. A sentence the model answered keeps the
+// translation's words wherever the model said nothing about them, except that a delivery the model
+// did set (volume, restraint, tension) retires a tone the translation had guessed.
+function mergeVoiceMaps(base, over) {
+  const merged = new Map(base instanceof Map ? base : []);
+  for (const [id, voice] of over instanceof Map ? over : []) {
+    const under = merged.get(id);
+    if (!under) {
+      merged.set(id, voice);
+      continue;
+    }
+    const combined = { ...under, ...voice };
+    if (!voice.tone && ['volume', 'restraint', 'tension'].some(key => key in voice)) delete combined.tone;
+    merged.set(id, combined);
+  }
+  return merged;
 }
 
 function requireFishKey(tts) {
@@ -2977,55 +3161,88 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
   requireFishKey(tts);
   const record = await dedupeTtsJob(key, floor.messageId, async signal => {
     const parts = planFishParts(items, { model: tts.fish.model, maxChars: tts.fish.maxChars, prosodySplit: tts.prosodySplit });
+    const label = unit.startsWith('line:') ? '这一段' : unit.startsWith('sentence:') ? '这一句' : unit.startsWith('chunk:') ? `第 ${unit.slice(6)} 批` : '整楼';
+    // Parts go to Fish several at a time when the settings allow; the recording is assembled in part
+    // order afterwards, so playback never learns which came back first. The first failure stops the
+    // rest, since parts of a recording that will not be kept are not worth paying for.
+    const lanes = Math.max(1, Math.min(tts.fish.concurrency, parts.length));
+    const group = new AbortController();
+    const onAbort = () => group.abort();
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+    let finished = 0;
+    const report = () => {
+      if (parts.length <= 1) {
+        onStatus?.(`正在生成${label}音频…`);
+        return;
+      }
+      onStatus?.(`正在生成${label}音频（${finished}/${parts.length} 段已完成${lanes > 1 ? `，${lanes} 路同时` : ''}）…`);
+      onStep?.(stepId, { state: 'active', detail: `${finished}/${parts.length} 次请求已完成` });
+    };
+    onStep?.(stepId, { state: 'active', label: ttsUnitLabel(unit), detail: `${items.length} 句${parts.length > 1 ? `，分 ${parts.length} 次请求${lanes > 1 ? `、${lanes} 路同时` : ''}` : ''}` });
+    report();
+    let made;
+    let failure = null;
+    try {
+      made = await runInLanes(parts, lanes, async (part, index) => {
+        const { body, spans } = buildFishPayload(part, tts.fish, { emotionCues: tts.emotionCues, prosodySplit: tts.prosodySplit, tamePunctuation: tts.tamePunctuation });
+        let stream;
+        try {
+          stream = await streamFishTimestamps(body, tts.fish, group.signal);
+        } catch (error) {
+          if (!isAbortError(error)) {
+            failure ??= error;
+            recordDiagnostic('error', 'tts.request-failed', safeError(error), {
+              floor: floor.floorId, unit, part: index + 1, parts: parts.length, model: tts.fish.model, viaProxy: tts.fish.viaProxy, status: error.status ?? null,
+            }, { status: error.status ?? null, body: error.body ?? '' }, { fullRequest: body, floor: floor.messageId });
+            onStep?.(stepId, { state: 'error', detail: safeError(error) });
+            group.abort();
+          }
+          throw error;
+        }
+        const blob = new Blob(stream.audio.map(base64ToBytes), { type: FISH_MIME[tts.fish.format] ?? 'audio/mpeg' });
+        const { timeline: spoken, duration } = buildGlobalTimeline(stream.alignments);
+        const aligned = alignSpansToTimeline(spans, spoken, { duration });
+        finished += 1;
+        report();
+        const weak = aligned.filter(entry => entry.coverage < 0.5);
+        recordDiagnostic(weak.length ? 'warn' : 'info', 'tts.recording', weak.length
+          ? `${label}音频第 ${index + 1} 段有 ${weak.length} 句没能对上时间戳，点这几句时起止位置可能不准。`
+          : `${label}音频第 ${index + 1} 段已生成，每一句都对上了时间戳。`, {
+          floor: floor.floorId,
+          unit,
+          part: index + 1,
+          parts: parts.length,
+          lanes,
+          sentences: part.length,
+          voices: new Set(part.map(item => item.voiceId)).size,
+          prosody: body.prosody,
+          model: tts.fish.model,
+          format: tts.fish.format,
+          bytes: blob.size,
+          duration: Number(duration.toFixed(2)),
+          textChunks: stream.alignments.size,
+          events: stream.events,
+          weak: weak.map(entry => `${entry.id}（${Math.round(entry.coverage * 100)}%）`),
+        }, {
+          text: body.text,
+          chunks: [...stream.alignments].map(([seq, chunk]) => ({ seq, offset: chunk.offset, duration: chunk.duration, content: chunk.content })),
+          sentences: aligned,
+        }, { fullRequest: body, floor: floor.messageId });
+        return { part, blob, duration, aligned };
+      });
+    } catch (error) {
+      // Siblings cancelled by the first failure report as aborted; the failure itself is what is thrown.
+      throw failure ?? error;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
     const storedParts = [];
     const timeline = [];
-    const label = unit.startsWith('line:') ? '这一段' : unit.startsWith('sentence:') ? '这一句' : '整楼';
-    onStep?.(stepId, { state: 'active', label: ttsUnitLabel(unit), detail: `${items.length} 句${parts.length > 1 ? `，分 ${parts.length} 次请求` : ''}` });
-    for (const [index, part] of parts.entries()) {
-      onStatus?.(parts.length > 1 ? `正在生成${label}音频（第 ${index + 1}/${parts.length} 段）…` : `正在生成${label}音频…`);
-      if (parts.length > 1) onStep?.(stepId, { state: 'active', detail: `第 ${index + 1}/${parts.length} 次请求` });
-      const { body, spans } = buildFishPayload(part, tts.fish, { emotionCues: tts.emotionCues, prosodySplit: tts.prosodySplit, tamePunctuation: tts.tamePunctuation });
-      let stream;
-      try {
-        stream = await streamFishTimestamps(body, tts.fish, signal);
-      } catch (error) {
-        if (!isAbortError(error)) {
-          recordDiagnostic('error', 'tts.request-failed', safeError(error), {
-            floor: floor.floorId, unit, part: index + 1, parts: parts.length, model: tts.fish.model, viaProxy: tts.fish.viaProxy, status: error.status ?? null,
-          }, { status: error.status ?? null, body: error.body ?? '' }, { fullRequest: body, floor: floor.messageId });
-          onStep?.(stepId, { state: 'error', detail: safeError(error) });
-        }
-        throw error;
-      }
-      const blob = new Blob(stream.audio.map(base64ToBytes), { type: FISH_MIME[tts.fish.format] ?? 'audio/mpeg' });
-      const { timeline: spoken, duration } = buildGlobalTimeline(stream.alignments);
-      const aligned = alignSpansToTimeline(spans, spoken, { duration });
-      for (const entry of recordCovers(part, aligned)) timeline.push({ ...entry, part: index });
-      storedParts.push({ blob, mime: blob.type, duration });
-      const weak = aligned.filter(entry => entry.coverage < 0.5);
-      recordDiagnostic(weak.length ? 'warn' : 'info', 'tts.recording', weak.length
-        ? `${label}音频第 ${index + 1} 段有 ${weak.length} 句没能对上时间戳，点这几句时起止位置可能不准。`
-        : `${label}音频第 ${index + 1} 段已生成，每一句都对上了时间戳。`, {
-        floor: floor.floorId,
-        unit,
-        part: index + 1,
-        parts: parts.length,
-        sentences: part.length,
-        voices: new Set(part.map(item => item.voiceId)).size,
-        prosody: body.prosody,
-        model: tts.fish.model,
-        format: tts.fish.format,
-        bytes: blob.size,
-        duration: Number(duration.toFixed(2)),
-        textChunks: stream.alignments.size,
-        events: stream.events,
-        weak: weak.map(entry => `${entry.id}（${Math.round(entry.coverage * 100)}%）`),
-      }, {
-        text: body.text,
-        chunks: [...stream.alignments].map(([seq, chunk]) => ({ seq, offset: chunk.offset, duration: chunk.duration, content: chunk.content })),
-        sentences: aligned,
-      }, { fullRequest: body, floor: floor.messageId });
-    }
+    made.forEach((result, index) => {
+      for (const entry of recordCovers(result.part, result.aligned)) timeline.push({ ...entry, part: index });
+      storedParts.push({ blob: result.blob, mime: result.blob.type, duration: result.duration });
+    });
     const stored = await ttsStore().putAudio({
       key, kind: 'recording', unit, floorId: floor.floorId, chatId: floor.chatId, version: floor.version, fingerprint: fingerprintId,
       side: floor.side, parts: storedParts, timeline,
@@ -3039,11 +3256,13 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
   return { record, cached: false };
 }
 
-// The unit a sentence is made in: the whole floor in floor mode; in the stream its paragraph, or the
-// sentence alone when the reader chose to hear sentences one by one.
-function ttsUnitFor(tts, items, item) {
-  if (tts.mode === 'stream') {
-    if (tts.streamUnit === 'sentence') return { unit: `sentence:${item.segment.id}`, items: [item] };
+// The unit a sentence is made in. In the stream its paragraph, or the sentence alone when the reader
+// chose to hear sentences one by one. In the whole-floor mode the floor — except for one sentence
+// asked for by itself on a floor not yet recorded, which gets its paragraph now rather than after
+// the whole floor; 「朗读本楼」 still makes the floor in one piece.
+function ttsUnitFor(tts, items, item, { single = false } = {}) {
+  if (tts.mode === 'stream' || single) {
+    if (tts.mode === 'stream' && tts.streamUnit === 'sentence') return { unit: `sentence:${item.segment.id}`, items: [item] };
     const lineId = item.segment.lineId;
     return { unit: `line:${lineId}`, items: items.filter(candidate => candidate.segment.lineId === lineId) };
   }
@@ -3059,6 +3278,7 @@ function ttsUnitsOf(tts, items) {
 
 // What a unit is called on the floor bar and in the progress list.
 function ttsUnitLabel(unit) {
+  if (unit.startsWith('chunk:')) return `生成第 ${unit.slice(6)} 批音频`;
   if (unit.startsWith('line:')) return `生成第 ${unit.slice(5)} 段`;
   if (unit.startsWith('sentence:')) return `生成第 ${unit.slice(9)} 句`;
   return '生成整楼音频';
@@ -3097,16 +3317,23 @@ function ttsStep(floor, id, patch = {}) {
   }
   Object.assign(step, patch);
   if (patch.state === 'active' && !step.since) step.since = Date.now();
+  if (patch.state === 'done' && step.since && !step.finishedAt) {
+    const bucket = id === 'analysis' ? runtime.timing.analysis : runtime.timing.parts;
+    bucket.push((Date.now() - step.since) / 1000);
+    if (bucket.length > 20) bucket.shift();
+  }
   if (patch.state === 'done' || patch.state === 'error') step.finishedAt = Date.now();
   notifyTtsPanels();
 }
 
-/** The recording entry for one item, made if need be. */
-async function resolveTtsEntry(floor, items, item, settings, onStatus = null, onStep = null) {
+/** The recording entry for one item, made if need be. `single` says the item was asked for by itself. */
+async function resolveTtsEntry(floor, items, item, settings, onStatus = null, onStep = null, { single = false, unit = null, unitItems = null } = {}) {
   const found = await findTtsEntry(floor, item, settings);
   if (found) return { ...found, cached: true };
   const tts = ttsSettings(settings);
-  const target = item.override?.text ? { unit: `sentence:${item.segment.id}`, items: [item] } : ttsUnitFor(tts, items, item);
+  const target = item.override?.text
+    ? { unit: `sentence:${item.segment.id}`, items: [item] }
+    : unit ? { unit, items: unitItems ?? items } : ttsUnitFor(tts, items, item, { single });
   const { record } = await ensureTtsRecording(floor, target.unit, target.items, settings, onStatus, onStep);
   const index = record.timeline.findIndex(entry => entry.id === item.segment.id);
   if (index < 0) throw new Error('这一句不在生成的音频里。');
@@ -3291,7 +3518,8 @@ function ttsTransportDescription(transport = runtime.tts.transport) {
     time: transport.progress.time,
     duration: transport.progress.duration,
     message: transport.message,
-    floorId: transport.floor.floorId,
+    // The floor is collected after the transport exists; the first notice arrives before it.
+    floorId: transport.floor?.floorId ?? null,
   };
 }
 
@@ -3333,6 +3561,12 @@ async function createTtsTransport(messageId, { single = false, fromUtterance = n
     progress: { time: 0, duration: 0 },
     current: null,
     generation: 0,
+    // A long floor arrives in batches: the sentences so far, the batch each belongs to, and whether
+    // the rest is still on its way.
+    batches: [],
+    prepared: false,
+    preparing: null,
+    wake: null,
   };
   runtime.tts.transport = transport;
   setTransport(transport, {});
@@ -3340,11 +3574,61 @@ async function createTtsTransport(messageId, { single = false, fromUtterance = n
   if (!floor) throw new Error(transport.side === 'source' ? '这一楼没有可朗读的原文。' : '这一楼没有可朗读的译文。');
   transport.floor = floor;
   beginTtsProgress(floor, tts);
-  const { segments } = await prepareTtsSegments(floor, settings, {
+  // Whole-floor reading: the first batch of a long reading is enough to start on; the rest keeps
+  // arriving while it plays, each batch made and heard as a recording of its own.
+  const progressive = tts.mode === 'floor' && !single && fromUtterance === null;
+  let firstBatch = null;
+  const firstReady = new Promise(resolve => { firstBatch = resolve; });
+  let chain = Promise.resolve();
+  const onPartial = partial => {
+    chain = chain.then(async () => {
+      if (runtime.tts.transport !== transport) return;
+      const { items: everything } = await ttsItemsFor(floor, partial.segments, settings);
+      const ready = everything.filter(item => partial.readyIds.has(item.segment.id));
+      const known = new Set(transport.items.map(item => item.segment.id));
+      const fresh = ready.filter(item => !known.has(item.segment.id));
+      if (!fresh.length) return;
+      transport.items = ready;
+      transport.batches.push({ unit: `chunk:${partial.ready}`, ids: new Set(fresh.map(item => item.segment.id)) });
+      setTransport(transport, { message: `第 ${partial.ready}/${partial.total} 批分析已回，先读这一批…` });
+      transport.wake?.();
+      firstBatch();
+    }).catch(() => {});
+  };
+  const preparing = prepareTtsSegments(floor, settings, {
     onStatus: text => setTransport(transport, { message: text }),
     onStep: (id, patch) => ttsStep(floor, id, patch),
+    onPartial: progressive ? onPartial : null,
+  }).then(async result => {
+    await chain;
+    return result;
   });
+  const settled = await Promise.race([firstReady.then(() => null), preparing]);
   if (runtime.tts.transport !== transport) return null;
+  if (settled === null) {
+    // Started on the first batch; the remaining ones join the list as they arrive.
+    transport.preparing = preparing.then(async result => {
+      if (runtime.tts.transport !== transport) return result;
+      const { items: everything } = await ttsItemsFor(floor, result.segments, settings);
+      const covered = new Set(transport.batches.flatMap(batch => [...batch.ids]));
+      const rest = everything.filter(item => !covered.has(item.segment.id));
+      transport.items = everything;
+      if (rest.length) transport.batches.push({ unit: `chunk:${transport.batches.length + 1}`, ids: new Set(rest.map(item => item.segment.id)) });
+      runtime.tts.floors.set(ttsPreparedKey(messageId, floor.side), { floor, segments: result.segments, items: everything, settings });
+      transport.prepared = true;
+      transport.wake?.();
+      return result;
+    }).catch(error => {
+      transport.prepared = true;
+      transport.wake?.();
+      throw error;
+    });
+    transport.preparing.catch(() => {});
+    if (!transport.items.length) throw new Error('这一楼没有可朗读的句子。');
+    return transport;
+  }
+  const { segments } = settled;
+  transport.prepared = true;
   let { items } = await ttsItemsFor(floor, segments, settings);
   if (fromUtterance !== null && !items.some(item => item.segment.id === fromUtterance)) {
     // The sentence clicked sits outside the reading range (the reading may have re-typed it); it is
@@ -3378,18 +3662,31 @@ function isTtsTransport(transport) {
  * exists in some recording, so a stream reads its next paragraph while this one is still playing.
  */
 async function runTtsTransport(transport) {
-  const { floor, items, settings } = transport;
+  const { floor, settings } = transport;
   transport.generation += 1;
   const generation = transport.generation;
   const live = () => isTtsTransport(transport) && transport.generation === generation;
+  // The batch a sentence came in, when the floor arrived in batches: it is made as a unit of its own.
+  const unitOf = item => {
+    const batch = (transport.batches ?? []).find(candidate => candidate.ids.has(item.segment.id));
+    return batch ? { unit: batch.unit, unitItems: transport.items.filter(candidate => batch.ids.has(candidate.segment.id)) } : {};
+  };
   try {
-    while (live() && transport.index < items.length) {
+    while (live() && (transport.index < transport.items.length || !transport.prepared)) {
+      if (transport.index >= transport.items.length) {
+        // The next batch of the reading is still on its way.
+        setTransport(transport, { state: 'loading', message: '等副模型的下一批…' });
+        await new Promise(resolve => { transport.wake = resolve; });
+        transport.wake = null;
+        continue;
+      }
+      const items = transport.items;
       const item = items[transport.index];
       setTransport(transport, { state: 'loading', message: '正在准备音频…' });
       setTtsButtonState(transport.messageId, item.segment.id, 'busy', transport.side);
       let entry;
       try {
-        entry = await resolveTtsEntry(floor, items, item, settings, text => live() && setTransport(transport, { message: text }), (id, patch) => ttsStep(floor, id, patch));
+        entry = await resolveTtsEntry(floor, items, item, settings, text => live() && setTransport(transport, { message: text }), (id, patch) => ttsStep(floor, id, patch), { single: transport.single, ...unitOf(item) });
       } finally {
         setTtsButtonState(transport.messageId, item.segment.id, null, transport.side);
       }
@@ -3397,6 +3694,7 @@ async function runTtsTransport(transport) {
       if (transport.generateOnly && !entry.cached) {
         // Made, not played: the reader asked for it that way. The next click on it plays.
         setTransport(transport, { state: 'idle', message: '已生成，再点一次播放' });
+        notifyTtsReady(transport.messageId);
         return;
       }
       const { record, index } = entry;
@@ -3416,8 +3714,9 @@ async function runTtsTransport(transport) {
       const url = ttsObjectUrl(`${record.key}#${part}`, record.parts[part].blob);
       transport.current = { record, part, url, start: window.start, end: endWindow.end };
       // Prefetch: the recording the next paragraph will need, while this one plays.
-      const next = items[lastOffset + 1];
-      if (next && !transport.single) void resolveTtsEntry(floor, items, next, settings).catch(() => {});
+      // Read off the transport, not the list this turn started with: a batch that arrived meanwhile is in it.
+      const next = transport.items[lastOffset + 1];
+      if (next && !transport.single) void resolveTtsEntry(floor, transport.items, next, settings, null, null, unitOf(next)).catch(() => {});
       setTransport(transport, { state: 'playing', message: '' });
       highlightTtsUtterance(transport.messageId, item.segment.id, transport.side);
       const outcome = await playTtsAudio(url, {
@@ -3444,7 +3743,7 @@ async function runTtsTransport(transport) {
       if (transport.single) break;
     }
     if (live()) {
-      transport.index = Math.min(transport.index, items.length - 1);
+      transport.index = Math.min(transport.index, transport.items.length - 1);
       finishTtsTransport(transport);
     }
   } catch (error) {
@@ -3475,6 +3774,7 @@ function stopTtsPlayback() {
 function stopTtsTransport(transport, clearStatus = true) {
   if (!transport) return;
   transport.generation += 1;
+  transport.wake?.();
   stopTtsPlayback();
   abortTtsJobs(transport.messageId);
   if (runtime.tts.transport === transport) {
@@ -3566,6 +3866,16 @@ function seekTts(fraction) {
 }
 
 // Steps to another paragraph and reads on from there, whatever was playing.
+// Audio made in the background is ready: a short buzz on a phone, and a word when the window is shut.
+function notifyTtsReady(messageId) {
+  try {
+    if (isCompactViewport()) globalThis.navigator?.vibrate?.(30);
+  } catch {
+    // Vibration is a nicety.
+  }
+  if (!runtime.mini?.host?.isConnected) toast('info', `第 ${messageId} 楼的音频好了，点播放。`);
+}
+
 function stepTtsParagraph(direction) {
   const transport = runtime.tts.transport;
   if (!transport?.items.length) return;
@@ -4022,7 +4332,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     return;
   }
   // The same text, the same settings and a bar still in place: nothing to do, and no snapshot taken.
-  const cheapKey = `${Number(message?.swipe_id ?? 0)}|${ttsSides(settings).join('+')}|${tts.mode}|${tts.range}|${tts.streamUnit}|${tts.quotePairs.join('')}|${tts.skipPairs.join('')}`;
+  const cheapKey = `${Number(message?.swipe_id ?? 0)}|${ttsSides(settings).join('+')}|${tts.mode}|${tts.range}|${tts.streamUnit}|${tts.quotePairs.join('')}|${tts.skipPairs.join('')}|${floorButtonsOn(settings) ? 'buttons' : 'plain'}`;
   const seen = runtime.tts.mesSeen.get(messageId);
   if (!force && seen && seen.mes === message?.mes && seen.key === cheapKey && root.dataset.jyTts && root.querySelector(':scope > .jy-tts-bar')) return;
   const floors = [];
@@ -4073,7 +4383,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   const unplaced = [];
   floors.forEach((floor, index) => {
     const utterances = ttsUtterances(floor, settings);
-    const labels = analyses[index]?.labels ?? labelsFromAnnotations(utterances, floor.annotations);
+    const labels = analyses[index]?.labels ?? annotationReading(utterances, floor.annotations).labels;
     const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices: analyses[index]?.voices ?? null });
     const visible = segmentsInRange(segments, tts.range);
     visibleTotal += visible.length;
@@ -4094,10 +4404,14 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   });
   // Later ranges first, so an insertion never sits between an earlier range and its own end.
   buttons.sort((left, right) => right.range.compareBoundaryPoints(Range.END_TO_END, left.range));
-  for (const { range, segment, side } of buttons) {
-    const play = makeTtsPlayButton(messageId, segment, side);
-    insertAfterRange(range, play, root);
-    play.after(makeTtsEditButton(messageId, segment, side));
+  // On a phone the sentences are tapped in the floating window's list instead; the floor keeps only
+  // the highlight and its bar.
+  if (floorButtonsOn(settings)) {
+    for (const { range, segment, side } of buttons) {
+      const play = makeTtsPlayButton(messageId, segment, side);
+      insertAfterRange(range, play, root);
+      play.after(makeTtsEditButton(messageId, segment, side));
+    }
   }
   root.appendChild(makeTtsBar(messageId, tts, visibleTotal, readingStyleOf(root), floors.map(floor => floor.side)));
   root.dataset.jyTts = signature;
@@ -4111,7 +4425,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     highlightTtsUtterance(messageId, highlighted.utteranceId, highlighted.side);
   }
   const warnKey = `${floors.map(floor => floor.floorId).join('+')}|${signature}`;
-  if (unplaced.length && !runtime.tts.anchorWarned.has(warnKey)) {
+  if (unplaced.length && floorButtonsOn(settings) && !runtime.tts.anchorWarned.has(warnKey)) {
     runtime.tts.anchorWarned.add(warnKey);
     recordDiagnostic('warn', 'tts.anchors', `第 ${messageId} 楼有 ${unplaced.length} 句没在渲染后的楼层里找到位置，这几句没有单独的播放按钮，「朗读本楼」照常能读到。`, {
       floor: floors.map(floor => floor.floorId),
@@ -4760,6 +5074,7 @@ function collectSettings(root) {
     'autoEdit',
     'streamingWriteback',
     'showFloatingButton',
+    'leftHanded',
     'paragraphPerLine',
     'carryFormatting',
     'includeWorldbook',
@@ -4769,7 +5084,7 @@ function collectSettings(root) {
     const element = root.querySelector(`[data-jy-field="${name}"]`);
     if (element) current[name] = element.checked;
   }
-  for (const name of ['segmentPrefix', 'segmentSuffix', 'translationPrefix', 'translationSuffix', 'preserveLineRules', 'floatingStyle']) {
+  for (const name of ['segmentPrefix', 'segmentSuffix', 'translationPrefix', 'translationSuffix', 'preserveLineRules', 'floatingStyle', 'floorButtons']) {
     const element = root.querySelector(`[data-jy-field="${name}"]`);
     if (element) current[name] = element.value;
   }
@@ -5128,7 +5443,7 @@ async function runThemeProbe(root) {
 // Reading aloud: the control-centre page.
 // ---------------------------------------------------------------------------------------------
 
-const TTS_NUMERIC_FISH_FIELDS = new Set(['speed', 'volume', 'temperature', 'topP', 'maxChars', 'timeoutSec', 'mp3Bitrate']);
+const TTS_NUMERIC_FISH_FIELDS = new Set(['speed', 'volume', 'temperature', 'topP', 'maxChars', 'timeoutSec', 'mp3Bitrate', 'concurrency']);
 
 // A picker of the saved voices, placed after a voice id field; choosing one fills the field.
 function ttsLibraryPicker(doc, settings = runtime.settings) {
@@ -5401,7 +5716,7 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
   const voices = ttsVoicesFor(settings);
   const owned = voices.filter(row => row.voiceId || Object.keys(row.voices ?? {}).length).length;
   const library = normalizeVoiceLibrary(settings?.voiceLibrary);
-  const analysisLabel = { auto: '分析跟随模式', deep: '总是深度分析', light: '总是轻量分析', annotations: '只用翻译标注' }[tts.analysis] ?? '';
+  const analysisLabel = { auto: '分析跟随模式', deep: '总是深度分析', light: '轻量（翻译标注优先）', annotations: '只用翻译标注' }[tts.analysis] ?? '';
   const summaries = {
     'tts-read': `${tts.side === 'source' ? '读原文' : '读译文'} · ${TTS_RANGE_LABELS[tts.range]} · ${analysisLabel}`,
     'tts-fish': tts.fish.key ? `已填 Key · ${tts.fish.model}` : '还没填 API Key',
@@ -5583,9 +5898,9 @@ function updateTtsModeHelp(root) {
   const depthText = depth === 'deep'
     ? '深度分析：副模型带着角色卡、世界书和前几楼细读这一楼，给每句写配音指令（情绪、强度、语速、停顿、重音、呼吸、潜台词……），本地再转成 Fish 的标签和语速音量。'
     : depth === 'light'
-      ? '轻量分析：副模型只标每句由谁念、什么情绪，快，标签少。'
-      : '不请求副模型：用翻译时的说话人标注和引号区分旁白与对白。';
-  help.textContent = `${mode === 'floor' ? '全篇发送：整楼一次生成，每句记时间，点哪句跳哪句。' : '流式朗读：按段生成，第一段回来就开始播，后面的段边播边生成。'} ${depthText}`;
+      ? '轻量：翻译时副模型顺手标好的说话人、情绪、语气直接转成 Fish 的标签，不再请求；只有没标注的楼（开朗读之前翻的、或者副模型没回标注的）才问一次副模型。'
+      : '不请求副模型：用翻译时的说话人、情绪标注和引号区分旁白与对白，没标注的楼只按引号读。';
+  help.textContent = `${mode === 'floor' ? '全篇发送：「朗读本楼」整楼一次生成，每句记时间，点哪句跳哪句；还没生成时点单句先只做那一段。' : '流式朗读：按段生成，第一段回来就开始播，后面的段边播边生成。'} ${depthText}`;
 }
 
 /**
@@ -6858,6 +7173,12 @@ function createControlCenter(rootDocument = document) {
       syncFloatingEntry();
       return;
     }
+    if (event.target.matches('[data-jy-field="floorButtons"], [data-jy-field="leftHanded"]')) {
+      saveSettings(collectSettings(root));
+      scheduleTtsDecorateAll({ force: true });
+      runtime.mini?.syncQuickPickers?.();
+      return;
+    }
     if (event.target.matches('[data-jy-field="autoGeneration"], [data-jy-field="autoSwipe"], [data-jy-field="streamingWriteback"], [data-jy-field="showFloatingButton"], [data-jy-field="includeWorldbook"], [data-jy-field="includeCharacterCard"], [data-jy-field="includeRecentContext"]')) {
       const name = event.target.dataset.jyField;
       for (const twin of fieldElements(root, name)) twin.checked = event.target.checked;
@@ -7137,6 +7458,14 @@ function isCompactViewport() {
   return globalThis.matchMedia?.('(max-width: 767px), (pointer: coarse)')?.matches === true;
 }
 
+// Whether a floor gets a play and a cue button after every sentence: a setting, or the device's call.
+function floorButtonsOn(settings = runtime.settings) {
+  const mode = settings?.floorButtons ?? 'auto';
+  if (mode === 'on') return true;
+  if (mode === 'off') return false;
+  return !isCompactViewport();
+}
+
 // Shape follows state, not taps: the ring is the quiet form, the pill only appears when there is
 // something to report, and the edge tab is the phone form.
 function resolveFloatingForm(status) {
@@ -7387,11 +7716,74 @@ function closeMiniWindow() {
   runtime.mini?.close?.();
 }
 
+const MINI_POSITION_KEY = `${MODULE_ID}-mini-position`;
+const MINI_SIZE_KEY = `${MODULE_ID}-mini-size`;
+const MINI_ROW_LIMIT = 400;
+const MINI_LOG_LIMIT = 80;
+
+function readMiniPosition() {
+  try {
+    const value = JSON.parse(globalThis.localStorage?.getItem(MINI_POSITION_KEY) || 'null');
+    if (Number.isFinite(value?.x) && Number.isFinite(value?.y)) return { x: value.x, y: value.y };
+  } catch {
+    // Local visual state is optional.
+  }
+  return null;
+}
+
+function saveMiniPosition(position) {
+  try {
+    globalThis.localStorage?.setItem(MINI_POSITION_KEY, JSON.stringify({ x: Math.round(position.x), y: Math.round(position.y) }));
+  } catch {
+    // Local visual state is optional.
+  }
+}
+
+// A phone opens the window full-size the first time; a reader who shrinks it once is remembered.
+function readMiniSize(touch) {
+  try {
+    const value = globalThis.localStorage?.getItem(MINI_SIZE_KEY);
+    if (value === 'max' || value === 'card') return value;
+  } catch {
+    // Local visual state is optional.
+  }
+  return touch ? 'max' : 'card';
+}
+
+function saveMiniSize(size) {
+  try {
+    globalThis.localStorage?.setItem(MINI_SIZE_KEY, size);
+  } catch {
+    // Local visual state is optional.
+  }
+}
+
+// The assistant floors of the chat, in order, for the window's floor arrows.
+function assistantFloorIds(context = getContext()) {
+  const chat = Array.isArray(context?.chat) ? context.chat : [];
+  const ids = [];
+  chat.forEach((message, index) => {
+    if (message && !message.is_user && !message.is_system && typeof message.mes === 'string') ids.push(index);
+  });
+  return ids;
+}
+
+function miniClock(seconds) {
+  const whole = Math.max(0, Math.round(Number(seconds) || 0));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+function miniShort(text, limit) {
+  const value = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+}
+
 async function openMiniWindow() {
   if (runtime.mini?.host?.isConnected) return runtime.mini;
   document.getElementById(MINI_HOST_ID)?.remove();
 
   const settings = runtime.settings;
+  const touch = isCompactViewport();
   const host = document.createElement('div');
   host.id = MINI_HOST_ID;
   host.dataset.jingyiVersion = APP_VERSION;
@@ -7405,58 +7797,51 @@ async function openMiniWindow() {
   win.className = 'jy-mini';
   win.setAttribute('role', 'dialog');
   win.setAttribute('aria-label', `${APP_NAME} 悬浮窗`);
+  win.dataset.touch = touch ? 'true' : 'false';
+  win.dataset.hand = settings.leftHanded ? 'left' : 'right';
+  // The full-size form belongs to phones; a desktop window is always the card.
+  win.dataset.size = touch ? readMiniSize(true) : 'card';
+  win.dataset.miniTab = 'translate';
   win.innerHTML = `
 <div class="jy-mini-bar" data-jy-mini-drag>
   <span class="jy-mini-mark" aria-hidden="true">镜</span>
-  <span class="jy-mini-name">镜译<span class="jy-dot" data-jy-task-dot="idle"></span></span>
-  <button type="button" data-jy-action="mini-expand" aria-label="展开控制中心" title="展开控制中心">⤢</button>
+  <span class="jy-mini-name"><span data-jy-mini-title>镜译</span><span class="jy-dot" data-jy-task-dot="idle"></span></span>
+  <button type="button" data-jy-action="mini-max" aria-label="放大到满屏" title="放大到满屏"${touch ? '' : ' hidden'}>⤢</button>
+  <button type="button" data-jy-action="mini-expand" aria-label="打开控制中心" title="控制中心">⚙</button>
   <button type="button" data-jy-action="mini-collapse" aria-label="收起悬浮窗" title="收起">−</button>
 </div>
-<div class="jy-mini-tabs" role="tablist" data-jy-mini-tabs hidden>
+<div class="jy-mini-tabs" role="tablist" data-jy-mini-tabs>
   <button type="button" role="tab" aria-selected="true" data-jy-mini-tab="translate">翻译</button>
   <button type="button" role="tab" aria-selected="false" data-jy-mini-tab="reading">朗读</button>
+  <button type="button" role="tab" aria-selected="false" data-jy-mini-tab="log">日志</button>
 </div>
-<div class="jy-mini-body jy-mini-reading" data-jy-mini-page="reading" hidden>
+<div class="jy-mini-body jy-mini-translate" data-jy-mini-page="translate">
   <div class="jy-mini-status">
-    <div class="jy-mini-status-top"><strong data-jy-tts-title>没有在读</strong><span data-jy-tts-floor>—</span></div>
-    <div class="jy-progress jy-progress-seek" data-jy-tts-seek role="slider" aria-label="播放进度，拖动或点击跳转" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><span data-jy-tts-progress></span></div>
-    <p class="jy-muted" data-jy-tts-message>点楼层里的播放按钮，或者「朗读本楼」。</p>
-  </div>
-  <div class="jy-mini-transport">
-    <button type="button" class="jy-button" data-jy-action="tts-prev" title="回到上一段" aria-label="上一段">⏮</button>
-    <button type="button" class="jy-button jy-button-primary" data-jy-action="tts-toggle" title="暂停 / 继续" aria-label="暂停或继续">▶</button>
-    <button type="button" class="jy-button" data-jy-action="tts-next" title="快进到下一段" aria-label="下一段">⏭</button>
-    <button type="button" class="jy-button" data-jy-action="tts-download" title="把这段音频保存到本地" aria-label="保存到本地">⤓</button>
-    <button type="button" class="jy-button" data-jy-action="tts-read-floor" title="从头朗读这一楼" aria-label="朗读本楼">全楼</button>
-  </div>
-  <ul class="jy-mini-steps" data-jy-tts-steps hidden></ul>
-  <div class="jy-mini-inspect" data-jy-tts-inspect hidden>
-    <div class="jy-mini-inspect-head"><strong data-jy-tts-who>—</strong><span class="jy-muted" data-jy-tts-depth></span></div>
-    <p class="jy-mini-inspect-text" data-jy-tts-text></p>
-    <dl class="jy-mini-inspect-summary" data-jy-tts-summary hidden></dl>
-    <label class="jy-mini-inspect-field"><span class="jy-label">发给 Fish 的内容（方括号里是情绪、停顿、强调标签，可以直接改、直接插）</span><textarea data-jy-tts-fish rows="3" spellcheck="false"></textarea></label>
-    <div class="jy-mini-inspect-tags" data-jy-tts-tags></div>
-    <div class="jy-mini-inspect-prosody"><label><span class="jy-label">语速</span><input type="number" data-jy-tts-speed min="0.5" max="2" step="0.05"></label><label><span class="jy-label">音量 dB</span><input type="number" data-jy-tts-volume min="-20" max="20" step="1"></label></div>
-    <div class="jy-mini-inspect-actions">
-      <button type="button" class="jy-button jy-button-primary" data-jy-action="tts-apply">用这个重新生成</button>
-      <button type="button" class="jy-button" data-jy-action="tts-play-this">播放这句</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-reset" hidden>恢复自动</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="丢掉这一楼的分析结果，让副模型重新细读一遍">重新细读这一楼</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-copy-analysis" title="把这一楼的分析结果（每句的说话人、情绪、配音指令）复制成 JSON">复制这一楼的分析</button>
+    <div class="jy-mini-status-top">
+      <div class="jy-mini-floor-nav">
+        <button type="button" data-jy-action="mini-floor-prev" aria-label="上一楼" title="上一楼">‹</button>
+        <strong data-jy-mini-floor-title>等待正文</strong>
+        <button type="button" data-jy-action="mini-floor-next" aria-label="下一楼" title="下一楼">›</button>
+      </div>
+      <span data-jy-mini-floor-state>—</span>
     </div>
-    <p class="jy-muted" data-jy-tts-note></p>
+    <div class="jy-mini-batches" data-jy-mini-batches hidden></div>
+    <p class="jy-muted jy-mini-taskline"><span data-jy-task-message></span><span class="jy-mini-eta" data-jy-mini-eta></span></p>
+    <button type="button" class="jy-mini-thinking" data-jy-action="mini-thinking" data-jy-mini-thinking hidden aria-expanded="false"><span class="jy-mini-thinking-mark" aria-hidden="true">◔</span><span class="jy-mini-thinking-text" data-jy-mini-thinking-text></span><span class="jy-mini-thinking-more" data-jy-mini-thinking-more>展开</span></button>
+    <pre class="jy-mini-thinking-full" data-jy-mini-thinking-full hidden></pre>
   </div>
-</div>
-<div class="jy-mini-body" data-jy-mini-page="translate">
-  <div class="jy-mini-status">
-    <div class="jy-mini-status-top"><strong data-jy-task-title>等待正文</strong><span data-jy-mini-floor>—</span></div>
-    <div class="jy-progress" aria-hidden="true"><span data-jy-progress></span></div>
-    <p class="jy-muted" data-jy-task-message></p>
+  <ol class="jy-mini-rows" data-jy-mini-rows></ol>
+  <div class="jy-mini-actions" data-jy-mini-actions>
+    <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-translate">翻译本楼</button>
+    <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-stop" hidden>停止</button>
+    <button type="button" class="jy-button" data-jy-action="mini-repair" hidden>补译</button>
+    <button type="button" class="jy-button" data-jy-action="mini-retranslate" hidden>重翻</button>
+    <button type="button" class="jy-button jy-mini-auto" data-jy-action="mini-auto" aria-pressed="true" title="新楼生成完自动翻译">自动 开</button>
   </div>
-  <div class="jy-mini-actions">
-    <button type="button" class="jy-button" data-jy-action="mini-translate">翻译本楼</button>
-    <button type="button" class="jy-button" data-jy-action="mini-stop" hidden>停止</button>
-    <button type="button" class="jy-button" data-jy-action="mini-refresh">刷新楼层</button>
+  <div class="jy-mini-quick">
+    <label><span class="jy-label">模型</span><select data-jy-mini-channel></select></label>
+    <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
+    <button type="button" class="jy-text-button" data-jy-action="mini-translate-all" data-jy-mini-untranslated hidden></button>
   </div>
   <details class="jy-mini-scratch" data-jy-mini-scratch data-expanded="false">
     <summary class="jy-mini-scratch-top"><strong>随手翻</strong><span data-jy-mini-target>简体中文</span></summary>
@@ -7477,10 +7862,62 @@ async function openMiniWindow() {
       </div>
     </div>
   </details>
-  <div class="jy-mini-quick">
-    <label><span class="jy-label">模型</span><select data-jy-mini-channel></select></label>
-    <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
+  <button type="button" class="jy-mini-playbar" data-jy-action="mini-goto-reading" data-jy-mini-playbar hidden>
+    <span class="jy-mini-playbar-glyph" data-jy-mini-playbar-glyph aria-hidden="true">▶</span>
+    <span class="jy-progress" aria-hidden="true"><span data-jy-mini-playbar-fill></span></span>
+    <span class="jy-mini-playbar-text" data-jy-mini-playbar-text></span>
+    <span class="jy-mini-playbar-more" aria-hidden="true">︿</span>
+  </button>
+</div>
+<div class="jy-mini-body jy-mini-reading" data-jy-mini-page="reading" hidden>
+  <div class="jy-mini-player">
+    <div class="jy-mini-status-top"><strong data-jy-tts-title>没有在读</strong><span data-jy-tts-floor>—</span></div>
+    <div class="jy-progress jy-progress-seek" data-jy-tts-seek role="slider" aria-label="播放进度，拖动或点击跳转" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><span data-jy-tts-progress></span></div>
+    <div class="jy-mini-clock"><span data-jy-tts-clock-now>0:00</span><span class="jy-muted" data-jy-tts-message>点楼层里的「朗读本楼」，或者下面的播放键。</span><span data-jy-tts-clock-total>0:00</span></div>
+    <div class="jy-mini-transport">
+      <button type="button" class="jy-button" data-jy-action="tts-prev" title="回到上一段">上一段</button>
+      <button type="button" class="jy-mini-play" data-jy-action="tts-toggle" aria-label="播放或暂停" title="播放 / 暂停">▶</button>
+      <button type="button" class="jy-button" data-jy-action="tts-next" title="快进到下一段">下一段</button>
+    </div>
+    <div class="jy-mini-pills" data-jy-tts-pills hidden></div>
+    <ul class="jy-mini-steps" data-jy-tts-steps hidden></ul>
+    <div class="jy-mini-links">
+      <button type="button" class="jy-text-button" data-jy-action="tts-read-floor" title="从头朗读这一楼">从头读</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="丢掉这一楼的分析结果，让副模型重新细读一遍">重新细读</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-download" title="把这段音频保存到本地">保存到本地</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-locate" title="把聊天滚到正在读的句子">定位到正文</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-copy-analysis" title="把这一楼的分析结果复制成 JSON">复制分析</button>
+    </div>
   </div>
+  <ol class="jy-mini-sentences" data-jy-tts-list hidden></ol>
+  <p class="jy-muted jy-mini-sentences-note" data-jy-tts-list-note hidden></p>
+  <div class="jy-mini-inspect" data-jy-tts-inspect hidden>
+    <div class="jy-mini-inspect-head"><strong data-jy-tts-who>—</strong><button type="button" class="jy-mini-inspect-close" data-jy-action="tts-inspect-close" aria-label="关闭改句面板" title="关闭">×</button></div>
+    <p class="jy-muted jy-mini-inspect-depth" data-jy-tts-depth></p>
+    <p class="jy-mini-inspect-text" data-jy-tts-text></p>
+    <dl class="jy-mini-inspect-summary" data-jy-tts-summary hidden></dl>
+    <label class="jy-mini-inspect-field"><span class="jy-label">发给 Fish 的内容（方括号里是情绪、停顿、强调标签，可以直接改、直接插）</span><textarea data-jy-tts-fish rows="3" spellcheck="false"></textarea></label>
+    <div class="jy-mini-inspect-tags" data-jy-tts-tags></div>
+    <div class="jy-mini-inspect-prosody"><label><span class="jy-label">语速</span><input type="number" data-jy-tts-speed min="0.5" max="2" step="0.05"></label><label><span class="jy-label">音量 dB</span><input type="number" data-jy-tts-volume min="-20" max="20" step="1"></label></div>
+    <div class="jy-mini-inspect-actions">
+      <button type="button" class="jy-button jy-button-primary" data-jy-action="tts-apply" hidden>重新生成并播放</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-reset" hidden>恢复自动</button>
+    </div>
+    <p class="jy-muted" data-jy-tts-note></p>
+  </div>
+</div>
+<div class="jy-mini-body jy-mini-logpage" data-jy-mini-page="log" hidden>
+  <div class="jy-mini-log-filters" data-jy-mini-log-filters>
+    <button type="button" class="jy-mini-chip" data-jy-action="log-filter" data-filter="floor" aria-pressed="true">本楼</button>
+    <button type="button" class="jy-mini-chip" data-jy-action="log-filter" data-filter="all" aria-pressed="false">全部</button>
+    <button type="button" class="jy-mini-chip" data-jy-action="log-filter" data-filter="translation" aria-pressed="false">翻译</button>
+    <button type="button" class="jy-mini-chip" data-jy-action="log-filter" data-filter="tts" aria-pressed="false">朗读</button>
+    <button type="button" class="jy-mini-chip jy-mini-chip-error" data-jy-action="log-filter" data-filter="errors" aria-pressed="false">只看出错</button>
+    <button type="button" class="jy-text-button" data-jy-action="log-copy">复制全部</button>
+  </div>
+  <ol class="jy-mini-log" data-jy-mini-log></ol>
+  <p class="jy-muted jy-mini-log-empty" data-jy-mini-log-empty hidden>这里还没有记录。</p>
+  <div class="jy-mini-log-detail" data-jy-mini-log-detail hidden></div>
 </div>`;
   shadow.append(style, win);
   document.body.appendChild(host);
@@ -7489,11 +7926,145 @@ async function openMiniWindow() {
   const input = win.querySelector('[data-jy-mini-input]');
   const resultBox = win.querySelector('[data-jy-mini-result]');
   const output = win.querySelector('[data-jy-mini-output]');
-  const meta = win.querySelector('[data-jy-mini-meta]');
   const scratch = win.querySelector('[data-jy-mini-scratch]');
   const scratchSummary = scratch.querySelector('summary');
   const channelSelect = win.querySelector('[data-jy-mini-channel]');
   const profileSelect = win.querySelector('[data-jy-mini-profile]');
+  const rowsList = win.querySelector('[data-jy-mini-rows]');
+  const tabs = win.querySelector('[data-jy-mini-tabs]');
+  const pages = {
+    translate: win.querySelector('[data-jy-mini-page="translate"]'),
+    reading: win.querySelector('[data-jy-mini-page="reading"]'),
+    log: win.querySelector('[data-jy-mini-page="log"]'),
+  };
+  const inspectBox = win.querySelector('[data-jy-tts-inspect]');
+  const sentenceList = win.querySelector('[data-jy-tts-list]');
+  const fishInput = win.querySelector('[data-jy-tts-fish]');
+  const speedInput = win.querySelector('[data-jy-tts-speed]');
+  const volumeInput = win.querySelector('[data-jy-tts-volume]');
+  const tagBox = win.querySelector('[data-jy-tts-tags]');
+  const seekBar = win.querySelector('[data-jy-tts-seek]');
+  const logList = win.querySelector('[data-jy-mini-log]');
+  const logDetail = win.querySelector('[data-jy-mini-log-detail]');
+
+  let miniTab = 'translate';
+  // The floor the translate page shows; the arrows move it, a new run pulls it along.
+  let viewFloor = null;
+  let viewRows = [];
+  let viewState = floorState([]);
+  let viewRunning = false;
+  let editingRow = null;
+  let rowsToken = 0;
+  let rowsTimer = null;
+  let etaTicker = null;
+  let thinkingOpen = false;
+  let logFilter = 'floor';
+  let logEntries = [];
+  let logShown = [];
+  let inspecting = null;
+  let inspectToken = 0;
+  let inspectDirty = false;
+  let sentencesToken = 0;
+  let sentencesSignature = '';
+  let sentencesBusy = false;
+  let sentencesAgain = false;
+  let sentencesTimer = null;
+
+  // -------------------------------------------------------------------------------------------
+  // Pages and the window's shape.
+  // -------------------------------------------------------------------------------------------
+  let resizeSettle = null;
+  const settleResize = () => {
+    if (resizeSettle !== null) {
+      globalThis.clearTimeout(resizeSettle);
+      runtime.timers.delete(resizeSettle);
+      resizeSettle = null;
+    }
+    win.removeEventListener('transitionend', onResizeEnd);
+    win.classList.remove('is-resizing');
+    win.style.height = '';
+    if (win.isConnected) reanchor();
+  };
+  const onResizeEnd = event => {
+    if (event.target === win && event.propertyName === 'height') settleResize();
+  };
+  const PAGE_ORDER = ['translate', 'reading', 'log'];
+  const selectMiniTab = (name, { animate = true } = {}) => {
+    if (!pages[name]) return;
+    const from = pages[miniTab];
+    const to = pages[name];
+    const switching = miniTab !== name && from && to;
+    const before = switching && win.dataset.size !== 'max' ? win.offsetHeight : 0;
+    const direction = PAGE_ORDER.indexOf(name) > PAGE_ORDER.indexOf(miniTab) ? 'forward' : 'back';
+    miniTab = name;
+    for (const button of tabs.querySelectorAll('[data-jy-mini-tab]')) button.setAttribute('aria-selected', String(button.dataset.jyMiniTab === name));
+    for (const [key, page] of Object.entries(pages)) page.hidden = key !== name;
+    win.dataset.miniTab = name;
+    const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+    if (switching && animate && !reduced && before) {
+      settleResize();
+      const after = win.offsetHeight;
+      if (after !== before) {
+        win.style.height = `${before}px`;
+        // Committing the old height first is what gives the transition a starting point.
+        void win.offsetHeight;
+        win.classList.add('is-resizing');
+        win.style.height = `${after}px`;
+        win.addEventListener('transitionend', onResizeEnd);
+        resizeSettle = globalThis.setTimeout(settleResize, 420);
+        runtime.timers.add(resizeSettle);
+      }
+      to.dataset.direction = direction;
+      to.classList.remove('is-entering');
+      void to.offsetWidth;
+      to.classList.add('is-entering');
+    }
+    if (name === 'log') renderLog();
+    if (name === 'reading') void renderSentences();
+    globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
+  };
+  const syncMiniTabs = () => {
+    const enabled = ttsSettings().enabled;
+    const readingTab = tabs.querySelector('[data-jy-mini-tab="reading"]');
+    if (readingTab) readingTab.hidden = !enabled;
+    if (!enabled && miniTab === 'reading') selectMiniTab('translate');
+    win.dataset.hand = runtime.settings.leftHanded ? 'left' : 'right';
+    host.dataset.theme = runtime.settings.theme || 'day';
+  };
+  const onTabClick = event => {
+    const tab = event.target.closest('[data-jy-mini-tab]');
+    if (tab) selectMiniTab(tab.dataset.jyMiniTab);
+  };
+  const setSize = (size, { remember = true } = {}) => {
+    win.dataset.size = size;
+    if (remember && win.dataset.touch === 'true') saveMiniSize(size);
+    const button = win.querySelector('[data-jy-action="mini-max"]');
+    if (button) {
+      button.textContent = size === 'max' ? '⤡' : '⤢';
+      const label = size === 'max' ? '缩回卡片' : '放大到满屏';
+      button.setAttribute('aria-label', label);
+      button.title = label;
+    }
+    if (size === 'max') {
+      win.style.left = '';
+      win.style.top = '';
+    } else if (userMoved) {
+      place(position.x, position.y);
+    } else {
+      // Measured as a card, not at the size it had a moment ago.
+      const next = anchorMiniPosition(win);
+      place(next.x, next.y);
+    }
+  };
+  // The device can change under the window: a desktop browser narrowed to a phone's width, or the
+  // pane widened again. The form follows, and the full-size form is only kept on a phone.
+  const syncTouch = () => {
+    const compact = isCompactViewport();
+    win.dataset.touch = compact ? 'true' : 'false';
+    const maxButton = win.querySelector('[data-jy-action="mini-max"]');
+    if (maxButton) maxButton.hidden = !compact;
+    if (!compact && win.dataset.size === 'max') setSize('card', { remember: false });
+  };
 
   const syncQuickPickers = () => {
     const current = runtime.settings;
@@ -7524,86 +8095,258 @@ async function openMiniWindow() {
     }
     profileSelect.value = current.selectedPromptProfileId;
     setText(win, '[data-jy-mini-target]', normalizeTargetLanguage(getActivePromptProfile(current).targetLanguage));
+    const auto = win.querySelector('[data-jy-action="mini-auto"]');
+    if (auto) {
+      auto.textContent = current.autoGeneration ? '自动 开' : '自动 关';
+      auto.setAttribute('aria-pressed', String(Boolean(current.autoGeneration)));
+    }
+    syncMiniTabs();
   };
   syncQuickPickers();
 
   // -------------------------------------------------------------------------------------------
-  // The reading panel: what is being read, the transport, and one sentence's voice laid open.
+  // The translate page: the floor, paragraph by paragraph.
   // -------------------------------------------------------------------------------------------
-  const tabs = win.querySelector('[data-jy-mini-tabs]');
-  const pages = { translate: win.querySelector('[data-jy-mini-page="translate"]'), reading: win.querySelector('[data-jy-mini-page="reading"]') };
-  const inspectBox = win.querySelector('[data-jy-tts-inspect]');
-  const fishInput = win.querySelector('[data-jy-tts-fish]');
-  const speedInput = win.querySelector('[data-jy-tts-speed]');
-  const volumeInput = win.querySelector('[data-jy-tts-volume]');
-  const tagBox = win.querySelector('[data-jy-tts-tags]');
-  let miniTab = 'translate';
-  let inspecting = null;
-  let inspectToken = 0;
-  let inspectDirty = false;
-  // Switching pages animates twice over: the window's height eases from the old page's to the new
-  // one's, and the new page slides in from the side it lives on. The underline under the tabs slides
-  // by CSS off data-mini-tab. Nothing moves when the system asks for reduced motion.
-  let resizeSettle = null;
-  const settleResize = () => {
-    if (resizeSettle !== null) {
-      globalThis.clearTimeout(resizeSettle);
-      runtime.timers.delete(resizeSettle);
-      resizeSettle = null;
+  const floorLockKey = snapshot => `${snapshot.chatId}|${snapshot.messageId}|${snapshot.swipeId}`;
+  const renderRowTags = row => {
+    const tags = document.createElement('div');
+    tags.className = 'jy-mini-row-tags';
+    if (row.speaker) {
+      const speaker = document.createElement('span');
+      speaker.className = 'jy-mini-pill';
+      speaker.textContent = row.speaker;
+      tags.appendChild(speaker);
     }
-    win.removeEventListener('transitionend', onResizeEnd);
-    win.classList.remove('is-resizing');
-    win.style.height = '';
-    if (win.isConnected) reanchor();
+    if (row.emotion) {
+      const emotion = document.createElement('span');
+      emotion.className = 'jy-mini-pill';
+      emotion.textContent = cueLabel(row.emotion);
+      tags.appendChild(emotion);
+    }
+    return tags.childElementCount ? tags : null;
   };
-  const onResizeEnd = event => {
-    if (event.target === win && event.propertyName === 'height') settleResize();
+  const rowButton = (label, action, id, { primary = false, danger = false } = {}) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `jy-button jy-mini-row-button${primary ? ' jy-button-primary' : ''}${danger ? ' jy-mini-row-button-danger' : ''}`;
+    button.dataset.jyAction = action;
+    button.dataset.id = String(id);
+    button.textContent = label;
+    return button;
   };
-  const selectMiniTab = (name, { animate = true } = {}) => {
-    const from = pages[miniTab];
-    const to = pages[name];
-    const switching = miniTab !== name && from && to;
-    const before = switching ? win.offsetHeight : 0;
-    miniTab = name;
-    for (const button of tabs.querySelectorAll('[data-jy-mini-tab]')) button.setAttribute('aria-selected', String(button.dataset.jyMiniTab === name));
-    pages.translate.hidden = name !== 'translate';
-    pages.reading.hidden = name !== 'reading';
-    win.dataset.miniTab = name;
-    const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
-    if (switching && animate && !reduced && before) {
-      settleResize();
-      const after = win.offsetHeight;
-      if (after !== before) {
-        win.style.height = `${before}px`;
-        // Committing the old height first is what gives the transition a starting point.
-        void win.offsetHeight;
-        win.classList.add('is-resizing');
-        win.style.height = `${after}px`;
-        // The transition's own end clears the fixed height; the timer only covers a dropped event.
-        win.addEventListener('transitionend', onResizeEnd);
-        resizeSettle = globalThis.setTimeout(settleResize, 420);
-        runtime.timers.add(resizeSettle);
+  const renderRows = () => {
+    rowsList.replaceChildren();
+    const reading = ttsSettings().enabled;
+    for (const row of viewRows.slice(0, MINI_ROW_LIMIT)) {
+      const item = document.createElement('li');
+      item.className = 'jy-mini-row';
+      item.dataset.id = String(row.id);
+      item.dataset.state = row.state;
+      const mark = document.createElement('span');
+      mark.className = 'jy-mini-row-mark';
+      mark.textContent = row.state === 'done' ? '✓' : row.state === 'running' ? '◌' : row.state === 'missing' ? '!' : '·';
+      const body = document.createElement('div');
+      body.className = 'jy-mini-row-body';
+      const source = document.createElement('div');
+      source.className = 'jy-mini-row-src';
+      source.textContent = row.source;
+      body.appendChild(source);
+      if (editingRow === row.id) {
+        item.dataset.editing = 'true';
+        const tags = renderRowTags(row);
+        if (tags) body.appendChild(tags);
+        const field = document.createElement('textarea');
+        field.className = 'jy-mini-row-field';
+        field.rows = 3;
+        field.spellcheck = false;
+        field.dataset.jyRowField = String(row.id);
+        field.value = row.translation;
+        field.placeholder = row.state === 'done' ? '' : '这一段还没有译文，可以直接写一段。';
+        body.appendChild(field);
+        const actions = document.createElement('div');
+        actions.className = 'jy-mini-row-actions';
+        actions.append(rowButton('写回', 'row-write', row.id, { primary: true }), rowButton('重翻这段', 'row-retry', row.id));
+        if (reading && row.state === 'done') actions.append(rowButton('试听', 'row-listen', row.id));
+        actions.append(rowButton('关闭', 'row-close', row.id));
+        body.appendChild(actions);
+      } else {
+        const target = document.createElement('div');
+        target.className = 'jy-mini-row-dst';
+        if (row.state === 'done') target.textContent = row.translation;
+        else if (row.state === 'running') target.textContent = '翻译中…';
+        else if (row.state === 'missing') target.textContent = '缺失';
+        else target.textContent = '未译';
+        body.appendChild(target);
+        const tags = renderRowTags(row);
+        if (tags) body.appendChild(tags);
       }
-      to.dataset.direction = name === 'reading' ? 'forward' : 'back';
-      to.classList.remove('is-entering');
-      void to.offsetWidth;
-      to.classList.add('is-entering');
+      item.append(mark, body);
+      if (editingRow !== row.id && row.state === 'missing' && !viewRunning) {
+        const side = document.createElement('div');
+        side.className = 'jy-mini-row-side';
+        side.appendChild(rowButton('补这段', 'row-fix', row.id, { danger: true }));
+        item.appendChild(side);
+      }
+      rowsList.appendChild(item);
     }
-    globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
+    rowsList.hidden = !viewRows.length;
   };
-  const syncMiniTabs = () => {
-    const enabled = ttsSettings().enabled;
-    tabs.hidden = !enabled;
-    if (!enabled && miniTab !== 'translate') selectMiniTab('translate');
+  const renderFloorActions = () => {
+    const running = viewRunning;
+    const show = (action, visible) => {
+      const button = win.querySelector(`[data-jy-action="${action}"]`);
+      if (button) button.hidden = !visible;
+    };
+    show('mini-stop', running);
+    show('mini-translate', !running && viewState.key === 'pending');
+    show('mini-retranslate', !running && ['done', 'missing'].includes(viewState.key));
+    show('mini-repair', !running && viewState.key === 'missing');
+    const untranslated = untranslatedFloors(getContext().chat, { limit: 50 }).filter(id => id !== viewFloor);
+    const all = win.querySelector('[data-jy-mini-untranslated]');
+    if (all) {
+      all.hidden = !untranslated.length || running;
+      all.textContent = `还有 ${untranslated.length} 楼没翻 · 全翻`;
+    }
   };
-  const onTabClick = event => {
-    const tab = event.target.closest('[data-jy-mini-tab]');
-    if (tab) selectMiniTab(tab.dataset.jyMiniTab);
+  const setFloorTitle = () => {
+    const title = Number.isInteger(viewFloor) ? `第 ${viewFloor} 楼` : '等待正文';
+    setText(win, '[data-jy-mini-floor-title]', title);
+    setText(win, '[data-jy-mini-floor-state]', Number.isInteger(viewFloor) ? `${viewState.label}${viewState.total ? ` · ${viewState.done}/${viewState.total} 段` : ''}` : '—');
+    setText(win, '[data-jy-mini-title]', Number.isInteger(viewFloor) ? `${title} · ${viewState.label}` : '镜译');
+    const ids = assistantFloorIds();
+    const at = ids.indexOf(viewFloor);
+    const prev = win.querySelector('[data-jy-action="mini-floor-prev"]');
+    const next = win.querySelector('[data-jy-action="mini-floor-next"]');
+    if (prev) prev.disabled = at <= 0;
+    if (next) next.disabled = at < 0 || at >= ids.length - 1;
   };
-  const formatClock = seconds => {
-    const whole = Math.max(0, Math.round(Number(seconds) || 0));
-    return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+  const renderFloor = async () => {
+    const token = ++rowsToken;
+    const context = getContext();
+    if (!Number.isInteger(viewFloor)) viewFloor = Number.isInteger(runtime.activeFloor) && runtime.task.status === 'running' ? runtime.activeFloor : latestAssistantMessageId(context);
+    let snapshot = null;
+    if (Number.isInteger(viewFloor)) {
+      try {
+        snapshot = await readMessageSnapshot(viewFloor, runtime.settings, { quiet: true });
+      } catch {
+        snapshot = null;
+      }
+    }
+    if (token !== rowsToken || !win.isConnected) return;
+    viewRunning = Boolean(snapshot && runtime.inflight.has(floorLockKey(snapshot)));
+    viewRows = snapshot ? floorRows(snapshot, { running: viewRunning }) : [];
+    viewState = floorState(viewRows, { running: viewRunning });
+    if (!viewRows.some(row => row.id === editingRow)) editingRow = null;
+    renderRows();
+    renderFloorActions();
+    setFloorTitle();
+    if (win.isConnected) globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
   };
+  const scheduleRows = (delay = 400) => {
+    if (rowsTimer !== null) return;
+    rowsTimer = globalThis.setTimeout(() => {
+      runtime.timers.delete(rowsTimer);
+      rowsTimer = null;
+      void renderFloor();
+    }, delay);
+    runtime.timers.add(rowsTimer);
+  };
+  const moveFloor = delta => {
+    const ids = assistantFloorIds();
+    if (!ids.length) return;
+    const at = ids.indexOf(viewFloor);
+    const next = ids[Math.min(ids.length - 1, Math.max(0, (at < 0 ? ids.length - 1 : at) + delta))];
+    if (next === viewFloor) return;
+    viewFloor = next;
+    editingRow = null;
+    void renderFloor();
+  };
+
+  // The run in progress: batches as a bar of blocks, the seconds still to go, the model's thinking.
+  const renderTaskLine = task => {
+    const running = task.status === 'running' && (!Number.isInteger(viewFloor) || runtime.activeFloor === viewFloor);
+    setText(win, '[data-jy-task-message]', running || !Number.isInteger(viewFloor) ? task.message : '');
+    const dot = win.querySelector('[data-jy-task-dot]');
+    if (dot) dot.dataset.jyTaskDot = task.status;
+    const batchBox = win.querySelector('[data-jy-mini-batches]');
+    const batches = running ? task.batches : null;
+    if (batchBox) {
+      batchBox.replaceChildren();
+      if (batches && batches.total > 1) {
+        for (let index = 0; index < batches.total; index += 1) {
+          const block = document.createElement('i');
+          block.dataset.state = index < batches.done ? 'done' : index < batches.done + batches.active ? 'active' : 'pending';
+          batchBox.appendChild(block);
+        }
+      }
+      batchBox.hidden = !(batches && batches.total > 1);
+    }
+    let eta = '';
+    if (running && batches && batches.total) {
+      const elapsedActive = batches.activeSince?.length ? (Date.now() - Math.min(...batches.activeSince)) / 1000 : 0;
+      eta = describeRemaining(estimateRemaining({
+        done: batches.done, total: batches.total, active: batches.active, lanes: batches.lanes,
+        durations: batches.durations, elapsedActive, history: runtime.timing.translation,
+      }));
+    }
+    setText(win, '[data-jy-mini-eta]', eta);
+    if (running && etaTicker === null) {
+      etaTicker = globalThis.setInterval(() => {
+        if (!win.isConnected) {
+          globalThis.clearInterval(etaTicker);
+          etaTicker = null;
+          return;
+        }
+        renderTaskLine(runtime.task);
+      }, 1000);
+    } else if (!running && etaTicker !== null) {
+      globalThis.clearInterval(etaTicker);
+      etaTicker = null;
+    }
+    renderThinkingLine();
+  };
+  const renderThinkingLine = () => {
+    const thinking = runtime.thinking;
+    const text = String(thinking.text ?? '').trim();
+    const line = win.querySelector('[data-jy-mini-thinking]');
+    const full = win.querySelector('[data-jy-mini-thinking-full]');
+    if (!line || !full) return;
+    const relevant = text && (thinking.live || runtime.task.status === 'running');
+    line.hidden = !relevant;
+    if (!relevant) {
+      full.hidden = true;
+      return;
+    }
+    const last = text.split('\n').map(item => item.trim()).filter(Boolean).at(-1) ?? '';
+    setText(win, '[data-jy-mini-thinking-text]', `${thinking.live ? '副模型：' : '上一批思考：'}${miniShort(last, 90)}`);
+    setText(win, '[data-jy-mini-thinking-more]', thinkingOpen ? '收起' : '展开');
+    line.setAttribute('aria-expanded', String(thinkingOpen));
+    full.hidden = !thinkingOpen;
+    if (thinkingOpen) {
+      const tail = text.length > THINKING_TAIL ? `…${text.slice(-THINKING_TAIL)}` : text;
+      if (full.textContent !== tail) {
+        full.textContent = tail;
+        full.scrollTop = full.scrollHeight;
+      }
+    }
+  };
+
+  // A translation in flight or done rewrites the floor; the rows follow with a short delay.
+  let lastTaskStatus = runtime.task.status;
+  const unsubscribeTask = subscribeTask(task => {
+    renderTaskLine(task);
+    if (task.status === 'running' && Number.isInteger(runtime.activeFloor) && runtime.activeFloor !== viewFloor && lastTaskStatus !== 'running') {
+      // A new run pulls the page onto its floor, the way the reader expects when they pressed translate.
+      viewFloor = runtime.activeFloor;
+      editingRow = null;
+    }
+    if (task.status !== lastTaskStatus || task.status === 'running') scheduleRows(task.status === 'running' ? 1200 : 200);
+    lastTaskStatus = task.status;
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // The reading page: the player, the sentences, one sentence laid open.
+  // -------------------------------------------------------------------------------------------
   // Cues a finger can drop into the text: the moods Fish lists, then pauses, emphasis and sounds.
   const emotionPicker = document.createElement('select');
   emotionPicker.setAttribute('aria-label', '插入情绪标签');
@@ -7627,6 +8370,11 @@ async function openMiniWindow() {
     chip.title = `[${tag}]`;
     tagBox.appendChild(chip);
   }
+  const markDirty = () => {
+    inspectDirty = true;
+    const apply = win.querySelector('[data-jy-action="tts-apply"]');
+    if (apply) apply.hidden = false;
+  };
   const insertCue = tag => {
     const start = fishInput.selectionStart ?? fishInput.value.length;
     const end = fishInput.selectionEnd ?? start;
@@ -7637,7 +8385,7 @@ async function openMiniWindow() {
     const caret = before.length + piece.length;
     fishInput.focus();
     fishInput.setSelectionRange(caret, caret);
-    inspectDirty = true;
+    markDirty();
   };
   // Keeping focus in the textarea across a chip tap is what makes the caret position survive.
   const onTagPointerDown = event => {
@@ -7651,13 +8399,19 @@ async function openMiniWindow() {
     if (emotionPicker.value) insertCue(emotionPicker.value);
     emotionPicker.value = '';
   };
-  const onFishInput = () => { inspectDirty = true; };
+  const onFishInput = () => markDirty();
+  const showInspector = show => {
+    inspectBox.hidden = !show;
+    sentenceList.hidden = show || !sentenceList.childElementCount;
+    const note = win.querySelector('[data-jy-tts-list-note]');
+    if (note && show) note.hidden = true;
+  };
   const renderInspector = async (messageId, utteranceId, { pinned = true, side = null } = {}) => {
     const token = ++inspectToken;
     const which = side ?? primaryTtsSide();
     inspecting = { messageId, utteranceId, pinned, side: which };
     inspectDirty = false;
-    inspectBox.hidden = false;
+    showInspector(true);
     setText(win, '[data-jy-tts-who]', '读取中…');
     let data;
     try {
@@ -7691,12 +8445,206 @@ async function openMiniWindow() {
     volumeInput.value = data.override?.volume ?? data.prosody.volume;
     const reset = win.querySelector('[data-jy-action="tts-reset"]');
     if (reset) reset.hidden = !data.override;
+    const apply = win.querySelector('[data-jy-action="tts-apply"]');
+    if (apply) apply.hidden = true;
     setText(win, '[data-jy-tts-note]', data.override
       ? '这句现在用的是你改过的版本；「恢复自动」回到副模型的分析。'
       : data.inRange
-        ? '改上面的内容、语速或音量，点「用这个重新生成」只重做这一句，整楼朗读时也用这个版本。'
+        ? '改上面的内容、语速或音量，「重新生成并播放」只重做这一句，整楼朗读时也用这个版本。'
         : '这句不在当前的朗读范围里，改了也不会读。');
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
+  };
+  const closeInspector = () => {
+    inspectToken += 1;
+    inspecting = null;
+    inspectDirty = false;
+    showInspector(false);
+    void renderSentences({ force: true });
+  };
+
+  // The floor's sentences, each with what the reader can do to it: tap to read from there, 改这句 to open it.
+  const renderSentencesNow = async ({ force = false } = {}) => {
+    const enabled = ttsSettings().enabled;
+    const transport = runtime.tts.transport;
+    const messageId = transport?.messageId ?? viewFloor;
+    const side = transport?.side ?? primaryTtsSide();
+    const note = win.querySelector('[data-jy-tts-list-note]');
+    if (!enabled || !Number.isInteger(messageId)) {
+      sentenceList.hidden = true;
+      if (note) note.hidden = true;
+      return;
+    }
+    const progress = ttsProgressFor(messageId, side);
+    const signature = `${messageId}|${side}|${progress?.steps.filter(step => step.state === 'done').length ?? 0}|${transport?.state ?? ''}|${runtime.tts.recordings.get(`${messageId}`)?.length ?? ''}`;
+    if (!force && signature === sentencesSignature) {
+      markCurrentSentence();
+      return;
+    }
+    // Claimed before the awaits: the steps a preparation fires must not start a second preparation.
+    sentencesSignature = signature;
+    const token = ++sentencesToken;
+    let prepared;
+    let records = [];
+    try {
+      prepared = await ttsPrepared(messageId, side);
+      records = await ttsRecordings(prepared.floor);
+    } catch (error) {
+      sentencesSignature = '';
+      if (token !== sentencesToken || !win.isConnected) return;
+      sentenceList.hidden = true;
+      if (note) {
+        note.hidden = false;
+        note.textContent = safeError(error);
+      }
+      return;
+    }
+    if (token !== sentencesToken || !win.isConnected) return;
+    const { key: fingerprint } = await ttsFingerprint(prepared.settings);
+    sentenceList.replaceChildren();
+    for (const item of prepared.items) {
+      const { segment } = item;
+      const ready = Boolean(findCoveringEntry(records, { text: segment.text, voiceId: item.voiceId, fingerprint }));
+      const row = document.createElement('li');
+      row.className = 'jy-mini-sentence';
+      row.dataset.id = String(segment.id);
+      row.dataset.side = side;
+      row.dataset.messageId = String(messageId);
+      row.dataset.ready = ready ? 'true' : 'false';
+      const mark = document.createElement('span');
+      mark.className = 'jy-mini-sentence-mark';
+      mark.textContent = ready ? '✓' : '·';
+      const body = document.createElement('div');
+      body.className = 'jy-mini-sentence-body';
+      const text = document.createElement('div');
+      text.className = 'jy-mini-sentence-text';
+      text.textContent = segment.text;
+      body.appendChild(text);
+      const tags = document.createElement('div');
+      tags.className = 'jy-mini-row-tags';
+      const who = document.createElement('span');
+      who.className = 'jy-mini-pill';
+      who.textContent = segment.type === 'narration' ? '旁白' : (segment.speaker || '对白');
+      tags.appendChild(who);
+      if (segment.emotion) {
+        const mood = document.createElement('span');
+        mood.className = 'jy-mini-pill';
+        mood.textContent = cueLabel(segment.emotion);
+        tags.appendChild(mood);
+      }
+      if (item.override?.text) {
+        const edited = document.createElement('span');
+        edited.className = 'jy-mini-pill jy-mini-pill-edited';
+        edited.textContent = '改过';
+        tags.appendChild(edited);
+      }
+      body.appendChild(tags);
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'jy-text-button jy-mini-sentence-edit';
+      edit.dataset.jyAction = 'sentence-edit';
+      edit.dataset.id = String(segment.id);
+      edit.textContent = '改这句';
+      row.append(mark, body, edit);
+      sentenceList.appendChild(row);
+    }
+    sentenceList.hidden = inspectBox.hidden === false || !prepared.items.length;
+    if (note) {
+      note.hidden = prepared.items.length > 0;
+      note.textContent = prepared.items.length ? '' : '这一楼在当前范围里没有可读的句子。';
+    }
+    markCurrentSentence();
+    globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
+  };
+  const markCurrentSentence = () => {
+    const transport = runtime.tts.transport;
+    const current = transport?.items[transport.index]?.segment.id;
+    for (const row of sentenceList.querySelectorAll('.jy-mini-sentence')) {
+      const on = transport && String(transport.messageId) === row.dataset.messageId && transport.side === row.dataset.side && String(current) === row.dataset.id && ['playing', 'paused', 'loading'].includes(transport.state);
+      row.dataset.current = on ? 'true' : 'false';
+      if (on) row.querySelector('.jy-mini-sentence-mark').textContent = '♪';
+      else if (row.dataset.ready === 'true') row.querySelector('.jy-mini-sentence-mark').textContent = '✓';
+      else row.querySelector('.jy-mini-sentence-mark').textContent = '·';
+    }
+  };
+  // One preparation at a time: a run that fires steps while the list is being built asks for one more
+  // pass afterwards instead of a pass per step, and a burst of transport notices collapses into one.
+  const renderSentences = async ({ force = false } = {}) => {
+    if (sentencesBusy) {
+      sentencesAgain = true;
+      return;
+    }
+    sentencesBusy = true;
+    try {
+      await renderSentencesNow({ force });
+    } finally {
+      sentencesBusy = false;
+      if (sentencesAgain) {
+        sentencesAgain = false;
+        scheduleSentences();
+      }
+    }
+  };
+  const scheduleSentences = (delay = 300) => {
+    if (sentencesTimer !== null) return;
+    sentencesTimer = globalThis.setTimeout(() => {
+      runtime.timers.delete(sentencesTimer);
+      sentencesTimer = null;
+      if (miniTab === 'reading' && win.isConnected) void renderSentences();
+    }, delay);
+    runtime.timers.add(sentencesTimer);
+  };
+
+  // What the run is doing, as three pills: the reading, the audio parts, the connection.
+  const renderPills = () => {
+    const box = win.querySelector('[data-jy-tts-pills]');
+    if (!box) return;
+    const transport = runtime.tts.transport;
+    const messageId = transport?.messageId ?? inspecting?.messageId ?? viewFloor;
+    const side = transport?.side ?? inspecting?.side ?? primaryTtsSide();
+    const record = Number.isInteger(messageId) ? ttsProgressFor(messageId, side) : null;
+    box.replaceChildren();
+    if (!record?.steps.length) {
+      box.hidden = true;
+      return;
+    }
+    const pill = (label, state) => {
+      const span = document.createElement('span');
+      span.className = 'jy-mini-pill';
+      span.dataset.state = state;
+      span.textContent = label;
+      box.appendChild(span);
+    };
+    const analysis = record.steps.find(step => step.id === 'analysis');
+    if (analysis) {
+      const seconds = analysis.state === 'active' ? ` · ${Math.max(0, Math.round((Date.now() - (analysis.since ?? Date.now())) / 1000))} 秒` : '';
+      pill(`${analysis.state === 'done' ? '✓ ' : analysis.state === 'active' ? '◌ ' : analysis.state === 'error' ? '! ' : ''}${analysis.label.replace(/（.*）$/, '')}${seconds}`, analysis.state);
+    }
+    const parts = record.steps.filter(step => step.id !== 'analysis');
+    if (parts.length) {
+      const done = parts.filter(step => step.state === 'done').length;
+      const active = parts.find(step => step.state === 'active');
+      const failed = parts.some(step => step.state === 'error');
+      pill(`${failed ? '! ' : active ? '◌ ' : done === parts.length ? '✓ ' : ''}生成 ${done}/${parts.length}${active?.detail ? ` · ${active.detail}` : ''}`, failed ? 'error' : active ? 'active' : done === parts.length ? 'done' : 'pending');
+    }
+    const request = ttsRequestSettings(runtime.settings);
+    if (request.apiMode === 'independent') pill(getActiveChannel(request).name, 'plain');
+    box.hidden = false;
+  };
+  // Seconds a preparation still needs, from what earlier runs took.
+  const readingEta = record => {
+    if (!record) return '';
+    const analysis = record.steps.find(step => step.id === 'analysis');
+    const parts = record.steps.filter(step => step.id !== 'analysis');
+    if (analysis?.state === 'active') {
+      return describeRemaining(estimateRemaining({ done: 0, total: 1, active: 1, lanes: 1, durations: [], elapsedActive: (Date.now() - (analysis.since ?? Date.now())) / 1000, history: runtime.timing.analysis }));
+    }
+    const pending = parts.filter(step => step.state !== 'done' && step.state !== 'error');
+    const active = parts.filter(step => step.state === 'active');
+    if (pending.length) {
+      const since = active.length ? Math.min(...active.map(step => step.since ?? Date.now())) : Date.now();
+      return describeRemaining(estimateRemaining({ done: parts.length - pending.length, total: parts.length, active: active.length, lanes: Math.max(1, Number(ttsSettings().fish.concurrency) || 1), durations: parts.filter(step => step.state === 'done' && step.since && step.finishedAt).map(step => (step.finishedAt - step.since) / 1000), elapsedActive: (Date.now() - since) / 1000, history: runtime.timing.parts }));
+    }
+    return '';
   };
   const renderTransport = transport => {
     const info = ttsTransportDescription(transport);
@@ -7705,22 +8653,35 @@ async function openMiniWindow() {
     const progress = win.querySelector('[data-jy-tts-progress]');
     const message = win.querySelector('[data-jy-tts-message]');
     const toggle = win.querySelector('[data-jy-action="tts-toggle"]');
-    const stepButtons = [win.querySelector('[data-jy-action="tts-prev"]'), win.querySelector('[data-jy-action="tts-next"]'), win.querySelector('[data-jy-action="tts-download"]')];
+    const stepButtons = [win.querySelector('[data-jy-action="tts-prev"]'), win.querySelector('[data-jy-action="tts-next"]')];
     if (!info) {
       if (title) title.textContent = '没有在读';
-      if (floorLabel) floorLabel.textContent = '—';
+      if (floorLabel) floorLabel.textContent = Number.isInteger(viewFloor) ? `第 ${viewFloor} 楼` : '—';
       if (progress) progress.style.width = '0%';
       if (seekBar) {
         seekBar.setAttribute('aria-valuenow', '0');
         seekBar.dataset.live = 'false';
       }
-      if (message) message.textContent = '点楼层里的播放按钮，或者「朗读本楼」。';
-      if (toggle) toggle.textContent = '▶';
+      setText(win, '[data-jy-tts-clock-now]', '0:00');
+      setText(win, '[data-jy-tts-clock-total]', '0:00');
+      if (message) message.textContent = '点播放键读这一楼，或者点下面的某一句。';
+      if (toggle) {
+        toggle.textContent = '▶';
+        toggle.dataset.state = 'idle';
+      }
       for (const button of stepButtons) if (button) button.disabled = true;
+      renderPills();
       return;
     }
+    const speaker = info.segment ? (info.segment.type === 'narration' ? '旁白' : (info.segment.speaker || '对白')) : '';
     if (title) {
-      title.textContent = info.state === 'loading' ? '准备中…' : info.state === 'playing' ? '正在朗读' : info.state === 'paused' ? '已暂停' : info.state === 'error' ? '出错了' : '待播放';
+      title.textContent = info.state === 'loading'
+        ? '准备中…'
+        : info.state === 'error'
+          ? '出错了'
+          : info.segment
+            ? `${speaker} ·「${miniShort(info.segment.text, 22)}」`
+            : (info.state === 'paused' ? '已暂停' : '待播放');
     }
     if (floorLabel) floorLabel.textContent = `第 ${info.messageId} 楼 · 第 ${info.lineIndex + 1}/${info.lineCount} 段 · ${TTS_MODE_LABELS[info.mode]}`;
     const fraction = info.duration ? Math.max(0, Math.min(1, info.time / info.duration)) : 0;
@@ -7729,17 +8690,26 @@ async function openMiniWindow() {
       seekBar.setAttribute('aria-valuenow', String(Math.round(fraction * 100)));
       seekBar.dataset.live = transport.current ? 'true' : 'false';
     }
+    setText(win, '[data-jy-tts-clock-now]', miniClock(info.time));
+    setText(win, '[data-jy-tts-clock-total]', miniClock(info.duration));
     if (message) {
+      const eta = info.state === 'loading' ? readingEta(ttsProgressFor(info.messageId, transport.side)) : '';
       message.textContent = info.state === 'loading' || info.state === 'error'
-        ? (info.message || '')
-        : `${formatClock(info.time)} / ${formatClock(info.duration)} · 第 ${info.index + 1}/${info.count} 句${info.segment ? ` · ${info.segment.type === 'narration' ? '旁白' : (info.segment.speaker || '对白')}` : ''}`;
+        ? `${info.message || ''}${eta ? ` · ${eta}` : ''}`
+        : info.state === 'paused'
+          ? `已暂停 · 第 ${info.index + 1}/${info.count} 句`
+          : `第 ${info.index + 1}/${info.count} 句`;
     }
-    if (toggle) toggle.textContent = info.state === 'playing' ? '⏸' : '▶';
+    if (toggle) {
+      toggle.textContent = info.state === 'playing' ? '❚❚' : '▶';
+      toggle.dataset.state = info.state;
+    }
     for (const button of stepButtons) if (button) button.disabled = false;
+    renderPills();
     // The panel follows the sentence being read unless someone pinned one, or is mid-edit.
     const side = runtime.tts.transport?.side ?? null;
-    if (info.segment && !inspecting?.pinned && !inspectDirty && shadow.activeElement !== fishInput
-      && (inspecting?.messageId !== info.messageId || inspecting?.utteranceId !== info.segment.id || inspecting?.side !== side)) {
+    if (info.segment && inspecting && !inspecting.pinned && !inspectDirty && shadow.activeElement !== fishInput
+      && (inspecting.messageId !== info.messageId || inspecting.utteranceId !== info.segment.id || inspecting.side !== side)) {
       void renderInspector(info.messageId, info.segment.id, { pinned: false, side });
     }
   };
@@ -7751,22 +8721,20 @@ async function openMiniWindow() {
     const transport = runtime.tts.transport;
     let record = transport?.floor ? ttsProgressFor(transport.messageId, transport.side) : null;
     if (!record && inspecting) record = ttsProgressFor(inspecting.messageId, inspecting.side);
-    if (!record) record = [...runtime.tts.progress.values()].at(-1) ?? null;
+    if (!record && Number.isInteger(viewFloor)) record = ttsProgressFor(viewFloor, primaryTtsSide());
     list.replaceChildren();
-    if (!record?.steps.length) {
+    const active = record?.steps.some(step => step.state === 'active') === true;
+    // The detailed list only shows while something is being made; afterwards the pills say it all.
+    if (!record?.steps.length || !active) {
       list.hidden = true;
       if (stepTicker !== null) {
         globalThis.clearInterval(stepTicker);
         stepTicker = null;
       }
+      renderPills();
       return;
     }
     list.hidden = false;
-    const head = document.createElement('li');
-    head.className = 'jy-mini-steps-head';
-    const done = record.steps.filter(step => step.state === 'done').length;
-    head.textContent = `第 ${record.messageId} 楼${record.side === 'source' ? '（原文）' : ''} · ${TTS_MODE_LABELS[record.mode] ?? ''} · ${done}/${record.steps.length}`;
-    list.appendChild(head);
     for (const step of record.steps) {
       const item = document.createElement('li');
       item.dataset.state = step.state;
@@ -7783,8 +8751,8 @@ async function openMiniWindow() {
       item.append(mark, label, detail);
       list.appendChild(item);
     }
-    const active = record.steps.some(step => step.state === 'active');
-    if (active && stepTicker === null) {
+    renderPills();
+    if (stepTicker === null) {
       stepTicker = globalThis.setInterval(() => {
         if (!win.isConnected) {
           globalThis.clearInterval(stepTicker);
@@ -7792,14 +8760,26 @@ async function openMiniWindow() {
           return;
         }
         renderSteps();
+        renderTransport(runtime.tts.transport);
       }, 1000);
-    } else if (!active && stepTicker !== null) {
-      globalThis.clearInterval(stepTicker);
-      stepTicker = null;
     }
   };
+  // The bar at the foot of the translate page while something is being read.
+  const renderPlaybar = transport => {
+    const info = ttsTransportDescription(transport);
+    const barButton = win.querySelector('[data-jy-mini-playbar]');
+    if (!barButton) return;
+    const live = info && ['loading', 'playing', 'paused'].includes(info.state);
+    barButton.hidden = !live;
+    if (!live) return;
+    const fill = win.querySelector('[data-jy-mini-playbar-fill]');
+    const fraction = info.duration ? Math.max(0, Math.min(1, info.time / info.duration)) : 0;
+    if (fill) fill.style.transform = `scaleX(${fraction})`;
+    setText(win, '[data-jy-mini-playbar-glyph]', info.state === 'playing' ? '❚❚' : info.state === 'loading' ? '◌' : '▶');
+    const speaker = info.segment ? (info.segment.type === 'narration' ? '旁白' : (info.segment.speaker || '对白')) : '';
+    setText(win, '[data-jy-mini-playbar-text]', info.state === 'loading' ? `第 ${info.messageId} 楼 · 准备中` : `第 ${info.messageId} 楼 · ${speaker} ${info.index + 1}/${info.count}`);
+  };
   // The progress bar is a slider: a tap jumps, a drag scrubs, the arrow keys nudge by five percent.
-  const seekBar = win.querySelector('[data-jy-tts-seek]');
   let seekDragging = false;
   let seekPointer = null;
   const seekFraction = event => {
@@ -7841,35 +8821,170 @@ async function openMiniWindow() {
     event.preventDefault();
     seekTts(Math.max(0, Math.min(1, info.time / info.duration + step)));
   };
-  seekBar.addEventListener('pointerdown', onSeekDown);
-  seekBar.addEventListener('pointermove', onSeekMove);
-  seekBar.addEventListener('pointerup', onSeekUp);
-  seekBar.addEventListener('pointercancel', onSeekUp);
-  seekBar.addEventListener('keydown', onSeekKey);
   const unsubscribeTts = subscribeTts(transport => {
     renderTransport(transport);
     renderSteps();
+    renderPlaybar(transport);
+    if (miniTab === 'reading') scheduleSentences();
   });
   const showReading = (messageId, utteranceId = null, side = null) => {
+    if (Number.isInteger(messageId) && messageId !== viewFloor) {
+      viewFloor = messageId;
+      editingRow = null;
+      void renderFloor();
+    }
     selectMiniTab('reading');
     if (utteranceId !== null && utteranceId !== undefined) {
       void renderInspector(messageId, utteranceId, { pinned: true, side });
       return;
     }
     renderSteps();
-    if (inspecting) return;
-    const info = ttsTransportDescription();
-    if (info?.segment) void renderInspector(info.messageId, info.segment.id, { pinned: false, side: runtime.tts.transport?.side ?? side });
   };
-  tabs.addEventListener('click', onTabClick);
-  tagBox.addEventListener('pointerdown', onTagPointerDown);
-  tagBox.addEventListener('click', onTagClick);
-  emotionPicker.addEventListener('change', onEmotionPick);
-  fishInput.addEventListener('input', onFishInput);
-  syncMiniTabs();
+  // Where the reading is on the page: the highlighted sentence, else the floor being read.
+  const locateReading = () => {
+    const highlighted = runtime.tts.highlighted;
+    const transport = runtime.tts.transport;
+    const messageId = highlighted?.messageId ?? transport?.messageId ?? inspecting?.messageId ?? viewFloor;
+    if (!Number.isInteger(messageId)) return false;
+    const range = highlighted ? runtime.tts.ranges.get(highlighted.messageId)?.get(`${highlighted.side}:${highlighted.utteranceId}`) : null;
+    const target = range?.startContainer?.parentElement ?? document.querySelector(`#chat .mes[mesid="${messageId}"]`);
+    if (!target) return false;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return true;
+  };
 
-  const position = anchorMiniPosition(win);
+  // -------------------------------------------------------------------------------------------
+  // The log page: what happened, filtered, one line each, the details a tap away.
+  // -------------------------------------------------------------------------------------------
+  const renderLog = () => {
+    const filtered = filterLogs(logEntries, { filter: logFilter, floor: viewFloor });
+    logShown = filtered.slice(0, MINI_LOG_LIMIT);
+    for (const chip of win.querySelectorAll('[data-jy-action="log-filter"]')) chip.setAttribute('aria-pressed', String(chip.dataset.filter === logFilter));
+    logList.replaceChildren();
+    logShown.forEach((entry, index) => {
+      const line = describeLog(entry);
+      const item = document.createElement('li');
+      item.className = 'jy-mini-log-item';
+      item.dataset.level = line.level;
+      item.dataset.jyAction = 'log-open';
+      item.dataset.index = String(index);
+      const meta = document.createElement('span');
+      meta.className = 'jy-mini-log-meta';
+      meta.textContent = `${line.time} · ${line.area}${line.floor !== null ? ` · 第 ${line.floor} 楼` : ''}${line.level === 'error' ? ' · 出错' : line.level === 'warn' ? ' · 提醒' : ''}`;
+      const text = document.createElement('span');
+      text.className = 'jy-mini-log-text';
+      text.textContent = line.message;
+      item.append(meta, text);
+      logList.appendChild(item);
+    });
+    const empty = win.querySelector('[data-jy-mini-log-empty]');
+    if (empty) {
+      empty.hidden = logShown.length > 0;
+      empty.textContent = logFilter === 'floor' ? (Number.isInteger(viewFloor) ? `第 ${viewFloor} 楼还没有记录。` : '还没有楼层。') : logFilter === 'errors' ? '没有出错的记录。' : '这里还没有记录。';
+    }
+    logList.hidden = !logShown.length;
+  };
+  const stringifyForLog = (value, limit) => {
+    let text;
+    try {
+      text = typeof value === 'string' ? value : JSON.stringify(value, null, 1);
+    } catch {
+      text = String(value);
+    }
+    text = String(text ?? '');
+    return text.length > limit ? `${text.slice(0, limit)}\n…（已截断，完整内容见控制中心的运行记录）` : text;
+  };
+  const openLogDetail = entry => {
+    const line = describeLog(entry);
+    logDetail.replaceChildren();
+    const head = document.createElement('div');
+    head.className = 'jy-mini-log-detail-head';
+    const meta = document.createElement('strong');
+    meta.dataset.level = line.level;
+    meta.textContent = `${line.time} · ${line.area}${line.floor !== null ? ` · 第 ${line.floor} 楼` : ''}${line.level === 'error' ? ' · 出错' : ''}`;
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'jy-mini-inspect-close';
+    close.dataset.jyAction = 'log-close';
+    close.setAttribute('aria-label', '关闭');
+    close.textContent = '×';
+    head.append(meta, close);
+    const message = document.createElement('p');
+    message.className = 'jy-mini-log-detail-message';
+    message.textContent = line.message;
+    const scope = document.createElement('p');
+    scope.className = 'jy-muted';
+    scope.textContent = entry.scope ?? '';
+    logDetail.append(head, message, scope);
+    const section = (label, value, open = false) => {
+      if (value === undefined || value === null || (typeof value === 'object' && !Object.keys(value).length) || value === '') return;
+      const details = document.createElement('details');
+      details.className = 'jy-mini-log-section';
+      details.open = open;
+      const summary = document.createElement('summary');
+      summary.textContent = label;
+      const pre = document.createElement('pre');
+      pre.textContent = stringifyForLog(value, label === '细节' ? 4000 : 12000);
+      details.append(summary, pre);
+      logDetail.appendChild(details);
+    };
+    section('细节', entry.details, true);
+    section('请求', entry.fullRequest);
+    section('返回', entry.fullResponse);
+    section('思考', entry.reasoning);
+    const actions = document.createElement('div');
+    actions.className = 'jy-mini-log-detail-actions';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'jy-button';
+    copy.dataset.jyAction = 'log-copy-one';
+    copy.textContent = '复制这条';
+    actions.appendChild(copy);
+    if (Number.isInteger(line.floor) && line.area === '翻译' && line.level !== 'info') {
+      const repair = document.createElement('button');
+      repair.type = 'button';
+      repair.className = 'jy-button';
+      repair.dataset.jyAction = 'log-repair';
+      repair.dataset.floor = String(line.floor);
+      repair.textContent = '补译这楼';
+      actions.appendChild(repair);
+    }
+    logDetail.appendChild(actions);
+    logDetail.dataset.entry = JSON.stringify(entry).slice(0, 400000);
+    logDetail.hidden = false;
+    logList.hidden = true;
+    win.querySelector('[data-jy-mini-log-filters]').hidden = true;
+    globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
+  };
+  const closeLogDetail = () => {
+    logDetail.hidden = true;
+    delete logDetail.dataset.entry;
+    win.querySelector('[data-jy-mini-log-filters]').hidden = false;
+    renderLog();
+  };
+  const logReport = () => {
+    const lines = logShown.slice().reverse().map(entry => {
+      const line = describeLog(entry);
+      return `[${entry.time ?? ''}] ${line.level} ${entry.scope ?? ''}${line.floor !== null ? ` 第${line.floor}楼` : ''}: ${line.message}${entry.details && Object.keys(entry.details).length ? ` ${stringifyForLog(entry.details, 600).replace(/\s+/g, ' ')}` : ''}`;
+    });
+    return `${APP_NAME} v${APP_VERSION} · 悬浮窗日志 · ${new Date().toISOString()}\n${lines.join('\n')}`;
+  };
+  const unsubscribeLog = subscribeDiagnostics(entries => {
+    logEntries = entries;
+    if (miniTab === 'log' && logDetail.hidden) renderLog();
+    const errors = entries.filter(entry => entry.level === 'error').length;
+    const logTab = tabs.querySelector('[data-jy-mini-tab="log"]');
+    if (logTab) logTab.dataset.errors = errors ? String(Math.min(errors, 99)) : '';
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // Placement: hung off the ball the first time, then wherever the reader dragged it.
+  // -------------------------------------------------------------------------------------------
+  const stored = readMiniPosition();
+  const position = stored ?? anchorMiniPosition(win);
+  let userMoved = Boolean(stored);
   const place = (x, y) => {
+    if (win.dataset.size === 'max') return;
     const width = win.offsetWidth || 344;
     const height = win.offsetHeight || 320;
     position.x = Math.min(Math.max(8, x), Math.max(8, globalThis.innerWidth - width - 8));
@@ -7877,12 +8992,10 @@ async function openMiniWindow() {
     win.style.left = `${position.x}px`;
     win.style.top = `${position.y}px`;
   };
-  place(position.x, position.y);
-
-  let userMoved = false;
-  // Status text and the floor label land after the first layout and can add a line, so the window
-  // is re-hung once the content settles; a window the user dragged only gets clamped back into view.
+  // Content lands after the first layout and can add a line, so the window is re-hung once it
+  // settles; a window the reader placed only gets clamped back into view.
   const reanchor = () => {
+    if (win.dataset.size === 'max') return;
     if (userMoved) {
       place(position.x, position.y);
       return;
@@ -7890,19 +9003,25 @@ async function openMiniWindow() {
     const next = anchorMiniPosition(win);
     place(next.x, next.y);
   };
+  setSize(win.dataset.size, { remember: false });
+  syncTouch();
   globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
 
   let pointerId = null;
   let grabX = 0;
   let grabY = 0;
   const onPointerDown = event => {
-    if (event.button !== 0 || event.target.closest('button')) return;
+    if (event.button !== 0 || event.target.closest('button') || win.dataset.size === 'max') return;
     event.preventDefault();
     pointerId = event.pointerId;
     grabX = event.clientX - position.x;
     grabY = event.clientY - position.y;
     bar.classList.add('is-dragging');
-    bar.setPointerCapture?.(event.pointerId);
+    try {
+      bar.setPointerCapture?.(event.pointerId);
+    } catch {
+      // A pointer the browser does not know still drags.
+    }
   };
   const onPointerMove = event => {
     if (event.pointerId !== pointerId) return;
@@ -7913,41 +9032,21 @@ async function openMiniWindow() {
     if (event.pointerId !== pointerId) return;
     pointerId = null;
     bar.classList.remove('is-dragging');
+    if (userMoved) saveMiniPosition(position);
   };
-  const onResize = () => reanchor();
-
-  const unsubscribe = subscribeTask(task => {
-    setText(win, '[data-jy-task-title]', task.title);
-    setText(win, '[data-jy-task-message]', task.message);
-    const dot = win.querySelector('[data-jy-task-dot]');
-    if (dot) dot.dataset.jyTaskDot = task.status;
-    const progress = win.querySelector('[data-jy-progress]');
-    if (progress) progress.style.transform = `scaleX(${Math.max(0, Math.min(1, (Number(task.progress) || 0) / 100))})`;
-    // Only one of the two is ever useful, so they take turns instead of sitting there greyed out.
-    const running = task.status === 'running';
-    const stop = win.querySelector('[data-jy-action="mini-stop"]');
-    const translate = win.querySelector('[data-jy-action="mini-translate"]');
-    if (stop) stop.hidden = !running;
-    if (translate) translate.hidden = running;
-  });
-
-  const refreshFloor = async () => {
-    try {
-      const snapshot = await readMessageSnapshot();
-      setText(win, '[data-jy-mini-floor]', `第 ${snapshot.messageId} 楼 · ${snapshot.segments.length} 行`);
-    } catch {
-      setText(win, '[data-jy-mini-floor]', '无可译楼层');
-    }
-    if (win.isConnected) reanchor();
+  const onResize = () => {
+    syncTouch();
+    reanchor();
   };
-  refreshFloor();
 
+  // -------------------------------------------------------------------------------------------
+  // Closing, keys, and the buttons.
+  // -------------------------------------------------------------------------------------------
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
     win.dataset.closing = 'true';
-    // A half-finished page switch must not hold the window at a fixed height while it fades out.
     settleResize();
     globalThis.removeEventListener('pointermove', onPointerMove);
     globalThis.removeEventListener('pointerup', finishPointer);
@@ -7960,6 +9059,7 @@ async function openMiniWindow() {
     scratch.removeEventListener('toggle', onScratchToggle);
     scratchSummary.removeEventListener('click', onSummaryClick);
     document.removeEventListener('keydown', onWindowKeydown, true);
+    document.removeEventListener('focusin', onOutsideFocus, true);
     channelSelect.removeEventListener('change', onQuickChange);
     profileSelect.removeEventListener('change', onQuickChange);
     tabs.removeEventListener('click', onTabClick);
@@ -7967,17 +9067,27 @@ async function openMiniWindow() {
     tagBox.removeEventListener('click', onTagClick);
     emotionPicker.removeEventListener('change', onEmotionPick);
     fishInput.removeEventListener('input', onFishInput);
-    unsubscribe();
+    speedInput.removeEventListener('input', onFishInput);
+    volumeInput.removeEventListener('input', onFishInput);
+    unsubscribeTask();
     unsubscribeTts();
+    unsubscribeLog();
     seekBar.removeEventListener('pointerdown', onSeekDown);
     seekBar.removeEventListener('pointermove', onSeekMove);
     seekBar.removeEventListener('pointerup', onSeekUp);
     seekBar.removeEventListener('pointercancel', onSeekUp);
     seekBar.removeEventListener('keydown', onSeekKey);
-    if (stepTicker !== null) {
-      globalThis.clearInterval(stepTicker);
-      stepTicker = null;
+    for (const ticker of [stepTicker, etaTicker]) if (ticker !== null) globalThis.clearInterval(ticker);
+    stepTicker = null;
+    etaTicker = null;
+    for (const pending of [rowsTimer, sentencesTimer]) {
+      if (pending !== null) {
+        globalThis.clearTimeout(pending);
+        runtime.timers.delete(pending);
+      }
     }
+    rowsTimer = null;
+    sentencesTimer = null;
     if (runtime.mini?.host === host) runtime.mini = null;
     holdFloatingPill(1800);
     const timer = setTimeout(() => { host.remove(); runtime.timers.delete(timer); }, 160);
@@ -7989,10 +9099,36 @@ async function openMiniWindow() {
     event.preventDefault();
     win.querySelector('[data-jy-action="mini-scratch"]')?.click();
   };
+  const typingInside = () => {
+    const active = shadow.activeElement;
+    return Boolean(active && (active.matches('textarea, input, select') || active.isContentEditable));
+  };
   const onWindowKeydown = event => {
-    if (event.key !== 'Escape' || !runtime.mini?.host?.isConnected) return;
-    event.preventDefault();
-    close();
+    if (!runtime.mini?.host?.isConnected) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+      return;
+    }
+    // The player's keys, when the window has the focus and nobody is typing in it.
+    if (win.dataset.touch === 'true' || event.target !== host || typingInside() || event.ctrlKey || event.metaKey || event.altKey) return;
+    const info = ttsTransportDescription();
+    if (event.key === ' ' && ttsSettings().enabled) {
+      event.preventDefault();
+      win.querySelector('[data-jy-action="tts-toggle"]')?.click();
+    } else if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && info?.duration && shadow.activeElement !== seekBar) {
+      event.preventDefault();
+      seekTts(Math.max(0, Math.min(1, info.time / info.duration + (event.key === 'ArrowLeft' ? -0.05 : 0.05))));
+    } else if ((event.key === '[' || event.key === ']') && info) {
+      event.preventDefault();
+      stepTtsParagraph(event.key === '[' ? -1 : 1);
+    }
+  };
+  // A phone's keyboard comes up for the chat box; the window gets out of its way.
+  const onOutsideFocus = event => {
+    if (win.dataset.touch !== 'true' || event.target === host) return;
+    const target = event.target;
+    if (target?.matches?.('textarea, input:not([type="checkbox"]):not([type="radio"]):not([type="button"]), [contenteditable="true"]')) close();
   };
   const onInput = () => {
     const length = input.value.trim().length;
@@ -8001,15 +9137,12 @@ async function openMiniWindow() {
   const onScratchToggle = () => {
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
   };
-
   // details would snap shut and take the body out of the layout before it could animate, so the
   // open attribute is held for the length of the collapse and removed at the end.
   const setScratchOpen = open => {
     if (scratch.dataset.expanded === String(open)) return;
     if (open) {
       scratch.open = true;
-      // Reading a layout property commits the collapsed start state; rAF is throttled to nothing in
-      // a backgrounded tab and would leave the drawer stuck shut.
       void scratch.offsetHeight;
       scratch.dataset.expanded = 'true';
     } else {
@@ -8026,12 +9159,10 @@ async function openMiniWindow() {
     }, 360);
     runtime.timers.add(settle);
   };
-
   const onSummaryClick = event => {
     event.preventDefault();
     setScratchOpen(scratch.dataset.expanded !== 'true');
   };
-
   const onQuickChange = event => {
     const next = mergeSettings(runtime.settings);
     if (event.target === channelSelect) next.selectedChannelId = channelSelect.value;
@@ -8039,16 +9170,68 @@ async function openMiniWindow() {
     saveSettings(next);
     syncQuickPickers();
   };
+  // A tap on a paragraph opens it for editing; a tap on the open one closes it.
+  const toggleRow = id => {
+    editingRow = editingRow === id ? null : id;
+    renderRows();
+    if (editingRow !== null) win.querySelector(`[data-jy-row-field="${editingRow}"]`)?.focus();
+    globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
+  };
+  // The sentence of the reading that starts with this paragraph's translation, played from there.
+  const listenRow = async id => {
+    const row = viewRows.find(item => item.id === id);
+    if (!row?.translation) throw new Error('这一段还没有译文。');
+    const prepared = await ttsPrepared(viewFloor, null);
+    const wanted = row.translation.split('\n').map(line => line.trim()).find(Boolean) ?? '';
+    const line = prepared.floor.lines.find(candidate => candidate.text.trim() === wanted) ?? prepared.floor.lines.find(candidate => wanted && candidate.text.includes(wanted.slice(0, 12)));
+    const item = line ? prepared.items.find(candidate => candidate.segment.lineId === line.lineId) : null;
+    if (!item) throw new Error('这一段不在当前的朗读范围里。');
+    void playTtsUtterance(viewFloor, item.segment.id, prepared.floor.side);
+    selectMiniTab('reading');
+  };
 
   const onClick = async event => {
     const button = event.target.closest('[data-jy-action]');
-    if (!button) return;
+    if (!button) {
+      const row = event.target.closest('.jy-mini-row');
+      if (row && !event.target.closest('textarea, button')) toggleRow(Number(row.dataset.id));
+      const sentence = event.target.closest('.jy-mini-sentence');
+      if (sentence && !event.target.closest('button')) void playTtsUtterance(Number(sentence.dataset.messageId), Number(sentence.dataset.id), sentence.dataset.side);
+      return;
+    }
     const action = button.dataset.jyAction;
     if (action === 'mini-collapse') { close(); return; }
     if (action === 'mini-expand') { close(); openControlCenter().catch(error => toast('error', safeError(error))); return; }
+    if (action === 'mini-max') { setSize(win.dataset.size === 'max' ? 'card' : 'max'); return; }
+    if (action === 'mini-goto-reading') { selectMiniTab('reading'); return; }
+    if (action === 'mini-thinking') { thinkingOpen = !thinkingOpen; renderThinkingLine(); globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); }); return; }
+    if (action === 'mini-floor-prev') { moveFloor(-1); return; }
+    if (action === 'mini-floor-next') { moveFloor(1); return; }
+    if (action === 'mini-auto') {
+      const next = mergeSettings(runtime.settings);
+      next.autoGeneration = !next.autoGeneration;
+      saveSettings(next);
+      syncQuickPickers();
+      toast('info', next.autoGeneration ? '新楼生成完会自动翻译。' : '新楼不再自动翻译，要翻的时候点「翻译本楼」。');
+      return;
+    }
+    if (action === 'row-close') { editingRow = null; renderRows(); return; }
+    if (action === 'log-filter') { logFilter = button.dataset.filter; renderLog(); return; }
+    if (action === 'log-open') {
+      const entry = logShown[Number(button.dataset.index)];
+      if (entry) openLogDetail(entry);
+      return;
+    }
+    if (action === 'log-close') { closeLogDetail(); return; }
+    if (action === 'sentence-edit') {
+      const row = button.closest('.jy-mini-sentence');
+      if (row) void renderInspector(Number(row.dataset.messageId), Number(row.dataset.id), { pinned: true, side: row.dataset.side });
+      return;
+    }
+    if (action === 'tts-inspect-close') { closeInspector(); return; }
     if (action === 'mini-copy') {
       try {
-        await navigator.clipboard.writeText(output.textContent || '');
+        await copyText(output.textContent || '');
         toast('success', '译文已复制。');
       } catch (error) { toast('error', safeError(error)); }
       return;
@@ -8058,15 +9241,16 @@ async function openMiniWindow() {
     if (action === 'tts-next') { stepTtsParagraph(1); return; }
     if (action === 'tts-toggle') {
       if (runtime.tts.transport) toggleTtsPause();
+      else if (inspecting?.pinned) void playTtsUtterance(inspecting.messageId, inspecting.utteranceId, inspecting.side);
       else {
-        const messageId = inspecting?.messageId ?? latestAssistantMessageId(getContext());
-        if (messageId === null) toast('error', '当前聊天里还没有 AI 楼层。');
+        const messageId = inspecting?.messageId ?? viewFloor ?? latestAssistantMessageId(getContext());
+        if (!Number.isInteger(messageId)) toast('error', '当前聊天里还没有 AI 楼层。');
         else void playTtsFloor(messageId, inspecting?.side ?? null);
       }
       return;
     }
-    if (action === 'tts-play-this') {
-      if (inspecting) void playTtsUtterance(inspecting.messageId, inspecting.utteranceId, inspecting.side);
+    if (action === 'tts-locate') {
+      if (!locateReading()) toast('info', '还没有在读的句子。');
       return;
     }
     if (action === 'tts-download') {
@@ -8076,19 +9260,16 @@ async function openMiniWindow() {
         const label = button.textContent;
         button.dataset.armed = '1';
         button.textContent = '确认保存?';
-        button.title = '再点一次，把音频保存到本地';
         const timer = globalThis.setTimeout(() => {
           runtime.timers.delete(timer);
           delete button.dataset.armed;
           button.textContent = label;
-          button.title = '把这段音频保存到本地';
         }, 6000);
         runtime.timers.add(timer);
         return;
       }
       delete button.dataset.armed;
-      button.textContent = '⤓';
-      button.title = '把这段音频保存到本地';
+      button.textContent = '保存到本地';
       button.disabled = true;
       try {
         const saved = await downloadTtsAudio();
@@ -8104,8 +9285,8 @@ async function openMiniWindow() {
     button.disabled = true;
     try {
       if (action === 'tts-read-floor') {
-        const messageId = inspecting?.messageId ?? latestAssistantMessageId(getContext());
-        if (messageId === null) throw new Error('当前聊天里还没有 AI 楼层。');
+        const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? viewFloor ?? latestAssistantMessageId(getContext());
+        if (!Number.isInteger(messageId)) throw new Error('当前聊天里还没有 AI 楼层。');
         void playTtsFloor(messageId, inspecting?.side ?? null);
       } else if (action === 'tts-apply') {
         if (!inspecting) throw new Error('先选一句。');
@@ -8124,8 +9305,8 @@ async function openMiniWindow() {
         await renderInspector(messageId, utteranceId, { pinned: true, side });
         toast('success', '已恢复为副模型的分析。');
       } else if (action === 'tts-copy-analysis') {
-        const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? latestAssistantMessageId(getContext());
-        if (messageId === null) throw new Error('当前聊天里还没有 AI 楼层。');
+        const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? viewFloor ?? latestAssistantMessageId(getContext());
+        if (!Number.isInteger(messageId)) throw new Error('当前聊天里还没有 AI 楼层。');
         const prepared = await ttsPrepared(messageId, inspecting?.side ?? runtime.tts.transport?.side ?? null);
         const analysis = runtime.tts.analysis.get(ttsLabelKey(prepared.floor));
         const payload = {
@@ -8141,21 +9322,62 @@ async function openMiniWindow() {
         await copyText(JSON.stringify(payload, null, 2));
         toast('success', `第 ${messageId} 楼的分析已复制（${payload.sentences.length} 句）。`);
       } else if (action === 'tts-reanalyze') {
-        const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? latestAssistantMessageId(getContext());
-        if (messageId === null) throw new Error('当前聊天里还没有 AI 楼层。');
+        const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? viewFloor ?? latestAssistantMessageId(getContext());
+        if (!Number.isInteger(messageId)) throw new Error('当前聊天里还没有 AI 楼层。');
         button.textContent = '细读中…';
         await reanalyzeTtsFloor(messageId, inspecting?.side ?? null);
         if (inspecting?.messageId === messageId) await renderInspector(messageId, inspecting.utteranceId, { pinned: true, side: inspecting.side });
+        sentencesSignature = '';
+        void renderSentences({ force: true });
         toast('success', `第 ${messageId} 楼重新分析完了，已有的音频保留，改了的句子下次播放时重做。`);
-      }
-      // The mini window used to bypass streaming entirely, so the writeback toggle looked dead
-      // whenever a translation was started from the floating entry instead of the control centre.
-      if (action === 'mini-translate') await startTranslation(null, { force: true });
-      else if (action === 'mini-repair') await startTranslation(null, { force: false });
-      else if (action === 'mini-refresh') await refreshFloor();
-      else if (action === 'mini-stop') {
+      } else if (action === 'mini-translate' || action === 'mini-repair') {
+        if (!Number.isInteger(viewFloor)) throw new Error('当前聊天里还没有 AI 楼层。');
+        await startTranslation(viewFloor, { force: false });
+      } else if (action === 'mini-retranslate') {
+        if (!Number.isInteger(viewFloor)) throw new Error('当前聊天里还没有 AI 楼层。');
+        await startTranslation(viewFloor, { force: true });
+      } else if (action === 'mini-stop') {
         for (const entry of runtime.inflight.values()) entry.controller.abort();
         toast('info', '已请求停止当前翻译。');
+      } else if (action === 'mini-translate-all') {
+        const floors = untranslatedFloors(getContext().chat, { limit: 20 }).filter(id => id !== viewFloor).reverse();
+        let done = 0;
+        for (const id of floors) {
+          button.textContent = `翻译中 ${done + 1}/${floors.length}`;
+          try {
+            await startTranslation(id, { force: false, quiet: true });
+            done += 1;
+          } catch (error) {
+            if (isAbortError(error)) break;
+          }
+        }
+        toast(done === floors.length ? 'success' : 'warning', `翻了 ${done}/${floors.length} 楼。`);
+      } else if (action === 'row-fix' || action === 'row-retry') {
+        const id = Number(button.dataset.id);
+        button.textContent = '翻译中…';
+        editingRow = null;
+        await startTranslation(viewFloor, { only: new Set([id]) });
+      } else if (action === 'row-write') {
+        const id = Number(button.dataset.id);
+        const field = win.querySelector(`[data-jy-row-field="${id}"]`);
+        button.textContent = '写回中…';
+        await editTranslationSegment(viewFloor, id, field?.value ?? '');
+        editingRow = null;
+        toast('success', `第 ${id} 段已按你的写法写回。`);
+      } else if (action === 'row-listen') {
+        await listenRow(Number(button.dataset.id));
+      } else if (action === 'log-copy') {
+        await copyText(logReport());
+        toast('success', `已复制 ${logShown.length} 条记录。`);
+      } else if (action === 'log-copy-one') {
+        await copyText(logDetail.dataset.entry ?? '');
+        toast('success', '这条记录已复制。');
+      } else if (action === 'log-repair') {
+        const floor = Number(button.dataset.floor);
+        closeLogDetail();
+        viewFloor = floor;
+        selectMiniTab('translate');
+        await startTranslation(floor, { force: false });
       } else if (action === 'mini-scratch') {
         button.textContent = '翻译中…';
         const started = globalThis.performance.now();
@@ -8174,12 +9396,15 @@ async function openMiniWindow() {
           runtime.inflight.delete(key);
         }
       }
-      if (action === 'mini-translate' || action === 'mini-repair') await refreshFloor();
+      if (['mini-translate', 'mini-repair', 'mini-retranslate', 'mini-stop', 'mini-translate-all', 'row-fix', 'row-retry', 'row-write', 'log-repair'].includes(action)) await renderFloor();
     } catch (error) {
-      toast('error', safeError(error));
+      if (!isAbortError(error)) toast('error', safeError(error));
+      if (['row-fix', 'row-retry', 'row-write'].includes(action)) await renderFloor();
     } finally {
-      button.textContent = original;
-      button.disabled = false;
+      if (button.isConnected) {
+        button.textContent = original;
+        button.disabled = false;
+      }
     }
   };
 
@@ -8191,14 +9416,42 @@ async function openMiniWindow() {
   scratchSummary.addEventListener('click', onSummaryClick);
   input.addEventListener('focus', () => setScratchOpen(true));
   document.addEventListener('keydown', onWindowKeydown, true);
+  document.addEventListener('focusin', onOutsideFocus, true);
   channelSelect.addEventListener('change', onQuickChange);
   profileSelect.addEventListener('change', onQuickChange);
+  tabs.addEventListener('click', onTabClick);
+  tagBox.addEventListener('pointerdown', onTagPointerDown);
+  tagBox.addEventListener('click', onTagClick);
+  emotionPicker.addEventListener('change', onEmotionPick);
+  fishInput.addEventListener('input', onFishInput);
+  speedInput.addEventListener('input', onFishInput);
+  volumeInput.addEventListener('input', onFishInput);
+  seekBar.addEventListener('pointerdown', onSeekDown);
+  seekBar.addEventListener('pointermove', onSeekMove);
+  seekBar.addEventListener('pointerup', onSeekUp);
+  seekBar.addEventListener('pointercancel', onSeekUp);
+  seekBar.addEventListener('keydown', onSeekKey);
   globalThis.addEventListener('pointermove', onPointerMove);
   globalThis.addEventListener('pointerup', finishPointer);
   globalThis.addEventListener('pointercancel', finishPointer);
   globalThis.addEventListener('resize', onResize);
 
-  runtime.mini = { host, close, syncQuickPickers: () => { syncQuickPickers(); syncMiniTabs(); }, showReading };
+  void renderFloor();
+  renderTransport(runtime.tts.transport);
+  renderPlaybar(runtime.tts.transport);
+
+  runtime.mini = {
+    host,
+    close,
+    syncQuickPickers: () => { syncQuickPickers(); void renderFloor(); },
+    showReading,
+    showFloor: messageId => {
+      if (Number.isInteger(messageId)) viewFloor = messageId;
+      selectMiniTab('translate');
+      void renderFloor();
+    },
+    refresh: () => { void renderFloor(); },
+  };
   return runtime.mini;
 }
 
@@ -8627,6 +9880,10 @@ export const __testing = Object.freeze({
   clearTtsOverride,
   importCastFromWorldbook,
   ttsStore,
+  editTranslationSegment,
+  floorButtonsOn,
+  translateMessage,
+  createTtsTransport,
   chunkTtsUtterances,
   ttsRequestSettings,
   seekTts,

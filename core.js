@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.19.1';
+} from './prompts.js?v=0.21.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.19.1';
+export const APP_VERSION = '0.21.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -395,6 +395,9 @@ export const DEFAULT_FISH = Object.freeze({
   // boundaries and played back as consecutive parts.
   maxChars: 1500,
   timeoutSec: 180,
+  // How many of one recording's parts go to Fish at once. Fish charges per character either way; the
+  // wait for a long floor drops by about this factor. Rate limits on the free tier argue for 1.
+  concurrency: 2,
 });
 
 export const DEFAULT_TTS = Object.freeze({
@@ -456,6 +459,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
   channels: [DEFAULT_CHANNEL],
   showFloatingButton: true,
   floatingStyle: 'auto',
+  // The play and cue buttons after every sentence of a floor: shown on a desktop, kept off a phone
+  // unless asked for. The floating window's list does the same job on a phone.
+  floorButtons: 'auto',
+  // Mirrors the floating window's main controls for a thumb on the left.
+  leftHanded: false,
   retries: 1,
   bodyTags: Object.freeze(['story_scene']),
   replaceTags: Object.freeze([]),
@@ -478,6 +486,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const FLOATING_STYLES = Object.freeze(['auto', 'ring', 'pill', 'edge']);
+export const FLOOR_BUTTON_MODES = Object.freeze(['auto', 'on', 'off']);
 
 export function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -827,6 +836,7 @@ export function normalizeFishSettings(value) {
     normalize: source.normalize === undefined ? DEFAULT_FISH.normalize : source.normalize !== false,
     maxChars: clampInteger(source.maxChars, 200, 10000, DEFAULT_FISH.maxChars),
     timeoutSec: clampInteger(source.timeoutSec, 10, 600, DEFAULT_FISH.timeoutSec),
+    concurrency: clampInteger(source.concurrency, 1, 4, DEFAULT_FISH.concurrency),
   };
 }
 
@@ -1023,6 +1033,8 @@ export function mergeSettings(value = {}) {
   merged.streamingWriteback = Boolean(merged.streamingWriteback);
   merged.showFloatingButton = Boolean(merged.showFloatingButton);
   merged.floatingStyle = FLOATING_STYLES.includes(merged.floatingStyle) ? merged.floatingStyle : DEFAULT_SETTINGS.floatingStyle;
+  merged.floorButtons = FLOOR_BUTTON_MODES.includes(merged.floorButtons) ? merged.floorButtons : DEFAULT_SETTINGS.floorButtons;
+  merged.leftHanded = merged.leftHanded === true;
   for (const key of [
     'profileId',
     'apiUrl',
@@ -2062,19 +2074,35 @@ export function isPlaceholderSpeaker(name) {
   return NON_SPEAKERS.has(String(name ?? '').trim().toLowerCase());
 }
 
-function readAnnotation(object) {
-  if (!object) return null;
+function readAnnotationFields(object) {
+  if (!object || typeof object !== 'object') return null;
   const reportedSpeaker = String(object.speaker ?? object.who ?? object.name ?? object.character ?? '').trim().slice(0, 60);
   const speaker = isPlaceholderSpeaker(reportedSpeaker) ? '' : reportedSpeaker;
-  const emotion = String(object.emotion ?? object.emo ?? object.mood ?? object.tone ?? '').trim().slice(0, 40);
+  const tone = String(object.tone ?? '').trim().slice(0, 30);
+  // `tone` used to be read as the mood; a mark with a tone and no mood still is.
+  const emotion = String(object.emotion ?? object.emo ?? object.mood ?? (tone || '')).trim().slice(0, 40);
   if (!speaker && !emotion) return null;
-  const rawIntensity = object.intensity ?? object.level ?? object.strength;
-  const intensity = Number(rawIntensity);
+  const intensity = Number(object.intensity ?? object.level ?? object.strength);
   const annotation = {};
   if (speaker) annotation.speaker = speaker;
   if (emotion) annotation.emotion = emotion;
   if (Number.isFinite(intensity)) annotation.intensity = Math.min(2, Math.max(0, Math.round(intensity)));
+  if (tone) annotation.tone = tone;
   return annotation;
+}
+
+// A line's mark, plus one mark per quoted run when the reading asked for them: each with the opening
+// characters that place it on its run. Whatever is not a mark is dropped without a word.
+function readAnnotation(object) {
+  if (!object || typeof object !== 'object') return null;
+  const fields = readAnnotationFields(object) ?? {};
+  const quotes = (Array.isArray(object.quotes) ? object.quotes : []).slice(0, 12).map(entry => {
+    const mark = readAnnotationFields(entry);
+    const head = String(entry?.head ?? entry?.start ?? '').trim().slice(0, 20);
+    return mark ? { ...(head ? { head } : {}), ...mark } : null;
+  }).filter(Boolean);
+  if (quotes.length) fields.quotes = quotes;
+  return Object.keys(fields).length ? fields : null;
 }
 
 function lineProtocolItems(raw) {

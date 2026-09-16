@@ -863,13 +863,22 @@ test('speaker and emotion labels ride alongside the translation without touching
     { id: 1, text: '「你到底在想什么！」', speaker: '英梨梨', emotion: 'angry', intensity: 2 },
     { id: 2, text: '……我不知道。', who: '加藤', mood: 'hesitant' },
     { id: 3, text: '窗外还在下雨。' },
+    {
+      id: 4, text: '「你来了？」泰罗抬起头，「坐吧。」', speaker: '泰罗', emotion: 'surprised', tone: 'in a hurry tone',
+      quotes: [{ head: '你来了', speaker: '樱井', emotion: 'surprised', intensity: 2 }, { head: '坐吧', speaker: '泰罗', emotion: 'calm', tone: '可选' }, 'junk', { head: '无标注' }],
+    },
   ] });
-  const recovered = recoverStructuredTranslations(raw, [{ id: 1 }, { id: 2 }, { id: 3 }]);
-  assert.deepEqual([...recovered.translations.values()], ['「你到底在想什么！」', '……我不知道。', '窗外还在下雨。']);
+  const recovered = recoverStructuredTranslations(raw, [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }]);
+  assert.deepEqual([...recovered.translations.values()], ['「你到底在想什么！」', '……我不知道。', '窗外还在下雨。', '「你来了？」泰罗抬起头，「坐吧。」']);
   assert.deepEqual(recovered.annotations.get(1), { speaker: '英梨梨', emotion: 'angry', intensity: 2 });
   assert.deepEqual(recovered.annotations.get(2), { speaker: '加藤', emotion: 'hesitant' });
   assert.equal(recovered.annotations.has(3), false, '没有标注的段落不该凭空得到一条');
-  assert.equal(recovered.response.annotatedItems, 2);
+  // The reading's marks: a tone, and one mark per quoted run; whatever is not a mark is dropped.
+  assert.deepEqual(recovered.annotations.get(4), {
+    speaker: '泰罗', emotion: 'surprised', tone: 'in a hurry tone',
+    quotes: [{ head: '你来了', speaker: '樱井', emotion: 'surprised', intensity: 2 }, { head: '坐吧', speaker: '泰罗', emotion: 'calm', tone: '可选' }],
+  });
+  assert.equal(recovered.response.annotatedItems, 3);
   // A model that answers with nothing but text still parses; annotation is strictly optional.
   const plain = recoverStructuredTranslations(JSON.stringify([{ id: 1, text: '只有译文。' }]), [{ id: 1 }]);
   assert.equal(plain.annotations.size, 0);

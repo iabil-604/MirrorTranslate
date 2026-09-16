@@ -8,8 +8,8 @@ import {
   parseJsonCandidates,
   parsePairList,
   unifySpeakerNames,
-} from './core.js?v=0.19.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.19.1';
+} from './core.js?v=0.21.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.21.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -283,20 +283,83 @@ function readTtsLabel(item) {
 }
 
 /**
- * Labels taken from the translation's own per-line annotations: no request, but one speaker per line.
- * A narrated line wears no speaker even when the model gave it one, the same rule the colouring keeps.
+ * The translation's own labels, read onto the utterances: no request at all.
+ *
+ * A line's mark names one speaker and one mood for the whole line; its `quotes` name them for each
+ * quoted run in order, each with the first few characters of that run, so the runs are told apart
+ * even when the model miscounted them. A narrated run wears no speaker even when the model gave the
+ * line one, the same rule the colouring keeps. Fish's own words come back as the voice beside the
+ * label, so the cue Fish hears is the word the translation chose and not the palette's fold of it.
  */
-export function labelsFromAnnotations(utterances, annotations) {
+export function annotationReading(utterances, annotations) {
   const labels = new Map();
-  if (!(annotations instanceof Map)) return labels;
-  for (const utterance of utterances) {
+  const voices = new Map();
+  if (!(annotations instanceof Map)) return { labels, voices };
+  const byLine = new Map();
+  for (const utterance of Array.isArray(utterances) ? utterances : []) {
     if (utterance.kind !== 'quoted') continue;
-    const mark = annotations.get(utterance.lineId);
-    if (!mark) continue;
-    const label = readTtsLabel({ type: 'dialogue', speaker: mark.speaker, emotion: mark.emotion, intensity: mark.intensity });
-    if (label) labels.set(utterance.id, label);
+    if (!byLine.has(utterance.lineId)) byLine.set(utterance.lineId, []);
+    byLine.get(utterance.lineId).push(utterance);
   }
-  return labels;
+  for (const [lineId, quoted] of byLine) {
+    const mark = annotations.get(lineId);
+    if (!mark) continue;
+    const quotes = (Array.isArray(mark.quotes) ? mark.quotes : []).filter(quote => quote && typeof quote === 'object');
+    const matched = matchQuoteMarks(quoted, quotes);
+    for (const utterance of quoted) {
+      const own = matched.get(utterance.id);
+      // A run's own mark fills in from the line's only where the line has just this one run to speak of.
+      const source = own ? (quoted.length === 1 ? { ...mark, ...own } : own) : mark;
+      const label = readTtsLabel({ type: 'dialogue', speaker: source.speaker, emotion: source.emotion, intensity: source.intensity });
+      if (label) labels.set(utterance.id, label);
+      const voice = annotationVoice(source);
+      if (voice) voices.set(utterance.id, voice);
+    }
+  }
+  return { labels, voices };
+}
+
+// The runs of a line matched to the marks the translation gave them: by the opening characters each
+// mark quotes, then by order when the counts agree. What matches nothing keeps the line's own mark.
+function matchQuoteMarks(quoted, quotes) {
+  const matched = new Map();
+  if (!quotes.length) return matched;
+  const keys = quoted.map(utterance => matchKey(utterance.text));
+  const taken = new Set();
+  const pending = [];
+  for (const quote of quotes) {
+    const head = matchKey(quote.head ?? '');
+    const found = head ? keys.findIndex((key, index) => !taken.has(index) && key.startsWith(head)) : -1;
+    if (found >= 0) {
+      taken.add(found);
+      matched.set(quoted[found].id, quote);
+    } else pending.push(quote);
+  }
+  if (quotes.length === quoted.length) {
+    const rest = quoted.map((utterance, index) => index).filter(index => !taken.has(index));
+    pending.forEach((quote, offset) => {
+      if (rest[offset] !== undefined) matched.set(quoted[rest[offset]].id, quote);
+    });
+  }
+  return matched;
+}
+
+// Fish's words in a mark: the mood when it is one of Fish's rather than one of the palette's, and the tone.
+function annotationVoice(mark) {
+  const voice = {};
+  const word = cueWord(mark?.emotion);
+  if (word && word !== 'neutral' && !Object.hasOwn(EMOTION_STYLES, word)) voice.emotion = word;
+  const tone = cueWord(mark?.tone);
+  if (FISH_TONES.includes(tone)) voice.tone = tone;
+  if (!Object.keys(voice).length) return null;
+  const intensity = level(mark?.intensity);
+  if (intensity !== null) voice.intensity = intensity;
+  return voice;
+}
+
+/** The labels alone, for callers that have no use for the voices. */
+export function labelsFromAnnotations(utterances, annotations) {
+  return annotationReading(utterances, annotations).labels;
 }
 
 const EMOTION_GLOSS = EMOTION_KEYS.map(key => `${key}=${EMOTION_STYLES[key].label}`).join('、');
@@ -329,7 +392,7 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
   ].join('\n'),
   deep: [
     '你是有声小说的配音导演。下面是一楼正文按顺序切好的句子，以及这一楼的背景资料。你为每一句写配音指令：由谁念、用什么声音念。不改写、不复述、不翻译任何句子。',
-    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text；references 里是角色卡、世界书和前几楼的正文，只用来理解人物和剧情；hints 是翻译时已经标好的每句说话人和情绪底色。',
+    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text；references 里是角色卡、世界书和前几楼的正文，只用来理解人物和剧情；hints 是翻译时已经标好的每句说话人、情绪底色，有的还带 tone（语气）。',
     '只输出一个 JSON 对象：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","emotion":"frustrated","intensity":2,"speed":"fast","stress":["热"]}]}',
     '省力原则：一句话的情绪和 hints 里的底色一样、和上一句没有转折、也不需要停顿重音的，只写 {"id":N}，底色会自动沿用。只有情绪有转折、有压抑或爆发、需要停顿重音、有非语言声音的句子才展开写。旁白通常只写 id。',
     '展开写时可用的字段（都可省略，省略就是平常）：',
@@ -338,7 +401,7 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
     '- lang：这句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。与整楼主要语言相同、人物设定又没说口音时省略。',
     '- emotion：基础情绪，英文，优先取 emotions 列表里的词；都不合适时用 1–3 个英文词描述。secondary：次级情绪。intensity：0 弱、1 中、2 强。',
     '- restraint：自我克制 0 放开、1 一般、2 压着（压着会转成气声、耳语）。tension：紧张 0–2。hesitation：犹豫 0–2。rasp：嘶哑 0–2。',
-    '- speed：slow / normal / fast。volume：quiet / normal / loud。breath：none / audible / panting。',
+    '- speed：slow / normal / fast。volume：quiet / normal / loud。breath：none / audible / panting。tone：whispering / soft tone / shouting / screaming / in a hurry tone 之一，只在这句明确是这种说法时写。',
     '- pauses：[{"after":"句中的词","length":"short|long"}]。stress：重音词 ["词"]。shifts：句内情绪变化 [{"at":"从这个词起","emotion":"英文"}]。这三项里的词必须逐字出现在这句里。',
     '- sounds：非语言声音 [{"at":"start|end","tag":"标签"}]，tag 取 {{sounds}}。只在这个人此刻真的会发出这个声音时写。',
     '- subtext：言不由衷时写真正想说的（中文 ≤20 字），其余省略。',
@@ -438,6 +501,8 @@ export const FISH_EMOTIONS = Object.freeze([
   'tender', 'gentle', 'shy', 'serious', 'playful', 'cold', 'pleading', 'mysterious', 'tired', 'flirtatious',
 ]);
 export const FISH_SOUNDS = Object.freeze(['sighing', 'gasping', 'sobbing', 'laughing', 'chuckling', 'groaning', 'panting', 'crying loudly', 'clear throat', 'yawning']);
+// The ways of delivering a line Fish names. One optional choice, for the translation and the deep reading alike.
+export const FISH_TONES = Object.freeze(['whispering', 'soft tone', 'shouting', 'screaming', 'in a hurry tone']);
 
 // Chinese for the cues, for the summary a reader sees beside a sentence. Unknown cues show as written.
 export const FISH_TAG_LABELS = Object.freeze({
@@ -498,6 +563,8 @@ export function normalizeVoice(item, text = '') {
   if (VOICE_LEVELS.has(item.speed) && item.speed !== 'normal') voice.speed = item.speed;
   if (VOLUMES.has(item.volume) && item.volume !== 'normal') voice.volume = item.volume;
   if (BREATHS.has(item.breath) && item.breath !== 'none') voice.breath = item.breath;
+  const tone = cueWord(item.tone);
+  if (FISH_TONES.includes(tone)) voice.tone = tone;
   const inSentence = word => word && sentence.includes(word);
   const pauses = (Array.isArray(item.pauses) ? item.pauses : [])
     .map(pause => ({ after: shortText(pause?.after ?? pause?.word, 20), length: pause?.length === 'long' ? 'long' : 'short' }))
@@ -519,14 +586,23 @@ export function normalizeVoice(item, text = '') {
   return Object.keys(voice).length ? voice : null;
 }
 
-// The translation's own per-line labels, as the base the deep reading may leave alone.
-function hintsFor(utterances, hints) {
+// The translation's own labels, as the base the deep reading may leave alone. Where the translation
+// chose one of Fish's words, that word goes rather than the palette's fold of it, and so does the tone.
+function hintsFor(utterances, hints, voices = null) {
   if (!(hints instanceof Map)) return [];
   return (Array.isArray(utterances) ? utterances : [])
     .filter(item => hints.has(item.id))
     .map(item => {
       const hint = hints.get(item.id);
-      return { id: item.id, ...(hint.speaker ? { speaker: hint.speaker } : {}), ...(hint.emotion ? { emotion: hint.emotion } : {}), ...(hint.intensity !== undefined ? { intensity: hint.intensity } : {}) };
+      const voice = voices instanceof Map ? voices.get(item.id) : null;
+      const emotion = voice?.emotion || hint.emotion;
+      return {
+        id: item.id,
+        ...(hint.speaker ? { speaker: hint.speaker } : {}),
+        ...(emotion ? { emotion } : {}),
+        ...(hint.intensity !== undefined ? { intensity: hint.intensity } : {}),
+        ...(voice?.tone ? { tone: voice.tone } : {}),
+      };
     });
 }
 
@@ -537,7 +613,7 @@ function hintsFor(utterances, hints) {
  * its id alone, and the hint stands. Speaker, type and language come back the same way the light
  * request returns them; the rest is the voice.
  */
-export function buildVoiceAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, packet = {}, hints = null, systemPrompt = '', lead = null } = {}) {
+export function buildVoiceAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, packet = {}, hints = null, hintVoices = null, systemPrompt = '', lead = null } = {}) {
   const references = referenceLines(translations);
   const system = fillPrompt(String(systemPrompt ?? '').trim() || DEFAULT_TTS_PROMPTS.deep, { userName, references: references.length > 0 });
   const referencesBlock = {};
@@ -545,7 +621,7 @@ export function buildVoiceAnalysisMessages(utterances, { roster = [], characterN
     const value = String(packet?.[key] ?? '').trim();
     if (value) referencesBlock[key] = value;
   }
-  const hintList = hintsFor(utterances, hints);
+  const hintList = hintsFor(utterances, hints, hintVoices);
   const leads = leadList(lead);
   const input = {
     task: 'direct_voices_for_audiobook',
@@ -675,6 +751,7 @@ export function voiceSummary(voice) {
   if (!voice || typeof voice !== 'object') return [];
   const lines = [];
   if (voice.emotion) lines.push(['情绪', `${cueLabel(voice.emotion)}${voice.intensity !== undefined && voice.intensity !== null ? `（${LEVEL_WORDS[voice.intensity]}）` : ''}${voice.secondary ? ` · ${cueLabel(voice.secondary)}` : ''}`]);
+  if (voice.tone) lines.push(['语气', cueLabel(voice.tone)]);
   if (voice.subtext) lines.push(['潜台词', voice.subtext]);
   for (const key of ['restraint', 'tension']) {
     if (voice[key] !== undefined && voice[key] !== 1) lines.push([{ restraint: '克制', tension: '紧张' }[key], THREE_WORDS[key][voice[key]]]);
@@ -877,8 +954,11 @@ function wrapCue(word, model) {
 export function emotionCue(emotion, intensity, model = 's2-pro') {
   const word = cueWord(emotion);
   const palette = normalizeEmotion(emotion);
-  // S1 cannot read free-form cues, so anything with a palette column takes that column there.
-  if (palette && (model === 's1' || !FISH_EMOTIONS.includes(word))) {
+  // A word Fish knows is sent as itself. Anything else with a palette column takes that column. S1
+  // cannot read free-form cues, so there every word outside its fixed set takes the column too, and
+  // so do the palette's own twelve, whose S1 columns spell intensity the way S1 can hear it.
+  const known = model === 's1' ? (S1_FIXED.has(word) && !Object.hasOwn(EMOTION_STYLES, word)) : FISH_EMOTIONS.includes(word);
+  if (palette && !known) {
     if (palette === 'neutral') return '';
     const table = model === 's1' ? FISH_S1_CUES : FISH_S2_CUES;
     return table[palette]?.[normalizeIntensity(intensity)] ?? '';
@@ -922,10 +1002,13 @@ export function compileVoiceCues(segment, { model = 's2-pro', emotionCues = true
   push(emotionCue(voice.emotion, voice.intensity ?? 1, model));
   if (voice.secondary) push(emotionCue(voice.secondary, 1, model));
   const intensity = normalizeIntensity(voice.intensity ?? 1);
-  let tone = '';
-  if (voice.volume === 'quiet') tone = (voice.restraint >= 2 || voice.tension >= 2) ? 'whispering' : 'soft tone';
-  else if (voice.volume === 'loud') tone = intensity === 2 && voice.tension >= 2 ? 'screaming' : 'shouting';
-  else if (voice.speed === 'fast' && voice.tension >= 1) tone = 'in a hurry tone';
+  // A tone named outright beats the one the volume and tension would imply.
+  let tone = FISH_TONES.includes(voice.tone) ? voice.tone : '';
+  if (!tone) {
+    if (voice.volume === 'quiet') tone = (voice.restraint >= 2 || voice.tension >= 2) ? 'whispering' : 'soft tone';
+    else if (voice.volume === 'loud') tone = intensity === 2 && voice.tension >= 2 ? 'screaming' : 'shouting';
+    else if (voice.speed === 'fast' && voice.tension >= 1) tone = 'in a hurry tone';
+  }
   if (tone) push(wrapCue(tone, model));
   // A sound the sentence opens on is more audible than a descriptor, so it comes before them.
   if (voice.breath === 'panting') push(wrapCue('panting', model));
@@ -1150,7 +1233,7 @@ export function describeFishFailure({ status = 0, body = '', viaProxy = true, ne
   if (Number(status) === 403 && /csrf/i.test(text)) return '酒馆拒绝了这次代理请求（CSRF）。刷新酒馆页面后再试。';
   if (upstream === 401 || /api[- ]?key|unauthorized/i.test(message)) return 'Fish API Key 无效或没有填写。';
   if (upstream === 402) return 'Fish API 余额不足。API 额度和网页端的额度分开计算；可以先把模型换成 s2.1-pro-free（免费开发者档），或者去 fish.audio/app/developers 充值。';
-  if (upstream === 429) return 'Fish 限流了，请求太频繁。等一会儿再试，免费档的限制更紧。';
+  if (upstream === 429) return 'Fish 限流了，请求太频繁。等一会儿再试，免费档的限制更紧；「声音参数」里的「同时生成几段」调回 1 也会好一些。';
   if (upstream === 404) return `Fish 接口地址不对（HTTP 404）：${message || '没有说明'}`;
   if (upstream >= 500) return `Fish 服务端暂时不可用（HTTP ${upstream}）：${message || '没有说明'}`;
   return `Fish 返回错误（HTTP ${upstream || '未知'}）：${message || '没有说明'}`;

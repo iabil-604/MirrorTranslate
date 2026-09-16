@@ -169,6 +169,11 @@ test('emotion labels survive the languages and synonyms a model actually answers
   assert.equal(normalizeEmotion('  Furious '), 'angry');
   assert.equal(normalizeEmotion('hesitant'), 'fear');
   assert.equal(normalizeEmotion('犹豫'), 'fear');
+  // Fish's own words fold onto the palette for the typography; the reading keeps the word itself.
+  assert.equal(normalizeEmotion('frustrated'), 'angry');
+  assert.equal(normalizeEmotion('soft tone'), 'whisper');
+  assert.equal(normalizeEmotion('curious'), 'surprise');
+  assert.equal(normalizeEmotion('pleading'), 'sad');
   assert.equal(normalizeEmotion('mildly perplexed'), '', '认不出来就当没标注，不猜');
   assert.equal(normalizeEmotion(undefined), '');
   assert.equal(normalizeIntensity('2'), 2);

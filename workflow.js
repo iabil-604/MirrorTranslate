@@ -1,6 +1,7 @@
-import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.19.1';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.19.1';
-import { EMOTION_KEYS } from './palette.js?v=0.19.1';
+import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.21.0';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.21.0';
+import { EMOTION_KEYS } from './palette.js?v=0.21.0';
+import { FISH_EMOTIONS, FISH_TONES } from './tts.js?v=0.21.0';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -188,6 +189,7 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
       emotion: annotate.emotions,
       ...(annotate.speakers && annotate.roster.length ? { roster: annotate.roster } : {}),
       ...(annotate.emotions ? { emotions: annotate.emotionLabels } : {}),
+      ...(annotate.voice ? { quotes: true, tones: annotate.tones } : {}),
     };
   }
   if (phase === 'style_repair') {
@@ -211,17 +213,25 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
 
 // The style-repair pass rewrites a finished draft; asking for labels again there would only invite
 // the model to change them, so annotation is limited to the passes that actually produce text.
+//
+// The colouring wants a speaker and a palette mood per line. The reading wants more: Fish's own
+// emotion words, the tone when the text names one, and a mark per quoted run, so that a floor is
+// ready to be read the moment it is translated and the stream never has to ask a model again.
 function annotationRequest(settings, phase, requestMeta) {
+  if (phase === 'style_repair') return null;
   const coloring = settings?.coloring;
-  if (!coloring || phase === 'style_repair') return null;
-  const speakers = coloring.speakers === true;
-  const emotions = coloring.emotions === true;
+  const reading = settings?.tts?.enabled === true;
+  const speakers = coloring?.speakers === true || reading;
+  const emotions = coloring?.emotions === true || reading;
   if (!speakers && !emotions) return null;
   return {
     speakers,
     emotions,
     roster: Array.isArray(requestMeta?.roster) ? requestMeta.roster.filter(Boolean).slice(0, 40) : [],
-    emotionLabels: EMOTION_KEYS,
+    emotionLabels: reading ? FISH_EMOTIONS : EMOTION_KEYS,
+    voice: reading,
+    tones: reading ? FISH_TONES : [],
+    quoteMarks: reading ? normalizeTts(settings.tts).quotePairs : [],
   };
 }
 

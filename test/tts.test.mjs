@@ -4,9 +4,11 @@ import assert from 'node:assert/strict';
 import { DEFAULT_TTS, formatPairList, mergeSettings, normalizeTts, normalizeVoiceLibrary, normalizeVoiceList, parsePairList } from '../core.js';
 import {
   FISH_EMOTIONS,
+  FISH_TONES,
   NARRATOR,
   alignSpansToTimeline,
   analysisCacheKey,
+  annotationReading,
   buildFishPayload,
   buildGlobalTimeline,
   buildSegments,
@@ -290,7 +292,8 @@ test('the deep reply becomes labels plus a checked voice per sentence', () => {
   });
   const { labels, voices } = parseVoiceAnalysis(reply, utterances);
   assert.deepEqual(labels.get(1), { type: 'narration' });
-  assert.deepEqual(labels.get(2), { type: 'dialogue', speaker: '泰罗', intensity: 2, lang: 'zh' });
+  // The label carries the palette's fold of the word, for the colouring's vocabulary; the voice keeps the word.
+  assert.deepEqual(labels.get(2), { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2, lang: 'zh' });
   const voice = voices.get(2);
   assert.equal(voice.emotion, 'frustrated');
   assert.equal(voice.secondary, 'embarrassed');
@@ -314,11 +317,11 @@ test('the deep reply becomes labels plus a checked voice per sentence', () => {
   assert.ok(summary.some(([term, value]) => term === '潜台词' && value === '想让人拦着'));
 
   // Hints: an id alone, or a sentence left out, keeps the translation's own label; a partial answer
-  // keeps the hint's speaker under the model's mood.
+  // keeps the hint's speaker under the model's mood (folded onto the palette in the label).
   const hints = new Map([[1, { type: 'narration' }], [2, { type: 'dialogue', speaker: '泰罗', emotion: 'shy', intensity: 1 }]]);
   const lean = parseVoiceAnalysis('{"voices":[{"id":1},{"id":2,"emotion":"frustrated","intensity":2}]}', utterances, { hints });
   assert.deepEqual(lean.labels.get(1), { type: 'narration' });
-  assert.deepEqual(lean.labels.get(2), { type: 'dialogue', speaker: '泰罗', emotion: 'shy', intensity: 2 });
+  assert.deepEqual(lean.labels.get(2), { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2 });
   assert.equal(lean.voices.get(2).emotion, 'frustrated');
   assert.equal(lean.reused, 1);
   const silent = parseVoiceAnalysis('{"voices":[]}', utterances, { hints });
@@ -751,4 +754,63 @@ test('the sentences before a batch ride along as lead, to be read and never answ
   assert.deepEqual(lightInput.lead.map(item => item.id), [1]);
   assert.match(light[0].content, /只用来认人和判断语气，不用回答/);
   assert.equal('lead' in JSON.parse(buildVoiceAnalysisMessages(batch)[1].content), false, 'a first batch has nothing before it');
+});
+
+test('per-quote annotations tell the runs of one line apart, by the characters they open on or by order', () => {
+  const utterances = splitUtterances([{ lineId: 4, text: '「你来了？」泰罗抬起头，「坐吧。」' }, { lineId: 5, text: '「……嗯。」' }, { lineId: 6, text: '「走。」她说，「快。」' }]);
+  const id = text => utterances.find(item => item.text.includes(text)).id;
+  const annotations = new Map([
+    // Heads out of order: the characters place each mark on its run.
+    [4, { speaker: '泰罗', emotion: 'surprised', quotes: [
+      { head: '坐吧', speaker: '泰罗', emotion: 'calm' },
+      { head: '你来了', speaker: '樱井', emotion: 'surprised', intensity: 2, tone: 'in a hurry tone' },
+    ] }],
+    // One run: the line's mark and the run's own fold into one.
+    [5, { speaker: '泰罗', emotion: 'hesitant', tone: 'whispering', quotes: [{ emotion: 'uncertain' }] }],
+    // No heads, equal counts: by order.
+    [6, { speaker: '樱井', emotion: 'serious', quotes: [{ speaker: '樱井', emotion: 'determined' }, { speaker: '泰罗', emotion: 'in a hurry tone' }] }],
+  ]);
+  const { labels, voices } = annotationReading(utterances, annotations);
+  assert.deepEqual(labels.get(id('你来了')), { type: 'dialogue', speaker: '樱井', emotion: 'surprise', intensity: 2 });
+  assert.deepEqual(voices.get(id('你来了')), { emotion: 'surprised', tone: 'in a hurry tone', intensity: 2 });
+  assert.deepEqual(labels.get(id('坐吧')), { type: 'dialogue', speaker: '泰罗', emotion: 'neutral' });
+  assert.deepEqual(voices.get(id('坐吧')), { emotion: 'calm' });
+  assert.equal(labels.has(id('泰罗抬起头')), false, 'narration between the runs stays narration');
+  assert.deepEqual(labels.get(id('嗯')), { type: 'dialogue', speaker: '泰罗', emotion: 'fear' });
+  assert.deepEqual(voices.get(id('嗯')), { emotion: 'uncertain', tone: 'whispering' });
+  assert.equal(labels.get(id('走')).speaker, '樱井');
+  assert.equal(labels.get(id('快')).speaker, '泰罗');
+  assert.deepEqual(voices.get(id('快')), { emotion: 'in a hurry tone' });
+  const segments = buildSegments(utterances, labels, { voices });
+  assert.equal(sentenceFishText({ segment: segments.find(item => item.id === id('你来了')) }, { model: 's2-pro' }), '[very surprised][in a hurry tone] 你来了？');
+  assert.equal(sentenceFishText({ segment: segments.find(item => item.id === id('嗯')) }, { model: 's2-pro' }), '[uncertain][whispering] ……嗯。');
+  // A miscount with no heads: every run keeps the line's mark.
+  const loose = annotationReading(utterances, new Map([[4, { speaker: '泰罗', emotion: 'happy', quotes: [{ speaker: '樱井' }] }]]));
+  assert.deepEqual([...loose.labels.values()].map(label => label.speaker), ['泰罗', '泰罗']);
+  assert.deepEqual([...labelsFromAnnotations(utterances, annotations).keys()], [...labels.keys()]);
+});
+
+test('a tone named outright is a cue of its own and beats what the volume would imply', () => {
+  const voice = normalizeVoice({ emotion: 'sad', tone: 'Whispering', volume: 'loud' }, '走吧。');
+  assert.equal(voice.tone, 'whispering');
+  assert.deepEqual(compileVoiceCues({ text: '走吧。', voice }).cues, ['[sad]', '[whispering]']);
+  assert.deepEqual(compileVoiceCues({ text: '走吧。', voice: { emotion: 'sad', volume: 'loud' } }).cues, ['[sad]', '[shouting]']);
+  assert.equal(normalizeVoice({ tone: 'grumpy' }, '走吧。'), null, 'a tone Fish does not name is not a tone');
+  assert.ok(voiceSummary(voice).some(([term, value]) => term === '语气' && value === '耳语'));
+  assert.deepEqual([...FISH_TONES], ['whispering', 'soft tone', 'shouting', 'screaming', 'in a hurry tone']);
+  // S1 keeps the exact word where it knows it, and the palette's own columns for the palette's words.
+  assert.equal(emotionCue('frustrated', 2, 's1'), '(frustrated)');
+  assert.equal(emotionCue('angry', 2, 's1'), '(angry)(shouting)');
+  assert.equal(emotionCue('frustrated', 1, 's2-pro'), '[frustrated]');
+});
+
+test('the deep request hands the translation\'s own Fish words and tones on as hints', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '「走吧。」' }]);
+  const hints = new Map([[1, { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 1 }]]);
+  const hintVoices = new Map([[1, { emotion: 'frustrated', tone: 'soft tone', intensity: 1 }]]);
+  const input = JSON.parse(buildVoiceAnalysisMessages(utterances, { hints, hintVoices })[1].content);
+  assert.deepEqual(input.hints, [{ id: 1, speaker: '泰罗', emotion: 'frustrated', intensity: 1, tone: 'soft tone' }]);
+  assert.deepEqual(JSON.parse(buildVoiceAnalysisMessages(utterances, { hints })[1].content).hints, [{ id: 1, speaker: '泰罗', emotion: 'angry', intensity: 1 }]);
+  assert.equal(normalizeTts({ fish: { concurrency: 9 } }).fish.concurrency, 4);
+  assert.equal(normalizeTts({}).fish.concurrency, 2);
 });

@@ -542,6 +542,20 @@ const EMOTION_ALIASES = Object.freeze({
   低语: 'whisper', 呢喃: 'whisper', 小声: 'whisper', murmur: 'whisper', quiet: 'whisper',
   呼喊: 'shout', 大喊: 'shout', 呐喊: 'shout', yell: 'shout', scream: 'shout', loud: 'shout',
   犹豫: 'fear', hesitant: 'fear', 迟疑: 'fear',
+  // Fish Audio's own emotion words, which the translation answers with when the reading is on. The
+  // fold is for the typography only; the reading keeps the exact word.
+  excited: 'happy', satisfied: 'happy', delighted: 'happy', grateful: 'happy', playful: 'happy', hopeful: 'happy', optimistic: 'happy', ecstatic: 'happy',
+  empathetic: 'tender', moved: 'tender', sympathetic: 'tender', compassionate: 'tender', nostalgic: 'tender', flirtatious: 'tender',
+  upset: 'sad', unhappy: 'sad', disappointed: 'sad', regretful: 'sad', guilty: 'sad', pessimistic: 'sad', lonely: 'sad', resigned: 'sad', tired: 'sad', pleading: 'sad',
+  frustrated: 'angry', disgusted: 'angry', jealous: 'angry', envious: 'angry',
+  worried: 'fear', terrified: 'fear', uncertain: 'fear',
+  surprised: 'surprise', confused: 'surprise', curious: 'surprise',
+  ashamed: 'shy',
+  cold: 'serious', indifferent: 'serious', contemptuous: 'serious', disdainful: 'serious', sarcastic: 'serious', doubtful: 'serious', mysterious: 'serious',
+  confident: 'resolute', proud: 'resolute',
+  whispering: 'whisper', 'soft tone': 'whisper', breathy: 'whisper',
+  shouting: 'shout', screaming: 'shout', hysterical: 'shout',
+  relaxed: 'neutral', bored: 'neutral', interested: 'neutral',
 });
 
 export function normalizeEmotion(value) {
