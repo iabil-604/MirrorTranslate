@@ -928,3 +928,12 @@ test('on TauriTavern a Fish call goes direct, carries no host headers, and fails
   assert.doesNotMatch(message, /检查酒馆是否还在运行/);
   assert.match(describeFishFailureOnHost({ network: true, viaProxy: true }), /检查酒馆是否还在运行/);
 });
+
+test('the analysis batch size is a sentence count, with zero meaning the whole floor at once', () => {
+  assert.equal(normalizeTts({}).batchSize, 12);
+  assert.equal(normalizeTts({ batchSize: 0 }).batchSize, 0);
+  assert.equal(normalizeTts({ batchSize: '20' }).batchSize, 20);
+  assert.equal(normalizeTts({ batchSize: 2 }).batchSize, 4);
+  assert.equal(normalizeTts({ batchSize: 999 }).batchSize, 60);
+  assert.equal(normalizeTts({ batchSize: 'abc' }).batchSize, 12);
+});

@@ -539,14 +539,16 @@ test('the cast is read out of the card and the worldbook by the model, and never
   await assert.rejects(__testing.importCastFromWorldbook(bare), /没有可读的世界书条目/);
 });
 
-test('batches cut at paragraph ends, and a short floor or a single lane is one batch', () => {
+test('batches cut at paragraph ends and follow the batch size, not the lane count', () => {
   const utterances = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, lineId: Math.floor(index / 5) + 1, text: `句${index + 1}` }));
-  assert.equal(__testing.chunkTtsUtterances(utterances, 1).length, 1, 'one lane, one request');
-  assert.equal(__testing.chunkTtsUtterances(utterances.slice(0, 30), 4).length, 1, 'thirty sentences are one request');
-  const chunks = __testing.chunkTtsUtterances(utterances, 3);
-  assert.deepEqual(chunks.map(chunk => chunk.items.length), [15, 15, 10], 'ceil(40 / 3) = 14 rounds up to the paragraph end');
-  assert.deepEqual(chunks.map(chunk => chunk.lead.map(item => item.id)), [[], [13, 14, 15], [28, 29, 30]], 'each batch sees the three sentences before it');
-  assert.deepEqual(__testing.chunkTtsUtterances(utterances, 8).map(chunk => chunk.items.length), [15, 15, 10], 'more lanes never mean batches under about sixteen sentences');
+  assert.equal(__testing.chunkTtsUtterances(utterances, 0).length, 1, 'zero means the whole floor in one request');
+  assert.equal(__testing.chunkTtsUtterances(utterances.slice(0, 16), 12).length, 1, 'a floor only a little over one batch goes whole');
+  assert.equal(__testing.chunkTtsUtterances(utterances.slice(0, 17), 12).length, 2, 'past that it splits');
+  const chunks = __testing.chunkTtsUtterances(utterances, 12);
+  assert.deepEqual(chunks.map(chunk => chunk.items.length), [10, 10, 10, 10], 'ceil(40 / 12) = 4 batches, balanced at paragraph ends');
+  assert.deepEqual(chunks.map(chunk => chunk.lead.map(item => item.id)), [[], [8, 9, 10], [18, 19, 20], [28, 29, 30]], 'each batch sees the three sentences before it');
+  assert.deepEqual(__testing.chunkTtsUtterances(utterances, 20).map(chunk => chunk.items.length), [20, 20], 'a bigger batch means fewer requests');
+  assert.deepEqual(__testing.chunkTtsUtterances(utterances).map(chunk => chunk.items.length), [10, 10, 10, 10], 'the default is twelve');
 });
 
 test('a long floor is read in batches, as many at once as the connection allows, each seeing the sentences before it', async t => {
@@ -773,4 +775,39 @@ test('a long floor starts reading on its first analysis batch; the rest joins wh
   assert.equal(small.prepared, true);
   assert.equal(small.items.length, 2);
   assert.deepEqual(small.batches, []);
+});
+
+test('a look at the floor asks nothing; the reading asks once and the look then shows it', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-passive', {
+    async processRequest(payload) {
+      requests.push(payload);
+      return { content: JSON.stringify({ voices: [{ id: 1, type: 'narration' }, { id: 2, type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2, direction: '压着火，装冷淡' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('空は青い。泰羅は言った：「暑いな、まだ九月か」', [[1, '蓝蓝的天空，泰罗说：「热死了，才九月啊」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  // The sentence list, the inspector and the overrides all look through this path.
+  const looked = await __testing.prepareTtsSegments(floor, settings, { passive: true });
+  assert.equal(requests.length, 0, 'looking asks nothing');
+  assert.equal(looked.passive, true);
+  assert.equal(looked.depth, 'pending', 'no skeleton and no analysis yet');
+  assert.equal(looked.segments.length, 2, 'the split itself is local');
+  const inspected = await __testing.ttsInspect(0, 2);
+  assert.equal(requests.length, 0, 'the inspector asks nothing either');
+  assert.equal(inspected.depth, 'pending');
+  // The reading asks once, and without a skeleton the deep reading still goes out as itself.
+  const read = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests.length, 1);
+  assert.equal(read.depth, 'deep');
+  assert.equal(JSON.parse(requests[0].messages.at(-1).content).task, 'direct_voices_for_audiobook');
+  // The next look shows the reading without asking again.
+  const again = await __testing.ttsInspect(0, 2);
+  assert.equal(requests.length, 1);
+  assert.equal(again.depth, 'deep');
+  assert.equal(again.voice?.direction, '压着火，装冷淡');
 });

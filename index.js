@@ -62,7 +62,7 @@ import {
   DEFAULT_CONSOLE,
   normalizeConsole,
   readAnnotationFields,
-} from './core.js?v=0.22.0';
+} from './core.js?v=0.22.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -110,14 +110,14 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.22.0';
-import { createTtsStore } from './tts-store.js?v=0.22.0';
+} from './tts.js?v=0.22.1';
+import { createTtsStore } from './tts-store.js?v=0.22.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.22.0';
+} from './processing.js?v=0.22.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -134,9 +134,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.22.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.22.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.22.0';
+} from './prompts.js?v=0.22.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.22.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.22.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -150,15 +150,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.22.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.22.0';
+} from './palette.js?v=0.22.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.22.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.22.0';
+} from './diagnostics.js?v=0.22.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -382,8 +382,9 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-connection-choice" role="radiogroup" aria-label="朗读模式"><label><input type="radio" name="jy-tts-mode" value="simple" data-jy-tts-field="mode"><span><strong>简单模式</strong><small>让文字有情绪：翻译时顺手给每句搭好情绪骨架（谁说的、什么情绪、怎么变、语气语速、停顿重读、笑声喘息），直接交给 Fish；没骨架的楼问一次副模型</small></span></label><label><input type="radio" name="jy-tts-mode" value="deep" data-jy-tts-field="mode"><span><strong>深度模式</strong><small>让情绪有因果、有演技：在骨架上多问一次副模型，结合上下文和角色关系判断为什么这样说、该怎么演，润色成配音级指令</small></span></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">分析用的副 API</span><select data-jy-tts-field="channelId"><option value="">跟随翻译的模型设置</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">分析用的副 API</span><select data-jy-tts-field="channelId"><option value="">跟随翻译的模型设置</option></select></label><label><span class="jy-label">分析每批句数</span><select data-jy-tts-field="batchSize"><option value="12">12 句（默认，第一批回来就出声）</option><option value="8">8 句</option><option value="20">20 句</option><option value="0">不分批（整楼一次）</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼翻译完成后自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">生成完自动播放（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
+<p class="jy-muted">分析只在你按播放、点单句或「朗读本楼」时才请求副模型，翻译完不会自己开始；勾了「自动生成音频」才会。分批：每批回来就先读这一批，后面的边读边分析，每批都带完整的背景资料，批数越多副模型的调用次数越多。手机上正文里默认不放每句的按钮（翻译台 →「楼层里每句的按钮」可以打开），单句播放和改句重生成都在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
 <label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label>
@@ -1616,7 +1617,7 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
       // That silence is wrong when every label is missing at once, which means the model ignored the
       // annotation request entirely. Without this the reader sees plain text and no reason for it.
       if ((coloringEnabled(settings) || ttsSettings(settings).enabled) && !annotations.size) {
-        recordDiagnostic('warn', 'translation.no-annotations', '副模型没有返回任何说话人或情绪标注，这一批按普通样式显示；朗读这一楼时轻量分析会另外问一次。', {
+        recordDiagnostic('warn', 'translation.no-annotations', '副模型没有返回任何说话人或情绪标注，这一批按普通样式显示；朗读这一楼时简单分析会另外问一次。', {
           request: state.requests,
           returned: translations.size,
           roster: state.roster ?? [],
@@ -2781,7 +2782,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     // A long floor goes out in batches, as many at once as the connection allows, each batch seeing
     // the few sentences before it. Wall time drops by about the number of batches.
     const lanes = request.apiMode === 'independent' ? channelConcurrency(getActiveChannel(request)) : 1;
-    const chunks = chunkTtsUtterances(utterances, lanes);
+    const chunks = chunkTtsUtterances(utterances, tts.batchSize);
     const started = Date.now();
     // Batches finish in any order; the caller hears about them as an unbroken run from the top.
     const partials = [];
@@ -2883,13 +2884,18 @@ function ttsRequestSettings(settings = runtime.settings) {
 
 // A floor of more than this many sentences is read in batches when the connection allows more than
 // one request at a time; a batch never cuts a paragraph in half.
-const TTS_BATCH_SINGLE = 30;
-const TTS_BATCH_MIN = 16;
+const TTS_BATCH_DEFAULT = 12;
 
-function chunkTtsUtterances(utterances, lanes) {
+/**
+ * The batches one floor's analysis goes out in: about `batchSize` sentences each, cut at paragraph
+ * ends, so the first batch is back and reading while the rest is still being written. A floor only a
+ * little over one batch goes whole; 0 sends every floor whole.
+ */
+function chunkTtsUtterances(utterances, batchSize = TTS_BATCH_DEFAULT) {
   const list = Array.isArray(utterances) ? utterances : [];
-  const count = Math.min(Math.max(1, Number(lanes) || 1), Math.ceil(list.length / TTS_BATCH_MIN));
-  if (count <= 1 || list.length <= TTS_BATCH_SINGLE) return [{ items: list, lead: [] }];
+  const per = Math.max(0, Math.round(Number(batchSize) || 0));
+  const count = per ? Math.ceil(list.length / per) : 1;
+  if (count <= 1 || list.length <= per + Math.floor(per / 3)) return [{ items: list, lead: [] }];
   const size = Math.ceil(list.length / count);
   const chunks = [];
   let current = [];
@@ -2921,7 +2927,7 @@ async function ttsPrimaryFloor(floor, settings) {
  * warning rather than refusing to read. When both languages are read, the original is labelled from
  * the translation's reading instead of being read a second time.
  */
-async function prepareTtsSegments(floor, settings, { onStatus = null, force = false, onStep = null, onPartial = null } = {}) {
+async function prepareTtsSegments(floor, settings, { onStatus = null, force = false, onStep = null, onPartial = null, passive = false } = {}) {
   const tts = ttsSettings(settings);
   const utterances = ttsUtterances(floor, settings);
   // What the translation already said about every quoted run: who, in what mood, in Fish's own words.
@@ -2931,7 +2937,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   let depth = ttsAnalysisDepth(tts);
   const primary = await ttsPrimaryFloor(floor, settings);
   if (primary) {
-    const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep });
+    const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep, passive });
     const derived = deriveLabelsForSide(read.utterances, read.labels, read.voices, utterances);
     for (const [id, label] of derived.labels) labels.set(id, { ...(labels.get(id) ?? {}), ...label });
     voices = derived.voices;
@@ -2946,6 +2952,9 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
       voices = known.voices;
       depth = known.depth;
       onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '细读这一楼' : '简单分析', detail: depth === 'annotations' ? '用翻译时的标注' : '已有结果' });
+    } else if (passive) {
+      // Only looking, not reading: the floor shows what the translation already said and asks nothing.
+      depth = labels.size ? 'annotations' : 'pending';
     } else if (depth === 'simple' && labels.size && !force) {
       // The translation labelled this floor as it was written. The simple reading would only ask the
       // same question again, so the floor reads at once and the model hears nothing.
@@ -2990,6 +2999,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           voices = mergeVoiceMaps(reading.voices, analyzed.voices);
           runtime.tts.analysis.set(key, { ...analyzed, voices, depth });
           if (runtime.tts.analysis.size > 200) runtime.tts.analysis.delete(runtime.tts.analysis.keys().next().value);
+          dropPreparedFloors(floor.messageId);
           onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '细读这一楼' : '简单分析', detail: analyzed.cached ? '已有结果' : `${labels.size} 句` });
           // Types may have moved: a quoted title is narration, an unquoted order is dialogue.
           scheduleTtsDecorate(floor.messageId, { force: true });
@@ -3005,7 +3015,12 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
     }
   }
   const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices });
-  return { utterances, labels, voices, segments, depth };
+  return { utterances, labels, voices, segments, depth, passive };
+}
+
+/** Floors prepared for a look before the analysis landed are rebuilt on the next look. */
+function dropPreparedFloors(messageId) {
+  for (const key of [...runtime.tts.floors.keys()]) if (key.startsWith(`${messageId}|`)) runtime.tts.floors.delete(key);
 }
 
 // The model's voices laid over the translation's. A sentence the model answered keeps the
@@ -4160,9 +4175,11 @@ async function ttsPrepared(messageId, side = null, { fresh = false } = {}) {
   if (known && !fresh && known.settings === settings) return known;
   const floor = await collectTtsFloor(messageId, settings, which);
   if (!floor) throw new Error(which === 'source' ? '这一楼没有可朗读的原文。' : '这一楼没有可朗读的译文。');
-  const { segments } = await prepareTtsSegments(floor, settings, { onStep: (id, patch) => ttsStep(floor, id, patch) });
+  // A look at the floor never asks the model: the list, the inspector and the overrides show what is
+  // known so far; the reading itself is what analyses, and it drops this entry when it lands.
+  const { segments, depth, passive } = await prepareTtsSegments(floor, settings, { onStep: (id, patch) => ttsStep(floor, id, patch), passive: true });
   const { items } = await ttsItemsFor(floor, segments, settings);
-  const prepared = { floor, segments, items, settings };
+  const prepared = { floor, segments, items, settings, depth, passive };
   runtime.tts.floors.set(key, prepared);
   if (runtime.tts.floors.size > 40) runtime.tts.floors.delete(runtime.tts.floors.keys().next().value);
   return prepared;
@@ -4186,7 +4203,7 @@ async function ttsInspect(messageId, utteranceId, side = null) {
     voiceId: item.voiceId,
     voice: segment.voice,
     summary: voiceSummary(segment.voice ?? (segment.emotion ? { emotion: segment.emotion, intensity: segment.intensity } : null)),
-    depth: analysis?.depth ?? null,
+    depth: analysis?.depth ?? prepared.depth ?? null,
     derived: analysis?.derived === true,
     text: sentenceFishText(automatic, tts.fish, { emotionCues: tts.emotionCues, tamePunctuation: tts.tamePunctuation }),
     prosody: sentenceProsody(automatic, tts.fish, { prosodySplit: tts.prosodySplit }),
@@ -6253,7 +6270,7 @@ function renderTtsPreview(root) {
   const inRange = new Set(segmentsInRange(preview.segments, tts.range).map(segment => segment.id));
   const head = doc.createElement('p');
   head.className = 'jy-muted';
-  head.textContent = `第 ${preview.messageId} 楼 · ${preview.segments.length} 句 · ${preview.source === 'translation' ? '读的是镜译译文' : preview.source === 'source' ? '读的是原文' : '读的是来源标签里的文字'} · 标注来自${preview.analyzed === 'deep' ? '副模型深度分析' : preview.analyzed === 'light' ? '副模型轻量分析' : '翻译时的标注与引号'}`;
+  head.textContent = `第 ${preview.messageId} 楼 · ${preview.segments.length} 句 · ${preview.source === 'translation' ? '读的是镜译译文' : preview.source === 'source' ? '读的是原文' : '读的是来源标签里的文字'} · 标注来自${preview.analyzed === 'deep' ? '副模型深度分析' : preview.analyzed === 'simple' ? '副模型简单分析' : preview.analyzed === 'pending' ? '还没分析' : '翻译时的骨架与引号'}`;
   target.appendChild(head);
   const table = doc.createElement('div');
   table.className = 'jy-tts-preview-table';
@@ -7090,7 +7107,7 @@ function createControlCenter(rootDocument = document) {
         toast('success', '已恢复内置提示词。');
       } else if (action === 'tts-copy-prompt') {
         await copyText(DEFAULT_TTS_PROMPTS[button.dataset.prompt] ?? '');
-        toast('success', `${button.dataset.prompt === 'deep' ? '深度' : '轻量'}分析的内置提示词已复制。`);
+        toast('success', `${button.dataset.prompt === 'deep' ? '深度' : '简单'}分析的内置提示词已复制。`);
       } else if (action === 'tts-fill-prompt') {
         const textarea = root.querySelector(`[data-jy-tts-prompt="${button.dataset.prompt}"]`);
         if (textarea) {
@@ -8120,6 +8137,8 @@ async function openMiniWindow() {
   let logFilter = 'floor';
   let logEntries = [];
   let logShown = [];
+  // The badge counts errors the reader has not opened the log for; opening it clears them.
+  let logSeenErrors = 0;
   let inspecting = null;
   let inspectToken = 0;
   let inspectDirty = false;
@@ -8178,7 +8197,11 @@ async function openMiniWindow() {
       void to.offsetWidth;
       to.classList.add('is-entering');
     }
-    if (name === 'log') renderLog();
+    if (name === 'log') {
+      logSeenErrors = countLogErrors(logEntries);
+      updateLogBadge();
+      renderLog();
+    }
     if (name === 'reading') void renderSentences();
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
   };
@@ -8584,7 +8607,7 @@ async function openMiniWindow() {
     const { segment } = data;
     const voiceName = data.voiceId ? (normalizeVoiceLibrary(runtime.settings.voiceLibrary).find(entry => entry.voiceId === data.voiceId)?.name ?? `${data.voiceId.slice(0, 6)}…`) : '';
     setText(win, '[data-jy-tts-who]', `${segment.type === 'narration' ? '旁白' : (segment.speaker || '未知说话人')}${segment.lang && segment.lang !== 'zh' ? ` · ${languageLabel(segment.lang)}` : ''}`);
-    setText(win, '[data-jy-tts-depth]', `第 ${messageId} 楼${which === 'source' ? '（原文）' : ''} · 第 ${utteranceId} 句 · ${data.depth === 'deep' ? '深度' : data.depth === 'simple' ? '简单分析' : '翻译骨架'}${data.derived ? '（由译文推出）' : ''}${voiceName ? ` · 音色 ${voiceName}` : ' · Fish 默认音色'}${data.recorded ? ' · 已有音频' : ''}`);
+    setText(win, '[data-jy-tts-depth]', `第 ${messageId} 楼${which === 'source' ? '（原文）' : ''} · 第 ${utteranceId} 句 · ${data.depth === 'deep' ? '深度' : data.depth === 'simple' ? '简单分析' : data.depth === 'pending' ? '还没分析' : ttsSettings().mode === 'deep' ? '翻译骨架（还没细读）' : '翻译骨架'}${data.derived ? '（由译文推出）' : ''}${voiceName ? ` · 音色 ${voiceName}` : ' · Fish 默认音色'}${data.recorded ? ' · 已有音频' : ''}`);
     setText(win, '[data-jy-tts-text]', segment.text);
     const summary = win.querySelector('[data-jy-tts-summary]');
     summary.replaceChildren();
@@ -8709,8 +8732,11 @@ async function openMiniWindow() {
     }
     sentenceList.hidden = inspectBox.hidden === false || !prepared.items.length;
     if (note) {
-      note.hidden = prepared.items.length > 0;
-      note.textContent = prepared.items.length ? '' : '这一楼在当前范围里没有可读的句子。';
+      const unread = prepared.passive && prepared.depth !== 'deep' && ttsSettings().mode === 'deep';
+      note.hidden = prepared.items.length > 0 && !unread && prepared.depth !== 'pending';
+      note.textContent = !prepared.items.length ? '这一楼在当前范围里没有可读的句子。'
+        : prepared.depth === 'pending' ? '这一楼还没分析。按播放或「朗读本楼」时才请求副模型，不会自己开始。'
+          : unread ? '这一楼还没细读，列表里是翻译时的骨架。按播放或「朗读本楼」时才请求副模型，不会自己开始。' : '';
     }
     markCurrentSentence();
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
@@ -9129,12 +9155,20 @@ async function openMiniWindow() {
     });
     return `${APP_NAME} v${APP_VERSION} · 悬浮窗日志 · ${new Date().toISOString()}\n${lines.join('\n')}`;
   };
+  const countLogErrors = entries => entries.filter(entry => entry.level === 'error').length;
+  const updateLogBadge = () => {
+    const logTab = tabs.querySelector('[data-jy-mini-tab="log"]');
+    if (!logTab) return;
+    const unseen = Math.max(0, countLogErrors(logEntries) - logSeenErrors);
+    logTab.dataset.errors = unseen ? String(Math.min(unseen, 99)) : '';
+  };
   const unsubscribeLog = subscribeDiagnostics(entries => {
     logEntries = entries;
     if (miniTab === 'log' && logDetail.hidden) renderLog();
-    const errors = entries.filter(entry => entry.level === 'error').length;
-    const logTab = tabs.querySelector('[data-jy-mini-tab="log"]');
-    if (logTab) logTab.dataset.errors = errors ? String(Math.min(errors, 99)) : '';
+    // Errors that arrive while the log is open are seen as they land.
+    if (miniTab === 'log') logSeenErrors = countLogErrors(entries);
+    else logSeenErrors = Math.min(logSeenErrors, countLogErrors(entries));
+    updateLogBadge();
   });
 
   // -------------------------------------------------------------------------------------------

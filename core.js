@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.22.0';
+} from './prompts.js?v=0.22.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.22.0';
+export const APP_VERSION = '0.22.1';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -446,6 +446,8 @@ export const DEFAULT_TTS = Object.freeze({
   prompts: Object.freeze({ simple: '', deep: '' }),
   // The saved connection the readings go to; empty follows the translation's own setting.
   channelId: '',
+  // Sentences per analysis batch; 0 sends the whole floor in one request.
+  batchSize: 12,
   quotePairs: DEFAULT_QUOTE_PAIRS,
   skipPairs: DEFAULT_SKIP_PAIRS,
   // What the deep reading is allowed to see besides the floor itself.
@@ -892,6 +894,15 @@ function normalizeTtsContext(value) {
   };
 }
 
+/** 0 keeps a floor in one request; anything else is clamped to a sensible batch. */
+export function normalizeBatchSize(value) {
+  if (value === undefined || value === null || value === '') return DEFAULT_TTS.batchSize;
+  const count = Number(value);
+  if (!Number.isFinite(count)) return DEFAULT_TTS.batchSize;
+  if (count <= 0) return 0;
+  return Math.min(60, Math.max(4, Math.round(count)));
+}
+
 export function normalizeTts(value) {
   const source = value && typeof value === 'object' ? value : {};
   const tags = parseTagNames(source.sourceTags ?? DEFAULT_TTS.sourceTags);
@@ -923,6 +934,7 @@ export function normalizeTts(value) {
       deep: typeof source.prompts?.deep === 'string' ? normalizeNewlines(source.prompts.deep).slice(0, 12000) : '',
     },
     channelId: String(source.channelId ?? '').trim().slice(0, 80),
+    batchSize: normalizeBatchSize(source.batchSize),
     quotePairs: normalizePairStrings(source.quotePairs, DEFAULT_QUOTE_PAIRS),
     skipPairs: normalizePairStrings(source.skipPairs, DEFAULT_SKIP_PAIRS),
     context: normalizeTtsContext(source.context),
