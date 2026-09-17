@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.25.0';
+} from './prompts.js?v=0.25.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.25.0';
+export const APP_VERSION = '0.25.1';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -336,7 +336,7 @@ export function normalizeConsole(value, { sparse = false } = {}) {
   if (sparse && !console.rules && !console.marks.length && CONSOLE_KEYS.every(key => console[key] === 50)) return null;
   return console;
 }
-export const TTS_DOWNLOAD_SCOPES = Object.freeze(['auto', 'floor', 'current']);
+export const TTS_DOWNLOAD_SCOPES = Object.freeze(['auto', 'floor', 'current', 'sentence']);
 // Where the character voice table lives: one per character card (every chat of the card shares it),
 // or one per chat, for a card played through several times with different casts.
 export const TTS_VOICE_SCOPES = Object.freeze(['character', 'chat']);

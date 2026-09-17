@@ -986,3 +986,38 @@ test('the console\'s speed lean nudges the prosody only where the voice said not
 });
 
 import { FISH_SOUNDS as FISH_SOUND_LIST, FISH_TONES as FISH_TONE_LIST } from '../tts.js';
+
+import { encodeWav as encodeWavFile } from '../tts.js';
+
+test('a cut of decoded audio is written out as a wav file that names its own shape', () => {
+  const left = new Float32Array([0, 0.5, -0.5, 1, -1]);
+  const bytes = encodeWavFile([left], 24000);
+  const text = (from, length) => String.fromCharCode(...bytes.slice(from, from + length));
+  const uint32 = at => bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16) | (bytes[at + 3] << 24);
+  const uint16 = at => bytes[at] | (bytes[at + 1] << 8);
+  assert.equal(text(0, 4), 'RIFF');
+  assert.equal(text(8, 4), 'WAVE');
+  assert.equal(text(12, 4), 'fmt ');
+  assert.equal(text(36, 4), 'data');
+  assert.equal(uint16(20), 1, 'plain PCM');
+  assert.equal(uint16(22), 1, 'one channel in, one channel out');
+  assert.equal(uint32(24), 24000, 'the sample rate it was decoded at');
+  assert.equal(uint16(34), 16, 'sixteen bits a sample');
+  assert.equal(uint32(40), left.length * 2, 'the data chunk is the samples');
+  assert.equal(bytes.length, 44 + left.length * 2);
+  assert.equal(uint32(4), bytes.length - 8);
+  // The far ends are the far ends, and nothing clips round to the wrong sign.
+  const view = new DataView(bytes.buffer);
+  assert.equal(view.getInt16(44, true), 0);
+  assert.equal(view.getInt16(50, true), 32767);
+  assert.equal(view.getInt16(52, true), -32768);
+  // Two channels interleave.
+  const stereo = encodeWavFile([new Float32Array([1, 0]), new Float32Array([-1, 0])], 48000);
+  assert.equal(uint16.call(null, 22), 1, 'the first file is untouched by the second');
+  const stereoView = new DataView(stereo.buffer);
+  assert.equal(stereo[22], 2);
+  assert.equal(stereoView.getInt16(44, true), 32767);
+  assert.equal(stereoView.getInt16(46, true), -32768);
+  // Nothing at all is still a valid, empty file rather than a throw.
+  assert.equal(encodeWavFile([], 44100).length, 44);
+});

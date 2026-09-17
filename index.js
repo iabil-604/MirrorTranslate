@@ -65,7 +65,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.25.0';
+} from './core.js?v=0.25.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -95,6 +95,7 @@ import {
   linesFromTaggedText,
   locateAnchors,
   mergeWavBuffers,
+  encodeWav,
   parseTtsAnalysis,
   parseVoiceAnalysis,
   plainLineText,
@@ -114,14 +115,14 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.25.0';
-import { createTtsStore } from './tts-store.js?v=0.25.0';
+} from './tts.js?v=0.25.1';
+import { createTtsStore } from './tts-store.js?v=0.25.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.25.0';
+} from './processing.js?v=0.25.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -138,9 +139,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.25.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.25.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.25.0';
+} from './prompts.js?v=0.25.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.25.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.25.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -154,15 +155,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.25.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.25.0';
+} from './palette.js?v=0.25.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.25.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.25.0';
+} from './diagnostics.js?v=0.25.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -388,7 +389,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep" disabled>深度分析（迭代中，暂不可选）</option></select></label><label><span class="jy-label">没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先整楼简单分析再读</option><option value="plain">直接读，不分析</option></select></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">分析用的副 API</span><select data-jy-tts-field="channelId"><option value="">跟随翻译的模型设置</option></select></label><label><span class="jy-label">分析每批句数</span><select data-jy-tts-field="batchSize"><option value="12">12 句（默认，第一批回来就出声）</option><option value="8">8 句</option><option value="20">20 句</option><option value="0">不分批（整楼一次）</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">分析用的副 API</span><select data-jy-tts-field="channelId"><option value="">跟随翻译的模型设置</option></select></label><label><span class="jy-label">分析每批句数</span><select data-jy-tts-field="batchSize"><option value="12">12 句（默认，第一批回来就出声）</option><option value="8">8 句</option><option value="20">20 句</option><option value="0">不分批（整楼一次）</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼翻译完成后自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">生成完自动播放（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
 <p class="jy-muted">分析只在你按播放、点单句或「朗读本楼」时才请求副模型，翻译完不会自己开始；勾了「自动生成音频」才会。分批：每批回来就先读这一批，后面的边读边分析，每批都带完整的背景资料，批数越多副模型的调用次数越多。每个自然段后面的「播放」从这一段读起，「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
@@ -4420,6 +4421,52 @@ async function ttsDownloadBlob(records, format) {
 }
 
 /**
+ * One stretch of a recording as its own file.
+ *
+ * The audio is decoded and the samples between the two moments are written out as wav. Cutting mp3 or
+ * Ogg bytes at an arbitrary moment gives a file that stutters or will not open, and asking Fish for
+ * the sentence again would give a different reading of it — this keeps the take that was heard.
+ */
+async function sliceAudioToWav(blob, start, end) {
+  const Context = globalThis.AudioContext ?? globalThis.webkitAudioContext;
+  if (!Context) throw new Error('这个浏览器剪不出单句音频，把「保存到本地」改成整段或整楼。');
+  const context = new Context();
+  try {
+    const buffer = await context.decodeAudioData(await blob.arrayBuffer());
+    const from = Math.max(0, Math.floor((Number(start) || 0) * buffer.sampleRate));
+    const to = Math.min(buffer.length, Math.ceil((Number.isFinite(end) ? end : buffer.duration) * buffer.sampleRate));
+    if (to <= from) throw new Error('算不出这一句在音频里的位置，先保存整段。');
+    const channels = [];
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) channels.push(buffer.getChannelData(channel).slice(from, to));
+    return new Blob([encodeWav(channels, buffer.sampleRate)], { type: 'audio/wav' });
+  } finally {
+    void context.close?.();
+  }
+}
+
+/** One sentence saved on its own, cut out of whatever recording it was read in. */
+async function downloadTtsSentence(messageId, utteranceId, side = null) {
+  const prepared = await ttsPrepared(messageId, side);
+  const item = prepared.items.find(candidate => candidate.segment.id === Number(utteranceId));
+  if (!item) throw new Error('这一句不在当前的朗读范围里。');
+  const entry = await findTtsEntry(prepared.floor, item, prepared.settings);
+  if (!entry) throw new Error('这一句还没有音频，先播一次再保存。');
+  const tts = ttsSettings(prepared.settings);
+  const { record, index } = entry;
+  const line = record.timeline[index];
+  const part = record.parts[line.part];
+  if (!part?.blob) throw new Error('这一句的音频不在了，重新播一次再保存。');
+  // A take made for this sentence alone already is the file; anything else is cut out of its paragraph.
+  const alone = record.unit === `sentence:${item.segment.id}` && record.parts.length === 1;
+  const blob = alone ? part.blob : await sliceAudioToWav(part.blob, line.start, line.end);
+  const format = tts.fish.format === 'opus' ? 'ogg' : tts.fish.format;
+  const who = item.segment.type === 'narration' ? '旁白' : (item.segment.speaker || '对白');
+  const name = `镜译-第${messageId}楼-${who}-第${item.segment.id}句.${alone ? format : 'wav'}`;
+  const saved = saveBlobAsFile(blob, name);
+  return { ...saved, cut: !alone };
+}
+
+/**
  * Saves what the transport is reading. The floor: every recording its sentences live in, in reading
  * order, made first when any is missing. The current paragraph: the recording that holds it.
  */
@@ -4429,6 +4476,11 @@ async function downloadTtsAudio(scope = null) {
   const tts = ttsSettings(transport.settings);
   const wanted = scope ?? (tts.downloadScope === 'auto' ? 'floor' : tts.downloadScope);
   const { floor, items, settings } = transport;
+  if (wanted === 'sentence') {
+    const current = items[transport.index]?.segment;
+    if (!current) throw new Error('先朗读一楼，再保存它的音频。');
+    return downloadTtsSentence(transport.messageId, current.id, transport.side);
+  }
   let chosen = items;
   if (wanted === 'current') {
     const lineId = items[transport.index]?.segment.lineId;
@@ -8768,6 +8820,7 @@ async function openMiniWindow() {
     <div class="jy-mini-inspect-actions">
       <button type="button" class="jy-button jy-button-primary" data-jy-action="tts-apply" hidden>重新生成并播放</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-refine-sentence" title="说一句哪里不对，让副模型只改这一句的分析">改这一句的分析</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-save-sentence" title="把这一句的音频存到本地，从已经听到的那一条里剪出来">保存这一句</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-reset" hidden>恢复自动</button>
     </div>
     <p class="jy-muted" data-jy-tts-note></p>
@@ -10160,6 +10213,12 @@ async function openMiniWindow() {
       if (row) void renderInspector(Number(row.dataset.messageId), Number(row.dataset.id), { pinned: true, side: row.dataset.side });
       return;
     }
+    if (action === 'tts-save-sentence') {
+      if (!inspecting) throw new Error('先打开一句的详细页，再保存它。');
+      const saved = await downloadTtsSentence(inspecting.messageId, inspecting.utteranceId, inspecting.side);
+      toast('success', `已保存 ${saved.name}${saved.cut ? '（从这一段的音频里剪出来的，wav）' : ''}`);
+      return;
+    }
     if (action === 'sentence-play' || action === 'sentence-regen') {
       const row = button.closest('.jy-mini-sentence');
       if (!row) return;
@@ -11116,6 +11175,7 @@ export const __testing = Object.freeze({
   floorButtonMode,
   planTtsLineButtons,
   refineTtsAnalysis,
+  downloadTtsSentence,
   currentTtsLabels,
   ttsObjectUrl,
   dropTtsObjectUrls,

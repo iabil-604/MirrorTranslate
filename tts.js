@@ -9,9 +9,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.25.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.25.0';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.25.0';
+} from './core.js?v=0.25.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.25.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.25.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -1859,6 +1859,42 @@ function wavData(bytes) {
     offset += 8 + size + (size % 2);
   }
   return { header, data: new Uint8Array(0) };
+}
+
+/**
+ * Samples as a wav file: 16-bit PCM with one header. What a slice of decoded audio is saved as,
+ * whatever the format it was decoded from, since cutting mp3 or Ogg at an arbitrary moment does not
+ * give a file that plays.
+ */
+export function encodeWav(channels, sampleRate = 44100) {
+  const list = (Array.isArray(channels) ? channels : []).filter(channel => channel && typeof channel.length === 'number');
+  const count = Math.max(1, list.length);
+  const frames = list[0]?.length ?? 0;
+  const bytes = new Uint8Array(44 + frames * count * 2);
+  const view = new DataView(bytes.buffer);
+  const write = (offset, text) => { for (let index = 0; index < text.length; index += 1) bytes[offset + index] = text.charCodeAt(index); };
+  write(0, 'RIFF');
+  view.setUint32(4, bytes.length - 8, true);
+  write(8, 'WAVE');
+  write(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, count, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * count * 2, true);
+  view.setUint16(32, count * 2, true);
+  view.setUint16(34, 16, true);
+  write(36, 'data');
+  view.setUint32(40, frames * count * 2, true);
+  let at = 44;
+  for (let frame = 0; frame < frames; frame += 1) {
+    for (let channel = 0; channel < count; channel += 1) {
+      const sample = Math.max(-1, Math.min(1, list[channel]?.[frame] ?? 0));
+      view.setInt16(at, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      at += 2;
+    }
+  }
+  return bytes;
 }
 
 export function mergeWavBuffers(buffers) {
