@@ -1022,3 +1022,59 @@ test('the public interface announces itself on the page, and says what it can do
   assert.equal(Object.isFrozen(api), true, 'a caller cannot rewrite the door');
   delete globalThis.__JINGYI__;
 });
+
+test('asking again with an opinion only touches what the opinion is about', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-refine', {
+    async processRequest(payload) {
+      requests.push(payload);
+      const input = JSON.parse(payload.messages.at(-1).content);
+      if (input.task === 'refine_voices_for_audiobook') {
+        // The complaint was about who says it; everything else comes back as a bare id.
+        return { content: JSON.stringify({ voices: [{ id: 2, type: 'dialogue', speaker: '樱井', emotion: 'angry' }, { id: 1 }] }) };
+      }
+      return { content: JSON.stringify({ voices: [{ id: 1, type: 'narration' }, { id: 2, type: 'dialogue', speaker: '泰罗', emotion: 'happy' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'simple', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '樱井', voiceId: 'voice-sakurai' }, { name: '泰罗', voiceId: 'voice-taro' }] },
+    },
+  });
+  context.chat.push(await translatedFloor('泰羅は言った：「またか」', [[1, '泰罗说：「又来了。」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  // First pass: the model says 泰罗 says it.
+  const first = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(first.segments[1].speaker, '泰罗');
+  assert.equal(requests.length, 1);
+  const fish = mockFish();
+  const items = (await __testing.ttsItemsFor(floor, first.segments, settings)).items;
+  await __testing.resolveTtsEntry(floor, items, items[1], settings);
+  assert.equal(fish.length, 1, 'the line has audio, made from the old labels');
+
+  // The reader says it is the wrong speaker: one short request, and only that sentence moves.
+  const result = await __testing.refineTtsAnalysis(0, { utteranceId: 2, feedback: '说话人不对，这句是樱井说的' });
+  assert.equal(requests.length, 2);
+  const refine = JSON.parse(requests[1].messages.at(-1).content);
+  assert.equal(refine.task, 'refine_voices_for_audiobook');
+  assert.deepEqual(refine.utterances.map(item => item.id), [2], 'only the sentence in scope is sent');
+  assert.deepEqual(refine.current, [{ id: 2, type: 'dialogue', speaker: '泰罗', emotion: 'happy', intensity: 1 }], 'last time answer rides along');
+  assert.match(refine.feedback, /说话人不对/);
+  assert.match(requests[1].messages[0].content, /按用户的意见修正上一次的标注/);
+  assert.equal(result.changed, 1);
+
+  // The correction is what the floor reads by now, and the take made from the old labels is gone.
+  const after = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(after.segments[1].speaker, '樱井');
+  assert.equal(after.segments[0].type, 'narration', 'the sentence nobody complained about is untouched');
+  assert.equal(requests.length, 2, 'reading the floor again asks nothing: the analysis is cached');
+  const fresh = (await __testing.ttsItemsFor(floor, after.segments, settings)).items;
+  assert.equal(fresh[1].voiceId, 'voice-sakurai', 'a new speaker means a new voice, with no re-analysis');
+  assert.equal(await __testing.findTtsEntry(floor, fresh[1], settings), null, 'the audio made from the old labels was let go');
+
+  // A sentence outside the floor is refused rather than silently doing the whole floor.
+  await assert.rejects(__testing.refineTtsAnalysis(0, { utteranceId: 99, feedback: 'x' }), /不在当前的朗读范围/);
+});

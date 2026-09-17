@@ -941,3 +941,13 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-ask-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .jy-ask-actions button { flex: 1 1 0; min-height: 40px; border-radius: 10px; border: 1px solid var(--jy-line, #cfd6cf); background: transparent; color: inherit; font-size: 13.5px; cursor: pointer; }
 .jy-ask-actions button.is-primary { background: var(--jy-accent, #2f6b4f); color: #fff; border-color: transparent; }
+
+/* 重新分析的小窗：范围、意见、几个常见的说法 */
+.jy-ask-scope { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.jy-ask-scope label { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: inherit; }
+.jy-ask-field { display: flex; flex-direction: column; gap: 4px; align-items: stretch; margin-bottom: 8px; }
+.jy-ask-field > span { font-size: 12px; color: var(--jy-muted, #5d6a63); }
+.jy-ask-field textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--jy-line, #cfd6cf); background: transparent; color: inherit; resize: vertical; }
+.jy-ask-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.jy-ask-chips button { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--jy-line, #cfd6cf); background: transparent; color: var(--jy-muted, #5d6a63); font-size: 12px; cursor: pointer; }
+.jy-ask-chips button:hover { color: inherit; border-color: var(--jy-accent, #2f6b4f); }

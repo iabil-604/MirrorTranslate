@@ -65,7 +65,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.24.1';
+} from './core.js?v=0.25.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -78,6 +78,7 @@ import {
   buildSegments,
   buildTtsAnalysisMessages,
   buildVoiceAnalysisMessages,
+  buildRefineAnalysisMessages,
   createSseParser,
   createTimestampCollector,
   cueLabel,
@@ -113,14 +114,14 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.24.1';
-import { createTtsStore } from './tts-store.js?v=0.24.1';
+} from './tts.js?v=0.25.0';
+import { createTtsStore } from './tts-store.js?v=0.25.0';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.24.1';
+} from './processing.js?v=0.25.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -137,9 +138,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.24.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.24.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.24.1';
+} from './prompts.js?v=0.25.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.25.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.25.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -153,15 +154,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.24.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.24.1';
+} from './palette.js?v=0.25.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.25.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.24.1';
+} from './diagnostics.js?v=0.25.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -4546,6 +4547,150 @@ async function reanalyzeTtsFloor(messageId, side = null) {
   return floor;
 }
 
+/** What the floor is labelled as right now, whatever it came from: the model, the translation, or the split. */
+function currentTtsLabels(prepared) {
+  return new Map(prepared.segments.map(segment => [segment.id, {
+    type: segment.type,
+    ...(segment.speaker ? { speaker: segment.speaker } : {}),
+    ...(segment.emotion ? { emotion: segment.emotion, intensity: segment.intensity ?? 1 } : {}),
+    ...(segment.voice?.tone ? { tone: segment.voice.tone } : {}),
+  }]));
+}
+
+/**
+ * Ask again about what is already labelled, with what the reader thinks of it.
+ *
+ * The model is handed last time's answer and the complaint, not the job of reading the floor again,
+ * and only the sentences in scope: fixing one line is one short request. Sentences the complaint does
+ * not touch come back as a bare id and keep what they had. The audio of whatever was asked about is
+ * dropped, so the next play is heard with the correction rather than from the old take.
+ */
+async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, feedback = '' } = {}) {
+  const settings = runtime.settings;
+  const which = side ?? primaryTtsSide(settings);
+  const prepared = await ttsPrepared(messageId, which);
+  const { floor } = prepared;
+  const utterances = ttsUtterances(floor, settings);
+  const base = currentTtsLabels(prepared);
+  const scope = utteranceId === null ? utterances : utterances.filter(item => item.id === Number(utteranceId));
+  if (!scope.length) throw new Error('这一句不在当前的朗读范围里。');
+  const request = ttsRequestSettings(settings);
+  const context = getContext();
+  const messages = buildRefineAnalysisMessages(scope, {
+    roster: ttsKnownNames(settings),
+    characterName: context.name2 ?? '',
+    userName: context.name1 ?? '',
+    translations: floor.references,
+    styles: ttsStyles(settings),
+    current: base,
+    feedback,
+  });
+  const started = Date.now();
+  const raw = await requestSubModelRaw(messages, request, undefined);
+  const parsed = parseVoiceAnalysis(raw, scope, { hints: base });
+  recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.refine', parsed.labels.size
+    ? `按你的意见改了第 ${messageId} 楼的 ${parsed.labels.size} 句标注（${scope.length} 句在范围里，${parsed.reused} 句原样保留），用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒。`
+    : `副模型没有返回可用的修正，第 ${messageId} 楼的标注保持原样。`, {
+    floor: floor.floorId,
+    scope: utteranceId === null ? 'floor' : `utterance:${utteranceId}`,
+    feedback: String(feedback ?? '').slice(0, 200),
+    sentences: scope.length,
+    changed: parsed.labels.size,
+    apiMode: request.apiMode,
+    endpoint: describeChannelEndpoint(request),
+  }, raw, { fullRequest: messages, floor: messageId });
+  if (!parsed.labels.size) throw new Error('副模型没有返回可用的修正，标注保持原样。');
+  const key = ttsLabelKey(floor);
+  const known = runtime.tts.analysis.get(key);
+  const labels = new Map(known?.labels ?? base);
+  const voices = new Map(known?.voices ?? []);
+  for (const [id, label] of parsed.labels) labels.set(id, label);
+  // A sentence the model rewrote without a voice of its own loses the old one: it belonged to the old mood.
+  for (const item of scope) if (parsed.labels.has(item.id) && !parsed.voices.has(item.id)) voices.delete(item.id);
+  for (const [id, voice] of parsed.voices) voices.set(id, voice);
+  runtime.tts.analysis.set(key, { labels, voices, depth: 'simple' });
+  // Kept where the reading looks for it next time, so a reload does not undo the correction.
+  await ttsStore().putAnalysis({
+    key: await analysisCacheKey({ utterances, source: 'model', depth: 'simple', side: floor.side }),
+    floorId: floor.floorId,
+    version: floor.version,
+    depth: 'simple',
+    labels: [...labels],
+    voices: [...voices],
+  }).catch(() => {});
+  // What was asked about is said again: the old take was made from the old labels.
+  const affected = prepared.items.filter(item => parsed.labels.has(item.segment.id));
+  if (affected.length) await dropTtsRecordings(prepared, affected);
+  dropPreparedFloors(messageId);
+  forgetTtsItems(messageId);
+  scheduleTtsDecorate(messageId, { force: true });
+  return { changed: parsed.labels.size, kept: parsed.reused, sentences: scope.length };
+}
+
+/**
+ * What to do about a floor that already has an analysis: build on it, or start over.
+ *
+ * The choice only exists the second time — a floor nobody has analysed has nothing to build on.
+ */
+function askTtsRefine({ messageId, sentence = null }) {
+  return new Promise(resolve => {
+    document.getElementById(`${MODULE_ID}-refine`)?.remove();
+    const host = document.createElement('div');
+    host.id = `${MODULE_ID}-refine`;
+    host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;';
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = runtime.panelCss ?? '';
+    const backdrop = document.createElement('div');
+    backdrop.className = 'jy-ask-backdrop';
+    const short = sentence ? miniShort(sentence.text, 18) : '';
+    backdrop.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="重新分析">
+  <h3>重新分析第 ${messageId} 楼</h3>
+  <p>按你的意见改已有的分析：副模型不用再通读一遍正文，只看上次的结果和你的意见，快得多，也便宜。也可以丢掉重来。</p>
+  <div class="jy-ask-scope" data-jy-refine-scope>
+    <label><input type="radio" name="jy-refine-scope" value="sentence" checked>只改这一句${short ? `：${short}` : ''}</label>
+    <label><input type="radio" name="jy-refine-scope" value="floor"${sentence ? '' : ' checked'}>整楼都改</label>
+  </div>
+  <label class="jy-ask-field"><span>哪里不对（可以不写）</span><textarea data-jy-refine-feedback rows="2" placeholder="比如：说话人不对，这句是樱井说的；情绪不够饱满；语气太平"></textarea></label>
+  <div class="jy-ask-chips" data-jy-refine-chips>
+    <button type="button" data-chip="说话人不对">说话人不对</button>
+    <button type="button" data-chip="情绪不够饱满">情绪不够</button>
+    <button type="button" data-chip="情绪太夸张了">情绪太过</button>
+    <button type="button" data-chip="语气太平，没起伏">语气太平</button>
+    <button type="button" data-chip="非语言声音太多了">声音太多</button>
+  </div>
+  <div class="jy-ask-actions"><button type="button" class="is-primary" data-jy-refine="refine">按意见改</button><button type="button" data-jy-refine="fresh">丢掉重来（整楼）</button><button type="button" data-jy-refine="cancel">取消</button></div>
+</div>`;
+    if (!sentence) backdrop.querySelector('[data-jy-refine-scope] label')?.remove();
+    shadow.append(style, backdrop);
+    const finish = choice => {
+      const scope = shadow.querySelector('[name="jy-refine-scope"]:checked')?.value ?? 'floor';
+      const feedback = shadow.querySelector('[data-jy-refine-feedback]')?.value.trim() ?? '';
+      host.remove();
+      document.removeEventListener('keydown', onKey, true);
+      resolve({ choice, scope: sentence ? scope : 'floor', feedback });
+    };
+    const onKey = event => {
+      if (event.key === 'Escape') { event.preventDefault(); finish('cancel'); }
+    };
+    backdrop.addEventListener('click', event => {
+      const chip = event.target.closest('[data-chip]');
+      if (chip) {
+        const box = shadow.querySelector('[data-jy-refine-feedback]');
+        box.value = box.value.trim() ? `${box.value.trim()}；${chip.dataset.chip}` : chip.dataset.chip;
+        box.focus();
+        return;
+      }
+      const button = event.target.closest('[data-jy-refine]');
+      if (button) finish(button.dataset.jyRefine);
+      else if (event.target === backdrop) finish('cancel');
+    });
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(host);
+    shadow.querySelector('[data-jy-refine-feedback]')?.focus();
+  });
+}
+
 /**
  * Keeps the reader's version of one sentence and makes its audio.
  *
@@ -8602,7 +8747,7 @@ async function openMiniWindow() {
     <ul class="jy-mini-steps" data-jy-tts-steps hidden></ul>
     <div class="jy-mini-links">
       <button type="button" class="jy-text-button" data-jy-action="tts-read-floor" title="从头朗读这一楼">从头读</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="丢掉这一楼的分析结果，让副模型重新细读一遍">重新细读</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="按你的意见改这一楼的分析，或者丢掉重来">重新分析</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-download" title="把这段音频保存到本地">保存到本地</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-locate" title="把聊天滚到正在读的句子">定位到正文</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-copy-analysis" title="把这一楼的分析结果复制成 JSON">复制分析</button>
@@ -8622,6 +8767,7 @@ async function openMiniWindow() {
     <div class="jy-mini-inspect-prosody"><label><span class="jy-label">语速</span><input type="number" data-jy-tts-speed min="0.5" max="2" step="0.05"></label><label><span class="jy-label">音量 dB</span><input type="number" data-jy-tts-volume min="-20" max="20" step="1"></label></div>
     <div class="jy-mini-inspect-actions">
       <button type="button" class="jy-button jy-button-primary" data-jy-action="tts-apply" hidden>重新生成并播放</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-refine-sentence" title="说一句哪里不对，让副模型只改这一句的分析">改这一句的分析</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-reset" hidden>恢复自动</button>
     </div>
     <p class="jy-muted" data-jy-tts-note></p>
@@ -10125,15 +10271,33 @@ async function openMiniWindow() {
         };
         await copyText(JSON.stringify(payload, null, 2));
         toast('success', `第 ${messageId} 楼的分析已复制（${payload.sentences.length} 句）。`);
-      } else if (action === 'tts-reanalyze') {
+      } else if (action === 'tts-reanalyze' || action === 'tts-refine-sentence') {
         const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? viewFloor ?? latestAssistantMessageId(getContext());
         if (!Number.isInteger(messageId)) throw new Error('当前聊天里还没有 AI 楼层。');
-        button.textContent = '细读中…';
-        await reanalyzeTtsFloor(messageId, inspecting?.side ?? null);
+        const side = inspecting?.side ?? null;
+        const sentenceId = action === 'tts-refine-sentence' ? inspecting?.utteranceId ?? null : null;
+        const prepared = await ttsPrepared(messageId, side);
+        // Nothing to build on: a floor nobody has analysed just gets its first pass.
+        // Anything already labelled — by the model or by the translation's own skeleton — can be corrected.
+        const analysed = runtime.tts.analysis.has(ttsLabelKey(prepared.floor))
+          || prepared.segments.some(segment => segment.speaker || segment.emotion);
+        let answer = { choice: 'fresh', scope: 'floor', feedback: '' };
+        if (analysed || sentenceId !== null) {
+          const sentence = sentenceId === null ? null : prepared.segments.find(segment => segment.id === sentenceId) ?? null;
+          answer = await askTtsRefine({ messageId, sentence });
+        }
+        if (answer.choice === 'cancel') return;
+        button.textContent = '分析中…';
+        if (answer.choice === 'refine') {
+          const result = await refineTtsAnalysis(messageId, { side, utteranceId: answer.scope === 'sentence' ? sentenceId : null, feedback: answer.feedback });
+          toast('success', `改了 ${result.changed} 句，${result.kept} 句保持原样；改动的句子下次播放时重做音频。`);
+        } else {
+          await reanalyzeTtsFloor(messageId, side);
+          toast('success', `第 ${messageId} 楼重新分析完了，已有的音频保留，改了的句子下次播放时重做。`);
+        }
         if (inspecting?.messageId === messageId) await renderInspector(messageId, inspecting.utteranceId, { pinned: true, side: inspecting.side });
         sentencesSignature = '';
         void renderSentences({ force: true });
-        toast('success', `第 ${messageId} 楼重新分析完了，已有的音频保留，改了的句子下次播放时重做。`);
       } else if (action === 'mini-translate' || action === 'mini-repair') {
         if (!Number.isInteger(viewFloor)) throw new Error('当前聊天里还没有 AI 楼层。');
         await startTranslation(viewFloor, { force: false });
@@ -10951,6 +11115,8 @@ export const __testing = Object.freeze({
   floorButtonsOn,
   floorButtonMode,
   planTtsLineButtons,
+  refineTtsAnalysis,
+  currentTtsLabels,
   ttsObjectUrl,
   dropTtsObjectUrls,
   apiFloor,

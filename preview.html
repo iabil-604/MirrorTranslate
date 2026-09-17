@@ -115,6 +115,14 @@
       const body = user ? JSON.parse(user.content) : { segments: [{ id: 1 }] };
       // The read-aloud analysis: labels by id, the speaker taken from a name in the narration before a
       // quote, and a mood from the closing punctuation.
+      if (body.task === 'refine_voices_for_audiobook') {
+        // The stand-in director takes the note: whoever was named is now 樱井, everything else stands.
+        const wanted = /说话人/.test(String(body.feedback ?? '')) ? '樱井' : null;
+        const voices = (body.utterances ?? []).map((item, index) => (index === 0 && wanted
+          ? { id: item.id, type: 'dialogue', speaker: wanted, emotion: 'nervous' }
+          : { id: item.id }));
+        return JSON.stringify({ voices });
+      }
       if (body.task === 'label_utterances_for_audiobook' || body.task === 'sketch_voices_for_audiobook' || body.task === 'direct_voices_for_audiobook') {
         const deep = body.task === 'direct_voices_for_audiobook';
         let lastName = '樱井';

@@ -9,9 +9,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.24.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.24.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.24.1';
+} from './core.js?v=0.25.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.25.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.25.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -416,6 +416,18 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
     '每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。',
     '{{references_rule}}',
   ].join('\n'),
+  refine: [
+    '你是有声小说的配音助手。下面是一楼正文里的几句话、上一次给它们的标注（current），还有用户对上一次结果的意见（feedback）。你的工作不是重新通读正文，而是按用户的意见修正上一次的标注。',
+    '只改用户的意见涉及到的句子。意见没有说到的句子，只输出 {"id":N}，表示上一次的标注原样保留——这是最重要的一条，不要把没提到的句子重写一遍。',
+    '只输出一个 JSON 对象，不要任何解释，格式和上一次一样：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","sounds":[{"at":"start","tag":"英文声音词"}]}]}',
+    '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。',
+    '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称。用户说「说话人不对」时，重新判断这几句到底是谁在说，参考前后文和 roster。',
+    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个。用户说「情绪不够」就换一个更贴切、更强的词；说「太夸张」就换平一点的；不要自己造词，不要加 slightly、very 这类程度词。',
+    '4. tone：可选，只能取 tones 列表里的一个；sounds：只能取 sounds 列表里的词，at 是 start 或 end。用户嫌声音多就删掉，嫌少就在真的合适的地方加。',
+    '5. styles 是角色的表达习惯和用户定下的规则，改的时候要遵守。',
+    '6. 每个 id 最多出现一次，不要输出 text。',
+    '{{references_rule}}',
+  ].join('\n'),
   // The older name of the simple prompt, for settings that still say it.
   get light() { return this.simple; },
 });
@@ -463,6 +475,40 @@ export function buildTtsAnalysisMessages(utterances, { roster = [], characterNam
     ...(styleList.length ? { styles: styleList } : {}),
     ...(leads.length ? { lead: leads } : {}),
     utterances: (Array.isArray(utterances) ? utterances : []).map(item => (references.length
+      ? { id: item.id, line: item.lineId, kind: item.kind, text: item.anchor }
+      : { id: item.id, kind: item.kind, text: item.anchor })),
+    ...(references.length ? { translations: references } : {}),
+  };
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: JSON.stringify(input) },
+  ];
+}
+
+/**
+ * The same question as the simple reading, with last time's answer and what the reader made of it.
+ *
+ * The sentences sent are only the ones in scope, so fixing one line costs one short request rather
+ * than another pass over the floor.
+ */
+export function buildRefineAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, systemPrompt = '', styles = null, current = null, feedback = '' } = {}) {
+  const references = referenceLines(translations);
+  const system = fillPrompt(String(systemPrompt ?? '').trim() || DEFAULT_TTS_PROMPTS.refine, { userName, references: references.length > 0 });
+  const styleList = styleEntries(styles);
+  const list = Array.isArray(utterances) ? utterances : [];
+  const known = current instanceof Map ? current : new Map();
+  const input = {
+    task: 'refine_voices_for_audiobook',
+    ...(characterName ? { character: characterName } : {}),
+    ...(userName ? { user: userName } : {}),
+    roster: rosterList(roster),
+    emotions: FISH_EMOTIONS,
+    tones: FISH_TONES,
+    sounds: FISH_SOUNDS,
+    ...(styleList.length ? { styles: styleList } : {}),
+    feedback: String(feedback ?? '').slice(0, 600),
+    current: list.map(item => ({ id: item.id, ...(known.get(item.id) ?? {}) })),
+    utterances: list.map(item => (references.length
       ? { id: item.id, line: item.lineId, kind: item.kind, text: item.anchor }
       : { id: item.id, kind: item.kind, text: item.anchor })),
     ...(references.length ? { translations: references } : {}),
