@@ -917,3 +917,88 @@ test('a re-made paragraph is heard, not replayed: the urls of the take it replac
   __testing.dropTtsObjectUrls('rec-1');
   assert.equal(__testing.ttsObjectUrl('rec-2#0', { size: 9 }), other, 'only the recording named is dropped');
 });
+
+test('the public interface reads text another extension hands over, in that character\'s voice', async t => {
+  restoreGlobals(t);
+  let subModelCalls = 0;
+  mockHost('tts-api', { async processRequest() { subModelCalls += 1; return { content: '{"voices":[]}' }; } });
+  const settings = __testing.configureForTest({
+    initialized: true,
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'simple', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', range: 'dialogue', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '樱井', aliases: ['桜井'], voiceId: 'voice-sakurai' }] },
+    },
+  });
+  t.after(() => __testing.configureForTest({ initialized: false }));
+
+  // The text becomes a floor of its own: one paragraph per line, nothing touching the chat.
+  const floor = await __testing.apiFloor('  今天也来了啊。\n\n等你很久了。  ', { speaker: '樱井' });
+  assert.deepEqual(floor.lines, [{ lineId: 1, text: '今天也来了啊。' }, { lineId: 2, text: '等你很久了。' }]);
+  assert.match(floor.floorId, /^jy-api\|/);
+  assert.equal(floor.source, 'api');
+  await assert.rejects(__testing.apiFloor('   '), /没有可朗读的文字/);
+  await assert.rejects(__testing.apiFloor('字'.repeat(20001)), /20000/);
+  // Markup a caller pasted is stripped before anything is billed for reading it aloud.
+  assert.deepEqual((await __testing.apiFloor('<p>你好<br>世界</p>')).lines.map(line => line.text), ['你好', '世界']);
+
+  const calls = mockFish();
+  const session = await __testing.apiSpeak({ text: '今天也来了啊。\n等你很久了。', speaker: '樱井', play: false });
+  await session.done;
+  assert.equal(session.total, 2, 'one item per paragraph');
+  assert.equal(subModelCalls, 0, 'no analysis unless it was asked for');
+  assert.equal(calls.length, 2, 'one Fish request per paragraph');
+  assert.deepEqual(calls.map(call => call.body.reference_id), ['voice-sakurai', 'voice-sakurai'], 'the voice the reader registered for that name');
+  assert.deepEqual(calls.map(call => call.body.text), ['今天也来了啊。', '等你很久了。'], 'the words go out as given');
+  assert.equal(session.playing, false);
+
+  // Said twice, asked for once.
+  const again = await __testing.apiSpeak({ text: '今天也来了啊。\n等你很久了。', speaker: '樱井', play: false });
+  await again.done;
+  assert.equal(calls.length, 2, 'the second reading is the cached one');
+  assert.equal(again.cached, true);
+
+  // The reader's 朗读范围 belongs to their chat: a caller's text is read whole even in dialogue-only.
+  assert.equal(settings.tts.range, 'dialogue');
+
+  // No speaker named: the narrator's voice.
+  const narrated = await __testing.apiSpeak({ text: '从前有一座山。', play: false });
+  await narrated.done;
+  assert.equal(calls.at(-1).body.reference_id, 'voice-narrator');
+
+  // Asking for the analysis costs exactly one sub-model call.
+  await (await __testing.apiSpeak({ text: '「你来了啊。」', speaker: '樱井', analyze: true, play: false })).done;
+  assert.equal(subModelCalls, 1);
+
+  // Switched off, the door says so instead of throwing something a caller cannot show a user.
+  __testing.configureForTest({ settings: { tts: { ...settings.tts, enabled: false } } });
+  await assert.rejects(__testing.apiSpeak({ text: '你好' }), /没有打开镜译的朗读功能/);
+  __testing.configureForTest({ settings: { tts: { ...settings.tts, enabled: true, fish: { ...FISH, key: '' } } } });
+  await assert.rejects(__testing.apiSpeak({ text: '你好' }), /还没有在镜译里填 Fish Audio/);
+});
+
+test('the public interface announces itself on the page, and says what it can do before it is asked', t => {
+  restoreGlobals(t);
+  mockHost('tts-api-global');
+  __testing.configureForTest({
+    settings: {
+      tts: { enabled: true, narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '樱井', aliases: ['桜井'], voiceId: 'voice-sakurai' }, { name: '老胡', aliases: [], voiceId: '' }] },
+    },
+  });
+  __testing.installPublicApi();
+  const api = globalThis.__JINGYI__;
+  assert.ok(api, 'the door exists');
+  assert.equal(api.tts.apiVersion, 1);
+  assert.equal(typeof api.tts.speak, 'function');
+  assert.equal(typeof api.tts.read, 'function');
+  const status = api.tts.status();
+  assert.equal(status.enabled, true);
+  assert.equal(status.hasKey, true);
+  assert.equal(status.provider, 'fish');
+  const voices = api.tts.voices();
+  assert.deepEqual(voices.find(voice => voice.name === '樱井'), { name: '樱井', aliases: ['桜井'], hasOwnVoice: true });
+  assert.equal(voices.find(voice => voice.name === '老胡').hasOwnVoice, false, 'a name with no voice of its own still answers');
+  assert.equal(Object.isFrozen(api), true, 'a caller cannot rewrite the door');
+  delete globalThis.__JINGYI__;
+});

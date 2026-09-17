@@ -10579,6 +10579,243 @@ function forceActivateWorldInfoFromText(text) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The public interface: another extension hands over text and a character, and hears it read.
+//
+// Everything the reader already configured applies — which voice that character has, their console,
+// the punctuation tags, the audio settings, their own Fish key and its quota. The caller never sees
+// the key, never touches the chat, and pays nothing of its own. Audio is cached by content, so the
+// same greeting said twice is asked for once.
+// ---------------------------------------------------------------------------------------------
+
+const PUBLIC_API_NAME = '__JINGYI__';
+const PUBLIC_API_VERSION = 1;
+// One synthetic floor id for everything the interface reads: a second call replaces the first.
+const API_FLOOR_PREFIX = 'jy-api';
+
+/** Text somebody handed us, shaped as a floor so the whole reading pipeline applies to it unchanged. */
+async function apiFloor(text, { speaker = '', lang = '' } = {}) {
+  const body = plainLineText(String(text ?? '')).trim();
+  if (!body) throw new Error('没有可朗读的文字。');
+  if (body.length > 20000) throw new Error('一次最多朗读 20000 字，请分几次。');
+  const lines = body.split('\n').map(line => line.trim()).filter(Boolean).map((line, index) => ({ lineId: index + 1, text: line }));
+  const version = await hashText(JSON.stringify([lines.map(line => line.text), speaker, lang]));
+  return {
+    chatId: API_FLOOR_PREFIX,
+    messageId: -1,
+    swipeId: 0,
+    side: 'translation',
+    floorId: `${API_FLOOR_PREFIX}|${version}`,
+    version,
+    lines,
+    annotations: new Map(),
+    references: null,
+    sources: null,
+    source: 'api',
+    complete: true,
+    apiSpeaker: speaker,
+    apiLang: lang,
+  };
+}
+
+/** Who says it: the character the caller named, in the voice the reader registered for them. */
+function apiLabels(utterances, { speaker = '', lang = '' } = {}) {
+  const named = String(speaker ?? '').trim();
+  return new Map(utterances.map(item => [item.id, {
+    type: named ? 'dialogue' : 'narration',
+    ...(named ? { speaker: named } : {}),
+    ...(lang ? { lang } : {}),
+  }]));
+}
+
+function apiTtsSettings() {
+  const settings = runtime.settings;
+  const tts = ttsSettings(settings);
+  if (!runtime.initialized) throw new Error('镜译还没启动完，稍后再试。');
+  if (!tts.enabled) throw new Error('用户没有打开镜译的朗读功能。');
+  if (!tts.fish.key) throw new Error('用户还没有在镜译里填 Fish Audio 的 API Key。');
+  return { settings, tts };
+}
+
+/**
+ * Read one piece of text aloud.
+ *
+ * Resolves as soon as the first paragraph is sounding, with a handle for the rest: what is playing,
+ * pause, carry on, stop, and a promise for the end. A long story is cut at its paragraphs and each is
+ * one Fish request, the next one made while this one plays.
+ */
+async function apiSpeak({ text, speaker = '', lang = '', analyze = false, play = true, signal = null } = {}) {
+  const { settings, tts } = apiTtsSettings();
+  const floor = await apiFloor(text, { speaker, lang });
+  const utterances = ttsUtterances(floor, settings);
+  if (!utterances.length) throw new Error('没有可朗读的文字。');
+  let labels = apiLabels(utterances, { speaker, lang });
+  let voices = null;
+  if (analyze) {
+    // The simple reading only: who is speaking, in what mood, in Fish's own words. One sub-model call.
+    const analysed = await analyzeTtsFloor(floor, utterances, settings, 'simple', {});
+    for (const [id, label] of analysed.labels) labels.set(id, { ...labels.get(id), ...label });
+    voices = analysed.voices;
+  }
+  const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices });
+  // The reader's 朗读范围 is about their chat, not about what a caller asked for: all of it is read.
+  const { items } = await ttsItemsFor(floor, segments, settings, { range: 'all' });
+  if (!items.length) throw new Error('没有可朗读的文字。');
+  // Only one thing sounds at a time, and a floor being read gives way to what was just asked for.
+  stopTts();
+  const session = apiSession(floor, items, settings, { play, signal });
+  await session.started;
+  return session.handle;
+}
+
+function apiSession(floor, items, settings, { play, signal }) {
+  const state = { index: 0, total: items.length, playing: false, stopped: false, seconds: 0, cached: true };
+  const listeners = new Set();
+  const announce = () => {
+    for (const listener of listeners) {
+      try { listener({ index: state.index, total: state.total, playing: state.playing, seconds: state.seconds }); } catch { /* a caller's own bug is not ours */ }
+    }
+  };
+  let begin = null;
+  let fail = null;
+  const started = new Promise((resolve, reject) => { begin = resolve; fail = reject; });
+  const run = async () => {
+    try {
+      let index = 0;
+      while (index < items.length && !state.stopped) {
+        if (signal?.aborted) break;
+        const item = items[index];
+        const entry = await resolveTtsEntry(floor, items, item, settings);
+        if (!entry.cached) state.cached = false;
+        if (state.stopped || signal?.aborted) break;
+        const { record, index: at } = entry;
+        const part = record.timeline[at].part;
+        // Everything that shares this part plays in one go, the way a paragraph was recorded.
+        let last = at;
+        let ahead = index;
+        for (let offset = index; offset < items.length; offset += 1) {
+          const found = record.timeline.findIndex(candidate => candidate.id === items[offset].segment.id && candidate.part === part);
+          if (found < 0) break;
+          last = found;
+          ahead = offset;
+        }
+        const from = playbackWindow(record.timeline, at, record.parts[part]?.duration);
+        const to = playbackWindow(record.timeline, last, record.parts[part]?.duration);
+        state.index = index;
+        if (!play) {
+          state.seconds += Math.max(0, to.end - from.start);
+          index = ahead + 1;
+          announce();
+          continue;
+        }
+        const url = ttsObjectUrl(`${record.key}#${part}`, record.parts[part].blob);
+        // The next paragraph is made while this one is heard.
+        const next = items[ahead + 1];
+        if (next) void resolveTtsEntry(floor, items, next, settings).catch(() => {});
+        state.playing = true;
+        begin?.();
+        begin = null;
+        announce();
+        const outcome = await playTtsAudio(url, {
+          start: from.start,
+          end: to.end,
+          onTime: time => {
+            state.seconds = Math.max(0, time - from.start);
+            announce();
+          },
+        });
+        if (outcome === 'error') throw new Error('浏览器播放这段音频失败。换成 mp3 格式通常能解决。');
+        if (outcome === 'stopped' || state.stopped) break;
+        index = ahead + 1;
+      }
+      state.playing = false;
+      state.index = Math.min(state.index, items.length - 1);
+      announce();
+    } catch (error) {
+      state.playing = false;
+      state.stopped = true;
+      announce();
+      if (begin) fail?.(error);
+      throw error;
+    } finally {
+      begin?.();
+      begin = null;
+    }
+  };
+  const done = run();
+  // A caller that never looks at the promise must not raise an unhandled rejection in the host page.
+  done.catch(() => {});
+  const handle = Object.freeze({
+    get playing() { return state.playing; },
+    get index() { return state.index; },
+    get total() { return state.total; },
+    get cached() { return state.cached; },
+    done,
+    onProgress(listener) {
+      if (typeof listener !== 'function') return () => {};
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    pause() {
+      runtime.tts.player?.audio.pause();
+      state.playing = false;
+      announce();
+    },
+    resume() {
+      void runtime.tts.player?.audio.play().catch(() => {});
+      state.playing = true;
+      announce();
+    },
+    stop() {
+      state.stopped = true;
+      stopTtsPlayback();
+      state.playing = false;
+      announce();
+    },
+  });
+  return { started: play ? started : done.then(() => {}), handle };
+}
+
+function installPublicApi() {
+  if (typeof globalThis === 'undefined') return;
+  const api = {
+    name: APP_NAME,
+    version: APP_VERSION,
+    ready: null,
+    tts: Object.freeze({
+      apiVersion: PUBLIC_API_VERSION,
+      /** Whether reading aloud is on and usable right now. Ask this before showing a read button. */
+      status() {
+        const tts = ttsSettings();
+        return {
+          enabled: tts.enabled === true,
+          provider: 'fish',
+          hasKey: Boolean(tts.fish.key),
+          model: tts.fish.model,
+          voices: ttsVoicesFor().filter(row => row.voiceId).length,
+          busy: Boolean(runtime.tts.transport && runtime.tts.transport.state !== 'idle'),
+        };
+      },
+      /** The characters the reader registered a voice for, with the names they are known by. */
+      voices() {
+        return ttsVoicesFor().map(row => ({
+          name: row.name,
+          aliases: [...(row.aliases ?? [])],
+          hasOwnVoice: Boolean(row.voiceId),
+        }));
+      },
+      speak: options => apiSpeak(options ?? {}),
+      read: options => apiSpeak(options ?? {}),
+      /** Whatever this interface is saying, stopped. A floor being read is left alone. */
+      stop() {
+        stopTtsPlayback();
+      },
+    }),
+  };
+  api.ready = Promise.resolve(api);
+  globalThis[PUBLIC_API_NAME] = Object.freeze(api);
+}
+
 globalThis[INTERCEPTOR_NAME] = interceptGeneration;
 
 export async function onActivate() {
@@ -10587,6 +10824,7 @@ export async function onActivate() {
   globalThis[INTERCEPTOR_NAME] = interceptGeneration;
   initializeSettings();
   runtime.initialized = true;
+  installPublicApi();
   syncSpeakerStylesheet(runtime.settings);
   scheduleEntries();
   registerRuntimeEvents();
@@ -10687,6 +10925,10 @@ export const __testing = Object.freeze({
   planTtsLineButtons,
   ttsObjectUrl,
   dropTtsObjectUrls,
+  apiFloor,
+  apiLabels,
+  apiSpeak,
+  installPublicApi,
   translateMessage,
   createTtsTransport,
   chunkTtsUtterances,
