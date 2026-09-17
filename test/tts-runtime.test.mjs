@@ -6,6 +6,7 @@ import {
   assembleBilingual,
   createTranslationSignature,
   hashText,
+  mergeSettings,
   normalizeChannel,
   segmentSource,
 } from '../core.js';
@@ -813,4 +814,106 @@ test('a look at the floor asks nothing; the reading asks once and the look then 
   assert.equal(requests.length, 1);
   assert.equal(again.depth, 'deep');
   assert.equal(again.voice?.direction, '压着火，装冷淡');
+});
+
+test('a floor plans one pair of buttons per paragraph, in reading order', () => {
+  const segments = [
+    { id: 1, lineId: 1, type: 'narration', text: '傍晚的教室里，一个人也没有。' },
+    { id: 2, lineId: 2, type: 'narration', text: '樱井回过头，' },
+    { id: 3, lineId: 2, type: 'dialogue', text: '你来了啊' },
+    { id: 4, lineId: 2, type: 'narration', text: '轻轻笑了一下。' },
+    { id: 5, lineId: 5, type: 'dialogue', text: '明天，也能在这里见面吗？' },
+  ];
+  const plan = __testing.planTtsLineButtons(segments);
+  assert.deepEqual(plan.map(line => line.lineId), [1, 2, 5], 'one entry per paragraph, paragraphs in the order they are read');
+  assert.deepEqual(plan.map(line => line.ids), [[1], [2, 3, 4], [5]], 'every sentence of the paragraph, so the buttons can hang off the last located one');
+  assert.deepEqual(__testing.planTtsLineButtons([]), []);
+  assert.deepEqual(__testing.planTtsLineButtons(null), [], 'nothing readable is no buttons, not a throw');
+  // Only what will be read is planned: with dialogue alone, a paragraph's narration is not in the list.
+  const dialogue = segments.filter(segment => segment.type === 'dialogue');
+  assert.deepEqual(__testing.planTtsLineButtons(dialogue).map(line => line.ids), [[3], [5]]);
+  // The plan is pure: the same segments twice give the same answer.
+  assert.deepEqual(__testing.planTtsLineButtons(segments), plan);
+});
+
+test('the floor button modes: paragraphs by default, the older names carried over', () => {
+  assert.equal(__testing.floorButtonMode({ floorButtons: 'line' }), 'line');
+  assert.equal(__testing.floorButtonMode({ floorButtons: 'sentence' }), 'sentence');
+  assert.equal(__testing.floorButtonMode({ floorButtons: 'off' }), 'off');
+  assert.equal(__testing.floorButtonMode({}), 'line', 'no setting reads as paragraphs');
+  assert.equal(__testing.floorButtonMode({ floorButtons: 'auto' }), 'line', 'the old device-dependent mode is paragraphs now');
+  assert.equal(__testing.floorButtonMode({ floorButtons: 'on' }), 'sentence', 'the old always-on mode kept its sentences');
+  assert.equal(__testing.floorButtonsOn({ floorButtons: 'off' }), false);
+  assert.equal(__testing.floorButtonsOn({ floorButtons: 'line' }), true);
+  // Stored settings are remapped once, at normalisation, so nobody silently loses their choice.
+  assert.equal(mergeSettings({ floorButtons: 'auto' }).floorButtons, 'line');
+  assert.equal(mergeSettings({ floorButtons: 'on' }).floorButtons, 'sentence');
+  assert.equal(mergeSettings({ floorButtons: 'off' }).floorButtons, 'off');
+  assert.equal(mergeSettings({ floorButtons: 'nonsense' }).floorButtons, 'line');
+  assert.equal(mergeSettings({}).floorButtons, 'line');
+});
+
+test('a Fish request that failed on the way out is asked again; a refusal is answered once', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-retry');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', narratorVoice: 'voice-narrator', fish: { ...FISH, retries: 2 } } },
+  });
+  context.chat.push(await translatedFloor('空は青い。', [[1, '天空很蓝。']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+
+  // Two server errors, then the audio: one paragraph, three calls, no error surfaced.
+  const calls = [];
+  let attempt = 0;
+  const good = mockFish();
+  const speaking = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push(url);
+    attempt += 1;
+    if (attempt <= 2) return new Response('upstream exploded', { status: 502 });
+    return speaking(url, init);
+  };
+  const entry = await __testing.resolveTtsEntry(floor, items, items[0], settings);
+  assert.equal(calls.length, 3, 'two failures and the take that worked');
+  assert.equal(entry.cached, false);
+  assert.ok(good.length >= 1, 'the last attempt went through the speaking mock');
+
+  // A refusal is not worth repeating: 402 comes back once, as an error the reader can act on.
+  const refusals = [];
+  globalThis.fetch = async url => {
+    refusals.push(url);
+    return new Response(JSON.stringify({ status: 402, message: 'Insufficient API credit.' }), { status: 402 });
+  };
+  const second = __testing.configureForTest({ settings: { tts: { ...settings.tts, fish: { ...settings.tts.fish, retries: 3 } } } });
+  context.chat.push(await translatedFloor('雨が降る。', [[1, '下雨了。']], second));
+  const other = await __testing.collectTtsFloor(1, second);
+  const prepared = await __testing.prepareTtsSegments(other, second);
+  const made = await __testing.ttsItemsFor(other, prepared.segments, second);
+  await assert.rejects(__testing.resolveTtsEntry(other, made.items, made.items[0], second), /余额不足/);
+  assert.equal(refusals.length, 1, 'a wallet that is empty stays empty, however many times it is asked');
+});
+
+test('a re-made paragraph is heard, not replayed: the urls of the take it replaces are let go', t => {
+  restoreGlobals(t);
+  const made = [];
+  const revoked = [];
+  globalThis.URL.createObjectURL = blob => {
+    const url = `blob:take-${made.length}`;
+    made.push({ url, blob });
+    return url;
+  };
+  globalThis.URL.revokeObjectURL = url => revoked.push(url);
+  // The same content-addressed key twice: without the purge the second take plays the first one's url.
+  const first = __testing.ttsObjectUrl('rec-1#0', { size: 1 });
+  assert.equal(__testing.ttsObjectUrl('rec-1#0', { size: 2 }), first, 'the cache answers for a key it already has');
+  __testing.dropTtsObjectUrls('rec-1');
+  assert.deepEqual(revoked, [first], 'the url of the take being replaced is released');
+  const second = __testing.ttsObjectUrl('rec-1#0', { size: 2 });
+  assert.notEqual(second, first, 'the take that replaces it gets a url of its own');
+  // Another recording's urls are left alone.
+  const other = __testing.ttsObjectUrl('rec-2#0', { size: 3 });
+  __testing.dropTtsObjectUrls('rec-1');
+  assert.equal(__testing.ttsObjectUrl('rec-2#0', { size: 9 }), other, 'only the recording named is dropped');
 });

@@ -64,7 +64,8 @@ import {
   readAnnotationFields,
   MARK_TAGS,
   RECOMMENDED_MARKS,
-} from './core.js?v=0.23.0';
+  FLOOR_BUTTON_MODES,
+} from './core.js?v=0.24.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -112,14 +113,14 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.23.0';
-import { createTtsStore } from './tts-store.js?v=0.23.0';
+} from './tts.js?v=0.24.0';
+import { createTtsStore } from './tts-store.js?v=0.24.0';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.23.0';
+} from './processing.js?v=0.24.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -136,9 +137,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.23.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.23.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.23.0';
+} from './prompts.js?v=0.24.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.24.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.24.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -152,15 +153,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.23.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.23.0';
+} from './palette.js?v=0.24.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.24.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.23.0';
+} from './diagnostics.js?v=0.24.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -363,7 +364,7 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 匹配整行。纯边框、纯符号与标签行自动保留。</p></details>
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层每句后面的按钮</span><select data-jy-field="floorButtons"><option value="auto">自动（电脑显示，手机不显示）</option><option value="on">始终显示</option><option value="off">不显示，只在悬浮窗里点句子</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层里的朗读按钮</span><select data-jy-field="floorButtons"><option value="line">每段一个（默认，手机也有）</option><option value="sentence">每段一个，再加每句一个</option><option value="off">不显示，只在悬浮窗里点</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
 <details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
 <p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。</p>
@@ -382,13 +383,13 @@ const CONTROL_CENTER_MARKUP = `
 
 <section class="jy-page" data-jy-page="tts" role="tabpanel" hidden>
 <header class="jy-page-heading"><div><h1>朗读</h1><span class="jy-page-context">旁白和每个角色各用各的声音，多国语言各配各的音色，点哪句读哪句</span></div><button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button></header>
-<div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每一句后面会出现播放按钮和情绪按钮，底部有「朗读本楼」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
+<div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每个自然段后面会出现「播放」和「重新生成」两个按钮，底部有「朗读本楼」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep" disabled>深度分析（迭代中，暂不可选）</option></select></label><label><span class="jy-label">没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先整楼简单分析再读</option><option value="plain">直接读，不分析</option></select></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">分析用的副 API</span><select data-jy-tts-field="channelId"><option value="">跟随翻译的模型设置</option></select></label><label><span class="jy-label">分析每批句数</span><select data-jy-tts-field="batchSize"><option value="12">12 句（默认，第一批回来就出声）</option><option value="8">8 句</option><option value="20">20 句</option><option value="0">不分批（整楼一次）</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼翻译完成后自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">生成完自动播放（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
-<p class="jy-muted">分析只在你按播放、点单句或「朗读本楼」时才请求副模型，翻译完不会自己开始；勾了「自动生成音频」才会。分批：每批回来就先读这一批，后面的边读边分析，每批都带完整的背景资料，批数越多副模型的调用次数越多。手机上正文里默认不放每句的按钮（翻译台 →「楼层里每句的按钮」可以打开），单句播放和改句重生成都在悬浮窗的朗读页。</p>
+<p class="jy-muted">分析只在你按播放、点单句或「朗读本楼」时才请求副模型，翻译完不会自己开始；勾了「自动生成音频」才会。分批：每批回来就先读这一批，后面的边读边分析，每批都带完整的背景资料，批数越多副模型的调用次数越多。每个自然段后面的「播放」从这一段读起，「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
 <label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label>
@@ -400,6 +401,8 @@ const CONTROL_CENTER_MARKUP = `
 <label><span class="jy-label">模型</span><select data-jy-tts-fish="model"><option value="s2-pro">s2-pro</option><option value="s2.1-pro">s2.1-pro</option><option value="s2.1-pro-free">s2.1-pro-free（免费开发者档）</option><option value="drama-3-preview">drama-3-preview（预览版）</option><option value="s1">s1（旧版，不能一次用多个音色）</option></select></label>
 <label class="jy-check"><input type="checkbox" data-jy-tts-fish="viaProxy">经酒馆 CORS 代理发送</label>
 <label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-fish="baseUrl" placeholder="https://api.fish.audio" spellcheck="false"></label>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-tts-fish="timeoutSec" min="10" max="600" step="10"></label><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-tts-fish="retries" min="0" max="5" step="1"></label><label title="整楼拆成几段请求时，几段同时发。越大等得越短，Fish 提示限流（429）就调回 1。"><span class="jy-label">同时生成几段</span><select data-jy-tts-fish="concurrency"><option value="1">1（一段一段来，最稳）</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label></div>
+<p class="jy-muted">超时、重试和并发是这条连接怎么发请求，不影响声音。重试只在超时、断线和 Fish 自己出错（5xx）时发生；Key 不对、余额不足、限流（429）这些一次就停，重试也没用。</p>
 <p class="jy-muted" data-jy-tts-proxy-help></p>
 </div></details>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-voices"><summary class="jy-section-title"><span>03</span><h2>音色</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
@@ -429,10 +432,9 @@ const CONTROL_CENTER_MARKUP = `
 <label><span class="jy-label">音频格式</span><select data-jy-tts-fish="format"><option value="mp3">mp3（兼容最好）</option><option value="opus">opus（体积小，旧版 Safari 可能播不了）</option><option value="wav">wav（无损，体积大）</option></select></label><label><span class="jy-label">延迟与质量</span><select data-jy-tts-fish="latency"><option value="normal">normal（质量最好）</option><option value="balanced">balanced</option><option value="low">low（最快）</option></select></label>
 <label><span class="jy-label">语速（0.5–2）</span><input type="number" data-jy-tts-fish="speed" min="0.5" max="2" step="0.05"></label><label><span class="jy-label">音量调整 / dB</span><input type="number" data-jy-tts-fish="volume" min="-20" max="20" step="1"></label>
 <label><span class="jy-label">temperature</span><input type="number" data-jy-tts-fish="temperature" min="0" max="1" step="0.05"></label><label><span class="jy-label">top_p</span><input type="number" data-jy-tts-fish="topP" min="0" max="1" step="0.05"></label>
-<label><span class="jy-label">一次请求最多字数（超过就再拆一段）</span><input type="number" data-jy-tts-fish="maxChars" min="200" max="10000" step="100"></label><label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-tts-fish="timeoutSec" min="10" max="600" step="10"></label>
-<label><span class="jy-label">同时生成几段</span><select data-jy-tts-fish="concurrency"><option value="1">1（一段一段来，最稳）</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>
+<label><span class="jy-label">一次请求最多字数（超过就再拆一段）</span><input type="number" data-jy-tts-fish="maxChars" min="200" max="10000" step="100"></label>
 <label class="jy-check"><input type="checkbox" data-jy-tts-fish="normalize">数字与符号规范化（中英文读数更稳）</label>
-</div><p class="jy-muted">改任何一项声音参数，已经缓存的音频都会按新参数重新生成；「同时生成几段」除外，它只影响整楼拆成几段请求时的等待时间，Fish 限流（429）就调回 1。</p></details>
+</div><p class="jy-muted">改任何一项声音参数，已经缓存的音频都会按新参数重新生成。超时、重试和并发不算声音参数，改了不会让音频重做，它们在上面「Fish Audio」那一栏。</p></details>
 <details class="jy-advanced" data-jy-tts-preview-panel><summary>当前楼层的朗读结构</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-preview">分析最新一楼</button><button type="button" class="jy-button" data-jy-action="tts-pregenerate">生成最新一楼的音频（不播放）</button><button type="button" class="jy-button" data-jy-action="tts-copy-structure" hidden>复制朗读结构 JSON</button></div><div class="jy-tts-preview" data-jy-tts-preview></div></details>
 <div class="jy-advanced jy-tts-cache"><div class="jy-row-between"><div><h3>缓存</h3><p class="jy-muted" data-jy-tts-usage>正在读取…</p></div><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-clear-chat">清空本聊天的朗读缓存</button><button type="button" class="jy-button" data-jy-action="tts-clear-all">清空全部</button></div></div></div>
 <footer class="jy-footer"><span class="jy-save-note" data-jy-tts-save-note>修改后保存朗读设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-tts">保存朗读设置</button></footer>
@@ -2514,6 +2516,7 @@ async function fetchChannelModels() {
 const TTS_ICON_PLAY = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.2 3.3v9.4l7.3-4.7z"/></svg>';
 const TTS_ICON_STOP = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2"/></svg>';
 const TTS_ICON_PAUSE = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="4" y="3.6" width="2.9" height="8.8" rx="0.9"/><rect x="9.1" y="3.6" width="2.9" height="8.8" rx="0.9"/></svg>';
+const TTS_ICON_REDO = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M13 8a5 5 0 1 1-1.6-3.7" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/><path d="M12.9 2.6v2.9h-2.9z"/></svg>';
 const TTS_ICON_EDIT = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 4.6h10M3 8h10M3 11.4h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/><circle cx="6.2" cy="4.6" r="1.5"/><circle cx="10.4" cy="8" r="1.5"/><circle cx="7.6" cy="11.4" r="1.5"/></svg>';
 const TTS_RANGE_LABELS = Object.freeze({ all: '旁白 + 对白', dialogue: '只读对白', narration: '只读旁白' });
 const TTS_MODE_LABELS = Object.freeze({ off: '不分析', simple: '简单', deep: '深度' });
@@ -3076,18 +3079,49 @@ async function regenerateTtsSentence(messageId, utteranceId, side = null) {
   const prepared = await ttsPrepared(messageId, side);
   const item = prepared.items.find(candidate => candidate.segment.id === utteranceId);
   if (!item) throw new Error('这一句不在当前的朗读范围里。');
-  const entry = await findTtsEntry(prepared.floor, item, prepared.settings);
-  if (entry) {
-    await ttsStore().deleteAudio(entry.record.key).catch(() => {});
-    const key = ttsLabelKey(prepared.floor);
-    runtime.tts.recordings.set(key, (runtime.tts.recordings.get(key) ?? []).filter(record => record.key !== entry.record.key));
-    const transport = runtime.tts.transport;
-    if (transport?.messageId === messageId) {
-      stopTtsPlayback();
-      transport.current = null;
-    }
-  }
+  await dropTtsRecordings(prepared, [item]);
   await playTtsUtterance(messageId, utteranceId, side);
+}
+
+/** The same re-roll for a whole paragraph: Fish reads the same words differently each time it is asked. */
+async function regenerateTtsParagraph(messageId, lineId, side = null) {
+  const prepared = await ttsPrepared(messageId, side);
+  const items = prepared.items.filter(candidate => candidate.segment.lineId === lineId);
+  if (!items.length) throw new Error('这一段不在当前的朗读范围里。');
+  await dropTtsRecordings(prepared, items);
+  await playTtsParagraph(messageId, lineId, side);
+}
+
+/**
+ * The recordings of these sentences, dropped from the store, from the cache and from what is playing.
+ *
+ * They are matched by the unit they were made in, not by their text: two paragraphs can hold the same
+ * words, and re-rolling one of them must not take the other one's audio away. The object URLs go too —
+ * a new take is stored under the same content-addressed key, so a cached URL would replay the old one.
+ */
+async function dropTtsRecordings(prepared, items) {
+  const units = new Set();
+  for (const item of items) {
+    units.add(`line:${item.segment.lineId}`);
+    units.add(`sentence:${item.segment.id}`);
+  }
+  const keys = new Set();
+  for (const record of await ttsRecordings(prepared.floor)) {
+    if (units.has(record.unit)) keys.add(record.key);
+  }
+  if (!keys.size) return 0;
+  for (const key of keys) {
+    await ttsStore().deleteAudio(key).catch(() => {});
+    dropTtsObjectUrls(key);
+  }
+  const floorKey = ttsLabelKey(prepared.floor);
+  runtime.tts.recordings.set(floorKey, (runtime.tts.recordings.get(floorKey) ?? []).filter(record => !keys.has(record.key)));
+  const transport = runtime.tts.transport;
+  if (transport?.messageId === prepared.floor.messageId) {
+    stopTtsPlayback();
+    transport.current = null;
+  }
+  return keys.size;
 }
 
 /** Floors prepared for a look before the analysis landed are rebuilt on the next look. */
@@ -3147,7 +3181,30 @@ async function withTtsTimeout(signal, seconds, task) {
   }
 }
 
-async function fishRequest(path, fish, { method = 'POST', body, signal } = {}) {
+/**
+ * One Fish call, asked again when the failure is the kind that passes: a dropped connection, a
+ * timeout, or Fish's own 5xx. A refused key, an empty wallet or a rate limit is answered once — asking
+ * again would only spend the same refusal.
+ */
+async function fishRequest(path, fish, options = {}) {
+  const attempts = Math.max(0, Number(fish.retries) || 0) + 1;
+  let failure = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fishRequestOnce(path, fish, options);
+    } catch (error) {
+      if (isAbortError(error) || options.signal?.aborted) throw error;
+      const status = Number(error.status) || 0;
+      const worthRetrying = status === 0 || status >= 500;
+      if (!worthRetrying || attempt === attempts - 1) throw error;
+      failure = error;
+      recordDiagnostic('info', 'tts.retry', `Fish 请求失败，第 ${attempt + 1} 次重试：${safeError(error)}`, { path, status: status || null, attempt: attempt + 1, attempts });
+    }
+  }
+  throw failure;
+}
+
+async function fishRequestOnce(path, fish, { method = 'POST', body, signal } = {}) {
   const host = detectTtsHost();
   const viaProxy = fish.viaProxy !== false && host !== 'tauritavern';
   let response;
@@ -3520,6 +3577,16 @@ function ttsPlayer() {
 
 // Object URLs for recorded parts. A handful stay alive so replaying a sentence does not re-read the
 // blob; the one currently loaded is never revoked from under the player.
+/** The urls made from one recording, let go, so the take that replaces it is the one heard. */
+function dropTtsObjectUrls(recordKey) {
+  const urls = runtime.tts.urls;
+  for (const [key, url] of [...urls]) {
+    if (key !== recordKey && !key.startsWith(`${recordKey}#`)) continue;
+    if (url !== runtime.tts.player?.url) URL.revokeObjectURL(url);
+    urls.delete(key);
+  }
+}
+
 function ttsObjectUrl(key, blob) {
   const urls = runtime.tts.urls;
   if (urls.has(key)) return urls.get(key);
@@ -3612,6 +3679,9 @@ function highlightTtsUtterance(messageId, utteranceId, side = null) {
   runtime.tts.highlighted = { messageId, utteranceId, side: which };
   const button = ttsButton(messageId, utteranceId, which);
   if (button && !button.dataset.state) button.dataset.state = 'playing';
+  // The paragraph's button stays lit for every sentence of its own paragraph.
+  const lineButton = ttsLineButton(messageId, ttsLineOfUtterance(messageId, utteranceId), which);
+  if (lineButton && !lineButton.dataset.state) lineButton.dataset.state = 'playing';
   const range = runtime.tts.ranges.get(messageId)?.get(`${which}:${utteranceId}`);
   // The Custom Highlight API paints a range without wrapping it, so the floor's DOM stays untouched.
   if (registry && typeof globalThis.Highlight === 'function' && range) registry.set('jy-tts-current', new globalThis.Highlight(range));
@@ -3623,8 +3693,34 @@ function ttsButton(messageId, utteranceId, side = null) {
   return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-play[data-jy-tts-utt="${utteranceId}"][data-jy-tts-side="${which}"]`);
 }
 
-function setTtsButtonState(messageId, utteranceId, state, side = null) {
-  const button = ttsButton(messageId, utteranceId, side);
+function ttsLineButton(messageId, lineId, side = null) {
+  const which = side ?? primaryTtsSide();
+  if (lineId === null || lineId === undefined) return null;
+  return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-line-play[data-jy-tts-line="${lineId}"][data-jy-tts-side="${which}"]`);
+}
+
+/** Which paragraph a sentence of the floor being read belongs to; null when that floor is not the one open. */
+function ttsLineOfUtterance(messageId, utteranceId) {
+  const transport = runtime.tts.transport;
+  if (transport?.messageId !== messageId) return null;
+  return transport.items.find(item => item.segment.id === utteranceId)?.segment.lineId ?? null;
+}
+
+function setTtsButtonState(messageId, utteranceId, state, side = null, lineId = undefined) {
+  // Busy and playing belong to whichever of the two buttons the floor is wearing; both are marked so
+  // neither mode has to know about the other. The paragraph is passed in wherever the caller knows it:
+  // by the time a request settles the transport may be gone, and a mark nobody can find never clears.
+  const line = lineId === undefined ? ttsLineOfUtterance(messageId, utteranceId) : lineId;
+  const buttons = [ttsButton(messageId, utteranceId, side), ttsLineButton(messageId, line, side)];
+  for (const button of buttons) {
+    if (!button) continue;
+    if (state) button.dataset.state = state;
+    else delete button.dataset.state;
+  }
+}
+
+function setTtsLineState(messageId, lineId, state, side = null) {
+  const button = ttsLineButton(messageId, lineId, side);
   if (!button) return;
   if (state) button.dataset.state = state;
   else delete button.dataset.state;
@@ -3926,12 +4022,12 @@ async function runTtsTransport(transport) {
       const item = items[transport.index];
       scheduleTtsAhead(transport);
       setTransport(transport, { state: 'loading', message: '正在准备音频…' });
-      setTtsButtonState(transport.messageId, item.segment.id, 'busy', transport.side);
+      setTtsButtonState(transport.messageId, item.segment.id, 'busy', transport.side, item.segment.lineId);
       let entry;
       try {
         entry = await resolveTtsEntry(floor, items, item, settings, text => live() && setTransport(transport, { message: text }), (id, patch) => ttsStep(floor, id, patch), { single: transport.single, ...unitOf(item) });
       } finally {
-        setTtsButtonState(transport.messageId, item.segment.id, null, transport.side);
+        setTtsButtonState(transport.messageId, item.segment.id, null, transport.side, item.segment.lineId);
       }
       if (!live()) return;
       if (transport.generateOnly && !entry.cached) {
@@ -4014,8 +4110,15 @@ function stopTtsPlayback() {
   if (typeof document !== 'undefined') highlightTtsUtterance(null, null);
 }
 
+/** Nothing in a floor is still being made, so nothing in it still says it is. */
+function clearTtsBusyMarks(messageId) {
+  if (typeof document === 'undefined') return;
+  for (const button of document.querySelectorAll(`#chat .mes[mesid="${messageId}"] [data-state="busy"]`)) delete button.dataset.state;
+}
+
 function stopTtsTransport(transport, clearStatus = true) {
   if (!transport) return;
+  clearTtsBusyMarks(transport.messageId);
   transport.generation += 1;
   transport.wake?.();
   stopTtsPlayback();
@@ -4160,7 +4263,7 @@ async function playTtsUtterance(messageId, utteranceId, side = null) {
   }
   // A second click while the first is still preparing this floor changes nothing.
   if (existing?.state === 'loading' && existing.messageId === messageId && existing.side === wantedSide) return;
-  setTtsButtonState(messageId, utteranceId, 'busy');
+  setTtsButtonState(messageId, utteranceId, 'busy', wantedSide);
   try {
     const transport = await createTtsTransport(messageId, { single: true, fromUtterance: utteranceId, side: wantedSide });
     if (!transport) {
@@ -4175,7 +4278,49 @@ async function playTtsUtterance(messageId, utteranceId, side = null) {
     else setTtsStatus(messageId, safeError(error), 'error');
     toast('error', safeError(error));
   } finally {
-    setTtsButtonState(messageId, utteranceId, null);
+    setTtsButtonState(messageId, utteranceId, null, wantedSide);
+  }
+}
+
+/**
+ * Read from the top of one paragraph and keep going.
+ *
+ * A sentence click stops at the end of its sentence; a paragraph click is how the floor is read from
+ * a place, so it leaves `single` off and the reading runs on into the paragraphs below it.
+ */
+async function playTtsParagraph(messageId, lineId, side = null) {
+  const wantedSide = side ?? primaryTtsSide();
+  const existing = runtime.tts.transport;
+  if (existing && existing.messageId === messageId && existing.side === wantedSide && existing.floor && existing.items.length) {
+    const index = existing.items.findIndex(item => item.segment.lineId === lineId);
+    if (index >= 0) {
+      if (existing.state === 'loading' && existing.index === index) return;
+      existing.generation += 1;
+      stopTtsPlayback();
+      existing.index = index;
+      existing.single = false;
+      existing.generateOnly = !ttsSettings().playAfterGenerate;
+      await runTtsTransport(existing);
+      return;
+    }
+  }
+  if (existing?.state === 'loading' && existing.messageId === messageId && existing.side === wantedSide) return;
+  setTtsLineState(messageId, lineId, 'busy', wantedSide);
+  try {
+    const prepared = await ttsPrepared(messageId, wantedSide);
+    const first = prepared.items.find(item => item.segment.lineId === lineId);
+    if (!first) throw new Error('这一段不在当前的朗读范围里。');
+    const transport = await createTtsTransport(messageId, { single: false, fromUtterance: first.segment.id, side: wantedSide });
+    if (!transport) return;
+    await runTtsTransport(transport);
+  } catch (error) {
+    if (isAbortError(error)) return;
+    const transport = runtime.tts.transport;
+    if (transport?.messageId === messageId) setTransport(transport, { state: 'error', message: safeError(error) });
+    else setTtsStatus(messageId, safeError(error), 'error');
+    toast('error', safeError(error));
+  } finally {
+    setTtsLineState(messageId, lineId, null, wantedSide);
   }
 }
 
@@ -4444,7 +4589,7 @@ function ttsMessageText(messageId) {
 
 function clearTtsDecoration(root) {
   if (!root) return;
-  for (const node of root.querySelectorAll('.jy-tts-play, .jy-tts-edit, .jy-tts-bar')) node.remove();
+  for (const node of root.querySelectorAll('.jy-tts-line, .jy-tts-play, .jy-tts-edit, .jy-tts-bar')) node.remove();
   // Inserting the buttons split text nodes; putting them back keeps the floor exactly as the host drew it.
   root.normalize();
   delete root.dataset.jyTts;
@@ -4507,6 +4652,68 @@ function makeTtsEditButton(messageId, segment, side) {
   button.title = label;
   button.innerHTML = TTS_ICON_EDIT;
   return button;
+}
+
+/**
+ * The two buttons at the end of a paragraph: read from here, and make this paragraph again.
+ *
+ * A paragraph is what one Fish request covers, so the first costs nothing extra, and the second is
+ * the answer to Fish reading the same words differently every time — the reader re-rolls a paragraph
+ * where they are reading it, without opening the floating window.
+ */
+function makeTtsLineTools(messageId, line, side) {
+  const box = document.createElement('span');
+  box.className = 'jy-tts-line';
+  box.dataset.jyTtsLine = String(line.lineId);
+  box.dataset.jyTtsSide = side;
+  box.setAttribute('contenteditable', 'false');
+  const suffix = side === 'source' ? '（原文）' : '';
+  box.append(
+    makeTtsLineButton(messageId, line, side, {
+      action: 'play-line', className: 'jy-tts-line-play', icon: TTS_ICON_PLAY, text: '播放',
+      label: `从这一段读起（${line.ids.length} 句）${suffix}`,
+    }),
+    makeTtsLineButton(messageId, line, side, {
+      action: 'regen-line', className: 'jy-tts-line-regen', icon: TTS_ICON_REDO, text: '重新生成',
+      label: `丢掉这一段的音频，再向 Fish 要一次${suffix}`,
+    }),
+  );
+  return box;
+}
+
+function makeTtsLineButton(messageId, line, side, { action, className, icon, text, label }) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  // The shared class keeps the busy, playing and beautify styles the sentence buttons already have.
+  button.className = `jy-tts-play ${className}`;
+  button.dataset.jyTtsAction = action;
+  button.dataset.jyTtsMes = String(messageId);
+  button.dataset.jyTtsLine = String(line.lineId);
+  button.dataset.jyTtsSide = side;
+  button.setAttribute('contenteditable', 'false');
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  const caption = document.createElement('span');
+  caption.textContent = text;
+  button.innerHTML = icon;
+  button.appendChild(caption);
+  return button;
+}
+
+/**
+ * The paragraphs of one floor, in reading order: every sentence that will be read, grouped by the
+ * paragraph it belongs to. The last id is where the paragraph's buttons hang, the first is where
+ * reading starts. With only dialogue read, a paragraph's narration is not in the list, so the buttons
+ * sit at the end of what will actually be heard rather than at the end of the printed paragraph.
+ */
+function planTtsLineButtons(segments) {
+  const lines = new Map();
+  for (const segment of Array.isArray(segments) ? segments : []) {
+    const known = lines.get(segment.lineId);
+    if (known) known.ids.push(segment.id);
+    else lines.set(segment.lineId, { lineId: segment.lineId, ids: [segment.id] });
+  }
+  return [...lines.values()];
 }
 
 // Which built-in beautify a rendered floor wears. The bar sits after the cards rather than inside one,
@@ -4581,7 +4788,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     return;
   }
   // The same text, the same settings and a bar still in place: nothing to do, and no snapshot taken.
-  const cheapKey = `${Number(message?.swipe_id ?? 0)}|${ttsSides(settings).join('+')}|${tts.mode}|${tts.range}|${tts.quotePairs.join('')}|${tts.skipPairs.join('')}|${floorButtonsOn(settings) ? 'buttons' : 'plain'}`;
+  const cheapKey = `${Number(message?.swipe_id ?? 0)}|${ttsSides(settings).join('+')}|${tts.mode}|${tts.range}|${tts.quotePairs.join('')}|${tts.skipPairs.join('')}|${floorButtonMode(settings)}`;
   const seen = runtime.tts.mesSeen.get(messageId);
   if (!force && seen && seen.mes === message?.mes && seen.key === cheapKey && root.dataset.jyTts && root.querySelector(':scope > .jy-tts-bar')) return;
   const floors = [];
@@ -4620,7 +4827,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
 
   clearTtsDecoration(root);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: node => (node.parentElement?.closest('.jy-tts-play, .jy-tts-edit, .jy-tts-bar, script, style') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    acceptNode: node => (node.parentElement?.closest('.jy-tts-line, .jy-tts-play, .jy-tts-edit, .jy-tts-bar, script, style') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
   });
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -4628,8 +4835,10 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   // Ranges are made before anything is inserted; they are live, so the insertions below move them along.
   const ranges = new Map();
   const buttons = [];
+  const lineButtons = [];
   let visibleTotal = 0;
   const unplaced = [];
+  const unplacedLines = [];
   floors.forEach((floor, index) => {
     const utterances = ttsUtterances(floor, settings);
     const labels = analyses[index]?.labels ?? annotationReading(utterances, floor.annotations).labels;
@@ -4650,16 +4859,32 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
       if (range) buttons.push({ range, segment, side: floor.side });
       else unplaced.push({ side: floor.side, id: segment.id, text: segment.text.slice(0, 24) });
     }
+    // A paragraph hangs its buttons off whichever of its sentences ends last in the rendered floor,
+    // which is not always the last one in reading order once a beautify has moved things around.
+    for (const line of planTtsLineButtons(visible)) {
+      let last = null;
+      for (const id of line.ids) {
+        const range = ranges.get(`${floor.side}:${id}`);
+        if (range && (!last || range.compareBoundaryPoints(Range.END_TO_END, last) > 0)) last = range;
+      }
+      if (last) lineButtons.push({ range: last, line, side: floor.side });
+      else unplacedLines.push({ side: floor.side, lineId: line.lineId });
+    }
   });
-  // Later ranges first, so an insertion never sits between an earlier range and its own end.
-  buttons.sort((left, right) => right.range.compareBoundaryPoints(Range.END_TO_END, left.range));
-  // On a phone the sentences are tapped in the floating window's list instead; the floor keeps only
-  // the highlight and its bar.
-  if (floorButtonsOn(settings)) {
-    for (const { range, segment, side } of buttons) {
-      const play = makeTtsPlayButton(messageId, segment, side);
-      insertAfterRange(range, play, root);
-      play.after(makeTtsEditButton(messageId, segment, side));
+  // Later ranges first, so an insertion never sits between an earlier range and its own end. Where a
+  // paragraph ends on its own last sentence the two share a point, and since each insertion goes in
+  // front of the one before it, the paragraph's pair is placed first to end up after the sentence's.
+  const placements = [...lineButtons, ...buttons];
+  placements.sort((left, right) => right.range.compareBoundaryPoints(Range.END_TO_END, left.range));
+  const buttonMode = floorButtonMode(settings);
+  for (const placement of placements) {
+    if (buttonMode === 'off') break;
+    if (placement.line) {
+      insertAfterRange(placement.range, makeTtsLineTools(messageId, placement.line, placement.side), root);
+    } else if (buttonMode === 'sentence') {
+      const play = makeTtsPlayButton(messageId, placement.segment, placement.side);
+      insertAfterRange(placement.range, play, root);
+      play.after(makeTtsEditButton(messageId, placement.segment, placement.side));
     }
   }
   root.appendChild(makeTtsBar(messageId, tts, visibleTotal, readingStyleOf(root), floors.map(floor => floor.side)));
@@ -4673,15 +4898,19 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   if (highlighted?.messageId === messageId && runtime.tts.transport?.messageId === messageId) {
     highlightTtsUtterance(messageId, highlighted.utteranceId, highlighted.side);
   }
+  // Only a paragraph none of whose sentences could be located is worth telling the reader about: one
+  // lost sentence still leaves the paragraph a button, and in the sentence mode the sentences matter too.
+  const missing = buttonMode === 'sentence' ? unplaced.length : unplacedLines.length;
   const warnKey = `${floors.map(floor => floor.floorId).join('+')}|${signature}`;
-  if (unplaced.length && floorButtonsOn(settings) && !runtime.tts.anchorWarned.has(warnKey)) {
+  if (missing && buttonMode !== 'off' && !runtime.tts.anchorWarned.has(warnKey)) {
     runtime.tts.anchorWarned.add(warnKey);
-    recordDiagnostic('warn', 'tts.anchors', `第 ${messageId} 楼有 ${unplaced.length} 句没在渲染后的楼层里找到位置，这几句没有单独的播放按钮，「朗读本楼」照常能读到。`, {
+    recordDiagnostic('warn', 'tts.anchors', `第 ${messageId} 楼有 ${missing} ${buttonMode === 'sentence' ? '句' : '段'}没在渲染后的楼层里找到位置，这几${buttonMode === 'sentence' ? '句' : '段'}后面没有按钮，「朗读本楼」照常能读到。`, {
       floor: floors.map(floor => floor.floorId),
       readable: visibleTotal,
-      placed: buttons.length,
+      placed: buttonMode === 'sentence' ? buttons.length : lineButtons.length,
+      mode: buttonMode,
       sources: floors.map(floor => floor.source),
-      unplaced: unplaced.slice(0, 5),
+      unplaced: (buttonMode === 'sentence' ? unplaced : unplacedLines).slice(0, 5),
     });
   }
   maybeAutoGenerateTts(messageId, floors);
@@ -4769,7 +4998,7 @@ function ttsViewer() {
 function clearAllTtsDecorations() {
   if (typeof document === 'undefined') return;
   const roots = new Set(document.querySelectorAll('#chat .mes_text[data-jy-tts]'));
-  for (const element of document.querySelectorAll('#chat .jy-tts-bar, #chat .jy-tts-play, #chat .jy-tts-edit')) {
+  for (const element of document.querySelectorAll('#chat .jy-tts-bar, #chat .jy-tts-line, #chat .jy-tts-play, #chat .jy-tts-edit')) {
     const root = element.closest('.mes_text');
     if (root) roots.add(root);
   }
@@ -4805,6 +5034,19 @@ function bindTtsDom() {
         const transport = runtime.tts.transport;
         if (target.dataset.state === 'playing' && transport?.messageId === messageId && transport.state === 'playing') pauseTts();
         else void playTtsUtterance(messageId, utteranceId, side);
+      } else if (action === 'play-line') {
+        const lineId = Number(target.dataset.jyTtsLine);
+        const transport = runtime.tts.transport;
+        const onThisParagraph = transport?.messageId === messageId && transport.side === (side ?? primaryTtsSide())
+          && transport.items[transport.index]?.segment.lineId === lineId;
+        if (transport?.state === 'playing' && onThisParagraph) pauseTts();
+        // Paused inside this paragraph: carry on from there rather than starting it over.
+        else if (transport?.state === 'paused' && onThisParagraph) resumeTts();
+        else void playTtsParagraph(messageId, lineId, side);
+      } else if (action === 'regen-line') {
+        void regenerateTtsParagraph(messageId, Number(target.dataset.jyTtsLine), side).catch(error => {
+          if (!isAbortError(error)) toast('error', safeError(error));
+        });
       }
     };
     document.addEventListener('click', onClick, true);
@@ -5693,7 +5935,7 @@ async function runThemeProbe(root) {
 // Reading aloud: the control-centre page.
 // ---------------------------------------------------------------------------------------------
 
-const TTS_NUMERIC_FISH_FIELDS = new Set(['speed', 'volume', 'temperature', 'topP', 'maxChars', 'timeoutSec', 'mp3Bitrate', 'concurrency']);
+const TTS_NUMERIC_FISH_FIELDS = new Set(['speed', 'volume', 'temperature', 'topP', 'maxChars', 'timeoutSec', 'mp3Bitrate', 'concurrency', 'retries']);
 
 // A picker of the saved voices, placed after a voice id field; choosing one fills the field.
 function ttsLibraryPicker(doc, settings = runtime.settings) {
@@ -7902,12 +8144,20 @@ function isCompactViewport() {
   return globalThis.matchMedia?.('(max-width: 767px), (pointer: coarse)')?.matches === true;
 }
 
-// Whether a floor gets a play and a cue button after every sentence: a setting, or the device's call.
+/**
+ * Which buttons a floor wears: one pair per paragraph ('line'), those plus the per-sentence pair
+ * ('sentence'), or none ('off'). The paragraph pair is not the device's call any more — a paragraph
+ * is the unit the audio is made in, and its buttons are large enough for a thumb.
+ */
+function floorButtonMode(settings = runtime.settings) {
+  const mode = settings?.floorButtons;
+  if (FLOOR_BUTTON_MODES.includes(mode)) return mode;
+  // Settings written by an older version, in case one reaches here unnormalised.
+  return mode === 'on' ? 'sentence' : mode === 'off' ? 'off' : 'line';
+}
+
 function floorButtonsOn(settings = runtime.settings) {
-  const mode = settings?.floorButtons ?? 'auto';
-  if (mode === 'on') return true;
-  if (mode === 'off') return false;
-  return !isCompactViewport();
+  return floorButtonMode(settings) !== 'off';
 }
 
 // Shape follows state, not taps: the ring is the quiet form, the pill only appears when there is
@@ -9715,7 +9965,7 @@ async function openMiniWindow() {
     const line = prepared.floor.lines.find(candidate => candidate.text.trim() === wanted) ?? prepared.floor.lines.find(candidate => wanted && candidate.text.includes(wanted.slice(0, 12)));
     const item = line ? prepared.items.find(candidate => candidate.segment.lineId === line.lineId) : null;
     if (!item) throw new Error('这一段不在当前的朗读范围里。');
-    void playTtsUtterance(viewFloor, item.segment.id, prepared.floor.side);
+    void playTtsParagraph(viewFloor, item.segment.lineId, prepared.floor.side);
     selectMiniTab('reading');
   };
 
@@ -9766,7 +10016,7 @@ async function openMiniWindow() {
       return;
     }
     if (action === 'mini-brief-read') {
-      if (Number.isInteger(viewFloor)) void readTtsFloor(viewFloor).catch(error => { if (!isAbortError(error)) toast('error', safeError(error)); });
+      if (Number.isInteger(viewFloor)) void playTtsFloor(viewFloor);
       return;
     }
     if (action === 'tts-insert-custom') {
@@ -10433,6 +10683,10 @@ export const __testing = Object.freeze({
   ttsStore,
   editTranslationSegment,
   floorButtonsOn,
+  floorButtonMode,
+  planTtsLineButtons,
+  ttsObjectUrl,
+  dropTtsObjectUrls,
   translateMessage,
   createTtsTransport,
   chunkTtsUtterances,

@@ -1,4 +1,4 @@
-@import url('./reading.css?v=0.17.1');
+@import url('./reading.css?v=0.24.0');
 
 #jingyi-translator-settings .jingyi-entry-row {
   display: flex;
@@ -487,4 +487,49 @@
     padding: 0.35em 0.9em;
   }
   #chat .jy-tts-bar-panel { padding: 0.35em 0; }
+}
+
+/* 自然段末尾的两个按钮：播放和重新生成。一段一对，手机上也留着——一个自然段大小的目标，
+   拇指点得准，而一段本来就是一次 Fish 请求的单位。颜色和淡入淡出仍旧交给美化风格。 */
+#chat .jy-tts-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  margin-left: 0.45em;
+  vertical-align: -0.3em;
+  white-space: nowrap;
+}
+#chat .jy-tts-play.jy-tts-line-play,
+#chat .jy-tts-play.jy-tts-line-regen {
+  display: inline-flex;
+  justify-content: center;
+  gap: 0.3em;
+  width: auto;
+  height: auto;
+  min-height: 1.85em;
+  margin: 0;
+  padding: 0.1em 0.62em;
+  border-radius: 999px;
+  font-size: 0.82em;
+}
+#chat .jy-tts-play.jy-tts-line-play > span,
+#chat .jy-tts-play.jy-tts-line-regen > span {
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+/* A pill has no room to grow, so the sentence button's little scale would only jitter the line. */
+#chat .jy-tts-play.jy-tts-line-play[data-state="playing"],
+#chat .jy-tts-play.jy-tts-line-regen[data-state="busy"] {
+  transform: none;
+}
+
+/* 手机：两个按钮都要够大，够得着。 */
+@media (hover: none) {
+  #chat .jy-tts-line { gap: 0.4em; margin-left: 0.5em; }
+  #chat .jy-tts-play.jy-tts-line-play,
+  #chat .jy-tts-play.jy-tts-line-regen {
+    min-height: 40px;
+    padding: 0 0.9em;
+    font-size: 0.9em;
+  }
 }

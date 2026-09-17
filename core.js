@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.23.0';
+} from './prompts.js?v=0.24.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.23.0';
+export const APP_VERSION = '0.24.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -449,6 +449,8 @@ export const DEFAULT_FISH = Object.freeze({
   // boundaries and played back as consecutive parts.
   maxChars: 1500,
   timeoutSec: 180,
+  // How many times one Fish request is asked again after a network error, a timeout or a 5xx.
+  retries: 1,
   // How many of one recording's parts go to Fish at once. Fish charges per character either way; the
   // wait for a long floor drops by about this factor. Rate limits on the free tier argue for 1.
   concurrency: 2,
@@ -521,9 +523,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   channels: [DEFAULT_CHANNEL],
   showFloatingButton: true,
   floatingStyle: 'auto',
-  // The play and cue buttons after every sentence of a floor: shown on a desktop, kept off a phone
-  // unless asked for. The floating window's list does the same job on a phone.
-  floorButtons: 'auto',
+  // The reading buttons inside a floor: one pair per paragraph ('line', the default, on every device
+  // because a paragraph-sized target is one a thumb can hit), those plus the per-sentence pair
+  // ('sentence'), or none at all ('off', leaving the floating window's list to do the job).
+  floorButtons: 'line',
   // Mirrors the floating window's main controls for a thumb on the left.
   leftHanded: false,
   retries: 1,
@@ -548,7 +551,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const FLOATING_STYLES = Object.freeze(['auto', 'ring', 'pill', 'edge']);
-export const FLOOR_BUTTON_MODES = Object.freeze(['auto', 'on', 'off']);
+export const FLOOR_BUTTON_MODES = Object.freeze(['line', 'sentence', 'off']);
+// What the two older names meant: 'auto' was per-sentence on a desktop and nothing on a phone, which
+// the paragraph buttons replace; 'on' was per-sentence everywhere, which is now the fuller mode.
+const FLOOR_BUTTON_LEGACY = Object.freeze({ auto: 'line', on: 'sentence' });
 
 export function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -891,6 +897,7 @@ export function normalizeFishSettings(value) {
     model: FISH_MODELS.includes(source.model) ? source.model : DEFAULT_FISH.model,
     format: FISH_FORMATS.includes(source.format) ? source.format : DEFAULT_FISH.format,
     mp3Bitrate: [64, 128, 192].includes(Number(source.mp3Bitrate)) ? Number(source.mp3Bitrate) : DEFAULT_FISH.mp3Bitrate,
+    retries: clampInteger(source.retries, 0, 5, DEFAULT_FISH.retries),
     latency: FISH_LATENCIES.includes(source.latency) ? source.latency : DEFAULT_FISH.latency,
     speed: clampNumber(source.speed, 0.5, 2, DEFAULT_FISH.speed),
     volume: clampNumber(source.volume, -20, 20, DEFAULT_FISH.volume),
@@ -1117,7 +1124,9 @@ export function mergeSettings(value = {}) {
   merged.streamingWriteback = Boolean(merged.streamingWriteback);
   merged.showFloatingButton = Boolean(merged.showFloatingButton);
   merged.floatingStyle = FLOATING_STYLES.includes(merged.floatingStyle) ? merged.floatingStyle : DEFAULT_SETTINGS.floatingStyle;
-  merged.floorButtons = FLOOR_BUTTON_MODES.includes(merged.floorButtons) ? merged.floorButtons : DEFAULT_SETTINGS.floorButtons;
+  merged.floorButtons = FLOOR_BUTTON_MODES.includes(merged.floorButtons)
+    ? merged.floorButtons
+    : (FLOOR_BUTTON_LEGACY[merged.floorButtons] ?? DEFAULT_SETTINGS.floorButtons);
   merged.leftHanded = merged.leftHanded === true;
   for (const key of [
     'profileId',
