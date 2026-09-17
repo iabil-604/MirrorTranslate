@@ -9,9 +9,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.24.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.24.0';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.24.0';
+} from './core.js?v=0.24.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.24.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.24.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.

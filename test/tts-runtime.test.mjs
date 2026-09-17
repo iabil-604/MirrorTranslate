@@ -952,6 +952,26 @@ test('the public interface reads text another extension hands over, in that char
   assert.deepEqual(calls.map(call => call.body.text), ['今天也来了啊。', '等你很久了。'], 'the words go out as given');
   assert.equal(session.playing, false);
 
+  // The audio it made comes back as one file, and saves in one line.
+  const blob = await session.blob();
+  assert.ok(blob.size > 0, 'both paragraphs in one file');
+  assert.equal(blob.type, 'audio/mpeg');
+  const saves = [];
+  globalThis.URL.createObjectURL = () => 'blob:saved';
+  globalThis.URL.revokeObjectURL = () => {};
+  globalThis.document = {
+    body: { appendChild() {} },
+    createElement: () => ({ set download(name) { saves.push(name); }, click() {}, remove() {}, style: {} }),
+  };
+  const saved = await session.download();
+  assert.match(saves[0], /^镜译-朗读-樱井-.*\.mp3$/, 'a name a user can find again');
+  assert.equal(saved.bytes, blob.size);
+  await session.download('打招呼');
+  assert.equal(saves[1], '打招呼.mp3', 'a name without an extension gets the right one');
+  await session.download('打招呼.mp3');
+  assert.equal(saves[2], '打招呼.mp3', 'a name that has one keeps it');
+  delete globalThis.document;
+
   // Said twice, asked for once.
   const again = await __testing.apiSpeak({ text: '今天也来了啊。\n等你很久了。', speaker: '樱井', play: false });
   await again.done;

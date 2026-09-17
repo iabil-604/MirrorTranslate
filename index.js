@@ -65,7 +65,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.24.0';
+} from './core.js?v=0.24.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -113,14 +113,14 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.24.0';
-import { createTtsStore } from './tts-store.js?v=0.24.0';
+} from './tts.js?v=0.24.1';
+import { createTtsStore } from './tts-store.js?v=0.24.1';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.24.0';
+} from './processing.js?v=0.24.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -137,9 +137,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.24.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.24.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.24.0';
+} from './prompts.js?v=0.24.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.24.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.24.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -153,15 +153,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.24.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.24.0';
+} from './palette.js?v=0.24.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.24.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.24.0';
+} from './diagnostics.js?v=0.24.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -4442,6 +4442,12 @@ async function downloadTtsAudio(scope = null) {
   const blob = await ttsDownloadBlob(records, tts.fish.format);
   const extension = tts.fish.format === 'opus' ? 'ogg' : tts.fish.format;
   const name = `镜译-第${transport.messageId}楼${wanted === 'current' ? `-第${(ttsTransportDescription(transport)?.lineIndex ?? 0) + 1}段` : ''}.${extension}`;
+  saveBlobAsFile(blob, name);
+  return { name, bytes: blob.size, records: records.length };
+}
+
+/** A blob handed to the browser as a download, and the url let go once it has had time to take it. */
+function saveBlobAsFile(blob, name) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -4455,7 +4461,7 @@ async function downloadTtsAudio(scope = null) {
     URL.revokeObjectURL(url);
   }, 60000);
   runtime.timers.add(timer);
-  return { name, bytes: blob.size, records: records.length };
+  return { name, bytes: blob.size };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -10662,14 +10668,17 @@ async function apiSpeak({ text, speaker = '', lang = '', analyze = false, play =
   const { items } = await ttsItemsFor(floor, segments, settings, { range: 'all' });
   if (!items.length) throw new Error('没有可朗读的文字。');
   // Only one thing sounds at a time, and a floor being read gives way to what was just asked for.
-  stopTts();
-  const session = apiSession(floor, items, settings, { play, signal });
+  // Making audio without playing it disturbs nothing, so it leaves the floor alone.
+  if (play) stopTts();
+  const session = apiSession(floor, items, settings, { play, signal, speaker });
   await session.started;
   return session.handle;
 }
 
-function apiSession(floor, items, settings, { play, signal }) {
+function apiSession(floor, items, settings, { play, signal, speaker = '' }) {
   const state = { index: 0, total: items.length, playing: false, stopped: false, seconds: 0, cached: true };
+  // The recordings this reading made, in order and without repeats: what a caller saves afterwards.
+  const records = [];
   const listeners = new Set();
   const announce = () => {
     for (const listener of listeners) {
@@ -10687,6 +10696,7 @@ function apiSession(floor, items, settings, { play, signal }) {
         const item = items[index];
         const entry = await resolveTtsEntry(floor, items, item, settings);
         if (!entry.cached) state.cached = false;
+        if (!records.includes(entry.record)) records.push(entry.record);
         if (state.stopped || signal?.aborted) break;
         const { record, index: at } = entry;
         const part = record.timeline[at].part;
@@ -10750,7 +10760,25 @@ function apiSession(floor, items, settings, { play, signal }) {
     get index() { return state.index; },
     get total() { return state.total; },
     get cached() { return state.cached; },
+    get format() { return ttsSettings(settings).fish.format; },
     done,
+    /** Everything this reading said, as one audio file. Await `done` first, or you get what is ready. */
+    async blob() {
+      if (!records.length) throw new Error('还没有生成好的音频。');
+      return ttsDownloadBlob(records, ttsSettings(settings).fish.format);
+    },
+    /** The same file, handed to the browser as a download. One line, no plumbing. */
+    async download(name = '') {
+      const format = ttsSettings(settings).fish.format;
+      const extension = format === 'opus' ? 'ogg' : format;
+      const blob = await this.blob();
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const wanted = String(name ?? '').trim();
+      const filename = wanted
+        ? (/\.[a-z0-9]{2,4}$/i.test(wanted) ? wanted : `${wanted}.${extension}`)
+        : `镜译-朗读${speaker ? `-${speaker}` : ''}-${stamp}.${extension}`;
+      return saveBlobAsFile(blob, filename);
+    },
     onProgress(listener) {
       if (typeof listener !== 'function') return () => {};
       listeners.add(listener);
