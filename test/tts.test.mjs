@@ -139,11 +139,13 @@ test('the analysis request carries ids and never offers the model a place to ret
   assert.equal(input.task, 'sketch_voices_for_audiobook');
   assert.deepEqual(input.roster, ['泰罗', '佐菲']);
   assert.deepEqual(input.emotions, FISH_EMOTIONS);
-  assert.deepEqual(input.sounds, SOUND_TAGS);
+  assert.deepEqual(input.sounds, FISH_SOUND_LIST, 'the simple reading offers only the sounds Fish lists');
+  assert.deepEqual(input.tones, FISH_TONE_LIST);
   assert.equal('styles' in input, false, 'no console set, none sent');
   assert.deepEqual(input.utterances, [{ id: 1, kind: 'narration', text: '泰罗说：' }, { id: 2, kind: 'quoted', text: '「我操好热啊！」' }]);
   assert.match(messages[0].content, /不要输出 text/);
-  assert.match(messages[0].content, /direction：一句中文配音指令/);
+  assert.doesNotMatch(messages[0].content, /direction/, 'the simple reading asks for no directions');
+  assert.match(messages[0].content, /不要加 slightly、very 这类程度词/);
   assert.match(messages[0].content, /lang：这一句的语言代码/);
   assert.doesNotMatch(messages[0].content, /"text":/);
   // The consoles ride along as sentences under each name.
@@ -650,12 +652,16 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.equal(settings.tts.enabled, true);
   assert.equal(settings.tts.mode, 'simple', 'the old sentence and stream modes are the simple reading now');
   assert.equal('analysis' in settings.tts, false, 'the depth is the mode');
-  assert.equal(mergeSettings({ tts: { mode: 'floor' } }).tts.mode, 'deep', 'the whole-floor mode read deeply');
-  assert.equal(mergeSettings({ tts: { mode: 'stream', analysis: 'deep' } }).tts.mode, 'deep', 'a depth named outright wins');
+  assert.equal(mergeSettings({ tts: { mode: 'floor' } }).tts.mode, 'simple', 'the whole-floor mode falls back to the simple reading while the deep one is shelved');
+  assert.equal(mergeSettings({ tts: { mode: 'stream', analysis: 'deep' } }).tts.mode, 'simple', 'a depth named outright falls back the same way');
+  assert.equal(mergeSettings({ tts: { mode: 'floor', deepUnlocked: true } }).tts.mode, 'deep', 'the hatch keeps the deep reading reachable');
+  assert.equal(mergeSettings({ tts: { mode: 'off' } }).tts.mode, 'off', 'the plain reading is a mode of its own');
+  assert.equal(mergeSettings({ tts: { askAnalysis: 'plain' } }).tts.askAnalysis, 'plain');
+  assert.equal(mergeSettings({ tts: { askAnalysis: 'sometimes' } }).tts.askAnalysis, 'ask');
   assert.equal(mergeSettings({ tts: { prompts: { light: '旧的' } } }).tts.prompts.simple, '旧的', 'the light prompt is the simple prompt');
   assert.equal(settings.tts.sanitizeHtml, true);
-  assert.deepEqual(settings.tts.console, { pause: 50, breath: 50, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '' });
-  assert.deepEqual(mergeSettings({ tts: { console: { pause: 150, breath: -3, rules: ' a \n\n b ' } } }).tts.console, { pause: 100, breath: 0, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: 'a\nb' });
+  assert.deepEqual(settings.tts.console, { pause: 50, breath: 50, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '', marks: [] });
+  assert.deepEqual(mergeSettings({ tts: { console: { pause: 150, breath: -3, rules: ' a \n\n b ' } } }).tts.console, { pause: 100, breath: 0, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: 'a\nb', marks: [] });
   assert.equal(settings.tts.range, 'dialogue');
   assert.deepEqual(settings.tts.quotePairs, ['“”', '** **']);
   assert.deepEqual(settings.tts.skipPairs, ['* *']);
@@ -668,7 +674,7 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.equal(settings.tts.fish.baseUrl, 'https://api.fish.audio');
   assert.equal(settings.tts.fish.key, 'sk-x');
   assert.deepEqual(settings.ttsVoices, { 'card.png': [{ name: '泰罗', aliases: [], voiceId: 'abc', voices: {}, locked: true, title: '', console: null }] });
-  assert.deepEqual(normalizeVoiceList([{ name: '樱井', console: { breath: 80, rules: '害羞时别太娇' } }])[0].console, { pause: 50, breath: 80, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '害羞时别太娇' });
+  assert.deepEqual(normalizeVoiceList([{ name: '樱井', console: { breath: 80, rules: '害羞时别太娇' } }])[0].console, { pause: 50, breath: 80, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '害羞时别太娇', marks: [] });
   assert.equal(normalizeVoiceList([{ name: '樱井', console: { breath: 50 } }])[0].console, null, 'a console left in the middle is no console');
   assert.deepEqual(settings.voiceLibrary, [{ id: 'voice-1', name: '少年', voiceId: 'lib-1', lang: 'zh', title: '' }]);
   assert.deepEqual(mergeSettings({}).tts, normalizeTts(undefined));
@@ -937,3 +943,46 @@ test('the analysis batch size is a sentence count, with zero meaning the whole f
   assert.equal(normalizeTts({ batchSize: 999 }).batchSize, 60);
   assert.equal(normalizeTts({ batchSize: 'abc' }).batchSize, 12);
 });
+
+
+import { normalizeConsole, normalizeMarks, RECOMMENDED_MARKS } from '../core.js';
+import { applyPunctuationMarks, sentenceFishText as fishTextOf, sentenceProsody as prosodyOf, fishFingerprint as fingerprintOf } from '../tts.js';
+
+test('punctuation marks: an inline mark replaces its run, a head mark opens the clause, and nothing doubles', () => {
+  const marks = normalizeMarks([{ punct: '……', tag: '停顿', at: 'inline' }, { punct: '！！', tag: '加大音量', at: 'head' }, { punct: '？！', tag: '惊讶' }]);
+  assert.deepEqual(marks.map(mark => mark.at), ['inline', 'head', 'head'], 'a mark without a place takes the catalogue default');
+  assert.equal(applyPunctuationMarks('这……不太好吧', marks), '这 [break] 不太好吧');
+  assert.equal(applyPunctuationMarks('真的吗。骗人的吧！！我不信。', marks), '真的吗。[shouting] 骗人的吧！！我不信。');
+  assert.equal(applyPunctuationMarks('骗人的吧！！', marks, 's1'), '(shouting) 骗人的吧！！');
+  assert.equal(applyPunctuationMarks('这……不太好吧', marks, 's1'), '这 (break) 不太好吧');
+  assert.equal(applyPunctuationMarks('[压着火……] 你好……', marks), '[压着火……] 你好 [break]', 'punctuation inside a cue is left alone');
+  assert.equal(applyPunctuationMarks('[shouting] 骗人的吧！！', marks), '[shouting] 骗人的吧！！', 'a cue already there is not doubled');
+  assert.equal(applyPunctuationMarks('等等……不对……', marks), '等等 [break] 不对 [break]');
+  assert.equal(applyPunctuationMarks('平常的一句。', marks), '平常的一句。');
+  assert.equal(applyPunctuationMarks('这……不太好吧', []), '这……不太好吧');
+  assert.deepEqual(normalizeMarks([{ punct: ' ', tag: '停顿' }, { punct: '……', tag: '不存在的' }, { punct: '……', tag: '停顿' }, { punct: '……', tag: '叹气' }]).length, 1, 'blank, unknown and repeated runs are dropped');
+  assert.equal(normalizeConsole({ marks: RECOMMENDED_MARKS }).marks.length, 3);
+  assert.equal(normalizeConsole({ marks: RECOMMENDED_MARKS }, { sparse: true })?.marks.length, 3, 'marks alone make a console worth keeping');
+});
+
+test('the lean compile sends one of Fish\'s own words, the named tone and an official sound, and the marks ride along', () => {
+  const segment = { id: 1, type: 'dialogue', speaker: '泰罗', text: '骗人的吧！！这……不太好吧', voice: { emotion: 'angry', intensity: 2, tone: 'shouting', direction: '压着火，装冷淡', sounds: [{ at: 'end', tag: '轻笑' }, { at: 'start', tag: '深呼吸' }] } };
+  const item = { segment, voiceId: 'v', console: { marks: normalizeMarks([{ punct: '……', tag: '停顿' }, { punct: '！！', tag: '加大音量' }]) } };
+  assert.equal(fishTextOf(item, { model: 's2-pro' }, { lean: true, directions: false }), '[angry][shouting] 骗人的吧！！这 [break] 不太好吧 [chuckling]', 'no adverb, no direction, the head tone not doubled by the mark, a sound Fish has no word for dropped');
+  assert.equal(fishTextOf(item, { model: 's1' }, { lean: true, directions: false }), '(angry)(shouting) 骗人的吧！！这 (break) 不太好吧 (chuckling)');
+  assert.equal(fishTextOf({ segment: { ...segment, voice: null }, console: item.console }, { model: 's2-pro' }, { lean: true }), '[shouting] 骗人的吧！！这 [break] 不太好吧', 'the plain reading is the text plus the marks, head marks included');
+  assert.match(fishTextOf(item, { model: 's2-pro' }, { directions: true }), /^\[压着火，装冷淡\]/, 'the deep reading still speaks in its own words');
+});
+
+test('the console\'s speed lean nudges the prosody only where the voice said nothing about speed', () => {
+  const fish = { speed: 1, volume: 0, model: 's2-pro' };
+  assert.equal(prosodyOf({ segment: { text: '你好' }, console: { speed: 80 } }, fish).speed, 1.15);
+  assert.equal(prosodyOf({ segment: { text: '你好' }, console: { speed: 20 } }, fish).speed, 0.85);
+  assert.equal(prosodyOf({ segment: { text: '你好' }, console: { speed: 50 } }, fish).speed, 1);
+  assert.equal(prosodyOf({ segment: { text: '你好', voice: { speed: 'fast' } }, console: { speed: 80 } }, fish).speed, 1.12, 'a speed the voice named wins');
+  assert.equal(prosodyOf({ segment: { text: '你好' }, console: { speed: 80 } }, fish, { prosodySplit: false }).speed, 1.15, 'the lean applies even without prosody splitting');
+  assert.equal(fingerprintOf(fish, { mode: 'off', consoles: 'c1' }).mode, 'off');
+  assert.notDeepEqual(fingerprintOf(fish, { mode: 'off', consoles: 'c1' }), fingerprintOf(fish, { mode: 'off', consoles: 'c2' }), 'a different console is a different recording');
+});
+
+import { FISH_SOUNDS as FISH_SOUND_LIST, FISH_TONES as FISH_TONE_LIST } from '../tts.js';

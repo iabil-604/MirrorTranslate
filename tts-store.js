@@ -153,6 +153,8 @@ export function createTtsStore({ indexedDB = globalThis.indexedDB, maxBytes = DE
       return stamped;
     },
     deleteAnalysis: key => guarded(target => target.delete(ANALYSIS_STORE, key)),
+    /** One recording gone, so the next play of its sentences asks Fish again. */
+    deleteAudio: key => guarded(target => target.delete(AUDIO_STORE, key)),
     /** Every recording of one floor, any text version; the caller keeps the ones for its version. */
     listFloorAudio: floorId => guarded(target => target.byFloor(AUDIO_STORE, floorId), []),
     // The reader's own version of one sentence lives beside the analyses, keyed by floor, text version

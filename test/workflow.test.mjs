@@ -230,14 +230,15 @@ test('the reading asks the translation for Fish\'s own words and one mark per qu
   assert.match(section.content, /不要把标注、情绪词或任何方括号标签写进 text/);
   const example = section.content.split('\n').find(line => line.startsWith('{"translations"'));
   const [item] = JSON.parse(example).translations;
-  assert.deepEqual(Object.keys(item), ['id', 'text', 'speaker', 'emotion', 'intensity', 'tone', 'direction', 'quotes']);
-  assert.deepEqual(Object.keys(item.quotes[0]), ['head', 'speaker', 'emotion', 'intensity', 'direction']);
-  assert.match(section.content, /direction：一句 20 字左右/);
-  assert.match(section.content, /轻笑/);
+  assert.deepEqual(Object.keys(item), ['id', 'text', 'speaker', 'emotion', 'intensity', 'tone', 'quotes'], 'the simple reading asks for no directions');
+  assert.deepEqual(Object.keys(item.quotes[0]), ['head', 'speaker', 'emotion', 'intensity']);
+  assert.doesNotMatch(section.content, /direction：一句 20 字左右/);
+  assert.match(section.content, /只在原文明确写了笑、叹气、喘息、倒吸气这类声音时写/);
+  assert.match(section.content, /chuckling/);
   const input = JSON.parse(messages.find(message => message.role === 'user').content);
   assert.equal(input.annotate.quotes, true);
-  assert.equal(input.annotate.direction, true);
-  assert.ok(input.annotate.sounds.includes('叹气'));
+  assert.equal(input.annotate.direction, undefined);
+  assert.ok(input.annotate.sounds.includes('sighing'), 'the sounds offered are the ones Fish lists');
   // The consoles reach the translation as rules under each name.
   const styled = buildTranslationMessages(segments, reading, {}, 'primary', { roster: ['樱井'], styles: [{ name: '樱井', rules: ['气息感明显但自然。'] }] });
   assert.match(styled.find(message => message.content.includes('附加标注')).content, /樱井：气息感明显但自然。/);
@@ -249,6 +250,12 @@ test('the reading asks the translation for Fish\'s own words and one mark per qu
   const plain = colouring.find(message => message.content.includes('附加标注'));
   assert.doesNotMatch(plain.content, /quotes/);
   assert.doesNotMatch(plain.content, /sarcastic/);
+  // The deep reading, while the hatch is open, asks how each line should be read.
+  const deep = buildTranslationMessages(segments, mergeSettings({ tts: { enabled: true, mode: 'deep', deepUnlocked: true } }), {}, 'primary', { roster: ['樱井'] });
+  assert.match(deep.find(message => message.content.includes('附加标注')).content, /direction：一句 20 字左右/);
+  assert.equal(JSON.parse(deep.find(message => message.role === 'user').content).annotate.direction, true);
+  // The plain reading asks the translation for nothing at all.
+  assert.equal(buildTranslationMessages(segments, mergeSettings({ tts: { enabled: true, mode: 'off' } }), {}, 'primary', {}).some(message => message.content.includes('附加标注')), false);
 });
 
 test('recent context quotes the extracted body and leaves the surrounding panels behind', async () => {

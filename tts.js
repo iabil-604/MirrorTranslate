@@ -8,9 +8,10 @@ import {
   parseJsonCandidates,
   parsePairList,
   unifySpeakerNames,
-} from './core.js?v=0.22.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.22.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.22.1';
+  MARK_TAGS,
+} from './core.js?v=0.23.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.23.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.23.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -378,6 +379,19 @@ function referenceLines(translations) {
 // {{references_rule}} the rule about translations riding along when the original is read.
 export const DEFAULT_TTS_PROMPTS = Object.freeze({
   simple: [
+    '你是有声小说的配音助手。下面是一楼正文按顺序切好的句子。你只做三件事：判断每一句由谁念、带什么情绪念、有没有明显的语气或声音。不改写、不复述、不翻译任何句子。',
+    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text；styles 是每个角色的表达习惯和用户定下的规则，判断情绪、语气和声音时要遵守。',
+    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","sounds":[{"at":"start","tag":"英文声音词"}]}]}',
+    '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。引号用来标书名、专有名词、强调或引用时是 narration；不在引号里却明显是角色在说的话也是 dialogue。',
+    '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。{{user}}看不出是谁说的就省略，不要猜。',
+    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句只写一个；看不出明显情绪就省略，不要为了填满而猜。不要自己造词，不要加 slightly、very 这类程度词。',
+    '4. tone：可选，只能取 tones 列表里的一个，只在原文明确写了小声、耳语、喊、尖叫、急促这类说法时写。',
+    '5. sounds：笑声、叹气、喘息、倒吸气这类非语言声音，只在原文明确写了的时候写，tag 只能取 sounds 列表里的词，at 是 start（句首）或 end（句尾）。',
+    '6. lang：这一句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。与整楼主要语言相同、人物设定又没说口音时省略。',
+    '7. 每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。输入里如果有 lead，那是这一批前面紧挨着的几句，只用来认人和判断语气，不用回答。',
+    '{{references_rule}}',
+  ].join('\n'),
+  simpleOld: [
     '你是有声小说的配音导演助手。下面是一楼正文按顺序切好的句子。你为每一句搭一个「情绪骨架」：由谁念、带什么情绪念、情绪在句中怎么变、语气语速如何、哪里该停顿或重读、有没有笑声喘息这类声音。不改写、不复述、不翻译任何句子。',
     '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text；styles 是每个角色的表达习惯和用户定下的规则，指令必须遵守。',
     '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","direction":"中文配音指令","speed":"slow","stress":["句中的词"],"pauses":[{"after":"句中的词","length":"long"}],"sounds":[{"at":"start","tag":"声音词"}],"shift":{"at":"句中的词","direction":"中文指令"}}]}',
@@ -444,7 +458,8 @@ export function buildTtsAnalysisMessages(utterances, { roster = [], characterNam
     ...(userName ? { user: userName } : {}),
     roster: rosterList(roster),
     emotions: FISH_EMOTIONS,
-    sounds: SOUND_TAGS,
+    tones: FISH_TONES,
+    sounds: FISH_SOUNDS,
     ...(styleList.length ? { styles: styleList } : {}),
     ...(leads.length ? { lead: leads } : {}),
     utterances: (Array.isArray(utterances) ? utterances : []).map(item => (references.length
@@ -1039,6 +1054,85 @@ function insertAll(text, insertions) {
   return result;
 }
 
+// The tag a catalogue word goes out as: Fish's own word, wrapped the way the model wants it.
+function markCue(label, model) {
+  const known = MARK_TAGS.find(item => item.label === label);
+  return known ? wrapCue(known.tag, model) : '';
+}
+
+const CLAUSE_ENDS = /[。！？!?…\n]/;
+
+/**
+ * The reader's punctuation marks applied to one sentence's text: an inline mark replaces the run of
+ * punctuation it is paired with; a head mark goes to the start of the clause that run closes. A tag
+ * already standing where a mark would go is not doubled, and nothing inside an existing cue is touched.
+ */
+export function applyPunctuationMarks(text, marks, model = 's2-pro', { leading = '' } = {}) {
+  let result = String(text ?? '');
+  const list = (Array.isArray(marks) ? marks : []).filter(mark => mark?.punct && mark?.tag).slice().sort((left, right) => right.punct.length - left.punct.length);
+  if (!list.length || !result) return result;
+  const inCue = (value, index) => {
+    const open = Math.max(value.lastIndexOf('[', index), value.lastIndexOf('(', index));
+    if (open < 0) return false;
+    const close = Math.max(value.lastIndexOf(']', index), value.lastIndexOf(')', index));
+    return close < open;
+  };
+  for (const mark of list) {
+    const cue = markCue(mark.tag, model);
+    if (!cue) continue;
+    let from = 0;
+    for (let guard = 0; guard < 40; guard += 1) {
+      const at = result.indexOf(mark.punct, from);
+      if (at < 0) break;
+      if (inCue(result, at)) { from = at + mark.punct.length; continue; }
+      if (mark.at === 'head') {
+        let start = at - 1;
+        while (start >= 0 && !CLAUSE_ENDS.test(result[start]) && result[start] !== ']' && result[start] !== ')') start -= 1;
+        start += 1;
+        while (start < at && /\s/.test(result[start])) start += 1;
+        const clause = result.slice(start, at);
+        const before = result.slice(0, start).trimEnd();
+        if (clause.includes(cue) || before.endsWith(cue) || (start === 0 && String(leading).includes(cue))) { from = at + mark.punct.length; continue; }
+        result = `${result.slice(0, start)}${cue} ${result.slice(start)}`;
+        from = at + cue.length + 1 + mark.punct.length;
+      } else {
+        const before = result.slice(0, at).trimEnd();
+        if (before.endsWith(cue)) { from = at + mark.punct.length; continue; }
+        const after = result.slice(at + mark.punct.length);
+        result = `${result.slice(0, at).replace(/\s+$/, '')} ${cue} ${after.replace(/^\s+/, '')}`;
+        from = result.length - after.replace(/^\s+/, '').length;
+      }
+    }
+  }
+  return result.replace(/\s{2,}/g, ' ').trim();
+}
+
+// A sound word as Fish lists it, whichever way the mark spelled it; an unlisted sound is dropped.
+function officialSound(tag) {
+  const raw = String(tag ?? '').trim();
+  if (FISH_SOUNDS.includes(raw)) return raw;
+  return Object.hasOwn(SOUND_WORDS, raw) && FISH_SOUNDS.includes(SOUND_WORDS[raw]) ? SOUND_WORDS[raw] : '';
+}
+
+/**
+ * The simple reading's compile: one of Fish's own emotion words, the tone the text named, a sound the
+ * sentence opens or ends on, and nothing else. Stacked descriptors and made-up tags are what the
+ * voice stumbles on, so the sentence itself is left as written.
+ */
+function compileLean(voice, text, result, model) {
+  const cues = [];
+  const push = cue => {
+    if (cue && !cues.includes(cue)) cues.push(cue);
+  };
+  push(emotionCue(voice.emotion, 1, model));
+  if (FISH_TONES.includes(voice.tone)) push(wrapCue(voice.tone, model));
+  for (const sound of voice.sounds ?? []) if (sound.at === 'start') push(wrapCue(officialSound(sound.tag), model));
+  result.cues = cues.slice(0, 3);
+  result.text = text;
+  result.tail = (voice.sounds ?? []).filter(sound => sound.at === 'end').map(sound => wrapCue(officialSound(sound.tag), model)).filter(Boolean).slice(0, 1).join('');
+  return result;
+}
+
 /**
  * The voice compiled into the provider's markup.
  *
@@ -1047,7 +1141,7 @@ function insertAll(text, insertions) {
  * are not cues at all but Fish's per-request prosody, so they are returned as steps for the request
  * planner. The words of the sentence never change.
  */
-export function compileVoiceCues(segment, { model = 's2-pro', emotionCues = true } = {}) {
+export function compileVoiceCues(segment, { model = 's2-pro', emotionCues = true, directions = true, lean = false } = {}) {
   const voice = segment?.voice ?? (segment?.emotion ? { emotion: segment.emotion, intensity: segment.intensity ?? 1 } : null);
   const text = String(segment?.text ?? '');
   const result = { cues: [], text, tail: '', speed: 'normal', volume: 'normal' };
@@ -1056,7 +1150,8 @@ export function compileVoiceCues(segment, { model = 's2-pro', emotionCues = true
   result.volume = VOLUMES.has(voice.volume) ? voice.volume : 'normal';
   if (!emotionCues) return result;
   const s1 = model === 's1';
-  if (voice.direction && !s1) return compileDirection(voice, text, result);
+  if (voice.direction && !s1 && directions && !lean) return compileDirection(voice, text, result);
+  if (lean) return compileLean(voice, text, result, model);
   const cues = [];
   const push = cue => {
     if (cue && !cues.includes(cue)) cues.push(cue);
@@ -1180,12 +1275,14 @@ export function consoleDirections(console) {
 }
 
 /** The text one sentence sends: the reader's own version when there is one, else the compiled voice. */
-export function sentenceFishText(item, fish, { emotionCues = true, tamePunctuation = false } = {}) {
+export function sentenceFishText(item, fish, { emotionCues = true, tamePunctuation = false, directions = true, lean = false } = {}) {
   const override = item?.override;
   if (override && typeof override.text === 'string' && override.text.trim()) return override.text.trim();
-  const compiled = compileVoiceCues(item.segment, { model: fish?.model, emotionCues });
+  const compiled = compileVoiceCues(item.segment, { model: fish?.model, emotionCues, directions, lean });
   const head = compiled.cues.join('');
-  const text = tamePunctuation ? tamePunctuationMarks(compiled.text) : compiled.text;
+  // The reader's punctuation marks go in before the runs are tamed, so a rule for 「！！」 still sees them.
+  const marked = applyPunctuationMarks(compiled.text, item?.console?.marks, fish?.model, { leading: head });
+  const text = tamePunctuation ? tamePunctuationMarks(marked) : marked;
   return `${head}${head ? ' ' : ''}${text}${compiled.tail ? ` ${compiled.tail}` : ''}`;
 }
 
@@ -1210,6 +1307,10 @@ const VOLUME_STEPS = Object.freeze({ quiet: -3, normal: 0, loud: 3 });
 /** Fish's prosody for one sentence: the reader's own numbers, else the voice's step on the settings. */
 export function sentenceProsody(item, fish, { prosodySplit = true } = {}) {
   const base = { speed: Number(fish?.speed) || 1, volume: Number(fish?.volume) || 0 };
+  // The character's speed lean, from the console: a small nudge that only applies where the voice
+  // itself said nothing about speed.
+  const lean = Number(item?.console?.speed);
+  const factor = Number.isFinite(lean) && lean !== 50 ? 1 + ((lean - 50) / 50) * 0.25 : 1;
   const override = item?.override;
   const speedOverride = Number(override?.speed);
   const volumeOverride = Number(override?.volume);
@@ -1219,10 +1320,10 @@ export function sentenceProsody(item, fish, { prosodySplit = true } = {}) {
       volume: Number(Math.min(20, Math.max(-20, Number.isFinite(volumeOverride) ? volumeOverride : base.volume)).toFixed(1)),
     };
   }
-  if (!prosodySplit) return base;
+  if (!prosodySplit) return { speed: Number(Math.min(2, Math.max(0.5, base.speed * factor)).toFixed(2)), volume: base.volume };
   const compiled = compileVoiceCues(item.segment, { model: fish?.model, emotionCues: false });
   return {
-    speed: Number(Math.min(2, Math.max(0.5, base.speed * SPEED_STEPS[compiled.speed])).toFixed(2)),
+    speed: Number(Math.min(2, Math.max(0.5, base.speed * SPEED_STEPS[compiled.speed] * (compiled.speed === 'normal' ? factor : 1))).toFixed(2)),
     volume: Number(Math.min(20, Math.max(-20, base.volume + VOLUME_STEPS[compiled.volume])).toFixed(1)),
   };
 }
@@ -1286,7 +1387,7 @@ export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosod
  * voice at all sends no reference id and lets Fish choose. The mood rides as cues at the start of its
  * sentence, where Fish says sentence-level cues work best, and the prosody is the part's.
  */
-export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit = true, tamePunctuation = false } = {}) {
+export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit = true, tamePunctuation = false, directions = true, lean = false } = {}) {
   const list = Array.isArray(items) ? items : [];
   const voices = [];
   for (const item of list) if (item.voiceId && !voices.includes(item.voiceId)) voices.push(item.voiceId);
@@ -1300,7 +1401,7 @@ export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit
     if (index) text += '\n';
     if (multi && item.voiceId !== currentVoice) text += `<|speaker:${voices.indexOf(item.voiceId)}|>`;
     currentVoice = item.voiceId;
-    const sentence = sentenceFishText(item, fish, { emotionCues, tamePunctuation });
+    const sentence = sentenceFishText(item, fish, { emotionCues, tamePunctuation, directions, lean });
     text += sentence;
     spans.push({ id: item.segment.id, text: item.override?.text ? stripCues(sentence) : item.segment.text });
   });
@@ -1606,9 +1707,12 @@ export function playbackWindow(entries, index, duration = 0) {
   };
 }
 
-export function fishFingerprint(fish, { emotionCues = true, prosodySplit = true, tamePunctuation = false } = {}) {
+export function fishFingerprint(fish, { emotionCues = true, prosodySplit = true, tamePunctuation = false, mode = '', consoles = '' } = {}) {
   return {
     provider: 'fish',
+    // The reading mode and the consoles change the text and the prosody, so they retire recordings too.
+    mode,
+    consoles,
     model: fish.model,
     format: fish.format,
     mp3Bitrate: fish.format === 'mp3' ? fish.mp3Bitrate : null,

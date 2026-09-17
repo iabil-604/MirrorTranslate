@@ -204,7 +204,7 @@ test('the deep reading carries the card and the recent floors, and every sentenc
     },
   });
   const settings = __testing.configureForTest({
-    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'floor', analysis: 'auto', context: { character: true, worldbook: false, recent: true, floors: 2 }, fish: FISH } },
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, deepUnlocked: true, mode: 'floor', analysis: 'auto', context: { character: true, worldbook: false, recent: true, floors: 2 }, fish: FISH } },
   });
   context.chat.push({ mes: '<story_scene>\n前一楼：泰罗擦了擦汗。\n</story_scene>', is_user: false, swipe_id: 0, extra: {} });
   context.chat.push(await translatedFloor('空は青い。泰羅は言った：「暑い！」', [[1, '蓝蓝的天空，泰罗说：「我操好热啊！」']], settings));
@@ -253,7 +253,7 @@ test('the deep reading leans on the translation\'s labels: an id alone keeps the
     },
   });
   const settings = __testing.configureForTest({
-    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'floor', analysis: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, deepUnlocked: true, mode: 'floor', analysis: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
   });
   context.chat.push(await translatedFloor('風。\n\n「暑い！」', [[1, '风停了。'], [2, '「好热！」']], settings, { 2: { speaker: '泰罗', emotion: 'happy', intensity: 1 } }));
   const floor = await __testing.collectTtsFloor(0, settings);
@@ -279,7 +279,7 @@ test('reading both languages: the original is labelled from the translation\'s r
   const settings = __testing.configureForTest({
     settings: {
       apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
-      tts: { enabled: true, mode: 'floor', side: 'both', analysis: 'deep', narratorVoice: 'voice-narrator', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH },
+      tts: { enabled: true, deepUnlocked: true, mode: 'floor', side: 'both', analysis: 'deep', narratorVoice: 'voice-narrator', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH },
       ttsVoices: { 'taro.png': [{ name: '樱井', voiceId: 'voice-zh', voices: { ja: 'voice-ja' } }] },
     },
   });
@@ -329,7 +329,7 @@ test('a failed analysis reads with the translation annotations and asks again ne
     },
   });
   const settings = __testing.configureForTest({
-    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, analysis: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, deepUnlocked: true, analysis: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
   });
   context.chat.push(await translatedFloor('「暑い！」', [[1, '「好热！」']], settings, { 1: { speaker: '泰罗', emotion: 'happy', intensity: 1 } }));
   const floor = await __testing.collectTtsFloor(0, settings);
@@ -380,10 +380,13 @@ test('the stream records one paragraph per request, and a sentence already recor
   assert.equal(calls.length, 1);
 
   // The deep reading finds it too, and the next paragraph is its own request in either reading.
-  const deep = __testing.configureForTest({ settings: { tts: { ...settings.tts, mode: 'deep' } } });
-  const found = await __testing.findTtsEntry(floor, items[1], deep);
-  assert.equal(found.record.unit, 'line:2', 'the paragraph recording answers for the sentence in the deep reading too');
-  const third = await __testing.resolveTtsEntry(floor, items, items[2], deep);
+  const deep = __testing.configureForTest({ settings: { tts: { ...settings.tts, mode: 'deep', deepUnlocked: true } } });
+  assert.equal(await __testing.findTtsEntry(floor, items[1], deep), null, 'a recording belongs to the mode that made it; another mode reads the words differently');
+  assert.equal((await __testing.findTtsEntry(floor, items[1], settings)).record.unit, 'line:2', 'in its own mode the paragraph recording answers for the sentence');
+  const consoled = __testing.configureForTest({ settings: { tts: { ...settings.tts, console: { speed: 80 } } } });
+  assert.equal(await __testing.findTtsEntry(floor, items[1], consoled), null, 'a changed console retires the recording, so the reader can hear the difference');
+  __testing.configureForTest({ settings: { tts: settings.tts } });
+  const third = await __testing.resolveTtsEntry(floor, items, items[2], settings);
   assert.equal(third.cached, false);
   assert.equal(calls.length, 2);
   assert.equal(calls[1].body.text, '泰罗放下了杯子。');
@@ -569,7 +572,7 @@ test('a long floor is read in batches, as many at once as the connection allows,
   });
   const wide = normalizeChannel({ id: 'c1', name: 'wide', url: 'https://relay.example/v1', key: 'k', model: 'labeler', concurrency: 3 });
   const settings = __testing.configureForTest({
-    settings: { apiMode: 'independent', channels: [wide], selectedChannelId: 'c1', tts: { enabled: true, mode: 'floor', analysis: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+    settings: { apiMode: 'independent', channels: [wide], selectedChannelId: 'c1', tts: { enabled: true, deepUnlocked: true, mode: 'floor', analysis: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
   });
   const lines = Array.from({ length: 36 }, (_, index) => `「第${index + 1}句。」`);
   context.chat.push(await translatedFloor(lines.map((_, index) => `「${index + 1}」`).join('\n\n'), lines.map((text, index) => [index + 1, text]), settings));
@@ -653,7 +656,7 @@ test('the stream reads from the translation\'s own labels and asks the sub-model
   const { items } = await __testing.ttsItemsFor(floor, segments, settings);
   assert.deepEqual(items.map(item => item.voiceId), ['voice-sakurai', 'voice-narrator', 'voice-taro', 'voice-sakurai']);
   const first = await __testing.ttsInspect(0, segments[0].id);
-  assert.equal(first.text, '[very surprised][in a hurry tone] 你来了？');
+  assert.equal(first.text, '[surprised][in a hurry tone] 你来了？');
   assert.equal(first.depth, 'annotations');
   assert.ok(first.summary.some(([term, value]) => term === '语气' && value === '急促'));
   const last = await __testing.ttsInspect(0, segments[3].id);
@@ -744,7 +747,7 @@ test('a long floor starts reading on its first analysis batch; the rest joins wh
   });
   const wide = normalizeChannel({ id: 'c1', name: 'wide', url: 'https://relay.example/v1', key: 'k', model: 'labeler', concurrency: 3 });
   const settings = __testing.configureForTest({
-    settings: { apiMode: 'independent', channels: [wide], selectedChannelId: 'c1', tts: { enabled: true, mode: 'floor', analysis: 'deep', narratorVoice: 'v-n', dialogueVoice: 'v-d', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+    settings: { apiMode: 'independent', channels: [wide], selectedChannelId: 'c1', tts: { enabled: true, deepUnlocked: true, mode: 'floor', analysis: 'deep', narratorVoice: 'v-n', dialogueVoice: 'v-d', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
   });
   // Its own wording: the analysis of the batching test above is cached by text, and would answer at once.
   const lines = Array.from({ length: 36 }, (_, index) => `「第${index + 1}句哦。」`);
@@ -787,7 +790,7 @@ test('a look at the floor asks nothing; the reading asks once and the look then 
     },
   });
   const settings = __testing.configureForTest({
-    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, deepUnlocked: true, mode: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
   });
   context.chat.push(await translatedFloor('空は青い。泰羅は言った：「暑いな、まだ九月か」', [[1, '蓝蓝的天空，泰罗说：「热死了，才九月啊」']], settings));
   const floor = await __testing.collectTtsFloor(0, settings);

@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.22.1';
+} from './prompts.js?v=0.23.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.22.1';
+export const APP_VERSION = '0.23.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -275,7 +275,42 @@ export const DEFAULT_COLORING = Object.freeze({
 // folded into 'stream': a single sentence is found inside whichever recording already holds it.
 // The two readings: the simple one gives every sentence its feeling, the deep one asks a model why
 // and how to play it, on top of the simple one.
-export const TTS_MODES = Object.freeze(['simple', 'deep']);
+export const TTS_MODES = Object.freeze(['off', 'simple', 'deep']);
+// What a play does on a floor the simple reading has not seen: ask, analyse without asking, or read the plain text.
+export const TTS_ASK_MODES = Object.freeze(['ask', 'analyze', 'plain']);
+// Punctuation the reader pairs with a tag: the Chinese word shown, Fish's own tag sent, and where the tag
+// lands by default (inline: in place of the punctuation; head: at the start of the clause it closes).
+export const MARK_TAGS = Object.freeze([
+  ['停顿', 'break', 'inline'], ['长停顿', 'long-break', 'inline'],
+  ['叹气', 'sighing', 'inline'], ['轻笑', 'chuckling', 'inline'], ['笑', 'laughing', 'inline'], ['喘息', 'panting', 'inline'],
+  ['倒吸气', 'gasping', 'inline'], ['抽泣', 'sobbing', 'inline'], ['清嗓', 'clear throat', 'inline'],
+  ['加大音量', 'shouting', 'head'], ['小声', 'soft tone', 'head'], ['耳语', 'whispering', 'head'], ['急促', 'in a hurry tone', 'head'],
+  ['生气', 'angry', 'head'], ['开心', 'happy', 'head'], ['难过', 'sad', 'head'], ['惊讶', 'surprised', 'head'], ['紧张', 'nervous', 'head'],
+  ['害怕', 'scared', 'head'], ['疑惑', 'doubtful', 'head'], ['困惑', 'confused', 'head'], ['温柔', 'tender', 'head'], ['害羞', 'shy', 'head'],
+  ['兴奋', 'excited', 'head'], ['平静', 'calm', 'head'], ['严肃', 'serious', 'head'], ['冷淡', 'indifferent', 'head'], ['讽刺', 'sarcastic', 'head'],
+  ['疲惫', 'tired', 'head'], ['哀求', 'pleading', 'head'],
+].map(([label, tag, at]) => Object.freeze({ label, tag, at })));
+export const MARK_TAG_LABELS = Object.freeze(MARK_TAGS.map(item => item.label));
+export const RECOMMENDED_MARKS = Object.freeze([
+  Object.freeze({ punct: '……', tag: '停顿', at: 'inline' }),
+  Object.freeze({ punct: '！！', tag: '加大音量', at: 'head' }),
+  Object.freeze({ punct: '？！', tag: '惊讶', at: 'head' }),
+]);
+/** Punctuation marks as saved: a run of punctuation, one catalogue word, and where the tag goes. */
+export function normalizeMarks(value) {
+  const list = Array.isArray(value) ? value : [];
+  const result = [];
+  const seen = new Set();
+  for (const item of list) {
+    const punct = String(item?.punct ?? '').replace(/\s+/g, '').slice(0, 8);
+    const known = MARK_TAGS.find(candidate => candidate.label === String(item?.tag ?? '').trim());
+    if (!punct || !known || seen.has(punct)) continue;
+    seen.add(punct);
+    result.push({ punct, tag: known.label, at: item?.at === 'head' || item?.at === 'inline' ? item.at : known.at });
+    if (result.length >= 12) break;
+  }
+  return result;
+}
 export const TTS_RANGES = Object.freeze(['all', 'dialogue', 'narration']);
 // Which language is read: the translation, the original the floor was written in, or both — each
 // made on its own, every line getting a button in either language.
@@ -289,7 +324,7 @@ export const TTS_ANALYSIS_MODES = Object.freeze(['auto', 'deep', 'light', 'annot
 // Sliders run 0–100 with 50 as the ordinary setting. The numbers never reach a model as numbers; they
 // become sentences about the character's habits first.
 export const CONSOLE_KEYS = Object.freeze(['pause', 'breath', 'grain', 'intensity', 'range', 'speed', 'expression']);
-export const DEFAULT_CONSOLE = Object.freeze({ pause: 50, breath: 50, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '' });
+export const DEFAULT_CONSOLE = Object.freeze({ pause: 50, breath: 50, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '', marks: Object.freeze([]) });
 
 /** A console with every slider clamped and the rules trimmed; `sparse` returns null for an untouched one. */
 export function normalizeConsole(value, { sparse = false } = {}) {
@@ -297,7 +332,8 @@ export function normalizeConsole(value, { sparse = false } = {}) {
   const console = {};
   for (const key of CONSOLE_KEYS) console[key] = clampInteger(source[key], 0, 100, DEFAULT_CONSOLE[key]);
   console.rules = normalizeNewlines(String(source.rules ?? '')).split('\n').map(line => line.trim()).filter(Boolean).slice(0, 12).join('\n').slice(0, 800);
-  if (sparse && !console.rules && CONSOLE_KEYS.every(key => console[key] === 50)) return null;
+  console.marks = normalizeMarks(source.marks);
+  if (sparse && !console.rules && !console.marks.length && CONSOLE_KEYS.every(key => console[key] === 50)) return null;
   return console;
 }
 export const TTS_DOWNLOAD_SCOPES = Object.freeze(['auto', 'floor', 'current']);
@@ -448,6 +484,10 @@ export const DEFAULT_TTS = Object.freeze({
   channelId: '',
   // Sentences per analysis batch; 0 sends the whole floor in one request.
   batchSize: 12,
+  // A play on a floor the simple reading has not seen: ask first, always analyse, or read the plain text.
+  askAnalysis: 'ask',
+  // The deep reading is shelved while it is reworked; this hatch keeps it reachable for tests.
+  deepUnlocked: false,
   quotePairs: DEFAULT_QUOTE_PAIRS,
   skipPairs: DEFAULT_SKIP_PAIRS,
   // What the deep reading is allowed to see besides the floor itself.
@@ -910,9 +950,12 @@ export function normalizeTts(value) {
   // floor was read (auto, deep, light, annotations). Only the depth survives as the mode: the whole
   // floor read deeply, the stream read simply, and a depth named outright wins over either.
   const legacyMode = source.mode === 'floor' ? 'deep' : ['stream', 'sentence'].includes(source.mode) ? 'simple' : source.mode;
-  const mode = TTS_MODES.includes(source.mode)
+  const wanted = TTS_MODES.includes(source.mode)
     ? source.mode
     : source.analysis === 'deep' ? 'deep' : ['light', 'annotations'].includes(source.analysis) ? 'simple' : legacyMode;
+  // The deep reading is shelved while it is reworked: a stored choice falls back to the simple one
+  // unless the hatch is open.
+  const mode = wanted === 'deep' && source.deepUnlocked !== true ? 'simple' : wanted;
   return {
     enabled: source.enabled === true,
     side: TTS_SIDES.includes(source.side) ? source.side : DEFAULT_TTS.side,
@@ -935,6 +978,8 @@ export function normalizeTts(value) {
     },
     channelId: String(source.channelId ?? '').trim().slice(0, 80),
     batchSize: normalizeBatchSize(source.batchSize),
+    askAnalysis: TTS_ASK_MODES.includes(source.askAnalysis) ? source.askAnalysis : DEFAULT_TTS.askAnalysis,
+    deepUnlocked: source.deepUnlocked === true,
     quotePairs: normalizePairStrings(source.quotePairs, DEFAULT_QUOTE_PAIRS),
     skipPairs: normalizePairStrings(source.skipPairs, DEFAULT_SKIP_PAIRS),
     context: normalizeTtsContext(source.context),

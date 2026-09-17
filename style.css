@@ -891,3 +891,53 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 @media (max-width: 520px) {
   .jy-tts-console { grid-template-columns: 1fr; }
 }
+
+/* 标点情绪标签：调音台里折叠的一组行，标点在左，标签和位置在右 */
+.jy-tts-marks-fold { grid-column: 1 / -1; margin: 2px 0 4px; }
+.jy-tts-marks-fold > summary { cursor: pointer; font-size: 12px; color: var(--jy-muted); list-style: none; padding: 4px 0; }
+.jy-tts-marks-fold > summary::-webkit-details-marker { display: none; }
+.jy-tts-marks-fold > summary::before { content: "▸ "; }
+.jy-tts-marks-fold[open] > summary::before { content: "▾ "; }
+.jy-tts-marks-fold > p.jy-muted { margin: 2px 0 6px; font-size: 11.5px; }
+.jy-tts-marks { display: flex; flex-direction: column; gap: 4px; }
+.jy-tts-mark-row { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(0, 1.4fr) auto auto; gap: 6px; align-items: center; }
+.jy-tts-mark-row input, .jy-tts-mark-row select { min-width: 0; font-size: 12.5px; }
+.jy-tts-marks-tools { display: flex; gap: 14px; margin-top: 4px; }
+
+/* 悬浮窗第一层：只有楼层状态、任务一行、播放条和两个按钮 */
+.jy-mini-brief { display: none; flex-direction: column; gap: 8px; padding: 10px 12px 12px; }
+.jy-mini[data-size="compact"] { width: 300px; }
+.jy-mini[data-size="compact"] .jy-mini-brief { display: flex; }
+.jy-mini[data-size="compact"] .jy-mini-tabs, .jy-mini[data-size="compact"] .jy-mini-body { display: none !important; }
+.jy-mini-brief-floor { display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 650; }
+.jy-mini-brief-floor .jy-muted { font-weight: 400; font-size: 12px; }
+.jy-mini-brief-task { margin: 0; font-size: 12px; color: var(--jy-muted); line-height: 1.5; }
+.jy-mini-brief-task[hidden] { display: none; }
+.jy-mini-brief-actions { display: flex; gap: 8px; }
+.jy-mini-brief-actions .jy-button { flex: 1 1 0; }
+.jy-mini[data-touch="true"] .jy-mini-brief-actions .jy-button { min-height: 44px; font-size: 14px; border-radius: 12px; }
+
+/* 句子行尾的三个按钮：播放、重新生成、详细 */
+.jy-mini-sentence-tools { display: flex; gap: 2px 6px; flex-wrap: wrap; justify-content: flex-end; align-self: start; }
+.jy-mini-sentence-tools .jy-text-button { font-size: 11.5px; white-space: nowrap; padding: 2px 4px; }
+.jy-mini[data-touch="true"] .jy-mini-sentence { grid-template-columns: 16px minmax(0, 1fr); }
+.jy-mini[data-touch="true"] .jy-mini-sentence-tools { grid-column: 2 / -1; justify-content: flex-start; gap: 4px 14px; }
+.jy-mini[data-touch="true"] .jy-mini-sentence-tools .jy-text-button { font-size: 13px; padding: 6px 2px; }
+
+/* 详情页：原文在最上面，自定义指令一行，手机键盘弹出时窗口跟着缩 */
+.jy-mini-inspect-source { margin: 0; font-size: 12px; line-height: 1.5; color: var(--jy-muted); overflow-wrap: anywhere; }
+.jy-mini-inspect-source[hidden] { display: none; }
+.jy-mini-inspect-custom { display: flex; gap: 6px; align-items: center; }
+.jy-mini-inspect-custom input { flex: 1 1 auto; min-width: 0; font-size: 12.5px; }
+.jy-mini[data-touch="true"][data-keyboard="true"] { max-height: var(--jy-mini-vh, 70dvh); }
+.jy-mini[data-size="max"][data-keyboard="true"] { height: var(--jy-mini-vh, 100dvh); max-height: var(--jy-mini-vh, 100dvh); }
+
+/* 问一下再分析的小弹窗 */
+.jy-ask-backdrop { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; background: #0006; padding: 16px; }
+.jy-ask { width: min(420px, 100%); border-radius: 14px; background: var(--jy-surface, #f6f4ec); color: var(--jy-ink, #1f2a24); box-shadow: 0 18px 48px #0004; padding: 16px 16px 14px; font: 13.5px/1.6 system-ui, sans-serif; }
+.jy-ask h3 { margin: 0 0 6px; font-size: 15px; }
+.jy-ask p { margin: 0 0 10px; color: var(--jy-muted, #5d6a63); }
+.jy-ask label { display: flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--jy-muted, #5d6a63); margin-bottom: 10px; }
+.jy-ask-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.jy-ask-actions button { flex: 1 1 0; min-height: 40px; border-radius: 10px; border: 1px solid var(--jy-line, #cfd6cf); background: transparent; color: inherit; font-size: 13.5px; cursor: pointer; }
+.jy-ask-actions button.is-primary { background: var(--jy-accent, #2f6b4f); color: #fff; border-color: transparent; }
