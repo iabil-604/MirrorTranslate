@@ -1160,3 +1160,27 @@ test('channel concurrency is clamped, a leaning saved as a style moves to its ow
   assert.equal(recovered.annotations.get(1)?.speaker, undefined);
   assert.equal(recovered.annotations.get(2)?.speaker, '洛琪希');
 });
+
+test('a voice id edited in the library moves every binding that pointed at it', async () => {
+  const { followVoiceLibrary } = await import('../core.js');
+  const before = [{ id: 'lib-a', name: '少女', voiceId: 'voice-a' }, { id: 'lib-b', name: '老人', voiceId: 'voice-b' }];
+  const settings = {
+    voiceLibrary: [{ id: 'lib-a', name: '少女', voiceId: 'voice-a2' }, { id: 'lib-b', name: '老人', voiceId: 'voice-b' }],
+    tts: { narratorVoice: 'voice-a', narratorTitle: 'Fish says A', dialogueVoice: 'voice-b', dialogueTitle: 'Fish says B', narratorVoices: { en: 'voice-a', ja: 'voice-c' } },
+    ttsVoices: { 'card.png': [{ name: '樱井', voiceId: 'voice-a', title: 'A', voices: { en: 'voice-a' } }, { name: '泰罗', voiceId: 'voice-b', voices: {} }] },
+    theme: 'day',
+  };
+  const followed = followVoiceLibrary(before, settings);
+  assert.equal(followed.tts.narratorVoice, 'voice-a2');
+  assert.equal(followed.tts.narratorTitle, '', 'the provider title belonged to the old id');
+  assert.equal(followed.tts.dialogueVoice, 'voice-b', 'an entry that did not move moves nothing');
+  assert.equal(followed.tts.dialogueTitle, 'Fish says B');
+  assert.deepEqual(followed.tts.narratorVoices, { en: 'voice-a2', ja: 'voice-c' });
+  assert.deepEqual(followed.ttsVoices['card.png'].map(row => [row.voiceId, row.title, row.voices.en ?? null]), [['voice-a2', '', 'voice-a2'], ['voice-b', undefined, null]]);
+  assert.equal(followed.theme, 'day', 'everything else rides along untouched');
+  const same = { ...settings, voiceLibrary: before };
+  assert.equal(followVoiceLibrary(before, same), same, 'no move, the same object back');
+  // A brand-new entry, or one whose id nobody held, changes nothing either.
+  const added = followVoiceLibrary(before, { ...settings, voiceLibrary: [...before, { id: 'lib-c', name: '新', voiceId: 'voice-c' }] });
+  assert.equal(added.tts.narratorVoice, 'voice-a');
+});

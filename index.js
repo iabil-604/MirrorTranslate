@@ -53,6 +53,7 @@ import {
   normalizeTts,
   normalizeVoiceList,
   normalizeVoiceLibrary,
+  followVoiceLibrary,
   normalizeLanguageCode,
   languageLabel,
   formatPairList,
@@ -65,7 +66,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.25.1';
+} from './core.js?v=0.26.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -73,7 +74,6 @@ import {
   alignSpansToTimeline,
   analysisCacheKey,
   base64ToBytes,
-  buildFishPayload,
   buildGlobalTimeline,
   buildSegments,
   buildTtsAnalysisMessages,
@@ -88,7 +88,6 @@ import {
   findCoveringEntry,
   fingerprintKey,
   fishEndpoint,
-  fishFingerprint,
   fishHeaders,
   groupSegmentsByLine,
   annotationReading,
@@ -99,15 +98,14 @@ import {
   parseTtsAnalysis,
   parseVoiceAnalysis,
   plainLineText,
-  planFishParts,
   planVoices,
   playbackWindow,
   recordCovers,
   recordingCacheKey,
+  itemIdentity,
+  ttsProvider,
   resolveSegmentVoice,
   segmentsInRange,
-  sentenceFishText,
-  sentenceProsody,
   splitUtterances,
   toStandardDocument,
   voiceRosterNames,
@@ -115,14 +113,15 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.25.1';
-import { createTtsStore } from './tts-store.js?v=0.25.1';
+} from './tts.js?v=0.26.0';
+import { createTtsStore } from './tts-store.js?v=0.26.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.26.0';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.25.1';
+} from './processing.js?v=0.26.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -139,9 +138,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.25.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.25.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.25.1';
+} from './prompts.js?v=0.26.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.26.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.26.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -155,15 +154,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.25.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.25.1';
+} from './palette.js?v=0.26.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.26.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.25.1';
+} from './diagnostics.js?v=0.26.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -691,7 +690,9 @@ function initializeSettings() {
 function saveSettings(next) {
   const context = getContext();
   const previous = runtime.settings;
-  runtime.settings = captureProcessingProfile(normalizeProcessingSettings(next));
+  // A voice id edited in the library takes the rows, the narrator and the dialogue default that
+  // pointed at the old id along with it: the entry is the voice, the id is where it lives today.
+  runtime.settings = followVoiceLibrary(previous.voiceLibrary, captureProcessingProfile(normalizeProcessingSettings(next)));
   const active = getActiveProcessingProfile(runtime.settings);
   const previousRules = getActiveProcessingProfile(previous).regexScripts;
   const visualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
@@ -707,7 +708,7 @@ function saveSettings(next) {
     runtime.mini.host.dataset.theme = runtime.settings.theme || 'day';
     runtime.mini.syncQuickPickers?.();
   }
-  const floating = document.getElementById(FLOATING_ID);
+  const floating = typeof document === 'undefined' ? null : document.getElementById(FLOATING_ID);
   if (floating) floating.dataset.theme = runtime.settings.theme || 'day';
   // Anything the floor buttons depend on — the switch, the mode, the range — redraws them; switching
   // reading aloud off also ends whatever is playing.
@@ -2567,6 +2568,50 @@ function ttsKnownNames(settings = runtime.settings) {
   return [...new Set([...voiceRosterNames(ttsVoicesFor(settings)), ...speakerRoster(settings), ...runtime.autoSpeakerNames])];
 }
 
+/**
+ * The people the speaker engine can name, each with the spellings it may meet in the text: the voice
+ * table's rows, the colouring's palette, the card's character and the reader, and whoever the model
+ * has already named this session. Names only; which voice a name reads in is nobody's business here.
+ */
+function ttsCast(settings = runtime.settings) {
+  const context = getContext();
+  const cast = [];
+  const add = (name, aliases = []) => {
+    const clean = String(name ?? '').trim();
+    if (!clean) return;
+    const spellings = (Array.isArray(aliases) ? aliases : []).map(alias => String(alias ?? '').trim()).filter(alias => alias && alias !== clean);
+    const entry = cast.find(item => item.name === clean);
+    if (entry) {
+      for (const alias of spellings) if (!entry.aliases.includes(alias)) entry.aliases.push(alias);
+      return;
+    }
+    cast.push({ name: clean, aliases: [...new Set(spellings)] });
+  };
+  for (const row of ttsVoicesFor(settings)) add(row.name, row.aliases);
+  for (const speaker of speakerPaletteFor(settings)) add(speaker.name, speaker.aliases);
+  add(context.name2);
+  add(context.name1);
+  for (const name of runtime.autoSpeakerNames) add(name);
+  return cast;
+}
+
+/** The cast's names alone, for the reader to pick from. */
+function ttsCastNames(settings = runtime.settings) {
+  return ttsCast(settings).map(entry => entry.name);
+}
+
+/** The speakers the reader set by hand on this floor, by utterance id. */
+async function ttsManualSpeakers(floor) {
+  const manual = new Map();
+  for (const [id, record] of await ttsOverrides(floor)) if (record?.speaker) manual.set(id, record.speaker);
+  return manual;
+}
+
+/** The provider adapter the reading sends through. Fish is the only one today; the settings name it. */
+function ttsProviderFor(settings = runtime.settings) {
+  return ttsProvider(ttsSettings(settings).provider ?? 'fish');
+}
+
 function ttsUtterances(floor, settings = runtime.settings) {
   const tts = ttsSettings(settings);
   return splitUtterances(floor.lines, { quotePairs: tts.quotePairs, skipPairs: tts.skipPairs });
@@ -2772,7 +2817,7 @@ async function ttsContextPacket(floor, settings) {
  * Either way the answer is labels keyed by id and never text. `onRequest` is told only when a request
  * actually goes out, so a cached reading never claims to be thinking.
  */
-async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, hints = null, hintVoices = null, onPrefix = null } = {}) {
+async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, hints = null, hintVoices = null, onPrefix = null, speakers = null } = {}) {
   const roster = ttsKnownNames(settings);
   const tts = ttsSettings(settings);
   const key = await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side });
@@ -2790,7 +2835,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     const context = getContext();
     const options = {
       roster, characterName: context.name2 ?? '', userName: context.name1 ?? '', translations: floor.references,
-      packet, hints, hintVoices, styles: ttsStyles(settings), previous, systemPrompt: depth === 'deep' ? tts.prompts.deep : tts.prompts.simple,
+      packet, hints, hintVoices, speakers, styles: ttsStyles(settings), previous, systemPrompt: depth === 'deep' ? tts.prompts.deep : tts.prompts.simple,
     };
     // A long floor goes out in batches, as many at once as the connection allows, each batch seeing
     // the few sentences before it. Wall time drops by about the number of batches.
@@ -2948,6 +2993,11 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   let labels = reading.labels;
   let voices = reading.voices.size ? reading.voices : null;
   let depth = ttsAnalysisDepth(tts);
+  // Who speaks each quote is settled here, before anything is asked: the reader's word first, then
+  // what the text itself shows, then the translation's label. The model is told, never asked.
+  const manual = await ttsManualSpeakers(floor);
+  const cast = ttsCast(settings);
+  let resolved = resolveSpeakers(utterances, { cast, hints: speakerHints(reading.labels), manual });
   const primary = await ttsPrimaryFloor(floor, settings);
   if (primary) {
     const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep, passive });
@@ -2955,6 +3005,8 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
     for (const [id, label] of derived.labels) labels.set(id, { ...(labels.get(id) ?? {}), ...label });
     voices = derived.voices;
     depth = read.depth ?? depth;
+    // The names were read in the other language and carried over; here they are not read again.
+    resolved = resolveSpeakers(utterances, { cast, hints: speakerHints(labels), manual, infer: false });
     const key = ttsLabelKey(floor);
     runtime.tts.analysis.set(key, { labels, voices, depth, derived: true });
   } else if (depth === 'off' || runtime.tts.plainFloors.has(ttsLabelKey(floor))) {
@@ -2993,6 +3045,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
       try {
         const analyzed = await analyzeTtsFloor(floor, utterances, settings, depth, {
           force,
+          speakers: speakersOf(resolved),
           hints: depth === 'deep' ? labels : null,
           hintVoices: depth === 'deep' ? voices : null,
           // Each batch that comes back, with the ones before it, becomes segments the floor can start on.
@@ -3001,7 +3054,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
             for (const [id, label] of partial.labels) partialLabels.set(id, label);
             onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `细读这一楼（${utterances.length} 句）` : `简单分析（${utterances.length} 句）`, detail: `已回 ${partial.ready}/${partial.total} 批` });
             onPartial({
-              segments: buildSegments(utterances, partialLabels, { knownNames: ttsKnownNames(settings), voices: mergeVoiceMaps(reading.voices, partial.voices) }),
+              segments: buildSegments(utterances, pinSpeakers(partialLabels, resolved), { knownNames: ttsKnownNames(settings), voices: mergeVoiceMaps(reading.voices, partial.voices) }),
               readyIds: partial.readyIds,
               ready: partial.ready,
               total: partial.total,
@@ -3034,8 +3087,11 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
       if (!requested) onStatus?.('');
     }
   }
-  const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices });
-  return { utterances, labels, voices, segments, depth, passive };
+  // The names settled above are written over whatever the labels say; the model's word stands only
+  // where nobody else had one.
+  const pinned = pinSpeakers(labels, resolved);
+  const segments = buildSegments(utterances, pinned, { knownNames: ttsKnownNames(settings), voices });
+  return { utterances, labels: pinned, voices, segments, depth, passive };
 }
 
 /** The labels with only who speaks left on them: what the plain reading keeps for its voices. */
@@ -3272,7 +3328,7 @@ async function streamFishTimestamps(body, fish, signal) {
 // Everything that changes the sound, hashed once per distinct settings.
 async function ttsFingerprint(settings = runtime.settings) {
   const tts = ttsSettings(settings);
-  const fingerprint = fishFingerprint(tts.fish, { emotionCues: tts.emotionCues, prosodySplit: tts.prosodySplit, tamePunctuation: tts.tamePunctuation, mode: tts.mode, consoles: consoleFingerprint(settings) });
+  const fingerprint = ttsProviderFor(settings).fingerprint(tts, { consoles: consoleFingerprint(settings) });
   const json = JSON.stringify(fingerprint);
   if (runtime.tts.fingerprint?.json !== json) runtime.tts.fingerprint = { json, fingerprint, key: await fingerprintKey(fingerprint) };
   return runtime.tts.fingerprint;
@@ -3301,7 +3357,7 @@ async function ttsItemsFor(floor, segments, settings, { range = null } = {}) {
   const items = plan.items.map(item => {
     const override = overrides.get(item.segment.id);
     const carried = { ...item, console: consoleFor(item.segment, settings) };
-    return override ? { ...carried, override: { text: override.text, speed: override.speed, volume: override.volume } } : carried;
+    return override ? { ...carried, override: { text: override.text, speed: override.speed, volume: override.volume, speaker: override.speaker } } : carried;
   });
   const warnKey = `${ttsLabelKey(floor)}|voices`;
   if ((plan.unvoiced.length || plan.defaulted.length) && !runtime.tts.anchorWarned.has(warnKey)) {
@@ -3346,7 +3402,7 @@ async function findTtsEntry(floor, item, settings) {
     if (own.length) return { record: own[0], index: 0 };
     return null;
   }
-  return findCoveringEntry(records, { text: item.segment.text, voiceId: item.voiceId, fingerprint });
+  return findCoveringEntry(records, { text: item.segment.text, voiceId: item.voiceId, fingerprint, identity: itemIdentity(item) });
 }
 
 /**
@@ -3369,7 +3425,8 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
   }
   requireFishKey(tts);
   const record = await dedupeTtsJob(key, floor.messageId, async signal => {
-    const parts = planFishParts(items, { model: tts.fish.model, maxChars: tts.fish.maxChars, prosodySplit: tts.prosodySplit });
+    const provider = ttsProviderFor(settings);
+    const parts = provider.parts(items, tts);
     const label = unit.startsWith('line:') ? '这一段' : unit.startsWith('sentence:') ? '这一句' : unit.startsWith('chunk:') ? `第 ${unit.slice(6)} 批` : '整楼';
     // Parts go to Fish several at a time when the settings allow; the recording is assembled in part
     // order afterwards, so playback never learns which came back first. The first failure stops the
@@ -3394,7 +3451,7 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
     let failure = null;
     try {
       made = await runInLanes(parts, lanes, async (part, index) => {
-        const { body, spans } = buildFishPayload(part, tts.fish, { emotionCues: tts.emotionCues, prosodySplit: tts.prosodySplit, tamePunctuation: tts.tamePunctuation, directions: tts.mode === 'deep', lean: tts.mode !== 'deep' });
+        const { body, spans } = provider.payload(part, tts);
         let stream;
         try {
           stream = await streamFishTimestamps(body, tts.fish, group.signal);
@@ -3409,7 +3466,7 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
           }
           throw error;
         }
-        const blob = new Blob(stream.audio.map(base64ToBytes), { type: FISH_MIME[tts.fish.format] ?? 'audio/mpeg' });
+        const blob = new Blob(stream.audio.map(base64ToBytes), { type: provider.mime(tts.fish.format) });
         const { timeline: spoken, duration } = buildGlobalTimeline(stream.alignments);
         const aligned = alignSpansToTimeline(spans, spoken, { duration });
         finished += 1;
@@ -3495,7 +3552,10 @@ function scheduleTtsAhead(transport) {
   const { floor, settings } = transport;
   const tts = ttsSettings(settings);
   const lanes = Math.max(1, Number(tts.fish.concurrency) || 1);
-  const units = ttsUnitsOf(tts, transport.items.slice(transport.index + 1));
+  // The paragraph being played is made whole by the turn itself; only the ones after it are made here,
+  // so its tail is never asked for a second time as a paragraph of its own.
+  const currentLine = transport.items[transport.index]?.segment.lineId;
+  const units = ttsUnitsOf(tts, transport.items.slice(transport.index + 1).filter(item => item.segment.lineId !== currentLine));
   if (!units.length) return;
   void runInLanes(units, lanes, async target => {
     if (!isTtsTransport(transport)) return;
@@ -3691,13 +3751,14 @@ function highlightTtsUtterance(messageId, utteranceId, side = null) {
 }
 
 function ttsButton(messageId, utteranceId, side = null) {
+  if (typeof document === 'undefined') return null;
   const which = side ?? primaryTtsSide();
   return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-play[data-jy-tts-utt="${utteranceId}"][data-jy-tts-side="${which}"]`);
 }
 
 function ttsLineButton(messageId, lineId, side = null) {
+  if (typeof document === 'undefined' || lineId === null || lineId === undefined) return null;
   const which = side ?? primaryTtsSide();
-  if (lineId === null || lineId === undefined) return null;
   return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-line-play[data-jy-tts-line="${lineId}"][data-jy-tts-side="${which}"]`);
 }
 
@@ -3988,6 +4049,30 @@ async function createTtsTransport(messageId, { single = false, fromUtterance = n
   return transport;
 }
 
+/**
+ * A transport built on settings that have since changed is brought up to date before it sounds.
+ *
+ * Its items are made again from the current voice table and the analysis already in hand — a look at
+ * the floor, never a reading, so nothing is asked of the model — and the sentence it was on keeps its
+ * place by id. A transport still receiving its batches is left alone; the loop catches up with it
+ * once the floor is whole.
+ */
+async function syncTtsTransport(transport) {
+  if (!transport || transport.settings === runtime.settings || !transport.prepared || !transport.floor) return transport;
+  const prepared = await ttsPrepared(transport.messageId, transport.side);
+  if (runtime.tts.transport !== transport || transport.settings === runtime.settings) return transport;
+  const currentId = transport.items[transport.index]?.segment.id ?? null;
+  transport.settings = runtime.settings;
+  transport.floor = prepared.floor;
+  transport.items = prepared.items;
+  transport.mode = ttsSettings(runtime.settings).mode;
+  transport.aheadKey = '';
+  transport.current = null;
+  const at = currentId === null ? -1 : prepared.items.findIndex(item => item.segment.id === currentId);
+  transport.index = at >= 0 ? at : Math.min(transport.index, Math.max(0, prepared.items.length - 1));
+  return transport;
+}
+
 function ttsPreparedKey(messageId, side) {
   return `${messageId}|${side}`;
 }
@@ -4004,7 +4089,6 @@ function isTtsTransport(transport) {
  * exists in some recording, so a stream reads its next paragraph while this one is still playing.
  */
 async function runTtsTransport(transport) {
-  const { floor, settings } = transport;
   transport.generation += 1;
   const generation = transport.generation;
   const live = () => isTtsTransport(transport) && transport.generation === generation;
@@ -4020,6 +4104,12 @@ async function runTtsTransport(transport) {
         transport.wake = null;
         continue;
       }
+      // Settings changed since the transport was built: its items are made again from the current
+      // voice table before anything more is heard, with nothing asked of the model.
+      await syncTtsTransport(transport);
+      if (!live()) return;
+      if (transport.index >= transport.items.length) continue;
+      const { floor, settings } = transport;
       const items = transport.items;
       const item = items[transport.index];
       scheduleTtsAhead(transport);
@@ -4251,6 +4341,7 @@ async function playTtsUtterance(messageId, utteranceId, side = null) {
   // The floor already open in the transport, paused or not: a click on one of its sentences is a seek,
   // never a second preparation of the same floor.
   if (existing && existing.messageId === messageId && existing.side === wantedSide && existing.floor && existing.items.length) {
+    await syncTtsTransport(existing);
     const index = existing.items.findIndex(item => item.segment.id === utteranceId);
     if (index >= 0) {
       if (existing.state === 'loading' && existing.index === index) return;
@@ -4294,6 +4385,7 @@ async function playTtsParagraph(messageId, lineId, side = null) {
   const wantedSide = side ?? primaryTtsSide();
   const existing = runtime.tts.transport;
   if (existing && existing.messageId === messageId && existing.side === wantedSide && existing.floor && existing.items.length) {
+    await syncTtsTransport(existing);
     const index = existing.items.findIndex(item => item.segment.lineId === lineId);
     if (index >= 0) {
       if (existing.state === 'loading' && existing.index === index) return;
@@ -4543,6 +4635,7 @@ async function ttsPrepared(messageId, side = null, { fresh = false } = {}) {
 async function ttsInspect(messageId, utteranceId, side = null) {
   const prepared = await ttsPrepared(messageId, side);
   const tts = ttsSettings(prepared.settings);
+  const provider = ttsProviderFor(prepared.settings);
   const segment = prepared.segments.find(item => item.id === utteranceId);
   if (!segment) throw new Error('这一句已经变了，等楼层重新渲染后再看。');
   const item = prepared.items.find(candidate => candidate.segment.id === utteranceId)
@@ -4560,9 +4653,15 @@ async function ttsInspect(messageId, utteranceId, side = null) {
     original: prepared.floor.side === 'translation' ? (prepared.floor.sources?.get(segment.lineId) ?? null) : (prepared.floor.references?.get(segment.lineId) ?? null),
     depth: analysis?.depth ?? prepared.depth ?? null,
     derived: analysis?.derived === true,
-    text: sentenceFishText(automatic, tts.fish, { emotionCues: tts.emotionCues, tamePunctuation: tts.tamePunctuation, directions: tts.mode === 'deep', lean: tts.mode !== 'deep' }),
-    prosody: sentenceProsody(automatic, tts.fish, { prosodySplit: tts.prosodySplit }),
+    text: provider.sentenceText(automatic, tts),
+    prosody: provider.prosody(automatic, tts),
     override: item.override ?? null,
+    // The reader rewrote the words or the delivery, as against only naming who speaks.
+    edited: Boolean(item.override && (item.override.text || item.override.speed !== undefined || item.override.volume !== undefined)),
+    manualSpeaker: item.override?.speaker ?? null,
+    speakerSource: segment.speakerSource ?? null,
+    speakerEvidence: segment.speakerEvidence ?? [],
+    cast: ttsCastNames(prepared.settings),
     recorded: Boolean(entry),
     inRange: prepared.items.some(candidate => candidate.segment.id === utteranceId),
   };
@@ -4698,14 +4797,13 @@ function askTtsRefine({ messageId, sentence = null }) {
     const short = sentence ? miniShort(sentence.text, 18) : '';
     backdrop.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="重新分析">
   <h3>重新分析第 ${messageId} 楼</h3>
-  <p>按你的意见改已有的分析：副模型不用再通读一遍正文，只看上次的结果和你的意见，快得多，也便宜。也可以丢掉重来。</p>
+  <p>按你的意见改已有的分析：副模型不用再通读一遍正文，只看上次的结果和你的意见，快得多。也可以丢掉重来。说话人不用问副模型，在详细页的下拉框里直接改。</p>
   <div class="jy-ask-scope" data-jy-refine-scope>
     <label><input type="radio" name="jy-refine-scope" value="sentence" checked>只改这一句${short ? `：${short}` : ''}</label>
     <label><input type="radio" name="jy-refine-scope" value="floor"${sentence ? '' : ' checked'}>整楼都改</label>
   </div>
-  <label class="jy-ask-field"><span>哪里不对（可以不写）</span><textarea data-jy-refine-feedback rows="2" placeholder="比如：说话人不对，这句是樱井说的；情绪不够饱满；语气太平"></textarea></label>
+  <label class="jy-ask-field"><span>哪里不对（可以不写）</span><textarea data-jy-refine-feedback rows="2" placeholder="比如：情绪不够饱满；语气太平；这句该更急一点"></textarea></label>
   <div class="jy-ask-chips" data-jy-refine-chips>
-    <button type="button" data-chip="说话人不对">说话人不对</button>
     <button type="button" data-chip="情绪不够饱满">情绪不够</button>
     <button type="button" data-chip="情绪太夸张了">情绪太过</button>
     <button type="button" data-chip="语气太平，没起伏">语气太平</button>
@@ -4758,7 +4856,10 @@ async function saveTtsOverride(messageId, utteranceId, { text, speed, volume }, 
   if (!cleaned) throw new Error('发给 Fish 的内容不能为空。');
   const speedValue = Number(speed);
   const volumeValue = Number(volume);
+  // A name the reader set on this sentence stays with it through a rewrite of its words.
+  const named = (await ttsOverrides(prepared.floor)).get(utteranceId)?.speaker;
   const record = {
+    ...(named ? { speaker: named } : {}),
     floorId: prepared.floor.floorId, version: prepared.floor.version, segmentId: utteranceId, text: cleaned,
     ...(Number.isFinite(speedValue) ? { speed: Math.min(2, Math.max(0.5, speedValue)) } : {}),
     ...(Number.isFinite(volumeValue) ? { volume: Math.min(20, Math.max(-20, volumeValue)) } : {}),
@@ -4774,6 +4875,37 @@ async function saveTtsOverride(messageId, utteranceId, { text, speed, volume }, 
   forgetTtsItems(messageId);
   setTtsStatus(messageId, '', 'idle');
   return made;
+}
+
+/**
+ * The reader names who says one sentence.
+ *
+ * The name is an annotation, kept beside the sentence's other overrides; the words do not change and
+ * nothing is asked of the model. The take made under the old name is let go, so the next play reads
+ * the sentence in the voice the new name has. An empty name hands the sentence back to the engine.
+ */
+async function saveTtsSpeaker(messageId, utteranceId, speaker, side = null) {
+  const prepared = await ttsPrepared(messageId, side);
+  const segment = prepared.segments.find(item => item.id === utteranceId);
+  if (!segment) throw new Error('这一句已经变了。');
+  const name = String(speaker ?? '').trim().slice(0, 60);
+  const { floor } = prepared;
+  const existing = (await ttsOverrides(floor)).get(utteranceId) ?? null;
+  const keepsWords = Boolean(existing && (existing.text || existing.speed !== undefined || existing.volume !== undefined));
+  if (name) {
+    await ttsStore().putOverride({ ...(existing ?? {}), floorId: floor.floorId, version: floor.version, segmentId: utteranceId, speaker: name });
+  } else if (keepsWords) {
+    const { speaker: dropped, ...rest } = existing;
+    void dropped;
+    await ttsStore().putOverride(rest);
+  } else if (existing) {
+    await ttsStore().deleteOverride(floor.floorId, floor.version, utteranceId);
+  }
+  const affected = prepared.items.filter(item => item.segment.id === utteranceId);
+  if (affected.length) await dropTtsRecordings(prepared, affected);
+  forgetTtsItems(messageId);
+  scheduleTtsDecorate(messageId, { force: true });
+  return name;
 }
 
 async function clearTtsOverride(messageId, utteranceId, side = null) {
@@ -8808,7 +8940,7 @@ async function openMiniWindow() {
   <ol class="jy-mini-sentences" data-jy-tts-list hidden></ol>
   <p class="jy-muted jy-mini-sentences-note" data-jy-tts-list-note hidden></p>
   <div class="jy-mini-inspect" data-jy-tts-inspect hidden>
-    <div class="jy-mini-inspect-head"><strong data-jy-tts-who>—</strong><button type="button" class="jy-mini-inspect-close" data-jy-action="tts-inspect-close" aria-label="关闭改句面板" title="关闭">×</button></div>
+    <div class="jy-mini-inspect-head"><strong data-jy-tts-who>—</strong><select data-jy-tts-speaker aria-label="这一句是谁说的" title="这一句是谁说的。改了就按这个人的音色重新生成，不重新分析" hidden></select><button type="button" class="jy-mini-inspect-close" data-jy-action="tts-inspect-close" aria-label="关闭改句面板" title="关闭">×</button></div>
     <p class="jy-muted jy-mini-inspect-depth" data-jy-tts-depth></p>
     <p class="jy-mini-inspect-source" data-jy-tts-source hidden></p>
     <p class="jy-mini-inspect-text" data-jy-tts-text></p>
@@ -8862,6 +8994,7 @@ async function openMiniWindow() {
   const fishInput = win.querySelector('[data-jy-tts-fish]');
   const speedInput = win.querySelector('[data-jy-tts-speed]');
   const volumeInput = win.querySelector('[data-jy-tts-volume]');
+  const speakerSelect = win.querySelector('[data-jy-tts-speaker]');
   const tagBox = win.querySelector('[data-jy-tts-tags]');
   const seekBar = win.querySelector('[data-jy-tts-seek]');
   const logList = win.querySelector('[data-jy-mini-log]');
@@ -9382,6 +9515,26 @@ async function openMiniWindow() {
     const voiceName = data.voiceId ? (normalizeVoiceLibrary(runtime.settings.voiceLibrary).find(entry => entry.voiceId === data.voiceId)?.name ?? `${data.voiceId.slice(0, 6)}…`) : '';
     setText(win, '[data-jy-tts-who]', `${segment.type === 'narration' ? '旁白' : (segment.speaker || '未知说话人')}${segment.lang && segment.lang !== 'zh' ? ` · ${languageLabel(segment.lang)}` : ''}`);
     setText(win, '[data-jy-tts-depth]', `第 ${messageId} 楼${which === 'source' ? '（原文）' : ''} · 第 ${utteranceId} 句 · ${data.depth === 'deep' ? '深度' : data.depth === 'simple' ? '简单分析' : data.depth === 'pending' ? '还没分析' : ttsSettings().mode === 'deep' ? '翻译骨架（还没细读）' : '翻译骨架'}${data.derived ? '（由译文推出）' : ''}${voiceName ? ` · 音色 ${voiceName}` : ' · Fish 默认音色'}${data.recorded ? ' · 已有音频' : ''}`);
+    // Who says it, and how that was decided; the reader can name someone else from the list.
+    if (speakerSelect) {
+      const dialogue = segment.type === 'dialogue';
+      speakerSelect.hidden = !dialogue;
+      if (dialogue) {
+        const names = [...new Set([...(data.cast ?? []), ...(segment.speaker ? [segment.speaker] : [])])];
+        const options = [['', data.manualSpeaker ? '交回程序判断' : '自动（程序判断）'], ...names.map(name => [name, name])];
+        speakerSelect.replaceChildren(...options.map(([value, label]) => Object.assign(document.createElement('option'), { value, textContent: label })));
+        speakerSelect.value = data.manualSpeaker ?? '';
+      }
+    }
+    const depthBox = win.querySelector('[data-jy-tts-depth]');
+    if (depthBox && segment.type === 'dialogue') {
+      const sourceLabel = SPEAKER_SOURCE_LABELS[data.speakerSource] ?? '副模型';
+      // The evidence is what showed the name; a source that is its own evidence is not said twice.
+      const why = (data.speakerEvidence ?? []).filter(item => item !== sourceLabel);
+      depthBox.textContent += segment.speaker
+        ? ` · 说话人：${sourceLabel}${why.length ? `（${why.join('；')}）` : ''}`
+        : ' · 说话人：没认出来，用对白默认音色';
+    }
     setText(win, '[data-jy-tts-text]', segment.text);
     const sourceLine = win.querySelector('[data-jy-tts-source]');
     if (sourceLine) {
@@ -9410,11 +9563,13 @@ async function openMiniWindow() {
     if (reset) reset.hidden = !data.override;
     const apply = win.querySelector('[data-jy-action="tts-apply"]');
     if (apply) apply.hidden = true;
-    setText(win, '[data-jy-tts-note]', data.override
-      ? '这句现在用的是你改过的版本；「恢复自动」回到副模型的分析。'
-      : data.inRange
-        ? '改上面的内容、语速或音量，「重新生成并播放」只重做这一句，整楼朗读时也用这个版本。'
-        : '这句不在当前的朗读范围里，改了也不会读。');
+    setText(win, '[data-jy-tts-note]', data.edited
+      ? `这句现在用的是你改过的版本${data.manualSpeaker ? `，说话人也是你定的（${data.manualSpeaker}）` : ''}；「恢复自动」回到程序的判断和副模型的分析。`
+      : data.manualSpeaker
+        ? `说话人是你定的（${data.manualSpeaker}）；上面的下拉框改回「交回程序判断」就恢复。`
+        : data.inRange
+          ? '改上面的内容、语速或音量，「重新生成并播放」只重做这一句，整楼朗读时也用这个版本。上面的下拉框可以直接改说话人，改了就按那个人的音色重做，不重新分析。'
+          : '这句不在当前的朗读范围里，改了也不会读。');
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
   };
   const closeInspector = () => {
@@ -9466,7 +9621,7 @@ async function openMiniWindow() {
     sentenceList.replaceChildren();
     for (const item of prepared.items) {
       const { segment } = item;
-      const ready = Boolean(findCoveringEntry(records, { text: segment.text, voiceId: item.voiceId, fingerprint }));
+      const ready = Boolean(findCoveringEntry(records, { text: segment.text, voiceId: item.voiceId, fingerprint, identity: itemIdentity(item) }));
       const row = document.createElement('li');
       row.className = 'jy-mini-sentence';
       row.dataset.id = String(segment.id);
@@ -10312,7 +10467,7 @@ async function openMiniWindow() {
         await clearTtsOverride(messageId, utteranceId, side);
         inspectDirty = false;
         await renderInspector(messageId, utteranceId, { pinned: true, side });
-        toast('success', '已恢复为副模型的分析。');
+        toast('success', '已恢复为程序的判断和副模型的分析。');
       } else if (action === 'tts-copy-analysis') {
         const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? viewFloor ?? latestAssistantMessageId(getContext());
         if (!Number.isInteger(messageId)) throw new Error('当前聊天里还没有 AI 楼层。');
@@ -10323,9 +10478,9 @@ async function openMiniWindow() {
           side: prepared.floor.side,
           depth: analysis?.depth ?? 'annotations',
           sentences: prepared.segments.map(segment => ({
-            id: segment.id, type: segment.type, speaker: segment.speaker, lang: segment.lang, text: segment.text,
+            id: segment.id, type: segment.type, speaker: segment.speaker, speakerSource: segment.speakerSource ?? null, lang: segment.lang, text: segment.text,
             emotion: segment.emotion, intensity: segment.intensity, voice: segment.voice ?? null,
-            fish: sentenceFishText({ segment, voiceId: '', console: consoleFor(segment) }, ttsSettings().fish, { emotionCues: ttsSettings().emotionCues, tamePunctuation: ttsSettings().tamePunctuation, directions: ttsSettings().mode === 'deep', lean: ttsSettings().mode !== 'deep' }),
+            fish: ttsProviderFor().sentenceText({ segment, voiceId: '', console: consoleFor(segment) }, ttsSettings()),
           })),
         };
         await copyText(JSON.stringify(payload, null, 2));
@@ -10456,6 +10611,24 @@ async function openMiniWindow() {
   globalThis.visualViewport?.addEventListener('resize', onViewport);
   speedInput.addEventListener('input', onFishInput);
   volumeInput.addEventListener('input', onFishInput);
+  // Naming who speaks: saved as the reader's word on this sentence, then the sentence is made again in
+  // that name's voice and played. The model hears nothing of it.
+  speakerSelect?.addEventListener('change', async () => {
+    if (!inspecting) return;
+    const { messageId, utteranceId, side } = inspecting;
+    const name = speakerSelect.value;
+    speakerSelect.disabled = true;
+    try {
+      await saveTtsSpeaker(messageId, utteranceId, name, side);
+      await renderInspector(messageId, utteranceId, { pinned: true, side });
+      toast('success', name ? `这一句改成${name}说的了，按这个人的音色重做，没有重新分析。` : '这一句交回程序判断了。');
+      void playTtsUtterance(messageId, utteranceId, side);
+    } catch (error) {
+      toast('error', safeError(error));
+    } finally {
+      speakerSelect.disabled = false;
+    }
+  });
   seekBar.addEventListener('pointerdown', onSeekDown);
   seekBar.addEventListener('pointermove', onSeekMove);
   seekBar.addEventListener('pointerup', onSeekUp);
@@ -11168,6 +11341,16 @@ export const __testing = Object.freeze({
   ttsInspect,
   saveTtsOverride,
   clearTtsOverride,
+  saveTtsSpeaker,
+  ttsPrepared,
+  saveSettings,
+  syncTtsTransport,
+  runTtsTransport,
+  playTtsUtterance,
+  regenerateTtsSentence,
+  regenerateTtsParagraph,
+  ttsCast,
+  ttsProviderFor,
   importCastFromWorldbook,
   ttsStore,
   editTranslationSegment,

@@ -968,7 +968,7 @@ test('punctuation marks: an inline mark replaces its run, a head mark opens the 
 test('the lean compile sends one of Fish\'s own words, the named tone and an official sound, and the marks ride along', () => {
   const segment = { id: 1, type: 'dialogue', speaker: '泰罗', text: '骗人的吧！！这……不太好吧', voice: { emotion: 'angry', intensity: 2, tone: 'shouting', direction: '压着火，装冷淡', sounds: [{ at: 'end', tag: '轻笑' }, { at: 'start', tag: '深呼吸' }] } };
   const item = { segment, voiceId: 'v', console: { marks: normalizeMarks([{ punct: '……', tag: '停顿' }, { punct: '！！', tag: '加大音量' }]) } };
-  assert.equal(fishTextOf(item, { model: 's2-pro' }, { lean: true, directions: false }), '[angry][shouting] 骗人的吧！！这 [break] 不太好吧 [chuckling]', 'no adverb, no direction, the head tone not doubled by the mark, a sound Fish has no word for dropped');
+  assert.equal(fishTextOf(item, { model: 's2-pro' }, { lean: true, directions: false }), '[furious][shouting] 骗人的吧！！这 [break] 不太好吧 [chuckling]', 'the mood at its strength, no adverb, no direction, the head tone not doubled by the mark, a sound Fish has no word for dropped');
   assert.equal(fishTextOf(item, { model: 's1' }, { lean: true, directions: false }), '(angry)(shouting) 骗人的吧！！这 (break) 不太好吧 (chuckling)');
   assert.equal(fishTextOf({ segment: { ...segment, voice: null }, console: item.console }, { model: 's2-pro' }, { lean: true }), '[shouting] 骗人的吧！！这 [break] 不太好吧', 'the plain reading is the text plus the marks, head marks included');
   assert.match(fishTextOf(item, { model: 's2-pro' }, { directions: true }), /^\[压着火，装冷淡\]/, 'the deep reading still speaks in its own words');
@@ -1020,4 +1020,145 @@ test('a cut of decoded audio is written out as a wav file that names its own sha
   assert.equal(stereoView.getInt16(46, true), -32768);
   // Nothing at all is still a valid, empty file rather than a throw.
   assert.equal(encodeWavFile([], 44100).length, 44);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Who speaks, read off the text; names pinned over labels; the audio's identity; the provider boundary.
+// ---------------------------------------------------------------------------------------------
+import { pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from '../tts-speakers.js';
+import { FISH_ADAPTER, itemIdentity, registerTtsProvider, ttsProvider } from '../tts.js';
+
+const CAST = [{ name: '顾旭禾', aliases: ['小苗苗'] }, { name: '陆玲', aliases: [] }, { name: '林可森', aliases: ['森畜'] }];
+function readFloor(lines, options = {}) {
+  const utterances = splitUtterances(lines.map((text, index) => ({ lineId: index + 1, text })));
+  const resolved = resolveSpeakers(utterances, { cast: CAST, ...options });
+  const quoted = utterances.filter(item => item.kind === 'quoted').map(item => [item.text, resolved.get(item.id)?.speaker ?? null, resolved.get(item.id)?.source ?? null]);
+  return { utterances, resolved, quoted };
+}
+
+test('the speaker engine reads who speaks off the text: the name beside the quote, the one who acts, the script form', () => {
+  const single = readFloor(['顾旭禾看了她一眼。“你来了？”', '“坐吧。”他说道。', '“外面冷吧。”']);
+  assert.deepEqual(single.quoted, [['你来了？', '顾旭禾', 'local'], ['坐吧。', '顾旭禾', 'local'], ['外面冷吧。', null, null]]);
+  assert.match(single.resolved.get(2).evidence.join('；'), /引号前「顾旭禾看了她一眼/);
+  assert.match(single.resolved.get(3).evidence.join('；'), /场上只有这一个人/, 'a pronoun with one person present is that person');
+  assert.equal(single.resolved.get(5).confidence, 0, 'a bare quote after that is nobody\'s: a guess is not a verdict');
+
+  const script = readFloor(['顾旭禾：“陆玲，你看这个。”', '“这是什么？”', '林可森从后面凑过来，“欸嘿~小苗苗在干嘛呢~”', '“滚。”']);
+  assert.deepEqual(script.quoted, [['陆玲，你看这个。', '顾旭禾', 'local'], ['这是什么？', '陆玲', 'local'], ['欸嘿~小苗苗在干嘛呢~', '林可森', 'local'], ['滚。', null, null]]);
+  assert.match(script.resolved.get(2).evidence.join('；'), /话里叫的是陆玲/, 'the one called by name is the one spoken to');
+  assert.equal(script.resolved.get(2).confidence, 1);
+  assert.equal(script.resolved.get(6).speaker, null, 'a third person in the scene ends the taking of turns');
+
+  const same = readFloor(['“早。”顾旭禾说道，“今天冷。”', '顾旭禾看着陆玲说：“写得挺好。”']);
+  assert.deepEqual(same.quoted.map(([, who]) => who), ['顾旭禾', '顾旭禾', '顾旭禾'], 'the one looked at is not the one speaking');
+  const above = readFloor(['顾旭禾挠了挠头，开口道：', '“那个……”']);
+  assert.deepEqual(above.quoted, [['那个……', '顾旭禾', 'local']]);
+  assert.match(above.resolved.get(2).evidence.join(''), /上一段末尾/);
+});
+
+test('two people take turns: once both are named, the nameless lines alternate between them', () => {
+  const two = readFloor(['顾旭禾推门进来。“早。”', '“早。”陆玲头也不抬。', '“今天很冷。”', '“嗯。”', '“作业写完了吗？”', '“……没有。”']);
+  assert.deepEqual(two.quoted.map(([, who, source]) => [who, source]), [
+    ['顾旭禾', 'local'], ['陆玲', 'local'], ['顾旭禾', 'local'], ['陆玲', 'local'], ['顾旭禾', 'local'], ['陆玲', 'local'],
+  ]);
+  assert.match(two.resolved.get(5).evidence.join('；'), /和陆玲轮流说话/);
+  // The same floor with nobody named at all: nobody is guessed at.
+  const nameless = readFloor(['“早。”', '“早。”', '“今天很冷。”']);
+  assert.deepEqual(nameless.quoted.map(([, who]) => who), [null, null, null]);
+});
+
+test('a quote nobody can name goes to the translation\'s label, then to nobody; the reader\'s word beats them all', () => {
+  const hinted = readFloor(['王轩风走过来。“喂。”', '“干嘛。”'], { hints: new Map([[2, '顾旭禾']]) });
+  assert.deepEqual(hinted.quoted, [['喂。', '顾旭禾', 'hint'], ['干嘛。', null, null]]);
+  assert.equal(hinted.resolved.get(2).confidence, 0.6);
+  // The text's own reading outranks the label where it is clear.
+  const clear = readFloor(['顾旭禾推门进来。“早。”'], { hints: new Map([[2, '陆玲']]) });
+  assert.deepEqual(clear.quoted, [['早。', '顾旭禾', 'local']]);
+  // The reader's word, in any spelling the cast knows, is final.
+  const manual = readFloor(['顾旭禾推门进来。“早。”', '“早。”陆玲头也不抬。'], { manual: new Map([[3, '小苗苗']]) });
+  assert.deepEqual(manual.quoted, [['早。', '顾旭禾', 'local'], ['早。', '顾旭禾', 'manual']]);
+  assert.deepEqual(manual.resolved.get(3).evidence, ['手动指定']);
+  // Carried over from the other language: only the labels and the reader's word, never the text.
+  const carried = readFloor(['顾旭禾推门进来。“早。”'], { hints: new Map([[2, '陆玲']]), infer: false });
+  assert.deepEqual(carried.quoted, [['早。', '陆玲', 'hint']]);
+});
+
+test('pinning names over labels: the model\'s word stands only where nobody else had one', () => {
+  const labels = new Map([[2, { type: 'dialogue', speaker: '泰罗', emotion: 'happy' }], [3, { type: 'dialogue', speaker: '樱井' }], [4, { type: 'narration' }]]);
+  const resolved = new Map([[2, { speaker: '陆玲', source: 'local', confidence: 1, evidence: ['引号前「陆玲说」'] }], [3, { speaker: null, source: null, confidence: 0, evidence: [] }]]);
+  const pinned = pinSpeakers(labels, resolved);
+  assert.deepEqual(pinned.get(2), { type: 'dialogue', speaker: '陆玲', emotion: 'happy', speakerSource: 'local', speakerEvidence: ['引号前「陆玲说」'] });
+  assert.deepEqual(pinned.get(3), { type: 'dialogue', speaker: '樱井', speakerSource: 'model' });
+  assert.deepEqual(pinned.get(4), { type: 'narration' });
+  assert.equal(labels.get(2).speaker, '泰罗', 'the labels handed in are left as they were');
+  assert.deepEqual([...speakerHints(labels)], [[2, '泰罗'], [3, '樱井']]);
+  assert.deepEqual([...speakersOf(resolved)], [[2, '陆玲']]);
+  // A label carried over from the other language keeps saying where its name was read.
+  const other = pinSpeakers(new Map([[7, { type: 'dialogue', speaker: '陆玲', speakerSource: 'local', speakerEvidence: ['x'] }]]),
+    new Map([[7, { speaker: '陆玲', source: 'hint', confidence: 0.6, evidence: ['翻译时的标注'] }]]));
+  assert.deepEqual(other.get(7), { type: 'dialogue', speaker: '陆玲', speakerSource: 'local', speakerEvidence: ['x'] });
+  // The segments say the same.
+  const utterances = splitUtterances([{ lineId: 1, text: '“早。”' }, { lineId: 2, text: '“嗯。”' }]);
+  const segments = buildSegments(utterances, pinSpeakers(new Map(), new Map([[1, { speaker: '陆玲', source: 'local', confidence: 0.55, evidence: ['e'] }], [2, { speaker: null, source: null, confidence: 0, evidence: [] }]])));
+  assert.deepEqual(segments.map(segment => [segment.speaker, segment.speakerSource, segment.speakerEvidence]), [['陆玲', 'local', ['e']], [null, null, []]]);
+});
+
+test('the simple request says who speaks and asks only how it is said', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '顾旭禾推门进来。“早。”' }, { lineId: 2, text: '“早。”' }]);
+  const messages = buildTtsAnalysisMessages(utterances, { roster: ['顾旭禾', '陆玲'], speakers: new Map([[2, '顾旭禾']]), lead: [{ id: 0, anchor: '前一句', text: '前一句' }] });
+  const input = JSON.parse(messages[1].content);
+  assert.deepEqual(input.utterances.map(item => [item.id, item.speaker ?? null]), [[1, null], [2, '顾旭禾'], [3, null]]);
+  assert.match(messages[0].content, /不要输出 speaker，更不要改/);
+  assert.match(messages[0].content, /intensity：0 弱、1 中、2 强/);
+  assert.match(messages[0].content, /pauses：/);
+  assert.doesNotMatch(messages[0].content, /判断每一句由谁念/, 'the old job of naming speakers is gone');
+});
+
+test('a recording\'s identity: the same words in another voice, mood, strength or name are never shared', () => {
+  const base = { segment: { id: 1, type: 'dialogue', text: '早。', speaker: '顾旭禾', lang: 'zh', emotion: 'happy', intensity: 1, voice: null }, voiceId: 'voice-a' };
+  assert.equal(itemIdentity(base), itemIdentity({ ...base, segment: { ...base.segment } }));
+  for (const changed of [
+    { ...base, voiceId: 'voice-b' },
+    { ...base, segment: { ...base.segment, emotion: 'sad' } },
+    { ...base, segment: { ...base.segment, intensity: 2 } },
+    { ...base, segment: { ...base.segment, speaker: '陆玲' } },
+    { ...base, segment: { ...base.segment, lang: 'ja' } },
+    { ...base, override: { text: '早……' } },
+  ]) assert.notEqual(itemIdentity(changed), itemIdentity(base));
+  const record = { key: 'r1', fingerprint: 'fp', createdAt: 1, timeline: recordCovers([base], [{ id: 1, start: 0, end: 1, part: 0 }]) };
+  assert.ok(findCoveringEntry([record], { text: '早。', voiceId: 'voice-a', fingerprint: 'fp', identity: itemIdentity(base) }));
+  assert.equal(findCoveringEntry([record], { text: '早。', voiceId: 'voice-b', fingerprint: 'fp', identity: itemIdentity({ ...base, voiceId: 'voice-b' }) }), null, 'voice A\'s take never stands in for voice B');
+  assert.equal(findCoveringEntry([record], { text: '早。', voiceId: 'voice-a', fingerprint: 'fp', identity: itemIdentity({ ...base, segment: { ...base.segment, emotion: 'sad' } }) }), null, 'nor for another mood');
+  // A recording from before identities were kept is matched by its words and voice, as it always was.
+  const older = { ...record, timeline: record.timeline.map(({ identity, ...entry }) => entry) };
+  assert.ok(findCoveringEntry([older], { text: '早。', voiceId: 'voice-a', fingerprint: 'fp', identity: itemIdentity({ ...base, segment: { ...base.segment, emotion: 'sad' } }) }));
+});
+
+test('the provider boundary: another adapter registers under its id, and what reaches it was named and voiced upstream', () => {
+  assert.equal(ttsProvider('fish'), FISH_ADAPTER);
+  assert.equal(ttsProvider('nobody'), FISH_ADAPTER, 'an unknown id reads through Fish');
+  assert.deepEqual(Object.keys(FISH_ADAPTER.vocabulary), ['emotions', 'tones', 'sounds']);
+  const seen = [];
+  const echo = registerTtsProvider({
+    id: 'echo', label: 'Echo', vocabulary: { emotions: ['happy'], tones: [], sounds: [] },
+    sentenceText: item => item.segment.text,
+    prosody: () => ({ speed: 1, volume: 0 }),
+    parts: items => [items],
+    payload: items => {
+      seen.push(items.map(item => [item.segment.speaker, item.voiceId, item.segment.emotion]));
+      return { body: { lines: items.map(item => item.segment.text) }, spans: items.map(item => ({ id: item.segment.id, text: item.segment.text })) };
+    },
+    fingerprint: () => ({ provider: 'echo' }),
+    mime: () => 'audio/wav',
+  });
+  assert.equal(ttsProvider('echo'), echo);
+  const utterances = splitUtterances([{ lineId: 1, text: '顾旭禾推门进来。“早。”' }, { lineId: 2, text: '“早。”陆玲头也不抬。' }]);
+  const resolved = resolveSpeakers(utterances, { cast: CAST });
+  const segments = buildSegments(utterances, pinSpeakers(new Map([[2, { emotion: 'happy' }]]), resolved));
+  const { items } = planVoices(segments, { voices: [{ name: '顾旭禾', voiceId: 'v-gu', locked: true }, { name: '陆玲', voiceId: 'v-lu', locked: true }], narratorVoice: 'v-n', dialogueVoice: 'v-d' });
+  const { body } = echo.payload(echo.parts(items, {})[0], {});
+  assert.deepEqual(body.lines, ['顾旭禾推门进来。', '早。', '早。', '陆玲头也不抬。']);
+  assert.deepEqual(seen[0], [['narrator', 'v-n', null], ['顾旭禾', 'v-gu', 'happy'], ['陆玲', 'v-lu', null], ['narrator', 'v-n', null]], 'names, voices and moods arrive settled; the adapter only formats');
+  assert.throws(() => registerTtsProvider({ id: 'half', vocabulary: {} }), /missing sentenceText/);
+  assert.equal(FISH_ADAPTER.sentenceText({ segment: segments[1], voiceId: 'v-gu' }, { fish: { model: 's2-pro' }, mode: 'simple' }), '[happy] 早。');
 });

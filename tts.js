@@ -9,9 +9,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.25.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.25.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.25.1';
+} from './core.js?v=0.26.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.26.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.26.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -379,14 +379,14 @@ function referenceLines(translations) {
 // {{references_rule}} the rule about translations riding along when the original is read.
 export const DEFAULT_TTS_PROMPTS = Object.freeze({
   simple: [
-    '你是有声小说的配音助手。下面是一楼正文按顺序切好的句子。你只做三件事：判断每一句由谁念、带什么情绪念、有没有明显的语气或声音。不改写、不复述、不翻译任何句子。',
-    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text；styles 是每个角色的表达习惯和用户定下的规则，判断情绪、语气和声音时要遵守。',
-    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","sounds":[{"at":"start","tag":"英文声音词"}]}]}',
+    '你是有声小说的配音助手。下面是一楼正文按顺序切好的句子。谁在说话已经由程序按上下文认出来了，写在每句的 speaker 里；你只做表演判断：每一句带什么情绪念、强度多大、有没有明显的语气、语速、音量、停顿和非语言声音。不改写、不复述、不翻译任何句子。',
+    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text，认出说话人的对白句还有 speaker；styles 是每个角色的表达习惯和用户定下的规则，判断表演时要遵守。',
+    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","emotion":"英文情绪词","intensity":1,"tone":"英文语气词","speed":"slow","volume":"quiet","pauses":[{"after":"句中的词","length":"short"}],"sounds":[{"at":"start","tag":"英文声音词"}]}]}',
     '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。引号用来标书名、专有名词、强调或引用时是 narration；不在引号里却明显是角色在说的话也是 dialogue。',
-    '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。{{user}}看不出是谁说的就省略，不要猜。',
-    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句只写一个；看不出明显情绪就省略，不要为了填满而猜。不要自己造词，不要加 slightly、very 这类程度词。',
-    '4. tone：可选，只能取 tones 列表里的一个，只在原文明确写了小声、耳语、喊、尖叫、急促这类说法时写。',
-    '5. sounds：笑声、叹气、喘息、倒吸气这类非语言声音，只在原文明确写了的时候写，tag 只能取 sounds 列表里的词，at 是 start（句首）或 end（句尾）。',
+    '2. speaker：输入里已经带 speaker 的句子，不要输出 speaker，更不要改。只有 dialogue 句在输入里没有 speaker 时，你才按前后文补一个：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。{{user}}看不出是谁说的就省略，不要猜。',
+    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句只写一个；看不出明显情绪就省略，不要为了填满而猜。不要自己造词，不要加 slightly、very 这类程度词。intensity：0 弱、1 中、2 强，只在原文明确加强或减弱时写。',
+    '4. tone：可选，只能取 tones 列表里的一个，只在原文明确写了小声、耳语、喊、尖叫、急促这类说法时写。speed 只能是 slow 或 fast，volume 只能是 quiet 或 loud，只在明显比平常快慢、轻响时写。',
+    '5. pauses：句中某个词后面要停顿，after 逐字照抄句中的词，length 是 short 或 long，最多两处，只在明显的犹豫、转折、哽住处写。sounds：笑声、叹气、喘息、倒吸气这类非语言声音，只在原文明确写了的时候写，tag 只能取 sounds 列表里的词，at 是 start（句首）或 end（句尾）。',
     '6. lang：这一句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。与整楼主要语言相同、人物设定又没说口音时省略。',
     '7. 每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。输入里如果有 lead，那是这一批前面紧挨着的几句，只用来认人和判断语气，不用回答。',
     '{{references_rule}}',
@@ -421,7 +421,7 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
     '只改用户的意见涉及到的句子。意见没有说到的句子，只输出 {"id":N}，表示上一次的标注原样保留——这是最重要的一条，不要把没提到的句子重写一遍。',
     '只输出一个 JSON 对象，不要任何解释，格式和上一次一样：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","sounds":[{"at":"start","tag":"英文声音词"}]}]}',
     '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。',
-    '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称。用户说「说话人不对」时，重新判断这几句到底是谁在说，参考前后文和 roster。',
+    '2. speaker：current 里已经写了 speaker 的句子，说话人是程序或用户定下的，不要改，也不要输出 speaker。只有 dialogue 句在 current 里没有 speaker 时，才按前后文从 roster 里逐字照抄一个，不加敬称。',
     '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个。用户说「情绪不够」就换一个更贴切、更强的词；说「太夸张」就换平一点的；不要自己造词，不要加 slightly、very 这类程度词。',
     '4. tone：可选，只能取 tones 列表里的一个；sounds：只能取 sounds 列表里的词，at 是 start 或 end。用户嫌声音多就删掉，嫌少就在真的合适的地方加。',
     '5. styles 是角色的表达习惯和用户定下的规则，改的时候要遵守。',
@@ -452,18 +452,24 @@ function fillPrompt(template, { userName = '', references = false } = {}) {
  * politer: whatever the model thinks of the wording, it has nowhere to write it.
  */
 // The sentences just before a batch, sent along as context only.
-function leadList(lead) {
-  return (Array.isArray(lead) ? lead : []).map(item => ({ id: item.id, text: item.anchor ?? item.text })).filter(item => item.text);
+function leadList(lead, speakers = null) {
+  const named = speakers instanceof Map ? speakers : new Map();
+  return (Array.isArray(lead) ? lead : [])
+    .map(item => ({ id: item.id, ...(named.get(item.id) ? { speaker: named.get(item.id) } : {}), text: item.anchor ?? item.text }))
+    .filter(item => item.text);
 }
 
-export function buildTtsAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, systemPrompt = '', lead = null, styles = null } = {}) {
+export function buildTtsAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, systemPrompt = '', lead = null, styles = null, speakers = null } = {}) {
   // Reading the original: the roster holds the names as the translation spells them (樱井), the text
   // says 桜井. Each line's translation rides along so the model can name people the way the voices are
   // registered, and the rule below says so.
   const references = referenceLines(translations);
   const system = fillPrompt(String(systemPrompt ?? '').trim() || DEFAULT_TTS_PROMPTS.simple, { userName, references: references.length > 0 });
-  const leads = leadList(lead);
+  const leads = leadList(lead, speakers);
   const styleList = styleEntries(styles);
+  // Who speaks is settled on this side; each sentence goes out with its name, and the model is asked
+  // how it is said, not by whom.
+  const named = speakers instanceof Map ? speakers : new Map();
   const input = {
     task: 'sketch_voices_for_audiobook',
     ...(characterName ? { character: characterName } : {}),
@@ -474,9 +480,13 @@ export function buildTtsAnalysisMessages(utterances, { roster = [], characterNam
     sounds: FISH_SOUNDS,
     ...(styleList.length ? { styles: styleList } : {}),
     ...(leads.length ? { lead: leads } : {}),
-    utterances: (Array.isArray(utterances) ? utterances : []).map(item => (references.length
-      ? { id: item.id, line: item.lineId, kind: item.kind, text: item.anchor }
-      : { id: item.id, kind: item.kind, text: item.anchor })),
+    utterances: (Array.isArray(utterances) ? utterances : []).map(item => ({
+      id: item.id,
+      ...(references.length ? { line: item.lineId } : {}),
+      kind: item.kind,
+      ...(named.get(item.id) ? { speaker: named.get(item.id) } : {}),
+      text: item.anchor,
+    })),
     ...(references.length ? { translations: references } : {}),
   };
   return [
@@ -832,6 +842,7 @@ export function deriveLabelsForSide(primaryUtterances, primaryLabels, primaryVoi
     if (source === undefined) continue;
     const label = primaryLabels instanceof Map ? primaryLabels.get(source) : null;
     if (label) {
+      // The language is the one thing that does not carry over; where the name came from does.
       const { lang, ...rest } = label;
       if (Object.keys(rest).length) labels.set(utterance.id, rest);
     }
@@ -921,7 +932,12 @@ export function buildSegments(utterances, labels = new Map(), { knownNames = [],
     }
     const speaker = label.speaker ? (names.get(label.speaker) ?? label.speaker) : null;
     const emotion = voice?.emotion ? voice.emotion : (label.emotion && label.emotion !== 'neutral' ? label.emotion : null);
-    return { ...base, speaker, emotion, intensity: emotion ? normalizeIntensity(voice?.intensity ?? label.intensity) : null };
+    return {
+      ...base, speaker, emotion, intensity: emotion ? normalizeIntensity(voice?.intensity ?? label.intensity) : null,
+      // Where the name came from — the reader, the text, the translation or the model — and what showed it.
+      speakerSource: speaker ? (label.speakerSource ?? null) : null,
+      speakerEvidence: speaker && Array.isArray(label.speakerEvidence) ? [...label.speakerEvidence] : [],
+    };
   });
 }
 
@@ -1167,14 +1183,27 @@ function officialSound(tag) {
  */
 function compileLean(voice, text, result, model) {
   const cues = [];
+  // A tone the mood's own cue already carries (S1's strong anger comes with its shout) is not said twice.
   const push = cue => {
-    if (cue && !cues.includes(cue)) cues.push(cue);
+    if (cue && !cues.some(existing => existing.includes(cue))) cues.push(cue);
   };
-  push(emotionCue(voice.emotion, 1, model));
+  // The strength only moves along Fish's own scale: a word Fish lists no steps for goes out bare rather
+  // than with an adverb Fish never documented.
+  const word = cueWord(voice.emotion);
+  const stepped = !FISH_EMOTIONS.includes(word) || Object.hasOwn(FISH_INTENSITY, word);
+  push(emotionCue(voice.emotion, stepped ? voice.intensity ?? 1 : 1, model));
   if (FISH_TONES.includes(voice.tone)) push(wrapCue(voice.tone, model));
   for (const sound of voice.sounds ?? []) if (sound.at === 'start') push(wrapCue(officialSound(sound.tag), model));
   result.cues = cues.slice(0, 3);
-  result.text = text;
+  // A pause is one of Fish's own marks at the word it belongs to; two at most, so a sentence never
+  // fills up with breaks.
+  const insertions = [];
+  for (const pause of (voice.pauses ?? []).slice(0, 2)) {
+    const index = text.indexOf(pause.after);
+    const cue = wrapCue(pause.length === 'long' ? 'long-break' : 'break', model);
+    if (index >= 0 && cue) insertions.push({ index: index + pause.after.length, value: ` ${cue} ` });
+  }
+  result.text = insertions.length ? insertAll(text, insertions).replace(/\s{2,}/g, ' ').trim() : text;
   result.tail = (voice.sounds ?? []).filter(sound => sound.at === 'end').map(sound => wrapCue(officialSound(sound.tag), model)).filter(Boolean).slice(0, 1).join('');
   return result;
 }
@@ -1467,6 +1496,63 @@ export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit
 }
 
 export const FISH_MIME = Object.freeze({ mp3: 'audio/mpeg', opus: 'audio/ogg', wav: 'audio/wav', pcm: 'audio/L16' });
+
+// ---------------------------------------------------------------------------------------------
+// The provider boundary.
+//
+// Everything above this line speaks in the reading's own terms: a segment has a speaker, a language,
+// a mood at a strength, a tone, a speed, a volume, pauses, stresses and sounds. An adapter turns that
+// into one provider's request and back, and nothing above it needs to know the provider's markup or
+// its parameter names. Fish is the only adapter today; another provider is another object of this
+// shape, registered under its own id, and the speaker engine, the analysis and the cache are none
+// the wiser.
+// ---------------------------------------------------------------------------------------------
+
+/** How the reading's marks are compiled for this provider under these settings. */
+function fishCompileOptions(tts) {
+  return {
+    emotionCues: tts?.emotionCues !== false,
+    prosodySplit: tts?.prosodySplit !== false,
+    tamePunctuation: tts?.tamePunctuation === true,
+    directions: tts?.mode === 'deep',
+    lean: tts?.mode !== 'deep',
+  };
+}
+
+export const FISH_ADAPTER = Object.freeze({
+  id: 'fish',
+  label: 'Fish Audio',
+  /** The words the analysis may use for a mood, a tone and a sound: the ones this provider hears. */
+  vocabulary: Object.freeze({ emotions: FISH_EMOTIONS, tones: FISH_TONES, sounds: FISH_SOUNDS }),
+  /** The text one sentence sends: its cues in the provider's markup ahead of the words. */
+  sentenceText: (item, tts) => sentenceFishText(item, tts.fish, fishCompileOptions(tts)),
+  /** The provider's prosody parameters for one sentence. */
+  prosody: (item, tts) => sentenceProsody(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false }),
+  /** A unit's items cut into requests. */
+  parts: (items, tts) => planFishParts(items, { model: tts.fish.model, maxChars: tts.fish.maxChars, prosodySplit: tts?.prosodySplit !== false }),
+  /** One request's body, with the span each sentence occupies in its text. */
+  payload: (items, tts) => buildFishPayload(items, tts.fish, fishCompileOptions(tts)),
+  /** Everything in the settings that changes the audio, so a change retires the recordings. */
+  fingerprint: (tts, { consoles = '' } = {}) => fishFingerprint(tts.fish, { ...fishCompileOptions(tts), mode: tts.mode, consoles }),
+  mime: format => FISH_MIME[format] ?? 'audio/mpeg',
+  supportsMultiSpeaker: model => fishSupportsMultiSpeaker(model),
+});
+
+const PROVIDERS = new Map([[FISH_ADAPTER.id, FISH_ADAPTER]]);
+
+/** The adapter for a provider id; an unknown id reads through Fish, the one every setting was made for. */
+export function ttsProvider(id = 'fish') {
+  return PROVIDERS.get(String(id ?? '')) ?? FISH_ADAPTER;
+}
+
+/** Another provider, made known under its id. Its adapter must offer what Fish's offers. */
+export function registerTtsProvider(adapter) {
+  for (const key of ['id', 'vocabulary', 'sentenceText', 'prosody', 'parts', 'payload', 'fingerprint', 'mime']) {
+    if (!adapter || adapter[key] === undefined) throw new Error(`provider adapter is missing ${key}`);
+  }
+  PROVIDERS.set(adapter.id, adapter);
+  return adapter;
+}
 
 /**
  * Which host page the reader is running in. TauriTavern serves the same SillyTavern frontend from a
@@ -1782,7 +1868,7 @@ export async function recordingCacheKey({ floorId, version, unit = 'floor', maxC
     v: 2, floorId, version, unit, maxChars, fingerprint,
     items: (Array.isArray(items) ? items : []).map(({ segment, voiceId, override }) => [
       segment.id, segment.type, segment.text, segment.speaker, segment.emotion, segment.intensity, voiceId,
-      segment.voice ?? null, override ?? null,
+      segment.voice ?? null, override ?? null, segment.lang ?? null,
     ]),
   }))}`;
 }
@@ -1798,6 +1884,23 @@ export async function fingerprintKey(fingerprint) {
   return hashText(JSON.stringify(fingerprint ?? null));
 }
 
+/**
+ * What one sentence's audio is made of, as one string: the words, who says them, in which language,
+ * in which voice, in what mood and how strongly, with whatever the reader wrote over it. Two items
+ * with the same identity may share a recording; two that differ in any of it never do — the voice
+ * that reads a name is looked up when the audio is made, so a name bound to a new voice is a new
+ * identity, and the take made in the old voice is never heard in its place.
+ */
+export function itemIdentity(item) {
+  const segment = item?.segment ?? {};
+  const override = item?.override ?? null;
+  return JSON.stringify([
+    segment.type ?? null, segment.text ?? '', segment.speaker ?? null, segment.lang ?? null,
+    segment.emotion ?? null, segment.intensity ?? null, item?.voiceId ?? '', segment.voice ?? null,
+    override ? [override.text ?? null, override.speed ?? null, override.volume ?? null] : null,
+  ]);
+}
+
 export function recordCovers(items, timeline) {
   const byId = new Map((Array.isArray(items) ? items : []).map(item => [item.segment.id, item]));
   return (Array.isArray(timeline) ? timeline : []).map(entry => {
@@ -1810,16 +1913,22 @@ export function recordCovers(items, timeline) {
       speaker: item?.segment.speaker ?? null,
       type: item?.segment.type ?? null,
       edited: Boolean(item?.override?.text),
+      identity: item ? itemIdentity(item) : '',
     };
   });
 }
 
-/** The entry in one of `records` that already holds this sentence in this voice, newest first. */
-export function findCoveringEntry(records, { text, voiceId, fingerprint }) {
+/**
+ * The entry in one of `records` that already holds this sentence, newest first. With an identity to
+ * match, the entry must have been made of the same everything; a recording from before identities
+ * were kept is matched by its words and voice alone, as it always was.
+ */
+export function findCoveringEntry(records, { text, voiceId, fingerprint, identity = null }) {
   const list = (Array.isArray(records) ? records : []).filter(record => Array.isArray(record?.timeline) && record.fingerprint === fingerprint);
   list.sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0));
   for (const record of list) {
-    const index = record.timeline.findIndex(entry => entry.text === text && (entry.voiceId ?? '') === (voiceId ?? '') && !entry.edited);
+    const index = record.timeline.findIndex(entry => entry.text === text && (entry.voiceId ?? '') === (voiceId ?? '') && !entry.edited
+      && (identity === null || entry.identity === undefined || entry.identity === identity));
     if (index >= 0) return { record, index };
   }
   return null;

@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.25.1';
+} from './prompts.js?v=0.26.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.25.1';
+export const APP_VERSION = '0.26.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -929,6 +929,42 @@ export function normalizeVoiceLibrary(value) {
       return true;
     })
     .slice(0, 200);
+}
+
+/**
+ * The bindings brought along when a library entry's voice id changes.
+ *
+ * A character row, the narrator and the dialogue default all name a voice by its id, and the library
+ * is where a reader edits that id. The entry is the identity: an id edited in the library moves every
+ * binding that held the old id onto the new one, so the name keeps reading in the voice the reader
+ * just chose for it. Returns the settings untouched when no entry moved.
+ */
+export function followVoiceLibrary(previousLibrary, settings) {
+  if (!settings || typeof settings !== 'object') return settings;
+  const before = new Map(normalizeVoiceLibrary(previousLibrary).map(entry => [entry.id, entry.voiceId]));
+  const moved = new Map();
+  for (const entry of normalizeVoiceLibrary(settings.voiceLibrary)) {
+    const old = before.get(entry.id);
+    if (old && old !== entry.voiceId) moved.set(old, entry.voiceId);
+  }
+  if (!moved.size) return settings;
+  const follow = id => (typeof id === 'string' && moved.has(id) ? moved.get(id) : id);
+  const followTable = table => (table && typeof table === 'object'
+    ? Object.fromEntries(Object.entries(table).map(([lang, id]) => [lang, follow(id)]))
+    : table);
+  const tts = settings.tts && typeof settings.tts === 'object' ? settings.tts : {};
+  const nextTts = { ...tts, narratorVoice: follow(tts.narratorVoice), dialogueVoice: follow(tts.dialogueVoice), narratorVoices: followTable(tts.narratorVoices) };
+  // A title is the provider's name for the old id; it goes when the id does.
+  if (nextTts.narratorVoice !== tts.narratorVoice) nextTts.narratorTitle = '';
+  if (nextTts.dialogueVoice !== tts.dialogueVoice) nextTts.dialogueTitle = '';
+  const ttsVoices = Object.fromEntries(Object.entries(settings.ttsVoices ?? {}).map(([key, rows]) => [key, Array.isArray(rows)
+    ? rows.map(row => {
+      if (!row || typeof row !== 'object') return row;
+      const voiceId = follow(row.voiceId);
+      return { ...row, voiceId, voices: followTable(row.voices), ...(voiceId !== row.voiceId ? { title: '' } : {}) };
+    })
+    : rows]));
+  return { ...settings, tts: nextTts, ttsVoices };
 }
 
 function normalizeTtsContext(value) {

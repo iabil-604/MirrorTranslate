@@ -951,3 +951,5 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-ask-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .jy-ask-chips button { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--jy-line, #cfd6cf); background: transparent; color: var(--jy-muted, #5d6a63); font-size: 12px; cursor: pointer; }
 .jy-ask-chips button:hover { color: inherit; border-color: var(--jy-accent, #2f6b4f); }
+.jy-mini-inspect-head select { min-height: 24px; padding: 1px 6px; font-size: 11px; max-width: 44%; margin-left: auto; }
+.jy-mini-inspect-head select[hidden] { display: none; }
