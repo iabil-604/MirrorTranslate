@@ -83,7 +83,7 @@ function restoreGlobals(t) {
 
 // A Fish stand-in: every request answers with one text chunk whose characters are aligned in order, so
 // each sentence lands on its own stretch of the timeline. The bodies are kept for the assertions.
-function mockFish({ status = 200, body = null } = {}) {
+function mockFish({ status = 200, body = null, audio = null } = {}) {
   const calls = [];
   globalThis.fetch = async (url, init) => {
     const sent = init?.body ? JSON.parse(init.body) : null;
@@ -93,7 +93,7 @@ function mockFish({ status = 200, body = null } = {}) {
     const characters = [...spoken].filter(character => /[\p{L}\p{N}]/u.test(character));
     const segments = characters.map((text, index) => ({ text, start: index * 0.25, end: index * 0.25 + 0.2 }));
     const duration = characters.length * 0.25;
-    const event = { audio_base64: 'AAEC', content: spoken, alignment: { audio_duration: duration, segments }, chunk_seq: 0, chunk_audio_offset_sec: 0 };
+    const event = { audio_base64: audio ? audio(calls.length, duration) : 'AAEC', content: spoken, alignment: { audio_duration: duration, segments }, chunk_seq: 0, chunk_audio_offset_sec: 0 };
     return new Response(`event: message\ndata: ${JSON.stringify(event)}\n\n`, { status: 200 });
   };
   return calls;
@@ -1440,4 +1440,81 @@ test('a sentence with a take of its own is heard from it inside its paragraph: r
   await __testing.runTtsTransport(whole);
   assert.equal(audio.plays.length - mark, 1, 'one stretch for the whole paragraph');
   assert.equal(audio.plays.at(-1).start, 0);
+});
+
+// A stand-in for the browser's audio decoder: a part's bytes become samples, one number per part,
+// so a file cut from several parts can be read back as the sequence of takes it was cut from.
+function mockAudioContext() {
+  class FakeContext {
+    async decodeAudioData(buffer) {
+      const bytes = new Uint8Array(buffer);
+      const value = bytes[0] ?? 0;
+      const length = bytes.length * 25;
+      return { sampleRate: 100, numberOfChannels: 1, length, duration: length / 100, getChannelData: () => new Float32Array(length).fill(value / 100) };
+    }
+
+    close() {}
+  }
+  const before = globalThis.AudioContext;
+  globalThis.AudioContext = FakeContext;
+  return { restore: () => { globalThis.AudioContext = before; } };
+}
+
+// The takes a wav made by the fake decoder is cut from, in order, each with its length in samples.
+function readTakes(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const takes = [];
+  for (let at = 44; at + 1 < bytes.length; at += 2) {
+    const call = Math.round((view.getInt16(at, true) / 0x7fff) * 100);
+    const last = takes.at(-1);
+    if (last && last.call === call) last.samples += 1;
+    else takes.push({ call, samples: 1 });
+  }
+  return takes;
+}
+
+test('saving a floor in which a sentence has a take of its own cuts and joins the takes in reading order', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-splice-save');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('一。二。三。', [[1, '第一句。第二句。第三句。']], settings));
+  // Each request's audio is its own number, one byte per quarter second.
+  const calls = mockFish({ audio: (call, duration) => Buffer.from(new Uint8Array(Math.round(duration * 4)).fill(call)).toString('base64') });
+  const audio = mockAudio();
+  t.after(audio.restore);
+  const decoder = mockAudioContext();
+  t.after(decoder.restore);
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  await __testing.resolveTtsEntry(floor, items, items[0], settings);
+  await __testing.saveTtsOverride(0, 3, { text: '第三句……' });
+  await __testing.regenerateTtsSentence(0, 2);
+  assert.equal(calls.length, 3, 'the paragraph, the reader\'s third sentence, the second sentence alone');
+  const prepared = await __testing.ttsPrepared(0);
+  const entries = [];
+  for (const item of prepared.items) entries.push({ item, entry: await __testing.resolveTtsEntry(prepared.floor, prepared.items, item, prepared.settings) });
+  assert.equal(calls.length, 3, 'everything is at hand');
+  assert.equal(__testing.downloadNeedsSplice(entries), true, 'the paragraph still holds sentences that play from elsewhere');
+  const blob = await __testing.ttsSplicedWav(entries);
+  assert.equal(blob.type, 'audio/wav');
+  const takes = readTakes(new Uint8Array(await blob.arrayBuffer()));
+  assert.deepEqual(takes.map(take => take.call), [1, 3, 2], 'the first sentence from the paragraph, the second from its own take, the third from the reader\'s');
+  assert.ok(takes.every(take => take.samples >= 70 && take.samples <= 80), `each stretch is one sentence long: ${takes.map(take => take.samples).join(', ')}`);
+  // Neighbouring sentences of one take come out as one stretch: nothing between them is lost.
+  await __testing.clearTtsOverride(0, 3);
+  const partly = await __testing.ttsPrepared(0);
+  const mixed = [];
+  for (const item of partly.items) mixed.push({ item, entry: await __testing.resolveTtsEntry(partly.floor, partly.items, item, partly.settings) });
+  const again = readTakes(new Uint8Array(await (await __testing.ttsSplicedWav(mixed)).arrayBuffer()));
+  assert.deepEqual(again.map(take => take.call), [1, 3, 1]);
+  assert.ok(again[2].samples >= 70 && again[2].samples <= 80, 'the third sentence, cut from the paragraph again');
+  // Whole recordings, untouched, need no cutting.
+  await __testing.regenerateTtsParagraph(0, 1);
+  const whole = await __testing.ttsPrepared(0);
+  const plain = [];
+  for (const item of whole.items) plain.push({ item, entry: await __testing.resolveTtsEntry(whole.floor, whole.items, item, whole.settings) });
+  assert.equal(__testing.downloadNeedsSplice(plain), false);
 });

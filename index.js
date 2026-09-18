@@ -66,7 +66,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.26.2';
+} from './core.js?v=0.26.3';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -113,15 +113,15 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.26.2';
-import { createTtsStore } from './tts-store.js?v=0.26.2';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.26.2';
+} from './tts.js?v=0.26.3';
+import { createTtsStore } from './tts-store.js?v=0.26.3';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.26.3';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.26.2';
+} from './processing.js?v=0.26.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -138,9 +138,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.26.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.26.2';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.26.2';
+} from './prompts.js?v=0.26.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.26.3';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.26.3';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -154,15 +154,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.26.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.26.2';
+} from './palette.js?v=0.26.3';
+import { sampleThemeBackground } from './theme-probe.js?v=0.26.3';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.26.2';
+} from './diagnostics.js?v=0.26.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -4630,16 +4630,94 @@ async function downloadTtsAudio(scope = null) {
     chosen = items.filter(item => item.segment.lineId === lineId);
   }
   const records = [];
+  const entries = [];
   for (const item of chosen) {
     const entry = await resolveTtsEntry(floor, items, item, settings, text => setTtsStatus(transport.messageId, text, 'busy'));
+    entries.push({ item, entry });
     if (!records.includes(entry.record)) records.push(entry.record);
   }
   if (runtime.tts.transport === transport && transport.state === 'idle') setTtsStatus(transport.messageId, '', 'idle');
-  const blob = await ttsDownloadBlob(records, tts.fish.format);
-  const extension = tts.fish.format === 'opus' ? 'ogg' : tts.fish.format;
+  // A sentence with a take of its own inside a paragraph that still serves its neighbours: the takes
+  // are cut and joined in reading order, as wav. Otherwise whole recordings follow one another as
+  // they are, in the format they were made in.
+  const spliced = downloadNeedsSplice(entries);
+  const blob = spliced ? await ttsSplicedWav(entries) : await ttsDownloadBlob(records, tts.fish.format);
+  const extension = spliced ? 'wav' : (tts.fish.format === 'opus' ? 'ogg' : tts.fish.format);
   const name = `镜译-第${transport.messageId}楼${wanted === 'current' ? `-第${(ttsTransportDescription(transport)?.lineIndex ?? 0) + 1}段` : ''}.${extension}`;
   saveBlobAsFile(blob, name);
-  return { name, bytes: blob.size, records: records.length };
+  return { name, bytes: blob.size, records: records.length, spliced };
+}
+
+/**
+ * Whether the chosen sentences can be saved as their whole recordings one after another, or must be
+ * cut and joined: the latter when a recording that serves one of them also holds another of them
+ * that plays from a take of its own.
+ */
+function downloadNeedsSplice(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  return list.some(({ entry }) => list.some(other => other.entry.record !== entry.record
+    && entry.record.timeline.some(line => line.id === other.item.segment.id)));
+}
+
+/**
+ * The chosen sentences as one wav, each cut from the take it plays from, joined in reading order.
+ *
+ * This is the save for a floor in which some sentence has a take of its own — rewritten by the
+ * reader, or made again alone — inside a paragraph that still serves its neighbours: the paragraph's
+ * audio is decoded, the stretch of the replaced sentence left out, and the sentence's own take put
+ * in its place. Neighbouring sentences of one take are cut as one stretch, so nothing between them
+ * is lost. The result is wav because a cut inside mp3 or Ogg does not give a file that plays.
+ */
+async function ttsSplicedWav(entries) {
+  const Context = globalThis.AudioContext ?? globalThis.webkitAudioContext;
+  if (!Context) throw new Error('这个浏览器拼不了改过的句子，把「保存到本地」改成整段，或者把那一句恢复自动。');
+  const context = new Context();
+  try {
+    const decoded = new Map();
+    const stretches = [];
+    for (const { entry } of Array.isArray(entries) ? entries : []) {
+      const { record, index } = entry;
+      const line = record.timeline[index];
+      const part = record.parts[line.part];
+      if (!part?.blob) throw new Error('有一句的音频不在了，重新播一次再保存。');
+      const key = `${record.key}#${line.part}`;
+      let buffer = decoded.get(key);
+      if (!buffer) {
+        buffer = await context.decodeAudioData(await part.blob.arrayBuffer());
+        decoded.set(key, buffer);
+      }
+      const window = playbackWindow(record.timeline, index, part.duration);
+      const last = stretches.at(-1);
+      if (last && last.buffer === buffer && window.start <= last.end + 0.05 && window.end >= last.end) last.end = window.end;
+      else stretches.push({ buffer, start: window.start, end: window.end });
+    }
+    if (!stretches.length) throw new Error('还没有生成音频。');
+    const sampleRate = stretches[0].buffer.sampleRate;
+    if (stretches.some(stretch => stretch.buffer.sampleRate !== sampleRate)) throw new Error('这些音频的采样率不一样，拼不到一起；把「保存到本地」改成整段。');
+    const channels = Math.max(...stretches.map(stretch => stretch.buffer.numberOfChannels));
+    const chunks = Array.from({ length: channels }, () => []);
+    for (const stretch of stretches) {
+      const from = Math.max(0, Math.floor(stretch.start * sampleRate));
+      const to = Math.min(stretch.buffer.length, Math.ceil(stretch.end * sampleRate));
+      if (to <= from) continue;
+      for (let channel = 0; channel < channels; channel += 1) {
+        const source = stretch.buffer.getChannelData(Math.min(channel, stretch.buffer.numberOfChannels - 1));
+        chunks[channel].push(source.slice(from, to));
+      }
+    }
+    const joined = chunks.map(list => {
+      const out = new Float32Array(list.reduce((total, piece) => total + piece.length, 0));
+      let at = 0;
+      for (const piece of list) {
+        out.set(piece, at);
+        at += piece.length;
+      }
+      return out;
+    });
+    return new Blob([encodeWav(joined, sampleRate)], { type: 'audio/wav' });
+  } finally {
+    void context.close?.();
+  }
 }
 
 /** A blob handed to the browser as a download, and the url let go once it has had time to take it. */
@@ -10501,7 +10579,7 @@ async function openMiniWindow() {
       button.disabled = true;
       try {
         const saved = await downloadTtsAudio();
-        toast('success', `已保存 ${saved.name}（${formatBytes(saved.bytes)}）。`);
+        toast('success', `已保存 ${saved.name}（${formatBytes(saved.bytes)}）${saved.spliced ? '，改过和单独重做的句子已按顺序拼在原位置，所以是 wav' : ''}。`);
       } catch (error) {
         toast('error', safeError(error));
       } finally {
@@ -11430,6 +11508,9 @@ export const __testing = Object.freeze({
   planTtsLineButtons,
   refineTtsAnalysis,
   downloadTtsSentence,
+  downloadTtsAudio,
+  downloadNeedsSplice,
+  ttsSplicedWav,
   currentTtsLabels,
   ttsObjectUrl,
   dropTtsObjectUrls,
