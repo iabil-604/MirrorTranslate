@@ -1199,3 +1199,33 @@ test('the provider boundary: another adapter registers under its id, and what re
   assert.throws(() => registerTtsProvider({ id: 'half', vocabulary: {} }), /missing sentenceText/);
   assert.equal(FISH_ADAPTER.sentenceText({ segment: segments[1], voiceId: 'v-gu' }, { fish: { model: 's2-pro' }, mode: 'simple' }), '[happy] 早。');
 });
+
+test('a quote set off inside a sentence is part of the sentence, not speech: the reading keeps it in the narration', () => {
+  const line = '“如果是怕那些麻烦，那你不做不就好了？”她挑起眉毛，语气轻飘飘的，却精准地刺中了孟空那份关于“想要接近”却又“深怕伤害”的纠结，“还是说，你其实并没有那么想，只是习惯了把自己当成一个必须负责的照顾者？”';
+  const utterances = splitUtterances([{ lineId: 1, text: line }]);
+  assert.deepEqual(utterances.map(item => [item.kind, item.text]), [
+    ['quoted', '如果是怕那些麻烦，那你不做不就好了？'],
+    ['narration', '她挑起眉毛，语气轻飘飘的，却精准地刺中了孟空那份关于“想要接近”却又“深怕伤害”的纠结，'],
+    ['quoted', '还是说，你其实并没有那么想，只是习惯了把自己当成一个必须负责的照顾者？'],
+  ]);
+  assert.equal(utterances.map(item => item.anchor).join(''), line, 'the anchors still cover the line end to end');
+  // Announced speech stays speech; a phrase set off after a word does not.
+  const cases = [
+    ['他说“好”。', ['narration', 'quoted']],
+    ['他说：“好。”', ['narration', 'quoted']],
+    ['所谓“朋友”，不过如此。', ['narration']],
+    ['她只说了两个字“再见”', ['narration']],
+    ['顾旭禾看着她“你来了？”', ['narration', 'quoted']],
+    ['“早。”“嗯。”', ['quoted', 'quoted']],
+    ['彼は「はい」と言った。', ['narration', 'quoted', 'narration']],
+    ['いわゆる「友達」という関係だ。', ['narration']],
+    ['the so-called "friend" was gone.', ['narration']],
+    ['she said "hi" and left.', ['narration', 'quoted', 'narration']],
+  ];
+  for (const [text, kinds] of cases) {
+    assert.deepEqual(splitUtterances([{ lineId: 1, text }]).map(item => item.kind), kinds, text);
+  }
+  // Skipped runs stand between their neighbours and never merge.
+  const skipped = splitUtterances([{ lineId: 1, text: '所谓*旁注*“朋友”，不过如此。' }], { skipPairs: ['**'] });
+  assert.deepEqual(skipped.map(item => item.kind), ['narration', 'quoted', 'narration']);
+});

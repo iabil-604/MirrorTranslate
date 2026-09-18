@@ -1184,3 +1184,22 @@ test('a voice id edited in the library moves every binding that pointed at it', 
   const added = followVoiceLibrary(before, { ...settings, voiceLibrary: [...before, { id: 'lib-c', name: '新', voiceId: 'voice-c' }] });
   assert.equal(added.tts.narratorVoice, 'voice-a');
 });
+
+test('the colouring leaves a quote set off inside a sentence uncoloured', async () => {
+  const { splitSpeechParts, describeSpeechShape, isEmbeddedQuote, foldEmbeddedQuotes } = await import('../core.js');
+  const parts = splitSpeechParts('她刺中了那份关于“想要接近”却又“深怕伤害”的纠结，“还是说，你不想？”');
+  assert.deepEqual(parts.map(part => [part.spoken, part.text]), [
+    [false, '她刺中了那份关于“想要接近”却又“深怕伤害”的纠结，'],
+    [true, '“还是说，你不想？”'],
+  ]);
+  assert.equal(describeSpeechShape('所谓“朋友”，不过如此。'), 'narration', 'a line with only such quotes wears nobody\'s colour');
+  assert.equal(describeSpeechShape('他说：“好。”'), 'mixed');
+  assert.equal(describeSpeechShape('“好。”'), 'spoken');
+  assert.equal(isEmbeddedQuote('想要接近', '那份关于', '却又'), true);
+  assert.equal(isEmbeddedQuote('好', '他说', '。'), false, 'a verb of speech announces speech');
+  assert.equal(isEmbeddedQuote('好。', '他点点头', ''), false, 'a sentence of its own is speech');
+  assert.equal(isEmbeddedQuote('好', '他点点头，', ''), false, 'punctuation before the quote announces speech');
+  assert.equal(isEmbeddedQuote('はい', '彼は', 'と言った'), false, 'the quotative particle announces speech');
+  assert.equal(isEmbeddedQuote('友達', 'いわゆる', 'という関係'), true);
+  assert.deepEqual(foldEmbeddedQuotes([{ text: '关于', spoken: false }, { text: '“它”', spoken: true }, { text: '的事', spoken: false }]), [{ text: '关于“它”的事', spoken: false }]);
+});

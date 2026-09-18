@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.26.1';
+} from './prompts.js?v=0.26.2';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.26.1';
+export const APP_VERSION = '0.26.2';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -61,6 +61,59 @@ const SPEECH_OPENERS = new Map([
  * never closed would spill the speaker's colour over the rest of the line, which is the very thing
  * this exists to stop.
  */
+// Speech is announced: a colon, a comma or a full stop before the opening quote, a verb of speech
+// before it, a quotative と after it in Japanese, or a sentence of its own inside. A short quote with
+// none of these and a word right before it is a phrase set off inside the sentence around it.
+const QUOTE_SPEECH_VERB_TAIL = /(?:说|讲|问|答|喊|叫|吼|嚷|骂|念|唱|道|应|写|读|喃|咕|囔|哝|语|声|句|话|口|曰|云|言|想|回|叹|笑|哼|嗯|着|地)\s*$|(?<![\p{L}\p{N}-])(?:said|says|say|asked|asks|replied|answered|shouted|whispered|called|cried|added|muttered|murmured|repeated|announced|wrote|reads?|goes|went|like)\s*$/iu;
+const QUOTE_INNER_SENTENCE = /[。！？!?…；;]/u;
+const QUOTE_JA_QUOTATIVE = /^\s*(?:と|って)(?!いう|よば|呼ば|称|書か|書い)/u;
+
+/**
+ * Whether a quoted run is a phrase inside its sentence rather than something said: short, with no
+ * sentence of its own inside, a word (not punctuation, not a verb of speech) right before it, and
+ * no quotative particle after it.
+ */
+export function isEmbeddedQuote(inner, before = '', after = '') {
+  const text = String(inner ?? '').trim();
+  if (!text || [...text].length > 12 || QUOTE_INNER_SENTENCE.test(text)) return false;
+  const lead = String(before ?? '').replace(/\s+$/u, '');
+  const tail = String(after ?? '').replace(/^\s+/u, '');
+  const beforeChar = lead.slice(-1);
+  if (!beforeChar || !/[\p{L}\p{N}]/u.test(beforeChar)) return false;
+  if (QUOTE_SPEECH_VERB_TAIL.test(lead)) return false;
+  if (QUOTE_JA_QUOTATIVE.test(tail)) return false;
+  return true;
+}
+
+/**
+ * The parts of one line with its embedded quotes folded back into the narration around them.
+ *
+ * Parts carry `text` and either `spoken` or `kind` ('quoted' / 'narration' / 'skipped'); `innerOf`
+ * strips a quoted part's marks. Only narration merges; a skipped run stands between its neighbours.
+ */
+export function foldEmbeddedQuotes(parts, innerOf = text => text.slice(1, -1)) {
+  const list = Array.isArray(parts) ? parts : [];
+  const isNarration = part => (part.kind ? part.kind === 'narration' : !part.spoken);
+  const isQuoted = part => (part.kind ? part.kind === 'quoted' : Boolean(part.spoken));
+  const folded = [];
+  list.forEach((part, index) => {
+    let piece = part;
+    if (isQuoted(part)) {
+      const before = list[index - 1] && isNarration(list[index - 1]) ? list[index - 1].text : '';
+      const after = list[index + 1] && isNarration(list[index + 1]) ? list[index + 1].text : '';
+      if (!isEmbeddedQuote(innerOf(part.text), before, after)) {
+        folded.push({ ...part });
+        return;
+      }
+      piece = { ...part, spoken: false, ...(part.kind ? { kind: 'narration' } : {}) };
+    }
+    const last = folded.at(-1);
+    if (isNarration(piece) && last && isNarration(last)) last.text += piece.text;
+    else folded.push({ ...piece });
+  });
+  return folded;
+}
+
 export function splitSpeechParts(value) {
   const source = String(value ?? '');
   const parts = [];
@@ -96,7 +149,7 @@ export function splitSpeechParts(value) {
     }
   }
   flush(false);
-  return parts;
+  return foldEmbeddedQuotes(parts);
 }
 
 /**

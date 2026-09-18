@@ -66,7 +66,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.26.1';
+} from './core.js?v=0.26.2';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -113,15 +113,15 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.26.1';
-import { createTtsStore } from './tts-store.js?v=0.26.1';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.26.1';
+} from './tts.js?v=0.26.2';
+import { createTtsStore } from './tts-store.js?v=0.26.2';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.26.2';
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.26.1';
+} from './processing.js?v=0.26.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -138,9 +138,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.26.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.26.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.26.1';
+} from './prompts.js?v=0.26.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.26.2';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.26.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -154,15 +154,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.26.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.26.1';
+} from './palette.js?v=0.26.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.26.2';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.26.1';
+} from './diagnostics.js?v=0.26.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -3149,12 +3149,31 @@ function consoleFingerprint(settings = runtime.settings) {
   return JSON.stringify([base.marks, base.speed, rows]);
 }
 
-/** One sentence made again: the recording that covered it is dropped and the play that follows asks Fish anew. */
+/**
+ * One sentence made again.
+ *
+ * The sentence is asked for on its own, as a take of its own: the paragraph it sits in keeps its
+ * recording for the other sentences, and the next play of this one finds the newer take first. An
+ * earlier take of the sentence alone is dropped, so asking twice gives two different readings. A
+ * reader who makes audio without playing it gets it made and told so.
+ */
 async function regenerateTtsSentence(messageId, utteranceId, side = null) {
   const prepared = await ttsPrepared(messageId, side);
   const item = prepared.items.find(candidate => candidate.segment.id === utteranceId);
   if (!item) throw new Error('这一句不在当前的朗读范围里。');
-  await dropTtsRecordings(prepared, [item]);
+  await dropTtsRecordings(prepared, [item], { paragraph: false });
+  const { floor, settings } = prepared;
+  setTtsButtonState(messageId, utteranceId, 'busy', floor.side, item.segment.lineId);
+  try {
+    await ensureTtsRecording(floor, `sentence:${utteranceId}`, [item], settings, text => setTtsStatus(messageId, text, 'busy'), (id, patch) => ttsStep(floor, id, patch));
+  } finally {
+    setTtsButtonState(messageId, utteranceId, null, floor.side, item.segment.lineId);
+  }
+  if (!ttsSettings(settings).playAfterGenerate) {
+    setTtsStatus(messageId, '这一句已重新生成，再点一次播放', 'idle');
+    notifyTtsPanels();
+    return;
+  }
   await playTtsUtterance(messageId, utteranceId, side);
 }
 
@@ -3164,6 +3183,13 @@ async function regenerateTtsParagraph(messageId, lineId, side = null) {
   const items = prepared.items.filter(candidate => candidate.segment.lineId === lineId);
   if (!items.length) throw new Error('这一段不在当前的朗读范围里。');
   await dropTtsRecordings(prepared, items);
+  if (!ttsSettings(prepared.settings).playAfterGenerate) {
+    const { floor, settings } = prepared;
+    await ensureTtsRecording(floor, `line:${lineId}`, items, settings, text => setTtsStatus(messageId, text, 'busy'), (id, patch) => ttsStep(floor, id, patch));
+    setTtsStatus(messageId, '这一段已重新生成，再点一次播放', 'idle');
+    notifyTtsPanels();
+    return;
+  }
   await playTtsParagraph(messageId, lineId, side);
 }
 
@@ -3174,10 +3200,10 @@ async function regenerateTtsParagraph(messageId, lineId, side = null) {
  * words, and re-rolling one of them must not take the other one's audio away. The object URLs go too —
  * a new take is stored under the same content-addressed key, so a cached URL would replay the old one.
  */
-async function dropTtsRecordings(prepared, items) {
+async function dropTtsRecordings(prepared, items, { paragraph = true } = {}) {
   const units = new Set();
   for (const item of items) {
-    units.add(`line:${item.segment.lineId}`);
+    if (paragraph) units.add(`line:${item.segment.lineId}`);
     units.add(`sentence:${item.segment.id}`);
   }
   const keys = new Set();
@@ -3747,6 +3773,7 @@ function playTtsAudio(url, { start = 0, end = null, onTime = null } = {}) {
 }
 
 function highlightTtsUtterance(messageId, utteranceId, side = null) {
+  if (typeof document === 'undefined') return;
   for (const button of document.querySelectorAll('#chat .jy-tts-play[data-state="playing"]')) delete button.dataset.state;
   const registry = globalThis.CSS?.highlights;
   if (utteranceId === null || utteranceId === undefined) {
@@ -4148,11 +4175,18 @@ async function runTtsTransport(transport) {
       const { record, index } = entry;
       const part = record.timeline[index].part;
       // The stretch of this part that belongs to items still ahead, in order, so the clock can name them.
+      // A sentence with a take of its own — rewritten by the reader, or made again alone — is heard
+      // from that take, not from the paragraph's older reading of it: the stretch ends before it, and
+      // the next turn of the loop plays it on its own before carrying on.
       const ahead = new Map();
       for (let offset = transport.index; offset < items.length; offset += 1) {
         const candidate = items[offset];
         const found = record.timeline.findIndex(candidateEntry => candidateEntry.id === candidate.segment.id && candidateEntry.part === part);
         if (found < 0) break;
+        if (offset > transport.index) {
+          const own = await findTtsEntry(floor, candidate, settings);
+          if (own && own.record.key !== record.key) break;
+        }
         ahead.set(offset, record.timeline[found]);
         if (transport.single) break;
       }

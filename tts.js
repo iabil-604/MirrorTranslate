@@ -1,5 +1,6 @@
 import {
   DEFAULT_QUOTE_PAIRS,
+  foldEmbeddedQuotes,
   hashText,
   isPlaceholderSpeaker,
   languageBase,
@@ -9,9 +10,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.26.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.26.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.26.1';
+} from './core.js?v=0.26.2';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.26.2';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.26.2';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -204,7 +205,8 @@ export function splitUtterances(lines, { quotePairs = DEFAULT_QUOTE_PAIRS, skipP
   const utterances = [];
   for (const line of Array.isArray(lines) ? lines : []) {
     const lineText = String(line?.text ?? '');
-    for (const part of splitByPairs(lineText, { quotePairs: quotes, skipPairs })) {
+    // A quote set off inside a sentence is part of that sentence, read as narration with it.
+    for (const part of foldEmbeddedQuotes(splitByPairs(lineText, { quotePairs: quotes, skipPairs }), run => unquote(run, quotes))) {
       if (part.kind === 'skipped') continue;
       const runs = part.spoken ? [part.text] : splitNarrationSentences(part.text);
       for (const run of runs) {

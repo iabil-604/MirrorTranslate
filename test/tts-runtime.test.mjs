@@ -1300,3 +1300,144 @@ test('the plain reading can ask for one simple analysis of a floor by hand, and 
   assert.equal(other.depth, 'off');
   assert.equal(requests, 1);
 });
+
+test('regenerating one sentence asks for that sentence alone; the paragraph keeps the rest, and asking twice gives two takes', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-regen-sentence');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', playAfterGenerate: false, narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('一。二。三。', [[1, '第一句。第二句。第三句。']], settings));
+  const calls = mockFish();
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.equal(items.length, 3);
+  // The paragraph is made whole, once.
+  const first = await __testing.resolveTtsEntry(floor, items, items[1], settings, null, null, { single: true });
+  assert.equal(first.record.unit, 'line:1');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, '第一句。\n第二句。\n第三句。');
+  // One sentence again: a request for that sentence only.
+  await __testing.regenerateTtsSentence(0, 2);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].body.text, '第二句。', 'only the sentence asked for goes out');
+  const again = await __testing.findTtsEntry(floor, items[1], settings);
+  assert.equal(again.record.unit, 'sentence:2', 'the newer take is what the next play finds');
+  const neighbour = await __testing.findTtsEntry(floor, items[0], settings);
+  assert.equal(neighbour.record.unit, 'line:1', 'the paragraph still serves the others');
+  assert.equal(neighbour.record.key, first.record.key);
+  // Asked again: another take, not the cached one.
+  await __testing.regenerateTtsSentence(0, 2);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2].body.text, '第二句。');
+  // The whole paragraph again drops the sentence's own take with it.
+  await __testing.regenerateTtsParagraph(0, 1);
+  assert.equal(calls.length, 4);
+  assert.equal(calls[3].body.text, '第一句。\n第二句。\n第三句。');
+  assert.equal((await __testing.findTtsEntry(floor, items[1], settings)).record.unit, 'line:1');
+});
+
+// A stand-in for the browser's audio element: loads at once, plays at once, ends on the next tick.
+// What was asked to play, and from where, is kept for the assertions.
+function mockAudio() {
+  const plays = [];
+  class FakeAudio {
+    constructor() {
+      this.listeners = new Map();
+      this.readyState = 0;
+      this.currentTime = 0;
+      this.duration = 3;
+      this.preload = '';
+      this.value = '';
+    }
+
+    addEventListener(type, handler) {
+      if (!this.listeners.has(type)) this.listeners.set(type, []);
+      this.listeners.get(type).push(handler);
+    }
+
+    removeEventListener(type, handler) {
+      this.listeners.set(type, (this.listeners.get(type) ?? []).filter(item => item !== handler));
+    }
+
+    emit(type) {
+      for (const handler of [...(this.listeners.get(type) ?? [])]) handler({ type });
+    }
+
+    set src(value) {
+      this.value = value;
+    }
+
+    get src() {
+      return this.value;
+    }
+
+    load() {
+      this.readyState = 1;
+      setTimeout(() => this.emit('loadedmetadata'), 0);
+    }
+
+    play() {
+      plays.push({ src: this.value, start: Number(this.currentTime.toFixed(2)) });
+      setTimeout(() => this.emit('ended'), 5);
+      return Promise.resolve();
+    }
+
+    pause() {}
+  }
+  const before = globalThis.Audio;
+  globalThis.Audio = FakeAudio;
+  return { plays, restore: () => { globalThis.Audio = before; } };
+}
+
+test('a sentence with a take of its own is heard from it inside its paragraph: rewritten by hand, or made again alone', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-own-take');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('一。二。三。', [[1, '第一句。第二句。第三句。']], settings));
+  const calls = mockFish();
+  const audio = mockAudio();
+  t.after(audio.restore);
+  // Each recording gets a url of its own here, so the plays can be told apart by what they were given.
+  const createUrl = URL.createObjectURL;
+  let urls = 0;
+  URL.createObjectURL = () => `blob:take-${urls += 1}`;
+  t.after(() => { URL.createObjectURL = createUrl; });
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  const paragraph = await __testing.resolveTtsEntry(floor, items, items[0], settings);
+  assert.equal(paragraph.record.unit, 'line:1');
+  assert.deepEqual(paragraph.record.timeline.map(entry => [entry.id, entry.start]), [[1, 0], [2, 0.75], [3, 1.5]], 'the mock aligns a character every quarter second');
+  // The reader rewrites the third sentence and makes the second again on its own.
+  await __testing.saveTtsOverride(0, 3, { text: '第三句……' });
+  await __testing.regenerateTtsSentence(0, 2);
+  assert.equal(calls.length, 3);
+  assert.equal(audio.plays.length, 1, 'the sentence made again is played on its own');
+  const from = audio.plays.length;
+  // The paragraph played from the top: the first sentence from the paragraph's take, then the
+  // second from its own, then the third from the reader's, each a play of its own.
+  const transport = await __testing.createTtsTransport(0, { single: false });
+  await __testing.runTtsTransport(transport);
+  assert.equal(calls.length, 3, 'nothing was made again');
+  const stretches = audio.plays.slice(from);
+  assert.equal(stretches.length, 3, 'three stretches, not one');
+  assert.equal(stretches[0].start, 0, 'the paragraph take, from the first sentence');
+  assert.notEqual(stretches[1].src, stretches[0].src, 'the second sentence comes from its own take');
+  assert.equal(stretches[1].start, 0);
+  assert.notEqual(stretches[2].src, stretches[0].src, 'the third from the reader\'s version');
+  assert.equal(stretches[2].start, 0);
+  assert.equal(transport.state, 'idle');
+  // Without a take of their own, the sentences play through in one stretch.
+  await __testing.clearTtsOverride(0, 3);
+  await __testing.regenerateTtsParagraph(0, 1);
+  assert.equal(calls.length, 4);
+  const mark = audio.plays.length;
+  const whole = await __testing.createTtsTransport(0, { single: false });
+  await __testing.runTtsTransport(whole);
+  assert.equal(audio.plays.length - mark, 1, 'one stretch for the whole paragraph');
+  assert.equal(audio.plays.at(-1).start, 0);
+});
