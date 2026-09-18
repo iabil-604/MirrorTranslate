@@ -9,9 +9,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.26.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.26.0';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.26.0';
+} from './core.js?v=0.26.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.26.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.26.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -379,16 +379,18 @@ function referenceLines(translations) {
 // {{references_rule}} the rule about translations riding along when the original is read.
 export const DEFAULT_TTS_PROMPTS = Object.freeze({
   simple: [
-    '你是有声小说的配音助手。下面是一楼正文按顺序切好的句子。谁在说话已经由程序按上下文认出来了，写在每句的 speaker 里；你只做表演判断：每一句带什么情绪念、强度多大、有没有明显的语气、语速、音量、停顿和非语言声音。不改写、不复述、不翻译任何句子。',
-    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text，认出说话人的对白句还有 speaker；styles 是每个角色的表达习惯和用户定下的规则，判断表演时要遵守。',
-    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","emotion":"英文情绪词","intensity":1,"tone":"英文语气词","speed":"slow","volume":"quiet","pauses":[{"after":"句中的词","length":"short"}],"sounds":[{"at":"start","tag":"英文声音词"}]}]}',
+    '你是有声小说的配音助手。下面是一楼正文按顺序切好的句子。你要判断每一句由谁念、带什么情绪念、强度多大、有没有明显的语气、语速、音量、停顿和非语言声音。不改写、不复述、不翻译任何句子。',
+    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text；个别对白句带 speaker，那是用户手动定的，照抄，不要改。styles 是每个角色的表达习惯和用户在调音台上定下的规则：这是硬性要求，不是参考，每一条都要落实到你写的字段上，写完对照一遍。',
+    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","intensity":1,"tone":"英文语气词","speed":"slow","volume":"quiet","pauses":[{"after":"句中的词","length":"short"}],"sounds":[{"at":"start","tag":"英文声音词"}]}]}',
     '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。引号用来标书名、专有名词、强调或引用时是 narration；不在引号里却明显是角色在说的话也是 dialogue。',
-    '2. speaker：输入里已经带 speaker 的句子，不要输出 speaker，更不要改。只有 dialogue 句在输入里没有 speaker 时，你才按前后文补一个：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。{{user}}看不出是谁说的就省略，不要猜。',
-    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句只写一个；看不出明显情绪就省略，不要为了填满而猜。不要自己造词，不要加 slightly、very 这类程度词。intensity：0 弱、1 中、2 强，只在原文明确加强或减弱时写。',
-    '4. tone：可选，只能取 tones 列表里的一个，只在原文明确写了小声、耳语、喊、尖叫、急促这类说法时写。speed 只能是 slow 或 fast，volume 只能是 quiet 或 loud，只在明显比平常快慢、轻响时写。',
-    '5. pauses：句中某个词后面要停顿，after 逐字照抄句中的词，length 是 short 或 long，最多两处，只在明显的犹豫、转折、哽住处写。sounds：笑声、叹气、喘息、倒吸气这类非语言声音，只在原文明确写了的时候写，tag 只能取 sounds 列表里的词，at 是 start（句首）或 end（句尾）。',
-    '6. lang：这一句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。与整楼主要语言相同、人物设定又没说口音时省略。',
-    '7. 每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。输入里如果有 lead，那是这一批前面紧挨着的几句，只用来认人和判断语气，不用回答。',
+    '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。认人看引号前后的人名和动作、上下文里谁在和谁说话、两个人一来一回的顺序；话里叫到的名字是听的人，不是说的人。{{user}}看不出是谁说的就省略，不要猜。',
+    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句只写一个；对白句尽量都给，只有真的平淡无起伏才省略。不要自己造词，不要加 slightly、very 这类程度词。intensity：0 弱、1 中、2 强，按语义定：感叹、追问、吼、哭这类明显加强的写 2，压着说、迟疑、耳语写 0。',
+    '4. 自然为先：同一个角色连续几句，情绪要跟着句意走，不要机械地全写一个词、全写一个强度；旁白一般不给情绪，只有明显带情绪的叙述才给。',
+    '5. tone：可选，只能取 tones 列表里的一个，只在原文明确写了小声、耳语、喊、尖叫、急促这类说法时写。speed 只能是 slow 或 fast，volume 只能是 quiet 或 loud，只在明显比平常快慢、轻响时写。',
+    '6. pauses：句中某个词后面要停顿，after 逐字照抄句中的词，length 是 short 或 long，最多两处，只在明显的犹豫、转折、哽住处写。',
+    '7. sounds：笑声、叹气、喘息、倒吸气这类非语言声音，只在原文写了、或者情绪明显到该有的时候写，tag 只能取 sounds 列表里的词，at 是 start（句首）或 end（句尾），一句最多一个。',
+    '8. lang：这一句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。与整楼主要语言相同、人物设定又没说口音时省略。',
+    '9. 每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。输入里如果有 lead，那是这一批前面紧挨着的几句，只用来认人和判断语气，不用回答。',
     '{{references_rule}}',
   ].join('\n'),
   simpleOld: [
@@ -421,7 +423,7 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
     '只改用户的意见涉及到的句子。意见没有说到的句子，只输出 {"id":N}，表示上一次的标注原样保留——这是最重要的一条，不要把没提到的句子重写一遍。',
     '只输出一个 JSON 对象，不要任何解释，格式和上一次一样：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","sounds":[{"at":"start","tag":"英文声音词"}]}]}',
     '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。',
-    '2. speaker：current 里已经写了 speaker 的句子，说话人是程序或用户定下的，不要改，也不要输出 speaker。只有 dialogue 句在 current 里没有 speaker 时，才按前后文从 roster 里逐字照抄一个，不加敬称。',
+    '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称。用户说「说话人不对」时，重新判断这几句到底是谁在说，参考前后文和 roster；current 里 manual 为 true 的句子是用户手动定的说话人，不要改。',
     '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个。用户说「情绪不够」就换一个更贴切、更强的词；说「太夸张」就换平一点的；不要自己造词，不要加 slightly、very 这类程度词。',
     '4. tone：可选，只能取 tones 列表里的一个；sounds：只能取 sounds 列表里的词，at 是 start 或 end。用户嫌声音多就删掉，嫌少就在真的合适的地方加。',
     '5. styles 是角色的表达习惯和用户定下的规则，改的时候要遵守。',
@@ -1322,28 +1324,69 @@ function compileDirection(voice, text, result) {
   return result;
 }
 
-const CONSOLE_LINES = Object.freeze({
-  pause: ['说话连贯，少停顿，句内不加停顿标记。', '停顿感强：句间留白多，转折、犹豫处加停顿，允许长停顿。'],
-  breath: ['几乎不带呼吸声，不写喘息、吸气。', '呼吸感明显但自然：紧张、害羞、疲惫、犹豫时可以加入呼吸或喘息，不要每句都加。'],
-  grain: ['口语颗粒度低：说话顺畅，少迟疑和口语化的毛边。', '口语颗粒度高：允许迟疑、重复、吞吞吐吐、小声嘀咕这类真人说话的毛边。'],
-  intensity: ['情感强度低：情绪写得克制、含蓄，强度多用弱。', '情感强度高：情绪写得饱满，强度多用强，允许爆发。'],
-  range: ['情绪表现幅度小：整体平稳，句内少转折。', '情绪表现幅度大：情绪起伏明显，允许句内转折和明显变化。'],
-  speed: ['语速偏慢：多用 slow，很少用 fast。', '语速偏快：多用 fast，急的时候更快。'],
-  expression: ['声音表现克制：少用笑声、叹气、咳嗽这类非语言声音。', '声音表现外放：合适的地方多用笑声、叹气、喘息等非语言声音，但要贴合当下情境。'],
+// What each slider demands at each end, in terms of the fields the model fills in: the outer bands
+// speak in numbers (how many sentences, which value), so a slider pushed far out is a rule the model
+// can be checked against rather than a mood it may weigh. Every word named here is one Fish knows.
+const CONSOLE_BANDS = Object.freeze({
+  pause: [
+    '几乎不停顿：pauses 一律不写。',
+    '停顿少：pauses 只在真正哽住、话说一半的地方写，整楼两三处以内。',
+    '停顿感强：犹豫、转折、话没说完的地方写 pauses，允许 long，每三四句对白至少一处。',
+    '停顿感很强：几乎每句对白都找一处该停的地方写 pauses，转折和哽咽用 long。',
+  ],
+  breath: [
+    '不要呼吸声：sounds 里不写 gasping、panting、sighing。',
+    '呼吸声少：只有原文明写了喘、叹气才在 sounds 里写。',
+    '呼吸感明显：紧张、害羞、疲惫、犹豫的句子在句首加 gasping、panting 或 sighing 这类 sounds，不要每句都加。',
+    '呼吸感很重：情绪起伏的句子大多在句首或句尾带 sighing、gasping、panting 这类 sounds。',
+  ],
+  grain: [
+    '说话顺畅利落：不写表示迟疑的 pauses，不用 soft tone。',
+    '口语毛边少：迟疑的短停顿只在明显吞吞吐吐的地方写。',
+    '口语颗粒度高：迟疑、重复、支支吾吾的地方用 short pauses 表现，小声嘀咕的句子给 soft tone。',
+    '口语颗粒度很高：真人说话的毛边要多，迟疑处普遍写 short pauses，含糊小声的句子写 soft tone 或 whispering。',
+  ],
+  intensity: [
+    '情感强度极低：intensity 一律写 0，情绪词选克制的（calm、gentle、indifferent 这类），不要 hysterical 这类爆发词。',
+    '情感强度低：intensity 多写 0，最高 1；情绪词选含蓄的。',
+    '情感强度高：对白句都要给 emotion，不要省略；intensity 多写 1 和 2，明显的情绪句写 2。',
+    '情感强度很高：对白句全部给 emotion，一半以上写 intensity 2，允许 hysterical、excited、scared 这类强烈的词。',
+  ],
+  range: [
+    '情绪幅度极小：整楼情绪平稳，相邻句子的情绪词尽量一致，不写 shouting、screaming 这类 tone。',
+    '情绪幅度小：整体平稳，情绪词少换，intensity 不跳变。',
+    '情绪幅度大：情绪跟着句意起伏，相邻句子可以从平静跳到激动，intensity 可以 0 到 2 跳变。',
+    '情绪幅度很大：激动处写 shouting，压抑处写 whispering，intensity 大起大落。',
+  ],
+  speed: [
+    '语速很慢：对白句多写 speed: slow，不写 fast。',
+    '语速偏慢：多用 slow，很少用 fast。',
+    '语速偏快：多用 fast，急的时候更要写。',
+    '语速很快：对白句多写 speed: fast，不写 slow，急促的句子加 in a hurry tone。',
+  ],
+  expression: [
+    '不要非语言声音：sounds 一律不写。',
+    '声音表现克制：sounds 只在原文明写了笑、叹气、咳嗽时写。',
+    '声音表现外放：合适的地方写 sounds（笑声、叹气、喘息、清嗓子），每三四句对白至少一处，要贴合当下的情绪。',
+    '声音表现很外放：大多数带情绪的对白句都配一个 sounds，笑就 laughing 或 chuckling，难过就 sobbing 或 sighing，一句最多一个。',
+  ],
 });
 
 /**
- * A console as sentences a model can follow. Sliders near the middle say nothing; the far ends speak;
- * the reader's own rules ride along as written. The numbers themselves never go out.
+ * A console as rules a model can be held to. Sliders near the middle say nothing; the outer bands
+ * speak, and the further out, the more they demand; the reader's own rules ride along as written.
+ * The numbers themselves never go out.
  */
 export function consoleDirections(console) {
   if (!console || typeof console !== 'object') return [];
   const lines = [];
-  for (const [key, pair] of Object.entries(CONSOLE_LINES)) {
+  for (const [key, bands] of Object.entries(CONSOLE_BANDS)) {
     const value = Number(console[key]);
     if (!Number.isFinite(value)) continue;
-    if (value <= 30) lines.push(pair[0]);
-    else if (value >= 70) lines.push(pair[1]);
+    if (value <= 15) lines.push(bands[0]);
+    else if (value <= 35) lines.push(bands[1]);
+    else if (value >= 85) lines.push(bands[3]);
+    else if (value >= 65) lines.push(bands[2]);
   }
   for (const rule of String(console.rules ?? '').split('\n').map(line => line.trim()).filter(Boolean).slice(0, 12)) lines.push(rule.slice(0, 120));
   return lines;

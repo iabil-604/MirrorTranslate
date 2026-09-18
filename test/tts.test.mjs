@@ -895,13 +895,18 @@ test('a console becomes sentences at its ends and says nothing in the middle', (
   const lines = consoleDirections({ pause: 80, breath: 20, grain: 50, intensity: 70, range: 30, speed: 100, expression: 0, rules: '害羞时不要过度娇柔\n\n生气时保持克制' });
   assert.equal(lines.length, 8);
   assert.match(lines[0], /^停顿感强/);
-  assert.match(lines[1], /^几乎不带呼吸声/);
+  assert.match(lines[1], /^呼吸声少/);
   assert.match(lines[2], /^情感强度高/);
-  assert.match(lines[3], /^情绪表现幅度小/);
-  assert.match(lines[4], /^语速偏快/);
-  assert.match(lines[5], /^声音表现克制/);
+  assert.match(lines[3], /^情绪幅度小/);
+  assert.match(lines[4], /^语速很快/);
+  assert.match(lines[5], /^不要非语言声音/);
   assert.deepEqual(lines.slice(6), ['害羞时不要过度娇柔', '生气时保持克制']);
   assert.deepEqual(consoleDirections(null), []);
+  // The further out a slider sits, the more it demands; the middle band is silent.
+  assert.match(consoleDirections({ intensity: 90 })[0], /^情感强度很高：.*一半以上写 intensity 2/);
+  assert.match(consoleDirections({ intensity: 10 })[0], /^情感强度极低：intensity 一律写 0/);
+  assert.match(consoleDirections({ expression: 70 })[0], /每三四句对白至少一处/);
+  assert.deepEqual(consoleDirections({ intensity: 40, expression: 60, pause: 64, breath: 36 }), []);
 });
 
 test('the lines a floor reads lose their markup before anything hears them', () => {
@@ -1038,10 +1043,10 @@ function readFloor(lines, options = {}) {
 
 test('the speaker engine reads who speaks off the text: the name beside the quote, the one who acts, the script form', () => {
   const single = readFloor(['顾旭禾看了她一眼。“你来了？”', '“坐吧。”他说道。', '“外面冷吧。”']);
-  assert.deepEqual(single.quoted, [['你来了？', '顾旭禾', 'local'], ['坐吧。', '顾旭禾', 'local'], ['外面冷吧。', null, null]]);
+  assert.deepEqual(single.quoted, [['你来了？', '顾旭禾', 'local'], ['坐吧。', '顾旭禾', 'local'], ['外面冷吧。', '顾旭禾', 'local']]);
   assert.match(single.resolved.get(2).evidence.join('；'), /引号前「顾旭禾看了她一眼/);
   assert.match(single.resolved.get(3).evidence.join('；'), /场上只有这一个人/, 'a pronoun with one person present is that person');
-  assert.equal(single.resolved.get(5).confidence, 0, 'a bare quote after that is nobody\'s: a guess is not a verdict');
+  assert.match(single.resolved.get(5).evidence.join(''), /只有这一个人在说话/, 'one person carries the floor: a bare quote is theirs');
 
   const script = readFloor(['顾旭禾：“陆玲，你看这个。”', '“这是什么？”', '林可森从后面凑过来，“欸嘿~小苗苗在干嘛呢~”', '“滚。”']);
   assert.deepEqual(script.quoted, [['陆玲，你看这个。', '顾旭禾', 'local'], ['这是什么？', '陆玲', 'local'], ['欸嘿~小苗苗在干嘛呢~', '林可森', 'local'], ['滚。', null, null]]);
@@ -1069,11 +1074,16 @@ test('two people take turns: once both are named, the nameless lines alternate b
 
 test('a quote nobody can name goes to the translation\'s label, then to nobody; the reader\'s word beats them all', () => {
   const hinted = readFloor(['王轩风走过来。“喂。”', '“干嘛。”'], { hints: new Map([[2, '顾旭禾']]) });
-  assert.deepEqual(hinted.quoted, [['喂。', '顾旭禾', 'hint'], ['干嘛。', null, null]]);
+  assert.deepEqual(hinted.quoted, [['喂。', '顾旭禾', 'hint'], ['干嘛。', '顾旭禾', 'local']], 'the one person the labels name carries the floor');
   assert.equal(hinted.resolved.get(2).confidence, 0.6);
-  // The text's own reading outranks the label where it is clear.
-  const clear = readFloor(['顾旭禾推门进来。“早。”'], { hints: new Map([[2, '陆玲']]) });
+  // A line beside a verb of speech with no known name is somebody else's: nobody's here.
+  const nobody = readFloor(['老板说道：“好嘞。”', '“快点。”'], { hints: new Map([[3, '顾旭禾']]) });
+  assert.deepEqual(nobody.quoted, [['好嘞。', null, null], ['快点。', '顾旭禾', 'hint']]);
+  // What the text says outright outranks the label; what it only suggests does not.
+  const clear = readFloor(['顾旭禾说道：“早。”'], { hints: new Map([[2, '陆玲']]) });
   assert.deepEqual(clear.quoted, [['早。', '顾旭禾', 'local']]);
+  const suggested = readFloor(['顾旭禾推门进来。“早。”'], { hints: new Map([[2, '陆玲']]) });
+  assert.deepEqual(suggested.quoted, [['早。', '陆玲', 'hint']]);
   // The reader's word, in any spelling the cast knows, is final.
   const manual = readFloor(['顾旭禾推门进来。“早。”', '“早。”陆玲头也不抬。'], { manual: new Map([[3, '小苗苗']]) });
   assert.deepEqual(manual.quoted, [['早。', '顾旭禾', 'local'], ['早。', '顾旭禾', 'manual']]);
@@ -1088,7 +1098,8 @@ test('pinning names over labels: the model\'s word stands only where nobody else
   const resolved = new Map([[2, { speaker: '陆玲', source: 'local', confidence: 1, evidence: ['引号前「陆玲说」'] }], [3, { speaker: null, source: null, confidence: 0, evidence: [] }]]);
   const pinned = pinSpeakers(labels, resolved);
   assert.deepEqual(pinned.get(2), { type: 'dialogue', speaker: '陆玲', emotion: 'happy', speakerSource: 'local', speakerEvidence: ['引号前「陆玲说」'] });
-  assert.deepEqual(pinned.get(3), { type: 'dialogue', speaker: '樱井', speakerSource: 'model' });
+  assert.deepEqual(pinned.get(3), { type: 'dialogue', speaker: '樱井', speakerSource: 'model', speakerEvidence: [] });
+  assert.equal(pinSpeakers(labels, resolved, { fallback: 'hint' }).get(3).speakerSource, 'hint');
   assert.deepEqual(pinned.get(4), { type: 'narration' });
   assert.equal(labels.get(2).speaker, '泰罗', 'the labels handed in are left as they were');
   assert.deepEqual([...speakerHints(labels)], [[2, '泰罗'], [3, '樱井']]);
@@ -1103,15 +1114,41 @@ test('pinning names over labels: the model\'s word stands only where nobody else
   assert.deepEqual(segments.map(segment => [segment.speaker, segment.speakerSource, segment.speakerEvidence]), [['陆玲', 'local', ['e']], [null, null, []]]);
 });
 
-test('the simple request says who speaks and asks only how it is said', () => {
+test('the simple request names what the reader set, asks the model for the rest, and holds it to the console', () => {
   const utterances = splitUtterances([{ lineId: 1, text: '顾旭禾推门进来。“早。”' }, { lineId: 2, text: '“早。”' }]);
   const messages = buildTtsAnalysisMessages(utterances, { roster: ['顾旭禾', '陆玲'], speakers: new Map([[2, '顾旭禾']]), lead: [{ id: 0, anchor: '前一句', text: '前一句' }] });
   const input = JSON.parse(messages[1].content);
   assert.deepEqual(input.utterances.map(item => [item.id, item.speaker ?? null]), [[1, null], [2, '顾旭禾'], [3, null]]);
-  assert.match(messages[0].content, /不要输出 speaker，更不要改/);
+  assert.match(messages[0].content, /个别对白句带 speaker，那是用户手动定的，照抄，不要改/);
+  assert.match(messages[0].content, /2\. speaker 只给 dialogue/);
+  assert.match(messages[0].content, /硬性要求，不是参考/);
   assert.match(messages[0].content, /intensity：0 弱、1 中、2 强/);
   assert.match(messages[0].content, /pauses：/);
-  assert.doesNotMatch(messages[0].content, /判断每一句由谁念/, 'the old job of naming speakers is gone');
+  assert.match(messages[0].content, /自然为先/);
+});
+
+test('in a floor the character wrote, the reader is the one spoken to', () => {
+  const cast = [{ name: '明日香', aliases: [] }, { name: '孟空', aliases: [] }];
+  const protagonists = { character: '明日香', user: '孟空' };
+  const read = lines => {
+    const utterances = splitUtterances(lines.map((text, index) => ({ lineId: index + 1, text })));
+    const resolved = resolveSpeakers(utterances, { cast, protagonists });
+    return utterances.filter(item => item.kind === 'quoted').map(item => [item.text.slice(0, 6), resolved.get(item.id)?.speaker ?? null, resolved.get(item.id)?.evidence ?? []]);
+  };
+  // The character narrated, the reader addressed: every quote is the character's.
+  const addressed = read(['明日香抱着胳膊靠在墙上，瞥了孟空一眼。', '“那可是前线诶，”', '“孟空，你现在的样子，比那时候死脑筋。”', '她哼了一声。', '“我是认真的。”']);
+  assert.deepEqual(addressed.map(([, who]) => who), ['明日香', '明日香', '明日香']);
+  assert.match(addressed[1][2].join('；'), /话里叫的是孟空（你），说话的是明日香/);
+  // The reader speaks outright once; everything else stays the character's.
+  const once = read(['明日香抱着胳膊。“你来干什么？”', '孟空说道：“来看你。”', '“……哼。”', '“随便你。”']);
+  assert.deepEqual(once.map(([, who]) => who), ['明日香', '孟空', '明日香', '明日香']);
+  // The character is only ever 她; the reader is named as the one looked at: the character speaks.
+  const pronouns = read(['她看着孟空，皱起眉。', '“你又迟到了。”', '“别找借口。”']);
+  assert.deepEqual(pronouns.map(([, who]) => who), ['明日香', '明日香']);
+  assert.match(pronouns[0][2].join(''), /只有你被叫到，说话的是明日香/);
+  // Somebody outside the cast speaks: that line is nobody's, and the character keeps the rest.
+  const stranger = read(['明日香推开门。“老板，两份拉面。”', '老板笑着说道：“好嘞。”', '“快点。”']);
+  assert.deepEqual(stranger.map(([, who]) => who), ['明日香', null, '明日香']);
 });
 
 test('a recording\'s identity: the same words in another voice, mood, strength or name are never shared', () => {

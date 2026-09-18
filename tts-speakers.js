@@ -1,4 +1,4 @@
-import { unifySpeakerNames } from './core.js?v=0.26.0';
+import { unifySpeakerNames } from './core.js?v=0.26.1';
 
 // ---------------------------------------------------------------------------------------------
 // Who is speaking, read off the text itself.
@@ -48,6 +48,9 @@ const SCORE = Object.freeze({
   pronoun: 45,
   script: 100,
   action: 55,
+  // The reader's own name beside a quote, with no verb of speech: in a floor the character wrote,
+  // the reader is mostly the one spoken to, so an action alone does not make them the speaker.
+  userAction: 25,
   bystander: 20,
   sameLine: 70,
   sameLineNarrated: 45,
@@ -56,12 +59,19 @@ const SCORE = Object.freeze({
   calledOut: -60,
   addressee: -40,
   answering: 30,
+  // A quote that calls the reader by name is the character talking to them.
+  toUser: 45,
+  toCharacter: 25,
   subject: 15,
   paragraphBefore: 80,
   paragraphAction: 35,
+  // One person carries the whole floor's dialogue: a quote nobody else claims is theirs.
+  sole: 50,
 });
 const CONFIDENT = 50;
 const MARGIN = 20;
+// From here up the text has said outright who speaks, and the translation's label no longer outranks it.
+const EXPLICIT = 80;
 // How far back a name still counts as present in the scene, in utterances.
 const PRESENT_WINDOW = 16;
 
@@ -169,29 +179,81 @@ class Tally {
 }
 
 /**
+ * A first look over the whole floor: who is named where, and how. A name that only ever stands
+ * after 看着 or inside a quote is spoken to, never speaking; a name beside a verb of speech has
+ * spoken outright; the translation's and the reader's labels count as speaking too.
+ */
+function surveyFloor(list, people, { hints, manual }) {
+  const roles = new Map();
+  const role = name => {
+    if (!roles.has(name)) roles.set(name, { subject: 0, addressee: 0, explicit: 0, spoken: 0, called: 0 });
+    return roles.get(name);
+  };
+  list.forEach((utterance, index) => {
+    if (utterance.kind === 'quoted') {
+      for (const name of calledOut(utterance.text, people)) role(name).called += 1;
+      for (const source of [hints, manual]) {
+        const named = source instanceof Map ? canonical(source.get(utterance.id), people) : '';
+        if (named) role(named).spoken += 1;
+      }
+      return;
+    }
+    const spoke = speechVerbIn(utterance.text);
+    const neighbour = (list[index - 1]?.kind === 'quoted' && list[index - 1].lineId === utterance.lineId)
+      || (list[index + 1]?.kind === 'quoted' && list[index + 1].lineId === utterance.lineId);
+    for (const mention of mentionsIn(utterance.text, people)) {
+      if (isAddressee(mention)) role(mention.name).addressee += 1;
+      else {
+        role(mention.name).subject += 1;
+        if (spoke && neighbour) role(mention.name).explicit += 1;
+      }
+    }
+  });
+  return roles;
+}
+
+/**
  * Who speaks each quoted utterance.
  *
  * `utterances` are the floor's, in order, as `splitUtterances` cuts them. `cast` lists the people the
- * reading knows, each as `{ name, aliases }` or a bare name. `hints` are the speakers the translation
- * named per utterance id; `manual` the ones the reader set by hand. The reader's word is final, then
- * what the text itself shows when it is clear, then the translation's label. `infer: false` skips the
- * text and keeps only the reader's and the translation's words — for a language the labels were
- * carried over to rather than read in.
+ * reading knows, each as `{ name, aliases }` or a bare name; `protagonists` names the card's character
+ * and the reader among them. `hints` are the speakers the translation named per utterance id;
+ * `manual` the ones the reader set by hand. The reader's word is final; then what the text says
+ * outright (a name beside a verb of speech, the script form); then the translation's label; then
+ * what the text merely suggests — who acts beside the quote, who is called by name, who takes turns
+ * with whom, who alone carries the floor. `infer: false` skips the text and keeps only the reader's
+ * and the translation's words — for a language the labels were carried over to rather than read in.
  *
  * Returns a map from each quoted utterance's id to `{ speaker, source, confidence, evidence }`, with
  * `speaker` null where nobody could be named. Names come back as the cast spells them.
  */
-export function resolveSpeakers(utterances, { cast = [], hints = null, manual = null, infer = true } = {}) {
+export function resolveSpeakers(utterances, { cast = [], hints = null, manual = null, infer = true, protagonists = null } = {}) {
   const list = Array.isArray(utterances) ? utterances : [];
   const people = buildLookup(cast);
+  const known = name => (people.lookup.has(String(name ?? '').trim()) ? canonical(name, people) : '');
+  const character = known(protagonists?.character);
+  const user = known(protagonists?.user);
   const result = new Map();
+  const roles = infer ? surveyFloor(list, people, { hints, manual }) : new Map();
+  // The reader counts as a speaker only where the text or a label has them speaking outright: in a
+  // floor the character wrote, the reader's name is mostly the one being addressed.
+  const speaksOutright = name => ((roles.get(name)?.explicit ?? 0) + (roles.get(name)?.spoken ?? 0)) > 0;
+  // Who could be speaking at all: named as doing something, called by name, or labelled as speaking.
+  const capable = [...roles].filter(([name, seen]) => (seen.subject > 0 || seen.called > 0 || speaksOutright(name)) && (name !== user || speaksOutright(name))).map(([name]) => name);
+  const pair = capable.length === 2 ? capable : null;
+  // One person carries the floor. With nobody named as speaking but the reader named as the one
+  // spoken to, that person is the character: a floor written to the reader is the character talking.
+  const addressedOnly = !capable.length && character && user && character !== user && (roles.get(user)?.addressee ?? 0) + (roles.get(user)?.called ?? 0) > 0;
+  const sole = capable.length === 1 ? capable[0] : (addressedOnly ? character : null);
+  const soleWhy = addressedOnly ? `这一楼里只有你被叫到，说话的是${character}` : '这一楼里只有这一个人在说话';
   // Who has been in the scene lately: the utterance index each name was last seen at.
   const present = new Map();
   let previous = null;
   const note = (name, index) => {
     if (name) present.set(name, index);
   };
-  const around = (index, name) => [...present].filter(([, at]) => index - at <= PRESENT_WINDOW).map(([who]) => who).filter(who => who !== name);
+  const around = (index, name) => [...present].filter(([, at]) => index - at <= PRESENT_WINDOW).map(([who]) => who)
+    .filter(who => who !== name && (who !== user || speaksOutright(who)));
 
   list.forEach((utterance, index) => {
     if (utterance.kind !== 'quoted') {
@@ -206,6 +268,9 @@ export function resolveSpeakers(utterances, { cast = [], hints = null, manual = 
     // paragraph spoke no quote of its own — a lead-in, not the tail of somebody else's line.
     const aboveRun = !before && index > 0 && !sameLine(list[index - 1]) && list[index - 1].kind !== 'quoted' ? list[index - 1] : null;
     const above = aboveRun && !list.some(other => other.lineId === aboveRun.lineId && other.kind === 'quoted') ? aboveRun : null;
+    // Somebody outside the cast speaks here: a verb of speech beside the quote with no known name.
+    const stranger = infer && [before, after].some(run => run && speechVerbIn(run.text) && !mentionsIn(run.text, people).length
+      && !(ZH_PRONOUN_LEAD_RE.test(run.text) || EN_PRONOUN_LEAD_RE.test(run.text)));
 
     if (infer) {
       const scoreNarration = (run, where, { weak = false } = {}) => {
@@ -222,8 +287,8 @@ export function resolveSpeakers(utterances, { cast = [], hints = null, manual = 
           }
           if (!subjectSeen) {
             subjectSeen = true;
-            if (weak) tally.add(mention.name, spoke ? SCORE.paragraphBefore : SCORE.paragraphAction, snippet);
-            else tally.add(mention.name, spoke ? SCORE.attributed : SCORE.action, snippet);
+            const acting = mention.name === user && !spoke ? SCORE.userAction : (weak ? SCORE.paragraphAction : SCORE.action);
+            tally.add(mention.name, spoke ? (weak ? SCORE.paragraphBefore : SCORE.attributed) : acting, snippet);
             if (JA_SUBJECT_RE.test(mention.after)) tally.add(mention.name, SCORE.subject, '');
           } else {
             tally.add(mention.name, SCORE.bystander, '');
@@ -249,17 +314,27 @@ export function resolveSpeakers(utterances, { cast = [], hints = null, manual = 
       for (const name of called) {
         note(name, index);
         tally.add(name, SCORE.calledOut, '');
-        const others = around(index, name);
+        if (name === user && character && character !== user) tally.add(character, SCORE.toUser, `话里叫的是${name}（你），说话的是${character}`);
+        else if (name === character && user && speaksOutright(user)) tally.add(user, SCORE.toCharacter, '');
+        const others = pair ? pair.filter(who => who !== name) : around(index, name);
         if (others.length === 1) tally.add(others[0], SCORE.answering, `话里叫的是${name}`);
       }
 
       // The rhythm of the exchange.
-      if (previous?.speaker) {
-        if (sameLine(list[previous.index])) {
-          const between = list.slice(previous.index + 1, index);
-          const namesBetween = between.some(run => run.kind !== 'quoted' && mentionsIn(run.text, people).length);
-          if (!namesBetween) tally.add(previous.speaker, between.length ? SCORE.sameLineNarrated : SCORE.sameLine, '同一段里接着上一句');
-        } else {
+      if (previous?.speaker && sameLine(list[previous.index])) {
+        const between = list.slice(previous.index + 1, index);
+        const namesBetween = between.some(run => run.kind !== 'quoted' && mentionsIn(run.text, people).length);
+        if (!namesBetween && !stranger) tally.add(previous.speaker, between.length ? SCORE.sameLineNarrated : SCORE.sameLine, '同一段里接着上一句');
+      } else if (!stranger) {
+        if (pair && pair.includes(user)) {
+          // The reader and one other: what the text does not hand to the reader outright is the other's.
+          const other = pair.find(who => who !== user);
+          tally.add(other, SCORE.sole, `这一楼里只有${other}和你，没写名字的话算${other}的`);
+        } else if (pair) {
+          if (previous?.speaker && pair.includes(previous.speaker)) tally.add(pair.find(who => who !== previous.speaker), SCORE.alternation, `和${previous.speaker}轮流说话`);
+        } else if (sole) {
+          tally.add(sole, SCORE.sole, soleWhy);
+        } else if (previous?.speaker) {
           const others = around(index, previous.speaker);
           if (others.length === 1) tally.add(others[0], SCORE.alternation, `和${previous.speaker}轮流说话`);
           else if (!others.length) tally.add(previous.speaker, SCORE.carryOn, '');
@@ -274,8 +349,11 @@ export function resolveSpeakers(utterances, { cast = [], hints = null, manual = 
     } else {
       const best = infer ? tally.best() : null;
       const hinted = hints instanceof Map ? canonical(hints.get(utterance.id), people) : '';
-      if (best) entry = { speaker: best.name, source: 'local', confidence: Math.min(1, best.score / 100), evidence: best.evidence };
+      const local = best ? { speaker: best.name, source: 'local', confidence: Math.min(1, best.score / 100), evidence: best.evidence } : null;
+      // What the text says outright beats the translation's label; what it only suggests does not.
+      if (local && best.score >= EXPLICIT) entry = local;
       else if (hinted) entry = { speaker: hinted, source: 'hint', confidence: 0.6, evidence: [SPEAKER_SOURCE_LABELS.hint] };
+      else if (local) entry = local;
       else entry = { speaker: null, source: null, confidence: 0, evidence: [] };
     }
     result.set(utterance.id, entry);
@@ -295,18 +373,17 @@ export function speakerHints(labels) {
 /**
  * The labels with the resolved speakers written over them.
  *
- * A resolved name replaces whatever the label said; a quote nobody could name keeps the model's
- * word if it gave one, marked as such, and otherwise loses its speaker. Labels of utterances the
- * resolver did not see — narration, or lines the model called dialogue — stay as they are.
+ * A resolved name replaces whatever the label said. A quote the resolver named nobody for keeps the
+ * label's own speaker — the model's or the translation's, whichever `fallback` says it came from,
+ * unless the label already says — and otherwise has none. Labels of utterances the resolver did not
+ * see — narration, or lines the model called dialogue — stay as they are.
  */
-export function pinSpeakers(labels, resolved) {
+export function pinSpeakers(labels, resolved, { fallback = 'model' } = {}) {
   const out = new Map();
   for (const [id, label] of labels instanceof Map ? labels : []) out.set(id, { ...label });
   for (const [id, entry] of resolved instanceof Map ? resolved : []) {
     const had = out.get(id) ?? null;
     const label = { ...(had ?? {}) };
-    delete label.speakerSource;
-    delete label.speakerEvidence;
     if (entry?.speaker) {
       // A label carried over from the other language keeps saying where its name was read.
       const carried = entry.source === 'hint' && label.speaker === entry.speaker && had?.speakerSource;
@@ -314,7 +391,11 @@ export function pinSpeakers(labels, resolved) {
       label.speakerSource = carried ? had.speakerSource : entry.source;
       label.speakerEvidence = carried ? [...(had.speakerEvidence ?? [])] : [...(entry.evidence ?? [])];
     } else if (label.speaker) {
-      label.speakerSource = 'model';
+      label.speakerSource = had?.speakerSource ?? fallback;
+      label.speakerEvidence = [...(had?.speakerEvidence ?? [])];
+    } else {
+      delete label.speakerSource;
+      delete label.speakerEvidence;
     }
     if (Object.keys(label).length) out.set(id, label);
     else out.delete(id);
