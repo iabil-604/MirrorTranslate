@@ -66,7 +66,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.28.1';
+} from './core.js?v=0.28.2';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -112,10 +112,10 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.28.1';
-import { createTtsStore } from './tts-store.js?v=0.28.1';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.28.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.28.1';
+} from './tts.js?v=0.28.2';
+import { createTtsStore } from './tts-store.js?v=0.28.2';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.28.2';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.28.2';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -124,7 +124,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.28.1';
+} from './processing.js?v=0.28.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -141,9 +141,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.28.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.28.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.28.1';
+} from './prompts.js?v=0.28.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.28.2';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.28.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -157,15 +157,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.28.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.28.1';
+} from './palette.js?v=0.28.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.28.2';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.28.1';
+} from './diagnostics.js?v=0.28.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -9612,7 +9612,8 @@ async function openMiniWindow() {
     emotionPicker.appendChild(option);
   }
   tagBox.appendChild(emotionPicker);
-  for (const [label, tag] of [['停顿', '停顿'], ['长停顿', '长停顿'], ['重读', '重读'], ['耳语', '耳语'], ['轻声', '轻声'], ['喊', '喊'], ['急促', '急促'], ['压着', '压着'], ...SOUND_TAGS.slice(0, 10).map(sound => [sound, sound])]) {
+  // The chips insert Fish's own words, the ones its app writes; the S1 models get their brackets and pause names.
+  for (const [label, tag] of [['停顿', 'pause'], ['长停顿', 'long pause'], ['重读', 'emphasis'], ['耳语', 'whispering'], ['轻声', 'soft tone'], ['喊', 'shouting'], ['急促', 'in a hurry tone'], ...FISH_SOUNDS.map(sound => [cueLabel(sound), sound])]) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'jy-mini-chip';
@@ -9631,7 +9632,10 @@ async function openMiniWindow() {
     const end = fishInput.selectionEnd ?? start;
     const before = fishInput.value.slice(0, start);
     const after = fishInput.value.slice(end);
-    const piece = `${before && !/\s$/.test(before) ? ' ' : ''}[${tag}]${after && !/^\s/.test(after) ? ' ' : ''}`;
+    const model = ttsSettings().fish.model;
+    const own = model === 's1' ? ({ pause: 'break', 'long pause': 'long-break' }[tag] ?? tag) : tag;
+    const wrapped = model === 's1' ? `(${own})` : `[${own}]`;
+    const piece = `${before && !/\s$/.test(before) ? ' ' : ''}${wrapped}${after && !/^\s/.test(after) ? ' ' : ''}`;
     fishInput.value = `${before}${piece}${after}`;
     const caret = before.length + piece.length;
     fishInput.focus();

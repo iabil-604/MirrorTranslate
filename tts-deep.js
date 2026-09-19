@@ -1,4 +1,4 @@
-import { normalizeTts } from './core.js?v=0.28.1';
+import { normalizeTts } from './core.js?v=0.28.2';
 import {
   FISH_EMOTIONS,
   FISH_SOUNDS,
@@ -8,7 +8,7 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.28.1';
+} from './tts.js?v=0.28.2';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -38,7 +38,7 @@ export const DEEP_PROMPT = [
   '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼；skeleton 里已有的说话人一般沿用，只在明显错了时改。{{user}}看不出是谁说的就省略，不要猜。',
   '3. emotion：这一句开头的情绪，只能取 emotions 列表里的一个英文词，逐字照抄，直接选最贴切的那个词，不要加程度词。对白句都要给，旁白只在明显带情绪时给。骨架里的情绪是参考：底下的情绪和表面不一样时，按念出来该有的那个给。',
   '4. shifts：一句话里情绪变了，就在变的地方标：at 逐字照抄那个分句开头的词，emotion 是从这里起的情绪，取 emotions 列表里的词。一句最多三处，常见的是前半句一种情绪、后半句另一种；情绪没变就不写。',
-  '5. sounds：叹气、笑、轻笑、抽泣、大哭、喘气、呻吟、清嗓、倒吸气这类非语言声音，tag 只能取 sounds 列表里的词；at 是 start（句首）、end（句尾）或 after（某个词之后，after 逐字照抄那个词）。原文写了的一定要加，原文没写但情境明显该有的也加，一句最多三处。',
+  '5. sounds：叹气、笑、轻笑、抽泣、大哭、喘气、呻吟、闷哼、清嗓、倒吸气这类非语言声音，tag 只能取 sounds 列表里的词；at 是 start（句首）、end（句尾）或 after（某个词之后，after 逐字照抄那个词）。原文写了的一定要加，原文没写但情境明显该有的也加，一句最多三处。',
   '6. pauses：句中某个词后面停顿，after 逐字照抄句中的词，length 是 short 或 long，一句最多三处；stress：要重读的词，最多两个，逐字照抄。',
   '7. tone：可选，只能取 tones 列表里的一个；speed 只能是 slow 或 fast；volume 只能是 quiet 或 loud；都只在明显时写。',
   '8. 上一句的情绪只是参考，不是惯性：剧情已经跳过时间、换了场景、事情已经解决，情绪就不延续；只有剧情上有连续的依据（同一场对话、同一件没解决的事）才延续。previous 里的念法同理。',

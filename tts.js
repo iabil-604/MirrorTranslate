@@ -10,9 +10,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.28.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.28.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.28.1';
+} from './core.js?v=0.28.2';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.28.2';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.28.2';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -561,7 +561,7 @@ export const FISH_EMOTIONS = Object.freeze([
   'pessimistic', 'nostalgic', 'lonely', 'bored', 'contemptuous', 'sympathetic', 'compassionate', 'determined', 'resigned',
   'tender', 'gentle', 'shy', 'serious', 'playful', 'cold', 'pleading', 'mysterious', 'tired', 'flirtatious',
 ]);
-export const FISH_SOUNDS = Object.freeze(['sighing', 'gasping', 'sobbing', 'laughing', 'chuckling', 'groaning', 'panting', 'crying loudly', 'clear throat', 'yawning']);
+export const FISH_SOUNDS = Object.freeze(['sighing', 'gasping', 'sobbing', 'laughing', 'chuckling', 'moaning', 'groaning', 'panting', 'crying loudly', 'clear throat', 'yawning', 'crowd laughing', 'background laughter', 'audience laughing']);
 // The ways of delivering a line Fish names. One optional choice, for the translation and the deep reading alike.
 export const FISH_TONES = Object.freeze(['whispering', 'soft tone', 'shouting', 'screaming', 'in a hurry tone']);
 // The sounds a sentence can carry, in the reader's own words, each with Fish's fixed tag for the S1
@@ -569,7 +569,8 @@ export const FISH_TONES = Object.freeze(['whispering', 'soft tone', 'shouting', 
 export const SOUND_WORDS = Object.freeze({
   轻笑: 'chuckling', 笑: 'laughing', 大笑: 'laughing', 叹气: 'sighing', 叹息: 'sighing', 喘息: 'panting', 喘气: 'panting',
   倒吸气: 'gasping', 吸气: 'gasping', 抽泣: 'sobbing', 哽咽: 'sobbing', 大哭: 'crying loudly', 咳嗽: '', 清嗓: 'clear throat',
-  清嗓子: 'clear throat', 呻吟: 'groaning', 哈欠: 'yawning', 打哈欠: 'yawning', 冷哼: '', 哼: '', 吞咽: '', 深呼吸: '',
+  清嗓子: 'clear throat', 呻吟: 'moaning', 闷哼: 'groaning', 哈欠: 'yawning', 打哈欠: 'yawning', 冷哼: '', 哼: '', 吞咽: '', 深呼吸: '',
+  人群笑声: 'crowd laughing', 背景笑声: 'background laughter', 观众笑声: 'audience laughing',
 });
 export const SOUND_TAGS = Object.freeze(Object.keys(SOUND_WORDS));
 
@@ -603,8 +604,9 @@ export const FISH_TAG_LABELS = Object.freeze({
   tired: '疲惫', flirtatious: '撩拨', furious: '暴怒', terrified: '惊恐', ecstatic: '狂喜', interested: '有兴趣',
   whispering: '耳语', 'soft tone': '轻声', shouting: '喊', screaming: '尖叫', 'in a hurry tone': '急促', emphasis: '强调',
   'holding back': '压着', hesitant: '犹豫', hoarse: '沙哑', breathy: '带气声', trembling: '发抖',
-  sighing: '叹气', gasping: '倒吸气', sobbing: '抽泣', laughing: '大笑', chuckling: '轻笑', groaning: '呻吟', panting: '喘气',
-  'crying loudly': '大哭', 'clear throat': '清嗓子', yawning: '打哈欠', break: '停顿', 'long-break': '长停顿',
+  sighing: '叹气', gasping: '倒吸气', sobbing: '抽泣', laughing: '大笑', chuckling: '轻笑', moaning: '呻吟', groaning: '闷哼', panting: '喘气',
+  'crying loudly': '大哭', 'clear throat': '清嗓子', yawning: '打哈欠', 'crowd laughing': '人群笑声', 'background laughter': '背景笑声', 'audience laughing': '观众笑声',
+  pause: '停顿', 'long pause': '长停顿', break: '停顿', 'long-break': '长停顿',
 });
 
 const VOICE_LEVELS = new Set(['slow', 'normal', 'fast']);
@@ -1007,10 +1009,20 @@ export function fishSupportsMultiSpeaker(model) {
   return model !== 's1';
 }
 
+// Fish's pause marks by model: its app writes [pause] and [long pause] for the S2 models, while S1
+// knows (break) and (long-break). Whichever name a reading was stored under, each model hears its own.
+const PAUSE_TAGS = Object.freeze({
+  s2: Object.freeze({ break: 'pause', 'long-break': 'long pause' }),
+  s1: Object.freeze({ pause: 'break', 'long pause': 'long-break' }),
+});
+
 function wrapCue(word, model) {
   if (!word) return '';
-  if (model === 's1') return S1_FIXED.has(word) ? `(${word})` : '';
-  return `[${word}]`;
+  if (model === 's1') {
+    const own = PAUSE_TAGS.s1[word] ?? word;
+    return S1_FIXED.has(own) ? `(${own})` : '';
+  }
+  return `[${PAUSE_TAGS.s2[word] ?? word}]`;
 }
 
 /**

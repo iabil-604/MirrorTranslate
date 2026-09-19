@@ -221,7 +221,7 @@ test('the deep reading carries the card and the recent floors, and every sentenc
   assert.deepEqual(segments[1].voice.pauses, [{ after: '我操', length: 'short' }]);
 
   const inspected = await __testing.ttsInspect(1, 2);
-  assert.equal(inspected.text, '[frustrated] 我操 [break] 好 [emphasis] 热啊！', 'Fish\'s own words only: the mood, the pause, the stress');
+  assert.equal(inspected.text, '[frustrated] 我操 [pause] 好 [emphasis] 热啊！', 'Fish\'s own words only: the mood, the pause, the stress');
   assert.deepEqual(inspected.prosody, { speed: 1.12, volume: 3 });
   assert.ok(inspected.summary.some(([term]) => term === '潜台词'));
   assert.equal(inspected.depth, 'deep');
@@ -239,7 +239,7 @@ test('the deep reading carries the card and the recent floors, and every sentenc
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].body.prosody, { speed: 1, volume: 0 });
   assert.deepEqual(calls[1].body.prosody, { speed: 1.12, volume: 3 });
-  assert.equal(calls[1].body.text, '[frustrated] 我操 [break] 好 [emphasis] 热啊！');
+  assert.equal(calls[1].body.text, '[frustrated] 我操 [pause] 好 [emphasis] 热啊！');
   assert.equal(record.parts.length, 2);
   assert.deepEqual(record.timeline.map(entry => [entry.id, entry.part]), [[1, 0], [2, 1]]);
 });
@@ -436,15 +436,15 @@ test('the reader\'s own version of a sentence is recorded as written and preferr
   });
   context.chat.push(await translatedFloor('風。\n\n「暑い！」', [[1, '风停了。'], [2, '「好热！」']], settings, { 2: { speaker: '泰罗', emotion: 'happy' } }));
   const calls = mockFish();
-  const made = await __testing.saveTtsOverride(0, 2, { text: '[whispering][sad] 好 [long-break] 热……', speed: 0.8, volume: -4 });
+  const made = await __testing.saveTtsOverride(0, 2, { text: '[whispering][sad] 好 [long pause] 热……', speed: 0.8, volume: -4 });
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].body.text, '[whispering][sad] 好 [long-break] 热……');
+  assert.equal(calls[0].body.text, '[whispering][sad] 好 [long pause] 热……');
   assert.deepEqual(calls[0].body.prosody, { speed: 0.8, volume: -4 });
   assert.equal(made.unit, 'sentence:2');
-  assert.equal(made.overrideText, '[whispering][sad] 好 [long-break] 热……');
+  assert.equal(made.overrideText, '[whispering][sad] 好 [long pause] 热……');
 
   const inspected = await __testing.ttsInspect(0, 2);
-  assert.equal(inspected.override.text, '[whispering][sad] 好 [long-break] 热……');
+  assert.equal(inspected.override.text, '[whispering][sad] 好 [long pause] 热……');
   assert.equal(inspected.override.speed, 0.8);
   assert.equal(inspected.text, '[happy] 好热！', 'the automatic version is still shown beside it');
   assert.equal(inspected.recorded, true);
@@ -453,7 +453,7 @@ test('the reader\'s own version of a sentence is recorded as written and preferr
   const floor = await __testing.collectTtsFloor(0, settings);
   const { segments } = await __testing.prepareTtsSegments(floor, settings);
   const { items } = await __testing.ttsItemsFor(floor, segments, settings);
-  assert.equal(items[1].override.text, '[whispering][sad] 好 [long-break] 热……');
+  assert.equal(items[1].override.text, '[whispering][sad] 好 [long pause] 热……');
   const edited = await __testing.resolveTtsEntry(floor, items, items[1], settings);
   assert.equal(edited.cached, true);
   assert.equal(edited.record.unit, 'sentence:2');
@@ -1197,7 +1197,7 @@ test('the simple analysis is the model\'s, names and moods alike; only the reade
   const { items } = await __testing.ttsItemsFor(floor, segments, settings);
   assert.deepEqual(items.map(item => item.voiceId), ['voice-narrator', 'voice-sakurai', 'voice-sakurai']);
   const inspected = await __testing.ttsInspect(0, 2);
-  assert.equal(inspected.text, '[furious] 你 [break] 来了？', 'the strength and the pause reach the provider in its own words');
+  assert.equal(inspected.text, '[furious] 你 [pause] 来了？', 'the strength and the pause reach the provider in its own words');
   assert.equal(inspected.prosody.speed, 1.12);
   // The reader's word goes out with the request and is kept over the model's answer.
   await __testing.saveTtsSpeaker(0, 2, '泰罗');
@@ -1657,7 +1657,7 @@ test('the deep reading: on the translation\'s skeleton, with the card and the la
   assert.deepEqual([read.segments[1].speaker, read.segments[1].emotion, read.segments[1].intensity], ['泰罗', 'shy', 0], 'the skeleton\'s mood gave way to the reading\'s');
   const inspected = await __testing.ttsInspect(1, 2);
   assert.equal(inspected.depth, 'deep');
-  assert.equal(inspected.text, '[shy][soft tone] 我 [break] 才没有寂寞。');
+  assert.equal(inspected.text, '[shy][soft tone] 我 [pause] 才没有寂寞。');
   assert.ok(inspected.summary.some(([term, value]) => term === '依据' && value === '嘴硬，其实是撒娇'));
   // A second look asks nothing.
   await __testing.prepareTtsSegments(floor, settings);

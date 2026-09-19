@@ -1,5 +1,11 @@
 # 验证边界
 
+## v0.28.2 · 标签名照 Fish 官方 App
+
+- **自动回归**：246 项通过（改了所有停顿标签的期望：S2 输出 \`[pause]\` / \`[long pause]\`，S1 输出 \`(break)\` / \`(long-break)\`，改字覆盖里用户自己写的原样发）。声音表加了 moaning（呻吟）、groaning 改为闷哼、三种群笑；中文别名表对应更新；详细页标签按钮改插官方英文。
+- **依据**：用户发来的 Fish 官方 App 截图——「效果」一栏全选后插入的是 \`[laughing][chuckling][moaning][clear throat][sobbing][crying loudly][sighing][panting][groaning][crowd laughing][background laughter][audience laughing][pause][long pause]\`，与按钮顺序（大笑 轻笑 呻吟 清嗓 抽泣 大哭 叹气 喘气 闷哼 人群笑声 背景笑声 观众笑声 停顿 长停顿）一一对应。
+- **尚未验证**：S2 模型对旧写法 \`[break]\` 是否也认（现在已不发）；「语气」一栏（强调 耳语 轻柔 气声 兴奋）的英文名没在截图里，仍按文档用 emphasis / whispering / soft tone；气声对应 breathy 只是猜的，没进任何自动路径。
+
 ## v0.28.1 · 深度分析：句内转折、词后声音、重读
 
 - **自动回归**：246 项通过（新增 1 项，改 3 项）。新增：一句「前半句高兴、后半句失落」的深度回复——三处转折里不在句中的那处被丢掉，其余两处以官方情绪词落在分句开头，词后的轻笑、停顿、重读、句尾叹气各落各位，S2 模型得到「[happy] … [chuckling] ， [sad] 可是… [break] ， [lonely] 屋里就 [emphasis] 空了。 [sighing]」，S1 模型同样顺序、括号写法、没有重读；详细页「句内变化」一行写着转折处。深度提示词里有 shifts、stress、after、「前半句一种情绪、后半句另一种」「留在中间的由你按情境定」，没有 intensity 和程度词。

@@ -381,11 +381,11 @@ test('a voice compiles into leading cues, inline cues and prosody steps, and the
   };
   const compiled = compileVoiceCues(segment, { model: 's2-pro' });
   assert.deepEqual(compiled.cues, ['[very frustrated]', '[embarrassed]', '[whispering]', '[sighing]'], 'four cues at most: the hesitant descriptor gives way to the sigh');
-  assert.equal(compiled.text, '我 [long-break] …… [shy] 我要 [emphasis] 裸奔啦。');
+  assert.equal(compiled.text, '我 [long pause] …… [shy] 我要 [emphasis] 裸奔啦。');
   assert.equal(compiled.tail, '[chuckling]');
   assert.deepEqual([compiled.speed, compiled.volume], ['fast', 'quiet']);
   const item = { segment, voiceId: 'v' };
-  assert.equal(sentenceFishText(item, { model: 's2-pro' }), '[very frustrated][embarrassed][whispering][sighing] 我 [long-break] …… [shy] 我要 [emphasis] 裸奔啦。 [chuckling]');
+  assert.equal(sentenceFishText(item, { model: 's2-pro' }), '[very frustrated][embarrassed][whispering][sighing] 我 [long pause] …… [shy] 我要 [emphasis] 裸奔啦。 [chuckling]');
   assert.equal(stripCues(sentenceFishText(item, { model: 's2-pro' })).replace(/\s/g, ''), '我……我要裸奔啦。');
   // S1: only its fixed set, in parentheses, and no emphasis.
   const legacy = compileVoiceCues(segment, { model: 's1' });
@@ -428,8 +428,8 @@ test('the Fish payload uses one reference id alone, speaker tags where the voice
   assert.throws(() => buildFishPayload([{ segment: segment(1, 'a'), voiceId: 'v' }, { segment: segment(2, 'b'), voiceId: '' }], FISH), /混用/);
   assert.throws(() => buildFishPayload([{ segment: segment(1, 'a'), voiceId: 'v-a' }, { segment: segment(2, 'b'), voiceId: 'v-b' }], { ...FISH, model: 's1' }), /s1/);
   // An edited sentence's span is the edited words with the cues taken off.
-  const edited = buildFishPayload([{ segment: segment(1, '好热！'), voiceId: 'v', override: { text: '[calm] 好 [break] 热啊！' } }], FISH);
-  assert.equal(edited.body.text, '[calm] 好 [break] 热啊！');
+  const edited = buildFishPayload([{ segment: segment(1, '好热！'), voiceId: 'v', override: { text: '[calm] 好 [pause] 热啊！' } }], FISH);
+  assert.equal(edited.body.text, '[calm] 好 [pause] 热啊！');
   assert.equal(edited.spans[0].text, '好 热啊！');
 });
 
@@ -955,13 +955,13 @@ import { applyPunctuationMarks, sentenceFishText as fishTextOf, sentenceProsody 
 test('punctuation marks: an inline mark replaces its run, a head mark opens the clause, and nothing doubles', () => {
   const marks = normalizeMarks([{ punct: '……', tag: '停顿', at: 'inline' }, { punct: '！！', tag: '加大音量', at: 'head' }, { punct: '？！', tag: '惊讶' }]);
   assert.deepEqual(marks.map(mark => mark.at), ['inline', 'head', 'head'], 'a mark without a place takes the catalogue default');
-  assert.equal(applyPunctuationMarks('这……不太好吧', marks), '这 [break] 不太好吧');
+  assert.equal(applyPunctuationMarks('这……不太好吧', marks), '这 [pause] 不太好吧');
   assert.equal(applyPunctuationMarks('真的吗。骗人的吧！！我不信。', marks), '真的吗。[shouting] 骗人的吧！！我不信。');
   assert.equal(applyPunctuationMarks('骗人的吧！！', marks, 's1'), '(shouting) 骗人的吧！！');
   assert.equal(applyPunctuationMarks('这……不太好吧', marks, 's1'), '这 (break) 不太好吧');
-  assert.equal(applyPunctuationMarks('[压着火……] 你好……', marks), '[压着火……] 你好 [break]', 'punctuation inside a cue is left alone');
+  assert.equal(applyPunctuationMarks('[压着火……] 你好……', marks), '[压着火……] 你好 [pause]', 'punctuation inside a cue is left alone');
   assert.equal(applyPunctuationMarks('[shouting] 骗人的吧！！', marks), '[shouting] 骗人的吧！！', 'a cue already there is not doubled');
-  assert.equal(applyPunctuationMarks('等等……不对……', marks), '等等 [break] 不对 [break]');
+  assert.equal(applyPunctuationMarks('等等……不对……', marks), '等等 [pause] 不对 [pause]');
   assert.equal(applyPunctuationMarks('平常的一句。', marks), '平常的一句。');
   assert.equal(applyPunctuationMarks('这……不太好吧', []), '这……不太好吧');
   assert.deepEqual(normalizeMarks([{ punct: ' ', tag: '停顿' }, { punct: '……', tag: '不存在的' }, { punct: '……', tag: '停顿' }, { punct: '……', tag: '叹气' }]).length, 1, 'blank, unknown and repeated runs are dropped');
@@ -972,9 +972,9 @@ test('punctuation marks: an inline mark replaces its run, a head mark opens the 
 test('the lean compile sends one of Fish\'s own words, the named tone and an official sound, and the marks ride along', () => {
   const segment = { id: 1, type: 'dialogue', speaker: '泰罗', text: '骗人的吧！！这……不太好吧', voice: { emotion: 'angry', intensity: 2, tone: 'shouting', direction: '压着火，装冷淡', sounds: [{ at: 'end', tag: '轻笑' }, { at: 'start', tag: '深呼吸' }] } };
   const item = { segment, voiceId: 'v', console: { marks: normalizeMarks([{ punct: '……', tag: '停顿' }, { punct: '！！', tag: '加大音量' }]) } };
-  assert.equal(fishTextOf(item, { model: 's2-pro' }, { lean: true, directions: false }), '[furious][shouting] 骗人的吧！！这 [break] 不太好吧 [chuckling]', 'the mood at its strength, no adverb, no direction, the head tone not doubled by the mark, a sound Fish has no word for dropped');
+  assert.equal(fishTextOf(item, { model: 's2-pro' }, { lean: true, directions: false }), '[furious][shouting] 骗人的吧！！这 [pause] 不太好吧 [chuckling]', 'the mood at its strength, no adverb, no direction, the head tone not doubled by the mark, a sound Fish has no word for dropped');
   assert.equal(fishTextOf(item, { model: 's1' }, { lean: true, directions: false }), '(angry)(shouting) 骗人的吧！！这 (break) 不太好吧 (chuckling)');
-  assert.equal(fishTextOf({ segment: { ...segment, voice: null }, console: item.console }, { model: 's2-pro' }, { lean: true }), '[shouting] 骗人的吧！！这 [break] 不太好吧', 'the plain reading is the text plus the marks, head marks included');
+  assert.equal(fishTextOf({ segment: { ...segment, voice: null }, console: item.console }, { model: 's2-pro' }, { lean: true }), '[shouting] 骗人的吧！！这 [pause] 不太好吧', 'the plain reading is the text plus the marks, head marks included');
   assert.match(fishTextOf(item, { model: 's2-pro' }, { directions: true }), /^\[压着火，装冷淡\]/, 'the deep reading still speaks in its own words');
 });
 
@@ -1281,7 +1281,7 @@ test('a sentence whose feeling turns is heard turning: a word of Fish\'s before 
   assert.deepEqual(voice.shifts, [{ at: '可是', emotion: 'sad' }, { at: '屋里', emotion: 'lonely' }], 'a turn on a word not in the sentence is dropped');
   const segments = buildSegments(utterances, parsed.labels, { voices: parsed.voices });
   const text = fishTextOf({ segment: segments[0], voiceId: 'v' }, { model: 's2-pro' }, { lean: true });
-  assert.equal(text, '[happy] 本来今天挺开心的 [chuckling] ， [sad] 可是你一走 [break] ， [lonely] 屋里就 [emphasis] 空了。 [sighing]');
+  assert.equal(text, '[happy] 本来今天挺开心的 [chuckling] ， [sad] 可是你一走 [pause] ， [lonely] 屋里就 [emphasis] 空了。 [sighing]');
   // S1 knows no stress mark; everything else it hears the same way, in its own brackets.
   const plain = fishTextOf({ segment: segments[0], voiceId: 'v' }, { model: 's1' }, { lean: true });
   assert.equal(plain, '(happy) 本来今天挺开心的 (chuckling) ， (sad) 可是你一走 (break) ， (lonely) 屋里就空了。 (sighing)');
