@@ -10,9 +10,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.28.2';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.28.2';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.28.2';
+} from './core.js?v=0.29.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.29.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.29.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -381,18 +381,12 @@ export function referenceLines(translations) {
 // {{references_rule}} the rule about translations riding along when the original is read.
 export const DEFAULT_TTS_PROMPTS = Object.freeze({
   simple: [
-    '你是有声小说的配音助手。下面是一楼正文按顺序切好的句子。你要判断每一句由谁念、带什么情绪念、强度多大、有没有明显的语气、语速、音量、停顿和非语言声音。不改写、不复述、不翻译任何句子。',
-    '输入的 utterances 每项有 id、kind（quoted 表示原文在引号里，narration 表示不在引号里）和 text；个别对白句带 speaker，那是用户手动定的，照抄，不要改。styles 是每个角色的表达习惯和用户在调音台上定下的规则：这是硬性要求，不是参考，每一条都要落实到你写的字段上，写完对照一遍。',
-    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":1,"type":"narration"},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","intensity":1,"tone":"英文语气词","speed":"slow","volume":"quiet","pauses":[{"after":"句中的词","length":"short"}],"sounds":[{"at":"start","tag":"英文声音词"}]}]}',
-    '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。引号用来标书名、专有名词、强调或引用时是 narration；不在引号里却明显是角色在说的话也是 dialogue。',
-    '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。认人看引号前后的人名和动作、上下文里谁在和谁说话、两个人一来一回的顺序；话里叫到的名字是听的人，不是说的人。{{user}}看不出是谁说的就省略，不要猜。',
-    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句只写一个；对白句尽量都给，只有真的平淡无起伏才省略。不要自己造词，不要加 slightly、very 这类程度词。intensity：0 弱、1 中、2 强，按语义定：感叹、追问、吼、哭这类明显加强的写 2，压着说、迟疑、耳语写 0。',
-    '4. 自然为先：同一个角色连续几句，情绪要跟着句意走，不要机械地全写一个词、全写一个强度；旁白一般不给情绪，只有明显带情绪的叙述才给。',
-    '5. tone：可选，只能取 tones 列表里的一个，只在原文明确写了小声、耳语、喊、尖叫、急促这类说法时写。speed 只能是 slow 或 fast，volume 只能是 quiet 或 loud，只在明显比平常快慢、轻响时写。',
-    '6. pauses：句中某个词后面要停顿，after 逐字照抄句中的词，length 是 short 或 long，最多两处，只在明显的犹豫、转折、哽住处写。',
-    '7. sounds：笑声、叹气、喘息、倒吸气这类非语言声音，只在原文写了、或者情绪明显到该有的时候写，tag 只能取 sounds 列表里的词，at 是 start（句首）或 end（句尾），一句最多一个。',
-    '8. lang：这一句的语言代码（zh、en、ja、ko、de、fr、es、ru……）。英语按人物设定区分 en-US（美式）和 en-GB（英式、伦敦腔），分不出就写 en。与整楼主要语言相同、人物设定又没说口音时省略。',
-    '9. 每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。输入里如果有 lead，那是这一批前面紧挨着的几句，只用来认人和判断语气，不用回答。',
+    '你是有声小说的配音助手。下面是一楼正文，按段给出，每句对白前面标着 ⟦编号⟧。你只做两件事：每句对白由谁念、带什么情绪念。不改写、不复述、不翻译任何句子。',
+    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"名字","emotion":"英文情绪词"}]}。只输出对白的条目，旁白不用输出；每个编号最多出现一次；不要输出 text。',
+    '1. speaker：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。看引号前后的人名和动作、话里叫到的名字（被叫到的是听的人，不是说的人）、两个人一来一回的顺序。{{user}}看不出是谁说的就省略，不要猜。输入里的 speakers 是用户手动定的说话人，那些编号照抄。',
+    '2. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个，看不出明显情绪就省略。不要自己造词，不要加程度词。',
+    '3. 可选：tone 只在原文明确写了小声、耳语、喊、尖叫、急促时写，取 tones 列表里的词；sounds 只在原文明确写了笑、叹气、喘息这类声音时写：[{"at":"start 或 end","tag":"sounds 列表里的词"}]。styles 是角色的表达习惯和用户定下的规则，是硬性要求，不是参考。',
+    '{{lang_rule}}',
     '{{references_rule}}',
   ].join('\n'),
   simpleOld: [
@@ -427,11 +421,15 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
 
 const REFERENCES_RULE = '输入里的 translations 是这些原文行（按 line 对应）的译文，只用来帮你认人、理解语气。speaker 按 roster 或译文里的写法写，不要写原文里的名字。';
 
-export function fillPrompt(template, { userName = '', references = false } = {}) {
+// Asked for only when a floor mixes scripts; a floor in one language has nothing to say about it.
+const LANG_RULE = 'lang：这一楼混着几种语言，给每句对白加 lang（zh、en、ja、ko、de、fr、es、ru……），与整楼主要语言相同的省略；英语按人物设定分 en-US 和 en-GB，分不出写 en。';
+
+export function fillPrompt(template, { userName = '', references = false, lang = false } = {}) {
   return String(template ?? '')
     .replaceAll('{{user}}', userName ? `用户扮演的角色叫 ${userName}。` : '')
     .replaceAll('{{palette}}', EMOTION_GLOSS)
     .replaceAll('{{sounds}}', SOUND_TAGS.join(' / '))
+    .replaceAll('{{lang_rule}}', lang ? LANG_RULE : '')
     .replaceAll('{{references_rule}}', references ? REFERENCES_RULE : '')
     .replace(/\n{2,}/g, '\n')
     .trim();
@@ -444,6 +442,31 @@ export function fillPrompt(template, { userName = '', references = false } = {})
  * text field in the answer at all, which is what keeps 「烦死了！」 from coming back as something
  * politer: whatever the model thinks of the wording, it has nowhere to write it.
  */
+/**
+ * The floor as the analyses read it: each paragraph as one line of text, every quoted run marked
+ * with its id in front — ⟦4⟧「……」 — so the model sees the words around a line of dialogue and
+ * answers by number, and nothing is listed twice.
+ */
+export function floorTextWithMarks(utterances) {
+  const lines = new Map();
+  for (const utterance of Array.isArray(utterances) ? utterances : []) {
+    const text = `${utterance.kind === 'quoted' ? `⟦${utterance.id}⟧` : ''}${utterance.anchor ?? utterance.text ?? ''}`;
+    lines.set(utterance.lineId, `${lines.get(utterance.lineId) ?? ''}${text}`);
+  }
+  return [...lines].map(([line, text]) => ({ line, text }));
+}
+
+/** Whether the floor's sentences come in more than one script, so the reading must be told each one's language. */
+export function mixedScripts(utterances) {
+  const seen = new Set();
+  for (const utterance of Array.isArray(utterances) ? utterances : []) {
+    const lang = detectLanguage(utterance.text);
+    if (lang) seen.add(lang);
+    if (seen.size > 1) return true;
+  }
+  return false;
+}
+
 // The sentences just before a batch, sent along as context only.
 export function leadList(lead, speakers = null) {
   const named = speakers instanceof Map ? speakers : new Map();
@@ -452,17 +475,17 @@ export function leadList(lead, speakers = null) {
     .filter(item => item.text);
 }
 
-export function buildTtsAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, systemPrompt = '', lead = null, styles = null, speakers = null } = {}) {
+export function buildTtsAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, systemPrompt = '', styles = null, speakers = null } = {}) {
+  const list = Array.isArray(utterances) ? utterances : [];
   // Reading the original: the roster holds the names as the translation spells them (樱井), the text
   // says 桜井. Each line's translation rides along so the model can name people the way the voices are
   // registered, and the rule below says so.
   const references = referenceLines(translations);
-  const system = fillPrompt(String(systemPrompt ?? '').trim() || DEFAULT_TTS_PROMPTS.simple, { userName, references: references.length > 0 });
-  const leads = leadList(lead, speakers);
+  const system = fillPrompt(String(systemPrompt ?? '').trim() || DEFAULT_TTS_PROMPTS.simple, { userName, references: references.length > 0, lang: mixedScripts(list) });
   const styleList = styleEntries(styles);
-  // Who speaks is settled on this side; each sentence goes out with its name, and the model is asked
-  // how it is said, not by whom.
-  const named = speakers instanceof Map ? speakers : new Map();
+  // The names the reader set by hand travel by number; the model copies them and names the rest.
+  const named = {};
+  if (speakers instanceof Map) for (const [id, name] of speakers) if (name && list.some(item => item.id === id)) named[id] = name;
   const input = {
     task: 'sketch_voices_for_audiobook',
     ...(characterName ? { character: characterName } : {}),
@@ -472,14 +495,8 @@ export function buildTtsAnalysisMessages(utterances, { roster = [], characterNam
     tones: FISH_TONES,
     sounds: FISH_SOUNDS,
     ...(styleList.length ? { styles: styleList } : {}),
-    ...(leads.length ? { lead: leads } : {}),
-    utterances: (Array.isArray(utterances) ? utterances : []).map(item => ({
-      id: item.id,
-      ...(references.length ? { line: item.lineId } : {}),
-      kind: item.kind,
-      ...(named.get(item.id) ? { speaker: named.get(item.id) } : {}),
-      text: item.anchor,
-    })),
+    ...(Object.keys(named).length ? { speakers: named } : {}),
+    lines: floorTextWithMarks(list),
     ...(references.length ? { translations: references } : {}),
   };
   return [
@@ -871,6 +888,26 @@ export function buildSegments(utterances, labels = new Map(), { knownNames = [],
   });
 }
 
+/**
+ * Whether a sentence is passed over instead of read.
+ *
+ * Narration is never muted by a character row: the narrator has a voice of their own. A line of
+ * dialogue is passed over when the row for whoever says it is switched off, and — when the reader
+ * set the dialogue default to 跳过 — when nobody has cast a voice for that speaker at all.
+ */
+export function segmentMuted(segment, { voices = [], dialogueFallback = 'default' } = {}) {
+  if (!segment || segment.type !== 'dialogue') return false;
+  const entry = findVoiceEntry(voices, segment.speaker);
+  if (entry?.mute === true) return true;
+  if (dialogueFallback !== 'skip') return false;
+  return !(entry && (languageVoice(entry.voices, segment.lang) || (entry.locked !== false && entry.voiceId)));
+}
+
+/** The sentences that will actually be heard: in range, and not passed over. */
+export function audibleSegments(segments, range = 'all', config = null) {
+  return segmentsInRange(segments, range).filter(segment => !segmentMuted(segment, config ?? {}));
+}
+
 export function segmentsInRange(segments, range = 'all') {
   const list = Array.isArray(segments) ? segments : [];
   if (range === 'dialogue') return list.filter(segment => segment.type === 'dialogue');
@@ -945,11 +982,19 @@ export function resolveSegmentVoice(segment, { voices = [], narratorVoice = '', 
 
 export function planVoices(segments, config) {
   const items = [];
+  const skipped = [];
   const defaulted = new Set();
   const unvoiced = new Set();
+  const muted = new Set();
   for (const segment of Array.isArray(segments) ? segments : []) {
     const voiceId = resolveSegmentVoice(segment, config);
     const who = segment.type === 'narration' ? '旁白' : (segment.speaker || '未知说话人');
+    // Passed over: it keeps its place in the list so the reader can see why it is silent.
+    if (segmentMuted(segment, config ?? {})) {
+      muted.add(who);
+      skipped.push({ segment, voiceId, reason: findVoiceEntry(config?.voices, segment.speaker)?.mute === true ? 'mute' : 'fallback' });
+      continue;
+    }
     if (!voiceId) unvoiced.add(who);
     else if (segment.type === 'dialogue') {
       const entry = findVoiceEntry(config?.voices, segment.speaker);
@@ -958,7 +1003,7 @@ export function planVoices(segments, config) {
     }
     items.push({ segment, voiceId });
   }
-  return { items, defaulted: [...defaulted], unvoiced: [...unvoiced] };
+  return { items, skipped, muted: [...muted], defaulted: [...defaulted], unvoiced: [...unvoiced] };
 }
 
 // ---------------------------------------------------------------------------------------------

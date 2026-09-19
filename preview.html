@@ -125,32 +125,30 @@
       }
       if (body.task === 'label_utterances_for_audiobook' || body.task === 'sketch_voices_for_audiobook' || body.task === 'direct_voices_for_audiobook') {
         const deep = body.task === 'direct_voices_for_audiobook';
+        // The floor arrives as paragraphs with every quoted run marked ⟦id⟧; only dialogue is answered.
+        const runs = [];
         let lastName = '樱井';
-        const labels = body.utterances.map(item => {
-          if (item.kind !== 'quoted') {
-            const named = (body.roster ?? []).find(name => item.text.includes(name)) ?? (item.text.includes('樱井') ? '樱井' : null);
-            if (named) lastName = named;
-            return { id: item.id, type: 'narration' };
+        for (const line of body.lines ?? []) {
+          const text = String(line.text ?? '');
+          const named = (body.roster ?? []).find(name => text.includes(name));
+          if (named) lastName = named;
+          for (const match of text.matchAll(/⟦(\d+)⟧([^⟦]*)/g)) {
+            const speaker = body.speakers?.[match[1]] ?? lastName;
+            lastName = lastName === '樱井' ? '玩家' : '樱井';
+            runs.push({ id: Number(match[1]), speaker, text: match[2] });
           }
-          const speaker = lastName;
-          lastName = lastName === '樱井' ? '玩家' : '樱井';
+        }
+        const voices = runs.map(run => {
+          const asking = /？」?/.test(run.text);
+          const trailing = /……/.test(run.text);
           if (!deep) {
-            // The simple sketch: a mood word for the colouring and a short direction for the voice.
-            const emotion = /？」?$/.test(item.text) ? 'nervous' : /……/.test(item.text) ? 'tender' : 'happy';
-            const direction = /？」?$/.test(item.text) ? '小心翼翼地问，语速放慢，句尾轻轻抬起' : /……/.test(item.text) ? '轻声承诺，前面停一下，尾音放软' : '见到人就开心，声音亮一点';
-            return { id: item.id, type: 'dialogue', speaker, emotion, intensity: 1, direction };
+            return { id: run.id, speaker: run.speaker, emotion: asking ? 'nervous' : trailing ? 'tender' : 'happy' };
           }
-          // The deep reading: a voice per line, shaped like a real reply, so the panel has something to show.
-          if (/？」?$/.test(item.text)) {
-            return { id: item.id, type: 'dialogue', speaker, emotion: 'nervous', intensity: 1, direction: '怕被拒绝的试探，压着期待，语速放慢，句尾轻轻抬起', speed: 'slow', volume: 'quiet', pauses: [{ after: '明天', length: 'short' }], stress: ['见面'], sounds: [{ at: 'start', tag: '吸气' }] };
-          }
-          if (/……/.test(item.text)) {
-            return { id: item.id, type: 'dialogue', speaker, emotion: 'tender', intensity: 1, direction: '被打动后的轻声承诺，先叹一口气，尾音放软', speed: 'slow', volume: 'quiet', sounds: [{ at: 'start', tag: '叹气' }], stress: ['保证'] };
-          }
-          return { id: item.id, type: 'dialogue', speaker, emotion: 'happy', intensity: 1, direction: '见到人就开心，声音亮起来，带一点笑', sounds: [{ at: 'end', tag: '轻笑' }] };
+          if (asking) return { id: run.id, speaker: run.speaker, emotion: 'nervous', tone: 'soft tone', speed: 'slow', volume: 'quiet', pauses: [{ after: '明天', length: 'short' }], stress: ['见面'], sounds: [{ at: 'start', tag: 'gasping' }] };
+          if (trailing) return { id: run.id, speaker: run.speaker, emotion: 'tender', speed: 'slow', volume: 'quiet', sounds: [{ at: 'start', tag: 'sighing' }], stress: ['保证'] };
+          return { id: run.id, speaker: run.speaker, emotion: 'happy', shifts: [{ at: '你', emotion: 'excited' }], sounds: [{ at: 'end', tag: 'chuckling' }] };
         });
-        if (!deep) return JSON.stringify({ labels });
-        return JSON.stringify({ scene: '傍晚，空教室，光很淡。', characters: [{ name: '樱井', state: '安静，但一直在等', habit: '说话轻，句尾常带笑' }], voices: labels });
+        return JSON.stringify({ voices });
       }
       if (body.task === 'list_characters_from_worldbook') {
         return JSON.stringify({ characters: [{ name: '樱井', aliases: ['桜井'], lang: 'ja' }, { name: '老胡', aliases: [] }] });

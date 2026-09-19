@@ -37,7 +37,10 @@ function cleanFullString(value) {
     .replace(/([?&](?:key|token|api_key|access_token)=)[^&#\s]+/gi, '$1[已隐藏]')
     .replace(/((?:api[_-]?key|authorization|token|secret|password)\s*["']?\s*[:=]\s*["']?)[^"'\s,}]+/gi, '$1[已隐藏]')
     .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, '[密钥已隐藏]')
-    .replace(/\bAIza[A-Za-z0-9_-]{20,}\b/g, '[密钥已隐藏]');
+    .replace(/\bAIza[A-Za-z0-9_-]{20,}\b/g, '[密钥已隐藏]')
+    // The whole of a long request is not worth the rest of the log: the store keeps a fixed number of
+    // characters, and one untrimmed body used to evict everything a reader was looking for.
+    .slice(0, 40000);
 }
 
 export function sanitizeDiagnostic(value, key = '') {

@@ -1,7 +1,7 @@
-import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.28.2';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.28.2';
-import { EMOTION_KEYS } from './palette.js?v=0.28.2';
-import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.28.2';
+import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.29.0';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.29.0';
+import { EMOTION_KEYS } from './palette.js?v=0.29.0';
+import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.29.0';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -223,7 +223,8 @@ function annotationRequest(settings, phase, requestMeta) {
   // Every reading wants the skeleton from the translation, the plain one included: the translation
   // has read the floor already, so who speaks and how comes with it for nothing, and a translated
   // floor reads from those marks whatever the mode. Only the deep one asks how each line should be read.
-  const reading = settings?.tts?.enabled === true;
+  // The deep reading reads the original by itself and takes nothing from the translation.
+  const reading = settings?.tts?.enabled === true && settings?.tts?.mode !== 'deep';
   // Directions in the reader's own words read badly; the deep reading asks the sub-model in Fish's
   // words instead, so the translation is never asked for them.
   const directions = false;

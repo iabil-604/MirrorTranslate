@@ -218,6 +218,7 @@ test('the annotation section restates the output shape, because §9 shows an id/
   assert.deepEqual(Object.keys(JSON.parse(speakerShape[0]).translations[0]), ['id', 'text', 'speaker']);
 });
 
+
 test('the reading asks the translation for Fish\'s own words and one mark per quoted run, colouring or not', () => {
   const reading = mergeSettings({ tts: { enabled: true } });
   const segments = [{ id: 1, text: '「来たんだね」' }];
@@ -250,18 +251,17 @@ test('the reading asks the translation for Fish\'s own words and one mark per qu
   const plain = colouring.find(message => message.content.includes('附加标注'));
   assert.doesNotMatch(plain.content, /quotes/);
   assert.doesNotMatch(plain.content, /sarcastic/);
-  // The deep reading, while the hatch is open, asks how each line should be read.
+  // The deep reading reads the original by itself the moment it closes, so the translation is never
+  // asked to mark anything: nothing of this request is its to reuse.
   const deep = buildTranslationMessages(segments, mergeSettings({ tts: { enabled: true, mode: 'deep', deepUnlocked: true } }), {}, 'primary', { roster: ['樱井'] });
-  // The deep reading asks the sub-model for how each line is read, in Fish's words; the translation is never asked for directions.
-  assert.doesNotMatch(deep.find(message => message.content.includes('附加标注')).content, /direction：一句 20 字左右/);
-  assert.notEqual(JSON.parse(deep.find(message => message.role === 'user').content).annotate.direction, true);
-  // The plain reading takes the skeleton from the translation too: it costs nothing there, and a
-  // translated floor reads from its marks whatever the mode.
+  assert.equal(deep.some(message => message.content.includes('附加标注')), false, 'the deep reading costs the translation nothing');
+  assert.equal(JSON.parse(deep.find(message => message.role === 'user').content).annotate, undefined);
+  // The plain reading takes the marks from the translation: they cost nothing there, and a
+  // translated floor reads from them whatever the mode.
   const plainReading = buildTranslationMessages(segments, mergeSettings({ tts: { enabled: true, mode: 'off' } }), {}, 'primary', {});
   assert.equal(plainReading.some(message => message.content.includes('附加标注')), true);
   assert.notEqual(JSON.parse(plainReading.find(message => message.role === 'user').content).annotate.direction, true, 'but never the deep reading\'s directions');
 });
-
 test('recent context quotes the extracted body and leaves the surrounding panels behind', async () => {
   // A floor as the presets that prompted this actually build one: the prose is a small part of it,
   // wrapped in reasoning, a status panel and a choice list, all of which used to travel as context.

@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.28.2';
+} from './prompts.js?v=0.29.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.28.2';
+export const APP_VERSION = '0.29.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -390,6 +390,9 @@ export function normalizeConsole(value, { sparse = false } = {}) {
   return console;
 }
 export const TTS_DOWNLOAD_SCOPES = Object.freeze(['auto', 'floor', 'current', 'sentence']);
+// What becomes of a line whose speaker has no voice of their own: read in the dialogue default, or
+// left unread, so that only the characters actually given a voice are heard.
+export const TTS_DIALOGUE_FALLBACKS = Object.freeze(['default', 'skip']);
 // Where the character voice table lives: one per character card (every chat of the card shares it),
 // or one per chat, for a card played through several times with different casts.
 export const TTS_VOICE_SCOPES = Object.freeze(['character', 'chat']);
@@ -555,6 +558,7 @@ export const DEFAULT_TTS = Object.freeze({
   narratorVoices: Object.freeze({}),
   dialogueVoice: '',
   dialogueTitle: '',
+  dialogueFallback: 'default',
   fish: DEFAULT_FISH,
 });
 
@@ -924,7 +928,8 @@ export function normalizeVoiceList(value) {
       // A row written before locks existed is locked exactly when it carries a voice of its own.
       const locked = item.locked === undefined ? Boolean(voiceId || Object.keys(voices).length) : item.locked === true;
       // A console of its own only when something on it was moved; null means the default console.
-      return { name, aliases, voiceId, voices, locked, title: normalizeVoiceTitle(item.title), console: normalizeConsole(item.console, { sparse: true }) };
+      // Muted: this character's lines are not read at all. Never by accident — only an explicit true.
+      return { name, aliases, voiceId, voices, locked, mute: item.mute === true, title: normalizeVoiceTitle(item.title), console: normalizeConsole(item.console, { sparse: true }) };
     })
     .filter(item => {
       if (!item || seen.has(item.name)) return false;
@@ -1084,6 +1089,7 @@ export function normalizeTts(value) {
     narratorTitle: normalizeVoiceTitle(source.narratorTitle),
     narratorVoices: normalizeLanguageVoices(source.narratorVoices),
     dialogueVoice: normalizeVoiceId(source.dialogueVoice),
+    dialogueFallback: TTS_DIALOGUE_FALLBACKS.includes(source.dialogueFallback) ? source.dialogueFallback : DEFAULT_TTS.dialogueFallback,
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     fish: normalizeFishSettings(source.fish),
   };
