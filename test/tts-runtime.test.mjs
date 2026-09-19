@@ -221,7 +221,7 @@ test('the deep reading carries the card and the recent floors, and every sentenc
   assert.deepEqual(segments[1].voice.pauses, [{ after: '我操', length: 'short' }]);
 
   const inspected = await __testing.ttsInspect(1, 2);
-  assert.equal(inspected.text, '[frustrated] 我操 [break] 好热啊！', 'Fish\'s own words only: the mood, the pause; a stress has no word of Fish\'s');
+  assert.equal(inspected.text, '[frustrated] 我操 [break] 好 [emphasis] 热啊！', 'Fish\'s own words only: the mood, the pause, the stress');
   assert.deepEqual(inspected.prosody, { speed: 1.12, volume: 3 });
   assert.ok(inspected.summary.some(([term]) => term === '潜台词'));
   assert.equal(inspected.depth, 'deep');
@@ -239,7 +239,7 @@ test('the deep reading carries the card and the recent floors, and every sentenc
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].body.prosody, { speed: 1, volume: 0 });
   assert.deepEqual(calls[1].body.prosody, { speed: 1.12, volume: 3 });
-  assert.equal(calls[1].body.text, '[frustrated] 我操 [break] 好热啊！');
+  assert.equal(calls[1].body.text, '[frustrated] 我操 [break] 好 [emphasis] 热啊！');
   assert.equal(record.parts.length, 2);
   assert.deepEqual(record.timeline.map(entry => [entry.id, entry.part]), [[1, 0], [2, 1]]);
 });

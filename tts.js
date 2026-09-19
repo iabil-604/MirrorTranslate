@@ -10,9 +10,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.28.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.28.0';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.28.0';
+} from './core.js?v=0.28.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.28.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.28.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -677,7 +677,7 @@ export function normalizeVoice(item, text = '') {
       return out;
     })
     .filter(shift => (shift.direction || shift.emotion) && inSentence(shift.at))
-    .slice(0, 2);
+    .slice(0, 3);
   if (shifts.length) voice.shifts = shifts;
   const sounds = (Array.isArray(item.sounds) ? item.sounds : [])
     .map(sound => {
@@ -1123,19 +1123,39 @@ function compileLean(voice, text, result, model) {
   if (FISH_TONES.includes(voice.tone)) push(wrapCue(voice.tone, model));
   for (const sound of voice.sounds ?? []) if (sound.at === 'start') push(wrapCue(officialSound(sound.tag), model));
   result.cues = cues.slice(0, 3);
-  // A pause is one of Fish's own marks at the word it belongs to; two at most, so a sentence never
-  // fills up with breaks.
   const insertions = [];
-  for (const pause of (voice.pauses ?? []).slice(0, 2)) {
+  const placed = new Set();
+  const find = needle => {
+    const index = text.indexOf(needle);
+    return index >= 0 && !placed.has(`${needle}@${index}`) ? index : -1;
+  };
+  // Where the feeling turns inside the sentence: one of Fish's own words before the word it turns on,
+  // up to three turns, so the first clause and the second are heard differently.
+  for (const shift of (voice.shifts ?? []).slice(0, 3)) {
+    const index = find(shift.at);
+    const cue = shift.emotion ? emotionCue(shift.emotion, 1, model) : '';
+    if (index < 0 || !cue) continue;
+    placed.add(`${shift.at}@${index}`);
+    insertions.push({ index, value: ` ${cue} ` });
+  }
+  // A pause is one of Fish's own marks at the word it belongs to; three at most.
+  for (const pause of (voice.pauses ?? []).slice(0, 3)) {
     const index = text.indexOf(pause.after);
     const cue = wrapCue(pause.length === 'long' ? 'long-break' : 'break', model);
     if (index >= 0 && cue) insertions.push({ index: index + pause.after.length, value: ` ${cue} ` });
   }
-  // One turn inside the sentence, as one of Fish's own words at the word it turns on.
-  for (const shift of (voice.shifts ?? []).slice(0, 1)) {
-    const index = text.indexOf(shift.at);
-    const cue = shift.emotion ? emotionCue(shift.emotion, 1, model) : '';
-    if (index >= 0 && cue) insertions.push({ index, value: ` ${cue} ` });
+  // A sound after a word — a sigh mid-sentence, a laugh before the rest — in Fish's own word.
+  for (const sound of (voice.sounds ?? []).filter(item => item.at === 'after').slice(0, 2)) {
+    const index = text.indexOf(sound.after);
+    const cue = wrapCue(officialSound(sound.tag), model);
+    if (index >= 0 && cue) insertions.push({ index: index + sound.after.length, value: ` ${cue} ` });
+  }
+  // A stressed word, for the models that know the mark.
+  if (model !== 's1') {
+    for (const stressed of (voice.stress ?? []).slice(0, 2)) {
+      const index = text.indexOf(stressed);
+      if (index >= 0) insertions.push({ index, value: ' [emphasis] ' });
+    }
   }
   result.text = insertions.length ? insertAll(text, insertions).replace(/\s{2,}/g, ' ').trim() : text;
   result.tail = (voice.sounds ?? []).filter(sound => sound.at === 'end').map(sound => wrapCue(officialSound(sound.tag), model)).filter(Boolean).slice(0, 1).join('');

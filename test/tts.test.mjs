@@ -272,7 +272,7 @@ test('the deep request carries the cast, the references and the voice fields, st
   assert.deepEqual(input.references, { character: '泰罗：怕热，嘴硬。', worldbook: '教室没有空调。', recent: '【第 3 楼】泰罗擦汗。' });
   assert.deepEqual(input.emotions, FISH_EMOTIONS);
   assert.deepEqual(input.utterances.map(item => item.text), ['泰罗压低了声音：', '「我……我要裸奔啦。」']);
-  for (const field of ['why', 'intensity', 'tone', 'pauses', 'shift', 'sounds', 'speed', 'volume', 'skeleton', 'previous', 'styles']) assert.match(messages[0].content, new RegExp(field));
+  for (const field of ['why', 'tone', 'pauses', 'shifts', 'stress', 'sounds', 'speed', 'volume', 'skeleton', 'previous', 'styles', 'after']) assert.match(messages[0].content, new RegExp(field));
   for (const gone of ['trend', 'pitch', 'energy', 'rhythm', 'ending', 'urgency', 'delivery', 'focus']) assert.doesNotMatch(messages[0].content, new RegExp(`- ${gone}`));
   assert.match(messages[0].content, /不是惯性/);
   assert.match(messages[0].content, /省力原则/);
@@ -1243,8 +1243,9 @@ test('the deep reading asks why and how strongly, in Fish\'s own words, and keep
   const utterances = splitUtterances([{ lineId: 1, text: '泰罗压低了声音：「我……我要裸奔啦。」' }]);
   const messages = buildVoiceAnalysisMessages(utterances, { roster: ['泰罗'], speakers: new Map([[2, '泰罗']]), hints: new Map([[2, { type: 'dialogue', speaker: '泰罗', emotion: 'shy', intensity: 1 }]]) });
   const system = messages[0].content;
-  for (const field of ['why', 'intensity', 'tone', 'speed', 'volume', 'pauses', 'shift', 'sounds', 'skeleton', 'previous', 'styles']) assert.match(system, new RegExp(field), field);
-  assert.match(system, /感情浓度/);
+  for (const field of ['why', 'tone', 'speed', 'volume', 'pauses', 'shifts', 'stress', 'sounds', 'skeleton', 'previous', 'styles']) assert.match(system, new RegExp(field), field);
+  assert.match(system, /前半句一种情绪、后半句另一种/);
+  assert.match(system, /留在中间的由你按情境定/);
   assert.match(system, /硬性要求/);
   assert.match(system, /省力原则/);
   assert.doesNotMatch(system, /direction/, 'no free-text directions: they read badly');
@@ -1263,4 +1264,26 @@ test('the deep reading asks why and how strongly, in Fish\'s own words, and keep
   const text = fishTextOf({ segment: segments[1], voiceId: 'v' }, { model: 's2-pro' }, { lean: true });
   assert.equal(text, '[nervous][whispering][gasping] 我……我要 [excited] 裸奔啦。', 'the turn lands as one of Fish\'s words at its word; nothing of the reason goes out');
   assert.equal(DEEP_STATUS.available, true);
+});
+
+test('a sentence whose feeling turns is heard turning: a word of Fish\'s before each clause, sounds where they fall, stresses', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '「本来今天挺开心的，可是你一走，屋里就空了。」' }]);
+  const reply = JSON.stringify({ voices: [{
+    id: 1, type: 'dialogue', speaker: '泰罗', why: '先是高兴，想起分别就落下去',
+    emotion: 'happy',
+    shifts: [{ at: '可是', emotion: 'sad' }, { at: '屋里', emotion: 'lonely' }, { at: '不在句里', emotion: 'angry' }],
+    pauses: [{ after: '一走', length: 'short' }],
+    stress: ['空'],
+    sounds: [{ at: 'after', after: '开心的', tag: 'chuckling' }, { at: 'end', tag: 'sighing' }],
+  }] });
+  const parsed = parseVoiceAnalysis(reply, utterances);
+  const voice = parsed.voices.get(1);
+  assert.deepEqual(voice.shifts, [{ at: '可是', emotion: 'sad' }, { at: '屋里', emotion: 'lonely' }], 'a turn on a word not in the sentence is dropped');
+  const segments = buildSegments(utterances, parsed.labels, { voices: parsed.voices });
+  const text = fishTextOf({ segment: segments[0], voiceId: 'v' }, { model: 's2-pro' }, { lean: true });
+  assert.equal(text, '[happy] 本来今天挺开心的 [chuckling] ， [sad] 可是你一走 [break] ， [lonely] 屋里就 [emphasis] 空了。 [sighing]');
+  // S1 knows no stress mark; everything else it hears the same way, in its own brackets.
+  const plain = fishTextOf({ segment: segments[0], voiceId: 'v' }, { model: 's1' }, { lean: true });
+  assert.equal(plain, '(happy) 本来今天挺开心的 (chuckling) ， (sad) 可是你一走 (break) ， (lonely) 屋里就空了。 (sighing)');
+  assert.ok(voiceSummary(voice).some(([term, value]) => term === '句内变化' && /可是/.test(value)));
 });
