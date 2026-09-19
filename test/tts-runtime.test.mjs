@@ -1084,7 +1084,11 @@ test('asking again with an opinion only touches what the opinion is about; a nam
   assert.equal(requests.length, 2, 'reading the floor again asks nothing: the analysis is cached');
   const fresh = (await __testing.ttsItemsFor(floor, after.segments, settings)).items;
   assert.equal(fresh[1].voiceId, 'voice-taro', 'a new speaker means a new voice, with no re-analysis');
-  assert.equal(await __testing.findTtsEntry(floor, fresh[1], settings), null, 'the audio made from the old labels was let go');
+  // The correction remakes what could already be heard, so the new voice is there without a second click.
+  const remadeEntry = await __testing.findTtsEntry(floor, fresh[1], settings);
+  assert.ok(remadeEntry, 'the paragraph was made again under the new labels');
+  assert.equal(fish.length, 2, 'one more Fish request, for the paragraph that changed');
+  assert.equal(result.remade, 1);
 
   // The reader names the speaker by hand: the sentence reads in that voice, and nobody is asked anything.
   await __testing.saveTtsSpeaker(0, 2, '樱井');

@@ -66,7 +66,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.29.3';
+} from './core.js?v=0.29.4';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -114,10 +114,10 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.29.3';
-import { createTtsStore } from './tts-store.js?v=0.29.3';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.3';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.3';
+} from './tts.js?v=0.29.4';
+import { createTtsStore } from './tts-store.js?v=0.29.4';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.4';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.4';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -126,7 +126,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.29.3';
+} from './processing.js?v=0.29.4';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -143,9 +143,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.29.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.3';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.3';
+} from './prompts.js?v=0.29.4';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.4';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.4';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -159,15 +159,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.29.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.29.3';
+} from './palette.js?v=0.29.4';
+import { sampleThemeBackground } from './theme-probe.js?v=0.29.4';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.29.3';
+} from './diagnostics.js?v=0.29.4';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -5173,12 +5173,67 @@ function forgetTtsItems(messageId) {
   }
 }
 
+/** Which paragraphs of this floor can already be heard, before an analysis changes the labels. */
+async function ttsHeardLines(messageId, side) {
+  try {
+    const prepared = await ttsPrepared(messageId, side);
+    const heard = new Set();
+    for (const item of prepared.items) {
+      if (heard.has(item.segment.lineId)) continue;
+      if (await findTtsEntry(prepared.floor, item, prepared.settings)) heard.add(item.segment.lineId);
+    }
+    return heard;
+  } catch {
+    // No prepared floor means nothing has been made from it; there is nothing to make again.
+    return new Set();
+  }
+}
+
+/**
+ * The paragraphs that had audio, made again under the labels the analysis just wrote.
+ *
+ * A paragraph the analysis left alone is found in the store and costs nothing, so this only pays for
+ * what actually changed. Failures are reported and do not stop the rest: the analysis itself landed.
+ */
+async function remakeTtsLines(messageId, side, heard) {
+  if (!heard?.size) return 0;
+  const settings = runtime.settings;
+  const prepared = await ttsPrepared(messageId, side, { fresh: true });
+  const tts = ttsSettings(settings);
+  const { floor } = prepared;
+  const units = ttsUnitsOf(tts, prepared.items).filter(target => target.items.some(item => heard.has(item.segment.lineId)));
+  if (!units.length) return 0;
+  for (const target of units) ttsStep(floor, `record:${target.unit}`, { state: 'pending', label: ttsUnitLabel(target.unit) });
+  let made = 0;
+  await runInLanes(units, Math.max(1, Number(tts.fish.concurrency) || 1), async (target, index) => {
+    const covered = await Promise.all(target.items.map(item => findTtsEntry(floor, item, settings)));
+    if (covered.every(Boolean)) {
+      ttsStep(floor, `record:${target.unit}`, { state: 'done', detail: '标注没变，音频照用' });
+      return;
+    }
+    try {
+      const { cached } = await ensureTtsRecording(floor, target.unit, target.items, settings,
+        text => setTtsStatus(messageId, units.length > 1 ? `${text}（${index + 1}/${units.length}）` : text, 'busy'),
+        (id, patch) => ttsStep(floor, id, patch));
+      if (!cached) made += 1;
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      ttsStep(floor, `record:${target.unit}`, { state: 'error', detail: safeError(error) });
+    }
+  });
+  reportTtsFish(floor);
+  return made;
+}
+
 /** Throws away the floor's reading and asks the model again, every sentence from scratch. */
 async function reanalyzeTtsFloor(messageId, side = null) {
   const settings = runtime.settings;
   requireClosedFloor(messageId);
-  const floor = await collectTtsFloor(messageId, settings, side ?? primaryTtsSide(settings));
+  const which = side ?? primaryTtsSide(settings);
+  const floor = await collectTtsFloor(messageId, settings, which);
   if (!floor) throw new Error('这一楼没有可朗读的文字。');
+  // Noted before the labels move: what could be heard is what will be made again afterwards.
+  const heard = await ttsHeardLines(messageId, which);
   forgetTtsItems(messageId);
   runtime.tts.analysis.delete(ttsLabelKey(floor));
   // A floor the reader once chose to hear plain is being asked about now.
@@ -5196,6 +5251,9 @@ async function reanalyzeTtsFloor(messageId, side = null) {
     setTtsStatus(messageId, '', 'idle');
     scheduleTtsDecorate(messageId, { force: true });
   }
+  // The audio follows the analysis that was asked for, without a second click.
+  floor.remade = await remakeTtsLines(messageId, which, heard);
+  setTtsStatus(messageId, floor.remade ? `重新分析完了，${floor.remade} 段音频已重做` : '', 'idle');
   return floor;
 }
 
@@ -5222,6 +5280,7 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
   const which = side ?? primaryTtsSide(settings);
   const prepared = await ttsPrepared(messageId, which);
   const { floor } = prepared;
+  const heard = await ttsHeardLines(messageId, which);
   const utterances = ttsUtterances(floor, settings);
   const base = currentTtsLabels(prepared);
   const scope = utteranceId === null ? utterances : utterances.filter(item => item.id === Number(utteranceId));
@@ -5278,7 +5337,8 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
   dropPreparedFloors(messageId);
   forgetTtsItems(messageId);
   scheduleTtsDecorate(messageId, { force: true });
-  return { changed: parsed.labels.size, kept: parsed.reused, sentences: scope.length };
+  const remade = await remakeTtsLines(messageId, which, heard);
+  return { remade, changed: parsed.labels.size, kept: parsed.reused, sentences: scope.length };
 }
 
 /**
@@ -11085,12 +11145,13 @@ async function openMiniWindow() {
         button.textContent = '分析中…';
         if (answer.choice === 'refine') {
           const result = await refineTtsAnalysis(messageId, { side, utteranceId: answer.scope === 'sentence' ? sentenceId : null, feedback: answer.feedback });
-          toast('success', `改了 ${result.changed} 句，${result.kept} 句保持原样；改动的句子下次播放时重做音频。`);
+          toast('success', `改了 ${result.changed} 句，${result.kept} 句保持原样${result.remade ? `；${result.remade} 段音频已按新标注重做` : ''}。`);
         } else {
-          await reanalyzeTtsFloor(messageId, side);
+          const done = await reanalyzeTtsFloor(messageId, side);
+          const audio = done.remade ? `，${done.remade} 段音频已按新标注重做` : '，之前没有生成过音频，按播放时再做';
           toast('success', ttsSettings().mode === 'off'
-            ? `第 ${messageId} 楼简单分析完了，这一楼以后按分析结果读；改了的句子下次播放时重做音频。`
-            : `第 ${messageId} 楼重新分析完了，已有的音频保留，改了的句子下次播放时重做。`);
+            ? `第 ${messageId} 楼简单分析完了，这一楼以后按分析结果读${audio}。`
+            : `第 ${messageId} 楼重新分析完了${audio}。`);
         }
         if (inspecting?.messageId === messageId) await renderInspector(messageId, inspecting.utteranceId, { pinned: true, side: inspecting.side });
         sentencesSignature = '';

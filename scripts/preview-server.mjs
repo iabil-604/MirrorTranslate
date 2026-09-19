@@ -11,6 +11,8 @@ const mime = new Map([
   ['.json', 'application/json; charset=utf-8'],
 ]);
 const previewPort = Number(process.env.JINGYI_PREVIEW_PORT) || 8766;
+// Bumped through /preview/analysis-round so a second analysis of the same floor answers differently.
+let previewAnalysisRound = 0;
 let previewUpdateAvailable = true;
 
 // ---------------------------------------------------------------------------------------------
@@ -184,11 +186,17 @@ async function handleFishMock(request, response, target) {
   response.end(JSON.stringify({ status: 404, message: 'no route' }));
 }
 
-http.createServer((request, response) => {
+http.createServer(async (request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
   const proxied = pathname.match(/^\/proxy\/https?:\/+api\.fish\.audio(\/.*)$/);
   if (proxied) {
     void handleFishMock(request, response, proxied[1]);
+    return;
+  }
+  if (request.method === 'POST' && pathname === '/preview/analysis-round') {
+    previewAnalysisRound += 1;
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    response.end(JSON.stringify({ round: previewAnalysisRound }));
     return;
   }
   if (request.method === 'POST' && pathname === '/api/backends/chat-completions/status') {
@@ -199,6 +207,44 @@ http.createServer((request, response) => {
   // A reasoning model, mocked: it thinks for a while before a single character of translation
   // appears. That gap is the only way to look at the thinking panel without a real slow model.
   if (request.method === 'POST' && pathname === '/api/backends/chat-completions/generate') {
+    // The readings come through here too, and they are not translations: a floor arrives as
+    // paragraphs with every quoted run marked ⟦id⟧, and the answer is the dialogue alone.
+    const body = await readBody(request);
+    const asked = (() => {
+      try {
+        return JSON.parse([...(body.messages ?? [])].reverse().find(message => message.role === 'user')?.content ?? '{}');
+      } catch {
+        return {};
+      }
+    })();
+    if (['sketch_voices_for_audiobook', 'direct_voices_for_audiobook', 'refine_voices_for_audiobook'].includes(asked.task)) {
+      const deep = asked.task === 'direct_voices_for_audiobook';
+      const moods = ['happy', 'nervous', 'tender', 'angry', 'sad'];
+      const voices = [];
+      let turn = 0;
+      let lastName = (asked.roster ?? [])[0] ?? '樱井';
+      for (const line of asked.lines ?? []) {
+        const text = String(line.text ?? '');
+        const named = (asked.roster ?? []).find(name => text.includes(name));
+        if (named) lastName = named;
+        for (const match of text.matchAll(/⟦(\d+)⟧/g)) {
+          const id = Number(match[1]);
+          const speaker = asked.speakers?.[id] ?? lastName;
+          const emotion = moods[(turn + Number(previewAnalysisRound)) % moods.length];
+          turn += 1;
+          voices.push(deep
+            ? { id, speaker, emotion, tone: 'soft tone', pauses: [{ after: '、', length: 'short' }], sounds: [{ at: 'end', tag: 'sighing' }] }
+            : { id, speaker, emotion });
+        }
+      }
+      for (const item of asked.utterances ?? []) voices.push({ id: item.id, speaker: lastName, emotion: moods[Number(previewAnalysisRound) % moods.length] });
+      response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ voices }) } }] })}\n\n`);
+      response.write('data: [DONE]\n\n');
+      response.end();
+      return;
+    }
+
     response.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache',
