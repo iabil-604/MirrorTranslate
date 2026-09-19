@@ -14,7 +14,6 @@ import {
   buildGlobalTimeline,
   buildSegments,
   buildTtsAnalysisMessages,
-  buildVoiceAnalysisMessages,
   compileVoiceCues,
   consoleDirections,
   createSseParser,
@@ -273,14 +272,14 @@ test('the deep request carries the cast, the references and the voice fields, st
   assert.deepEqual(input.references, { character: '泰罗：怕热，嘴硬。', worldbook: '教室没有空调。', recent: '【第 3 楼】泰罗擦汗。' });
   assert.deepEqual(input.emotions, FISH_EMOTIONS);
   assert.deepEqual(input.utterances.map(item => item.text), ['泰罗压低了声音：', '「我……我要裸奔啦。」']);
-  for (const field of ['direction', 'pauses', 'stress', 'shift', 'sounds', 'speed', 'volume', 'skeleton', 'previous', 'styles']) assert.match(messages[0].content, new RegExp(field));
+  for (const field of ['why', 'intensity', 'tone', 'pauses', 'shift', 'sounds', 'speed', 'volume', 'skeleton', 'previous', 'styles']) assert.match(messages[0].content, new RegExp(field));
   for (const gone of ['trend', 'pitch', 'energy', 'rhythm', 'ending', 'urgency', 'delivery', 'focus']) assert.doesNotMatch(messages[0].content, new RegExp(`- ${gone}`));
   assert.match(messages[0].content, /不是惯性/);
   assert.match(messages[0].content, /省力原则/);
   assert.match(messages[0].content, /不要输出 text/);
-  assert.match(messages[0].content, /OOC/);
   assert.equal('skeleton' in input, false);
-  assert.deepEqual(input.sounds, SOUND_TAGS);
+  assert.deepEqual(input.sounds, FISH_SOUND_LIST, 'the sounds Fish lists itself');
+  assert.deepEqual(input.tones, FISH_TONE_LIST);
   // The translation's own labels ride along as the skeleton, and a custom prompt replaces the built-in one.
   const hinted = buildVoiceAnalysisMessages(utterances, { userName: '玩家', hints: new Map([[2, { type: 'dialogue', speaker: '泰罗', emotion: 'shy', intensity: 1 }]]), systemPrompt: '自定义提示词，{{user}}标签：{{sounds}}' });
   assert.deepEqual(JSON.parse(hinted[1].content).skeleton, [{ id: 2, speaker: '泰罗', emotion: 'shy', intensity: 1 }]);
@@ -652,9 +651,9 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.equal(settings.tts.enabled, true);
   assert.equal(settings.tts.mode, 'simple', 'the old sentence and stream modes are the simple reading now');
   assert.equal('analysis' in settings.tts, false, 'the depth is the mode');
-  assert.equal(mergeSettings({ tts: { mode: 'floor' } }).tts.mode, 'simple', 'the whole-floor mode falls back to the simple reading while the deep one is shelved');
-  assert.equal(mergeSettings({ tts: { mode: 'stream', analysis: 'deep' } }).tts.mode, 'simple', 'a depth named outright falls back the same way');
-  assert.equal(mergeSettings({ tts: { mode: 'floor', deepUnlocked: true } }).tts.mode, 'deep', 'the hatch keeps the deep reading reachable');
+  assert.equal(mergeSettings({ tts: { mode: 'floor' } }).tts.mode, 'deep', 'the whole-floor mode of old is the deep reading, open again');
+  assert.equal(mergeSettings({ tts: { mode: 'stream', analysis: 'deep' } }).tts.mode, 'deep', 'a depth named outright is kept');
+  assert.equal(mergeSettings({ tts: { mode: 'deep' } }).tts.mode, 'deep');
   assert.equal(mergeSettings({ tts: { mode: 'off' } }).tts.mode, 'off', 'the plain reading is a mode of its own');
   assert.equal(mergeSettings({ tts: { askAnalysis: 'plain' } }).tts.askAnalysis, 'plain');
   assert.equal(mergeSettings({ tts: { askAnalysis: 'sometimes' } }).tts.askAnalysis, 'ask');
@@ -941,12 +940,12 @@ test('on TauriTavern a Fish call goes direct, carries no host headers, and fails
 });
 
 test('the analysis batch size is a sentence count, with zero meaning the whole floor at once', () => {
-  assert.equal(normalizeTts({}).batchSize, 12);
+  assert.equal(normalizeTts({}).batchSize, 0, 'a floor is analysed whole unless told otherwise');
   assert.equal(normalizeTts({ batchSize: 0 }).batchSize, 0);
   assert.equal(normalizeTts({ batchSize: '20' }).batchSize, 20);
   assert.equal(normalizeTts({ batchSize: 2 }).batchSize, 4);
   assert.equal(normalizeTts({ batchSize: 999 }).batchSize, 60);
-  assert.equal(normalizeTts({ batchSize: 'abc' }).batchSize, 12);
+  assert.equal(normalizeTts({ batchSize: 'abc' }).batchSize, 0);
 });
 
 
@@ -993,6 +992,7 @@ test('the console\'s speed lean nudges the prosody only where the voice said not
 import { FISH_SOUNDS as FISH_SOUND_LIST, FISH_TONES as FISH_TONE_LIST } from '../tts.js';
 
 import { encodeWav as encodeWavFile } from '../tts.js';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages as buildVoiceAnalysisMessages, deepRequestSettings } from '../tts-deep.js';
 
 test('a cut of decoded audio is written out as a wav file that names its own shape', () => {
   const left = new Float32Array([0, 0.5, -0.5, 1, -1]);
@@ -1228,4 +1228,39 @@ test('a quote set off inside a sentence is part of the sentence, not speech: the
   // Skipped runs stand between their neighbours and never merge.
   const skipped = splitUtterances([{ lineId: 1, text: '所谓*旁注*“朋友”，不过如此。' }], { skipPairs: ['**'] });
   assert.deepEqual(skipped.map(item => item.kind), ['narration', 'quoted', 'narration']);
+});
+
+test('the deep reading is a module of its own, open, on a connection of its own', () => {
+  assert.equal(DEEP_STATUS.available, true);
+  assert.match(DEEP_PROMPT, /配音导演/);
+  const settings = { apiMode: 'tavern', channels: [{ id: 'd1', name: 'deep', url: 'https://deep.example/v1', key: 'k', model: 'thinker' }], tts: { deepChannelId: 'd1' } };
+  assert.equal(deepRequestSettings(settings).selectedChannelId, 'd1');
+  const unset = { ...settings, tts: { deepChannelId: '' } };
+  assert.equal(deepRequestSettings(unset), unset, 'nothing chosen: the translation connection, untouched');
+});
+
+test('the deep reading asks why and how strongly, in Fish\'s own words, and keeps its reason for the reader', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '泰罗压低了声音：「我……我要裸奔啦。」' }]);
+  const messages = buildVoiceAnalysisMessages(utterances, { roster: ['泰罗'], speakers: new Map([[2, '泰罗']]), hints: new Map([[2, { type: 'dialogue', speaker: '泰罗', emotion: 'shy', intensity: 1 }]]) });
+  const system = messages[0].content;
+  for (const field of ['why', 'intensity', 'tone', 'speed', 'volume', 'pauses', 'shift', 'sounds', 'skeleton', 'previous', 'styles']) assert.match(system, new RegExp(field), field);
+  assert.match(system, /感情浓度/);
+  assert.match(system, /硬性要求/);
+  assert.match(system, /省力原则/);
+  assert.doesNotMatch(system, /direction/, 'no free-text directions: they read badly');
+  const input = JSON.parse(messages[1].content);
+  assert.deepEqual(input.tones, FISH_TONE_LIST);
+  assert.deepEqual(input.sounds, FISH_SOUND_LIST, 'the sounds Fish itself lists, not the free-text ones');
+  assert.equal(input.utterances[1].speaker, '泰罗', 'a name the reader set travels with the sentence');
+  assert.deepEqual(input.skeleton, [{ id: 2, speaker: '泰罗', emotion: 'shy', intensity: 1 }]);
+  // The reply: the reason is kept beside the voice and shown, never sent.
+  const parsed = parseVoiceAnalysis(JSON.stringify({ voices: [{ id: 1 }, { id: 2, why: '嘴硬，其实怕被拦下来', emotion: 'nervous', intensity: 2, tone: 'whispering', shift: { at: '裸奔', emotion: 'excited' }, sounds: [{ at: 'start', tag: 'gasping' }] }] }), utterances, { hints: new Map([[2, { type: 'dialogue', speaker: '泰罗', emotion: 'shy' }]]) });
+  const voice = parsed.voices.get(2);
+  assert.equal(voice.why, '嘴硬，其实怕被拦下来');
+  assert.deepEqual(voice.shifts, [{ at: '裸奔', emotion: 'excited' }]);
+  assert.ok(voiceSummary(voice).some(([term, value]) => term === '依据' && value === '嘴硬，其实怕被拦下来'));
+  const segments = buildSegments(utterances, parsed.labels, { voices: parsed.voices });
+  const text = fishTextOf({ segment: segments[1], voiceId: 'v' }, { model: 's2-pro' }, { lean: true });
+  assert.equal(text, '[nervous][whispering][gasping] 我……我要 [excited] 裸奔啦。', 'the turn lands as one of Fish\'s words at its word; nothing of the reason goes out');
+  assert.equal(DEEP_STATUS.available, true);
 });

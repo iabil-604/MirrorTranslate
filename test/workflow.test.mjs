@@ -252,10 +252,14 @@ test('the reading asks the translation for Fish\'s own words and one mark per qu
   assert.doesNotMatch(plain.content, /sarcastic/);
   // The deep reading, while the hatch is open, asks how each line should be read.
   const deep = buildTranslationMessages(segments, mergeSettings({ tts: { enabled: true, mode: 'deep', deepUnlocked: true } }), {}, 'primary', { roster: ['樱井'] });
-  assert.match(deep.find(message => message.content.includes('附加标注')).content, /direction：一句 20 字左右/);
-  assert.equal(JSON.parse(deep.find(message => message.role === 'user').content).annotate.direction, true);
-  // The plain reading asks the translation for nothing at all.
-  assert.equal(buildTranslationMessages(segments, mergeSettings({ tts: { enabled: true, mode: 'off' } }), {}, 'primary', {}).some(message => message.content.includes('附加标注')), false);
+  // The deep reading asks the sub-model for how each line is read, in Fish's words; the translation is never asked for directions.
+  assert.doesNotMatch(deep.find(message => message.content.includes('附加标注')).content, /direction：一句 20 字左右/);
+  assert.notEqual(JSON.parse(deep.find(message => message.role === 'user').content).annotate.direction, true);
+  // The plain reading takes the skeleton from the translation too: it costs nothing there, and a
+  // translated floor reads from its marks whatever the mode.
+  const plainReading = buildTranslationMessages(segments, mergeSettings({ tts: { enabled: true, mode: 'off' } }), {}, 'primary', {});
+  assert.equal(plainReading.some(message => message.content.includes('附加标注')), true);
+  assert.notEqual(JSON.parse(plainReading.find(message => message.role === 'user').content).annotate.direction, true, 'but never the deep reading\'s directions');
 });
 
 test('recent context quotes the extracted body and leaves the surrounding panels behind', async () => {

@@ -10,9 +10,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.26.3';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.26.3';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.26.3';
+} from './core.js?v=0.28.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.28.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.28.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -366,11 +366,11 @@ export function labelsFromAnnotations(utterances, annotations) {
 
 const EMOTION_GLOSS = EMOTION_KEYS.map(key => `${key}=${EMOTION_STYLES[key].label}`).join('、');
 
-function rosterList(roster) {
+export function rosterList(roster) {
   return [...new Set((Array.isArray(roster) ? roster : []).map(name => String(name ?? '').trim()).filter(Boolean))].slice(0, 60);
 }
 
-function referenceLines(translations) {
+export function referenceLines(translations) {
   return translations instanceof Map
     ? [...translations].filter(([, text]) => String(text ?? '').trim()).map(([line, text]) => ({ line, text: String(text) }))
     : [];
@@ -409,17 +409,6 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
     '8. 每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。输入里如果有 lead，那是这一批前面紧挨着的几句，只用来认人和判断语气，不用回答。',
     '{{references_rule}}',
   ].join('\n'),
-  deep: [
-    '你是有声小说的配音导演。下面是一楼正文按顺序切好的句子，附带这一楼的背景资料，还有已经搭好的情绪骨架（skeleton）。骨架说的是每一句「是什么感觉」；你的工作是弄清「为什么是这种感觉、该怎么演」，把骨架润色成配音演员能直接照着演的指令。不改写、不复述、不翻译任何句子。',
-    '输入：utterances 每项有 id、kind（quoted 表示在引号里，narration 表示不在引号里）和 text；skeleton 是每句已有的说话人、情绪和指令，没有骨架的句子由你从头判断；references 里是角色卡、世界书和前几楼的正文，只用来理解人物和剧情；previous 是相关角色在前几楼最后说过的话和当时的指令；styles 是每个角色的表达习惯和用户定下的规则，指令必须遵守；lead 是这一批前面紧挨着的几句，只看不答。',
-    '只输出一个 JSON 对象：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","direction":"中文配音指令","speed":"slow","volume":"quiet","stress":["句中的词"],"pauses":[{"after":"句中的词","length":"long"}],"shift":{"at":"句中的词","direction":"中文指令"},"sounds":[{"at":"end","tag":"声音词"}]}]}',
-    '省力原则：骨架已经对、没有转折、不需要停顿重音、没有非语言声音的句子，只写 {"id":N}，骨架自动沿用。展开写的句子给出改过之后的完整指令，不要只写差异。',
-    '每一句想清楚：这句为什么这样说；表面情绪和底下的情绪；和上一句的关系，是延续、转折还是爆发；说话的目的（试探、掩饰、安抚、挑衅……）；角色之间的关系；哪些词该重读、哪里该停顿、哪里该变语速；哪里会自然出现呼吸、笑声、迟疑、咳嗽；这个角色会不会这样表现，不要让角色 OOC。',
-    'direction：中文，20 字左右、最多 40 字，写演法而不是情绪名：压着的、装出来的、带着什么余味、语速怎么走。其余字段的写法和取值同骨架：type 是 dialogue 或 narration；speaker 从 roster 逐字照抄，{{user}}看不出就省略；emotion 可选，取 emotions 里的英文词给界面着色；speed slow / fast、volume quiet / loud 只在明显时写；stress 最多 3 个词，pauses 最多 4 处，sounds 的 tag 取 {{sounds}} 之一或简短中文声音词，at 是 start、end 或 after（配 after 字段）；这些词必须逐字出现在这句里。',
-    '上一句的情绪只是参考，不是惯性：剧情已经跳过时间、换了场景、事情已经解决，情绪就不延续；只有剧情上有连续的依据（同一场对话、同一件没解决的事）才延续。',
-    '每个 id 最多出现一次。不要输出 text，不要输出 id 以外的句子内容。',
-    '{{references_rule}}',
-  ].join('\n'),
   refine: [
     '你是有声小说的配音助手。下面是一楼正文里的几句话、上一次给它们的标注（current），还有用户对上一次结果的意见（feedback）。你的工作不是重新通读正文，而是按用户的意见修正上一次的标注。',
     '只改用户的意见涉及到的句子。意见没有说到的句子，只输出 {"id":N}，表示上一次的标注原样保留——这是最重要的一条，不要把没提到的句子重写一遍。',
@@ -438,7 +427,7 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
 
 const REFERENCES_RULE = '输入里的 translations 是这些原文行（按 line 对应）的译文，只用来帮你认人、理解语气。speaker 按 roster 或译文里的写法写，不要写原文里的名字。';
 
-function fillPrompt(template, { userName = '', references = false } = {}) {
+export function fillPrompt(template, { userName = '', references = false } = {}) {
   return String(template ?? '')
     .replaceAll('{{user}}', userName ? `用户扮演的角色叫 ${userName}。` : '')
     .replaceAll('{{palette}}', EMOTION_GLOSS)
@@ -456,7 +445,7 @@ function fillPrompt(template, { userName = '', references = false } = {}) {
  * politer: whatever the model thinks of the wording, it has nowhere to write it.
  */
 // The sentences just before a batch, sent along as context only.
-function leadList(lead, speakers = null) {
+export function leadList(lead, speakers = null) {
   const named = speakers instanceof Map ? speakers : new Map();
   return (Array.isArray(lead) ? lead : [])
     .map(item => ({ id: item.id, ...(named.get(item.id) ? { speaker: named.get(item.id) } : {}), text: item.anchor ?? item.text }))
@@ -652,6 +641,9 @@ export function normalizeVoice(item, text = '') {
   if (intensity !== null) voice.intensity = intensity;
   const subtext = shortText(item.subtext, 40);
   if (subtext) voice.subtext = subtext;
+  // The deep reading's reason for its choice: shown to the reader, never sent to the provider.
+  const why = shortText(item.why ?? item.reason, 40);
+  if (why) voice.why = why;
   // The reading's own words for how the sentence is said; this is what the S2 models are handed.
   const direction = shortText(item.direction ?? item.instruction, 60);
   if (direction) voice.direction = direction;
@@ -699,81 +691,12 @@ export function normalizeVoice(item, text = '') {
   return Object.keys(voice).length ? voice : null;
 }
 
-// The translation's own labels, as the base the deep reading may leave alone. Where the translation
-// chose one of Fish's words, that word goes rather than the palette's fold of it, and so does the tone.
-function skeletonFor(utterances, hints, voices = null) {
-  const list = Array.isArray(utterances) ? utterances : [];
-  return list
-    .filter(item => (hints instanceof Map && hints.has(item.id)) || (voices instanceof Map && voices.has(item.id)))
-    .map(item => {
-      const hint = hints instanceof Map ? (hints.get(item.id) ?? {}) : {};
-      const voice = voices instanceof Map ? (voices.get(item.id) ?? {}) : {};
-      const emotion = voice.emotion || hint.emotion;
-      const entry = { id: item.id };
-      if (hint.speaker) entry.speaker = hint.speaker;
-      if (emotion) entry.emotion = emotion;
-      if (hint.intensity !== undefined) entry.intensity = hint.intensity;
-      for (const key of ['direction', 'tone', 'speed', 'volume', 'stress', 'pauses', 'sounds', 'shifts']) if (voice[key] !== undefined) entry[key] = voice[key];
-      return entry;
-    });
-}
-
 // The consoles as the request carries them: a name and the sentences its sliders and rules became.
-function styleEntries(styles) {
+export function styleEntries(styles) {
   return (Array.isArray(styles) ? styles : [])
     .map(style => ({ name: String(style?.name ?? '').trim().slice(0, 60), rules: (Array.isArray(style?.rules) ? style.rules : []).map(rule => String(rule ?? '').trim()).filter(Boolean).slice(0, 20) }))
     .filter(style => style.name && style.rules.length)
     .slice(0, 40);
-}
-
-// What each speaker said last, before this floor, with the direction it was read in.
-function previousEntries(previous) {
-  return (Array.isArray(previous) ? previous : [])
-    .map(item => ({ speaker: String(item?.speaker ?? '').trim().slice(0, 60), text: String(item?.text ?? '').trim().slice(0, 120), ...(item?.direction ? { direction: String(item.direction).trim().slice(0, 60) } : {}) }))
-    .filter(item => item.speaker && item.text)
-    .slice(0, 12);
-}
-
-/**
- * The deep request. The floor's sentences go with the cast, the card, the worldbook and the last few
- * floors, and the answer describes the voice of every sentence that needs one. The translation's own
- * labels ride along as hints: a sentence whose mood is the hint's and turns nowhere is answered with
- * its id alone, and the hint stands. Speaker, type and language come back the same way the light
- * request returns them; the rest is the voice.
- */
-export function buildVoiceAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, packet = {}, hints = null, hintVoices = null, systemPrompt = '', lead = null, styles = null, previous = null } = {}) {
-  const references = referenceLines(translations);
-  const system = fillPrompt(String(systemPrompt ?? '').trim() || DEFAULT_TTS_PROMPTS.deep, { userName, references: references.length > 0 });
-  const referencesBlock = {};
-  for (const key of ['character', 'worldbook', 'recent']) {
-    const value = String(packet?.[key] ?? '').trim();
-    if (value) referencesBlock[key] = value;
-  }
-  const skeleton = skeletonFor(utterances, hints, hintVoices);
-  const leads = leadList(lead);
-  const styleList = styleEntries(styles);
-  const previousList = previousEntries(previous);
-  const input = {
-    task: 'direct_voices_for_audiobook',
-    ...(characterName ? { character: characterName } : {}),
-    ...(userName ? { user: userName } : {}),
-    roster: rosterList(roster),
-    emotions: FISH_EMOTIONS,
-    sounds: SOUND_TAGS,
-    ...(Object.keys(referencesBlock).length ? { references: referencesBlock } : {}),
-    ...(styleList.length ? { styles: styleList } : {}),
-    ...(previousList.length ? { previous: previousList } : {}),
-    ...(skeleton.length ? { skeleton } : {}),
-    ...(leads.length ? { lead: leads } : {}),
-    utterances: (Array.isArray(utterances) ? utterances : []).map(item => (references.length
-      ? { id: item.id, line: item.lineId, kind: item.kind, text: item.anchor }
-      : { id: item.id, kind: item.kind, text: item.anchor })),
-    ...(references.length ? { translations: references } : {}),
-  };
-  return [
-    { role: 'system', content: system },
-    { role: 'user', content: JSON.stringify(input) },
-  ];
 }
 
 /**
@@ -887,6 +810,7 @@ export function voiceSummary(voice) {
   if (!voice || typeof voice !== 'object') return [];
   const lines = [];
   if (voice.direction) lines.push(['指令', voice.direction]);
+  if (voice.why) lines.push(['依据', voice.why]);
   if (voice.emotion) lines.push(['情绪', `${cueLabel(voice.emotion)}${voice.intensity !== undefined && voice.intensity !== null ? `（${LEVEL_WORDS[voice.intensity]}）` : ''}${voice.secondary ? ` · ${cueLabel(voice.secondary)}` : ''}`]);
   if (voice.tone) lines.push(['语气', cueLabel(voice.tone)]);
   if (voice.subtext) lines.push(['潜台词', voice.subtext]);
@@ -1206,6 +1130,12 @@ function compileLean(voice, text, result, model) {
     const index = text.indexOf(pause.after);
     const cue = wrapCue(pause.length === 'long' ? 'long-break' : 'break', model);
     if (index >= 0 && cue) insertions.push({ index: index + pause.after.length, value: ` ${cue} ` });
+  }
+  // One turn inside the sentence, as one of Fish's own words at the word it turns on.
+  for (const shift of (voice.shifts ?? []).slice(0, 1)) {
+    const index = text.indexOf(shift.at);
+    const cue = shift.emotion ? emotionCue(shift.emotion, 1, model) : '';
+    if (index >= 0 && cue) insertions.push({ index, value: ` ${cue} ` });
   }
   result.text = insertions.length ? insertAll(text, insertions).replace(/\s{2,}/g, ' ').trim() : text;
   result.tail = (voice.sounds ?? []).filter(sound => sound.at === 'end').map(sound => wrapCue(officialSound(sound.tag), model)).filter(Boolean).slice(0, 1).join('');
@@ -1559,8 +1489,10 @@ function fishCompileOptions(tts) {
     emotionCues: tts?.emotionCues !== false,
     prosodySplit: tts?.prosodySplit !== false,
     tamePunctuation: tts?.tamePunctuation === true,
-    directions: tts?.mode === 'deep',
-    lean: tts?.mode !== 'deep',
+    // Every reading speaks in Fish's own words now, the deep one included; a stored free-text
+    // direction from an older deep reading is passed over for its mood.
+    directions: false,
+    lean: true,
   };
 }
 

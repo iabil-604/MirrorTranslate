@@ -66,7 +66,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.26.3';
+} from './core.js?v=0.28.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -77,7 +77,6 @@ import {
   buildGlobalTimeline,
   buildSegments,
   buildTtsAnalysisMessages,
-  buildVoiceAnalysisMessages,
   buildRefineAnalysisMessages,
   createSseParser,
   createTimestampCollector,
@@ -113,15 +112,19 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.26.3';
-import { createTtsStore } from './tts-store.js?v=0.26.3';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.26.3';
+} from './tts.js?v=0.28.0';
+import { createTtsStore } from './tts-store.js?v=0.28.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.28.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.28.0';
+
+// The built-in prompts by name: the deep reading's comes from its own module.
+const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
 import {
   VISUAL_FIELDS, REGEX_OWNER_KEY,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.26.3';
+} from './processing.js?v=0.28.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -138,9 +141,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.26.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.26.3';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.26.3';
+} from './prompts.js?v=0.28.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.28.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.28.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -154,15 +157,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.26.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.26.3';
+} from './palette.js?v=0.28.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.28.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.26.3';
+} from './diagnostics.js?v=0.28.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -385,16 +388,15 @@ const CONTROL_CENTER_MARKUP = `
 <section class="jy-page" data-jy-page="tts" role="tabpanel" hidden>
 <header class="jy-page-heading"><div><h1>朗读</h1><span class="jy-page-context">旁白和每个角色各用各的声音，多国语言各配各的音色，点哪句读哪句</span></div><button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button></header>
 <div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每个自然段后面会出现「播放」和「重新生成」两个按钮，底部有「朗读本楼」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep" disabled>深度分析（迭代中，暂不可选）</option></select></label><label><span class="jy-label">没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先整楼简单分析再读</option><option value="plain">直接读，不分析</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep">深度分析：在骨架上再看一遍，定情绪浓度和表演</option></select></label><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">分析用的副 API</span><select data-jy-tts-field="channelId"><option value="">跟随翻译的模型设置</option></select></label><label><span class="jy-label">分析每批句数</span><select data-jy-tts-field="batchSize"><option value="12">12 句（默认，第一批回来就出声）</option><option value="8">8 句</option><option value="20">20 句</option><option value="0">不分批（整楼一次）</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">生成完自动播放（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
-<p class="jy-muted">分析只在你按播放、点单句或「朗读本楼」时才请求副模型，翻译完不会自己开始；勾了「自动生成音频」才会。分批：每批回来就先读这一批，后面的边读边分析，每批都带完整的背景资料，批数越多副模型的调用次数越多。每个自然段后面的「播放」从这一段读起，「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
+<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读本楼」时才请求，整楼一次，走翻译用的那条连接；勾了「自动生成音频」才会翻完就做。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
 <label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label>
-<div class="jy-behaviors"><span class="jy-label">深度分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
 <p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>两种模式都给每句写一句中文配音指令：谁在说、基础情绪、情绪怎么变、语气、语速、停顿重读、要不要笑声叹气喘息。S2 系列模型直接读方括号里的中文指令，句内还会插 [重读]、[停顿]、[长停顿] 和声音词，语速音量走 Fish 的参数；S1 读不懂自由文本，退回它认得的英文固定标签。台词本身不经过模型，一个字不改。分析按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮或悬浮窗的改句面板能看到分析结果和最终发给 Fish 的内容，可以改。</p>
 </div></details>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-fish"><summary class="jy-section-title"><span>02</span><h2>Fish Audio</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
@@ -420,14 +422,20 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-tts-library" data-jy-tts-library></div>
 <p class="jy-muted">给常用的 Fish 音色起个自己的名字存起来，全部角色卡共用。之后旁白、对白默认音色、每个角色、每门语言的音色都可以直接从库里选，不用再去翻 32 位的 ID。Voice ID 在 fish.audio 音色页面的地址栏里。</p>
 </div></details>
+<details class="jy-form-section jy-fold" data-jy-fold="tts-deep"><summary class="jy-section-title"><span>05</span><h2>深度分析</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
+<p class="jy-muted">在简单分析的骨架上，带着角色卡、世界书、前几楼再看一遍，判断每句情绪的因果和浓度，定下情绪、强度、语气、语速、音量、停顿、句内转折和非语言声音，全是 Fish 官方认得的标签；调音台上你推到头的滑杆是它必须守的规则，留在中间的交给它判断。开着翻译时一楼两次调用（翻译一次、深度一次），不开翻译一次做完。这一栏里的东西只属于深度分析，改它不碰别的。</p>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">深度分析用的副 API</span><select data-jy-tts-field="deepChannelId"><option value="">跟随翻译的模型设置</option></select></label></div>
+<p class="jy-muted">简单分析不在这里选：它走翻译用的那条连接——翻译的模型已经读过这一楼，要它做的又不多。深度分析可以换一个更会读人的模型。</p>
+<div class="jy-behaviors"><span class="jy-label">深度分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
+</div></details>
 <details class="jy-advanced" open><summary>默认调音台（没单独调过的角色和旁白都用这套）</summary>
 <p class="jy-muted">滑块只是倾向，中间是平常；拉到两头才会变成一句话交给副模型，比如「呼吸感明显但自然」「语速偏慢」。数字本身不发给任何模型。每个角色还能在音色那栏单独调。</p>
 <div class="jy-tts-console" data-jy-tts-console="default"><label class="jy-tts-console-field"><span>停顿感</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="pause"><output>50</output></label><label class="jy-tts-console-field"><span>气息感</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="breath"><output>50</output></label><label class="jy-tts-console-field"><span>口语颗粒度</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="grain"><output>50</output></label><label class="jy-tts-console-field"><span>情感强度</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="intensity"><output>50</output></label><label class="jy-tts-console-field"><span>情绪表现幅度</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="range"><output>50</output></label><label class="jy-tts-console-field"><span>语速倾向</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="speed"><output>50</output></label><label class="jy-tts-console-field"><span>声音表现倾向</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="expression"><output>50</output></label><label class="jy-tts-console-rules"><span class="jy-label">自定义配音规则（一行一条，直接交给副模型）</span><textarea rows="3" data-jy-console-rules spellcheck="false" placeholder="比如：害羞时不要过度娇柔；生气时保持克制；不要每句话都加呼吸"></textarea></label></div>
 </details>
 <details class="jy-advanced"><summary>副模型提示词（高级）</summary>
 <p class="jy-muted">留空用内置的。可用占位符：<code>{{user}}</code> 用户扮演的角色，<code>{{sounds}}</code> 声音词表，<code>{{references_rule}}</code> 读原文时关于译文的那条规则。JSON 的输出格式和字段名要照旧，不然解析不出来；深度模式里 skeleton 的省力原则建议留着，那是省时间的关键。</p>
-<label><span class="jy-label">深度模式（在骨架上润色）</span><textarea data-jy-tts-prompt="deep" rows="10" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="deep">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="deep">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="deep">恢复默认</button></div>
-<label><span class="jy-label">简单模式（没骨架的楼才用）</span><textarea data-jy-tts-prompt="simple" rows="8" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="simple">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="simple">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="simple">恢复默认</button></div>
+<label><span class="jy-label">深度分析</span><textarea data-jy-tts-prompt="deep" rows="10" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="deep">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="deep">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="deep">恢复默认</button></div>
+<label><span class="jy-label">简单分析（没翻译标注的楼才用）</span><textarea data-jy-tts-prompt="simple" rows="8" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="simple">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="simple">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="simple">恢复默认</button></div>
 </details>
 <details class="jy-advanced"><summary>声音参数</summary><div class="jy-form-grid">
 <label><span class="jy-label">音频格式</span><select data-jy-tts-fish="format"><option value="mp3">mp3（兼容最好）</option><option value="opus">opus（体积小，旧版 Safari 可能播不了）</option><option value="wav">wav（无损，体积大）</option></select></label><label><span class="jy-label">延迟与质量</span><select data-jy-tts-fish="latency"><option value="normal">normal（质量最好）</option><option value="balanced">balanced</option><option value="low">low（最快）</option></select></label>
@@ -2829,7 +2837,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
   }
   return dedupeTtsJob(key, floor.messageId, async (signal, notifyPrefix) => {
     onRequest?.();
-    const request = ttsRequestSettings(settings);
+    const request = ttsRequestSettings(settings, depth);
     const packet = depth === 'deep' ? await ttsContextPacket(floor, settings) : null;
     const previous = depth === 'deep' && tts.context.recent ? await ttsPreviousLines(floor, settings) : null;
     const context = getContext();
@@ -2848,7 +2856,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     let notified = 0;
     const results = await runInLanes(chunks, lanes, async (chunk, index) => {
       const messages = depth === 'deep'
-        ? buildVoiceAnalysisMessages(chunk.items, { ...options, lead: chunk.lead })
+        ? buildDeepAnalysisMessages(chunk.items, { ...options, lead: chunk.lead })
         : buildTtsAnalysisMessages(chunk.items, { ...options, lead: chunk.lead });
       let raw;
       const batchStarted = Date.now();
@@ -2870,7 +2878,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       const parsed = parseVoiceAnalysis(raw, chunk.items, { hints: depth === 'deep' ? hints : null });
       recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.analysis', parsed.labels.size
         ? (depth === 'deep'
-          ? `副模型细读了 ${parsed.labels.size} 句${chunks.length > 1 ? `（第 ${index + 1}/${chunks.length} 批）` : ''}，${parsed.voices.size} 句展开写了配音指令，${parsed.reused} 句沿用翻译时的底色，用时 ${((Date.now() - batchStarted) / 1000).toFixed(1)} 秒。`
+          ? `深度分析了 ${parsed.labels.size} 句${chunks.length > 1 ? `（第 ${index + 1}/${chunks.length} 批）` : ''}，${parsed.voices.size} 句展开写了配音指令，${parsed.reused} 句沿用翻译时的底色，用时 ${((Date.now() - batchStarted) / 1000).toFixed(1)} 秒。`
           : `副模型给 ${parsed.labels.size} 句标了类型、说话人或情绪${chunks.length > 1 ? `（第 ${index + 1}/${chunks.length} 批）` : ''}，用时 ${((Date.now() - batchStarted) / 1000).toFixed(1)} 秒。`)
         : `副模型没有返回可用的朗读标注${chunks.length > 1 ? `（第 ${index + 1}/${chunks.length} 批）` : ''}，这一批按引号区分旁白与对白。`, {
         floor: floor.floorId,
@@ -2932,12 +2940,13 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
 
 // The connection the readings go to: the reading's own saved connection when one is chosen, else
 // whatever the translation uses.
-function ttsRequestSettings(settings = runtime.settings) {
-  const id = ttsSettings(settings).channelId;
-  if (!id) return settings;
-  const channel = (Array.isArray(settings?.channels) ? settings.channels : []).find(item => item.id === id);
-  if (!channel) return settings;
-  return { ...settings, apiMode: 'independent', selectedChannelId: id };
+/**
+ * The connection an analysis goes out on. The simple reading and its corrections follow the
+ * translation's: the model that translated the floor has read it already, and what is asked of it
+ * is light. Only the deep reading may have a connection of its own, chosen in its own section.
+ */
+function ttsRequestSettings(settings = runtime.settings, depth = 'simple') {
+  return depth === 'deep' ? deepRequestSettings(settings) : settings;
 }
 
 // A floor of more than this many sentences is read in batches when the connection allows more than
@@ -3020,8 +3029,15 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
     labels = asked.labels;
     voices = asked.voices ?? null;
     depth = asked.depth ?? 'simple';
-    fallback = 'model';
-    onStep?.('analysis', { state: 'done', label: '简单分析', detail: '这一楼按你的要求分析过' });
+    fallback = depth === 'annotations' ? 'hint' : 'model';
+    onStep?.('analysis', { state: 'done', label: '简单分析', detail: depth === 'annotations' ? '用翻译时的标注' : '这一楼按你的要求分析过' });
+  } else if (depth === 'off' && labels.size) {
+    // Translated with the reading on: the translation marked who speaks and how. That one request
+    // was the simple reading already, so the plain reading uses it whole rather than reading the
+    // text again on its own.
+    depth = 'annotations';
+    runtime.tts.analysis.set(floorKey, { labels, voices, depth });
+    onStep?.('analysis', { state: 'done', label: '简单分析', detail: `用翻译时的标注，${labels.size} 句` });
   } else if (depth === 'off' || runtime.tts.plainFloors.has(floorKey)) {
     // The plain reading: the text as written, no moods and no request. Who speaks is read off the
     // text itself — the reader's word first, then what the text says outright, then the translation's
@@ -3039,7 +3055,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
       voices = known.voices;
       depth = known.depth;
       fallback = depth === 'annotations' ? 'hint' : 'model';
-      onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '细读这一楼' : '简单分析', detail: depth === 'annotations' ? '用翻译时的标注' : '已有结果' });
+      onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '深度分析' : '简单分析', detail: depth === 'annotations' ? '用翻译时的标注' : '已有结果' });
     } else if (passive) {
       // Only looking, not reading: the floor shows what the translation already said and asks nothing.
       depth = labels.size ? 'annotations' : 'pending';
@@ -3068,7 +3084,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           onPrefix: onPartial ? partial => {
             const partialLabels = new Map(reading.labels);
             for (const [id, label] of partial.labels) partialLabels.set(id, label);
-            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `细读这一楼（${utterances.length} 句）` : `简单分析（${utterances.length} 句）`, detail: `已回 ${partial.ready}/${partial.total} 批` });
+            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `深度分析（${utterances.length} 句）` : `简单分析（${utterances.length} 句）`, detail: `已回 ${partial.ready}/${partial.total} 批` });
             onPartial({
               segments: buildSegments(utterances, pinSpeakers(partialLabels, resolved, { fallback: 'model' }), { knownNames: ttsKnownNames(settings), voices: mergeVoiceMaps(reading.voices, partial.voices) }),
               readyIds: partial.readyIds,
@@ -3078,8 +3094,8 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           } : null,
           onRequest: () => {
             requested = true;
-            onStatus?.(depth === 'deep' ? '副模型正在细读这一楼…' : '正在简单分析…');
-            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `细读这一楼（${utterances.length} 句）` : `简单分析（${utterances.length} 句）` });
+            onStatus?.(depth === 'deep' ? '正在深度分析…' : '正在简单分析…');
+            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `深度分析（${utterances.length} 句）` : `简单分析（${utterances.length} 句）` });
           },
         });
         if (analyzed.labels.size) {
@@ -3090,7 +3106,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           runtime.tts.analysis.set(key, { ...analyzed, voices, depth });
           if (runtime.tts.analysis.size > 200) runtime.tts.analysis.delete(runtime.tts.analysis.keys().next().value);
           dropPreparedFloors(floor.messageId);
-          onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '细读这一楼' : '简单分析', detail: analyzed.cached ? '已有结果' : `${labels.size} 句` });
+          onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '深度分析' : '简单分析', detail: analyzed.cached ? '已有结果' : `${labels.size} 句` });
           // Types may have moved: a quoted title is narration, an unquoted order is dialogue.
           scheduleTtsDecorate(floor.messageId, { force: true });
         } else {
@@ -3588,7 +3604,7 @@ function ttsUnitsOf(tts, items) {
  * and cheap when nothing has changed.
  */
 function scheduleTtsAhead(transport) {
-  if (transport.single) return;
+  if (transport.single || transport.paragraph) return;
   const key = `${transport.items.length}|${transport.index}`;
   if (transport.aheadKey === key) return;
   transport.aheadKey = key;
@@ -3916,15 +3932,25 @@ function setTransport(transport, patch) {
  * Whether a play on this floor would be the first simple analysis of it: the simple mode, no analysis
  * known or stored, no skeleton from the translation, and the floor not already chosen to be heard plain.
  */
-async function firstSimpleAnalysis(floor, settings = runtime.settings) {
+/**
+ * Whether the plain reading should ask what to do with this floor: nobody translated it (a translated
+ * floor reads from its marks), nobody analysed it, and the reader has not already chosen to hear it
+ * plain. An analysis stored from before is picked up silently on the way. The analysed readings
+ * never ask; such a floor is analysed as a matter of course.
+ */
+async function firstPlainAnalysis(floor, settings = runtime.settings) {
   const tts = ttsSettings(settings);
-  if (tts.mode !== 'simple' || tts.autoGenerate) return false;
+  if (tts.mode !== 'off' || tts.autoGenerate) return false;
   const key = ttsLabelKey(floor);
   if (runtime.tts.plainFloors.has(key) || runtime.tts.analysis.has(key)) return false;
   const utterances = ttsUtterances(floor, settings);
   if (!utterances.length || annotationReading(utterances, floor.annotations).labels.size) return false;
   const stored = await ttsStore().getAnalysis(await analysisCacheKey({ utterances, source: 'model', depth: 'simple', side: floor.side })).catch(() => null);
-  return !(Array.isArray(stored?.labels) && stored.labels.length);
+  if (Array.isArray(stored?.labels) && stored.labels.length) {
+    runtime.tts.analysis.set(key, { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), depth: 'simple' });
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -3933,8 +3959,10 @@ async function firstSimpleAnalysis(floor, settings = runtime.settings) {
  */
 async function askTtsAnalysis(floor, settings = runtime.settings) {
   const tts = ttsSettings(settings);
-  if (!(await firstSimpleAnalysis(floor, settings))) return 'go';
+  if (!(await firstPlainAnalysis(floor, settings))) return 'go';
   let choice = tts.askAnalysis;
+  // Nowhere to ask (a headless run): the floor is read as the text says.
+  if (choice === 'ask' && typeof document === 'undefined') choice = 'plain';
   if (choice === 'ask') {
     const answer = await askTtsChoice(floor);
     if (answer.choice === 'cancel') return 'cancel';
@@ -3942,6 +3970,8 @@ async function askTtsAnalysis(floor, settings = runtime.settings) {
     if (answer.remember) saveSettings({ ...runtime.settings, tts: { ...tts, askAnalysis: choice } });
   }
   if (choice === 'plain') runtime.tts.plainFloors.add(ttsLabelKey(floor));
+  // Analysed once, for this floor alone; the mode stays plain.
+  else if (choice === 'analyze') await reanalyzeTtsFloor(floor.messageId, floor.side);
   return 'go';
 }
 
@@ -3957,10 +3987,10 @@ function askTtsChoice(floor) {
     const backdrop = document.createElement('div');
     backdrop.className = 'jy-ask-backdrop';
     backdrop.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="要不要先分析">
-  <h3>第 ${floor.messageId} 楼还没做过简单分析</h3>
-  <p>先让副模型看一遍这一楼（谁在说、什么情绪、什么语气）再读，分析一次就够，之后这一楼都用它；或者不分析，直接把字读出来，只加你配的标点标签。</p>
+  <h3>第 ${floor.messageId} 楼没有翻译标注，也没分析过</h3>
+  <p>让副模型看一遍这一楼（谁在说、什么情绪）再读，只做这一楼，模式不变，之后这一楼都用它；或者直接读，谁在说由程序按上下文认，只加你配的标点标签。</p>
   <label><input type="checkbox" data-jy-ask-remember>以后都这样，不再问（朗读页里能改回来）</label>
-  <div class="jy-ask-actions"><button type="button" class="is-primary" data-jy-ask="analyze">先分析再读</button><button type="button" data-jy-ask="plain">直接读</button><button type="button" data-jy-ask="cancel">取消</button></div>
+  <div class="jy-ask-actions"><button type="button" class="is-primary" data-jy-ask="analyze">分析一次再读</button><button type="button" data-jy-ask="plain">直接读</button><button type="button" data-jy-ask="cancel">取消</button></div>
 </div>`;
     shadow.append(style, backdrop);
     const finish = choice => {
@@ -3983,7 +4013,7 @@ function askTtsChoice(floor) {
   });
 }
 
-async function createTtsTransport(messageId, { single = false, fromUtterance = null, side = null } = {}) {
+async function createTtsTransport(messageId, { single = false, paragraph = false, fromUtterance = null, side = null } = {}) {
   const settings = runtime.settings;
   const tts = ttsSettings(settings);
   // A floor the simple reading has not seen asks first; a cancelled question is no reading at all.
@@ -3998,6 +4028,8 @@ async function createTtsTransport(messageId, { single = false, fromUtterance = n
     settings,
     mode: tts.mode,
     single,
+    // Only this paragraph, then stop: how a paragraph button reads.
+    paragraph,
     // Off: the click makes the audio and stops; the next click on a made sentence plays it.
     generateOnly: !tts.playAfterGenerate,
     state: 'loading',
@@ -4156,6 +4188,8 @@ async function runTtsTransport(transport) {
       const { floor, settings } = transport;
       const items = transport.items;
       const item = items[transport.index];
+      // A paragraph button reads its paragraph and stops at its end.
+      const stopLine = transport.paragraph ? item.segment.lineId : null;
       scheduleTtsAhead(transport);
       setTransport(transport, { state: 'loading', message: '正在准备音频…' });
       setTtsButtonState(transport.messageId, item.segment.id, 'busy', transport.side, item.segment.lineId);
@@ -4182,7 +4216,7 @@ async function runTtsTransport(transport) {
       for (let offset = transport.index; offset < items.length; offset += 1) {
         const candidate = items[offset];
         const found = record.timeline.findIndex(candidateEntry => candidateEntry.id === candidate.segment.id && candidateEntry.part === part);
-        if (found < 0) break;
+        if (found < 0 || (stopLine !== null && candidate.segment.lineId !== stopLine)) break;
         if (offset > transport.index) {
           const own = await findTtsEntry(floor, candidate, settings);
           if (own && own.record.key !== record.key) break;
@@ -4223,6 +4257,7 @@ async function runTtsTransport(transport) {
       if (outcome === 'stopped') return;
       transport.index = lastOffset + 1;
       if (transport.single) break;
+      if (stopLine !== null && items[transport.index]?.segment.lineId !== stopLine) break;
     }
     if (live()) {
       transport.index = Math.min(transport.index, transport.items.length - 1);
@@ -4308,6 +4343,7 @@ function resumeTts() {
   }
   if (['idle', 'error', 'paused'].includes(transport.state)) {
     transport.single = false;
+    transport.paragraph = false;
     void runTtsTransport(transport);
   }
 }
@@ -4351,6 +4387,7 @@ function seekTts(fraction) {
   stopTtsPlayback();
   transport.index = index;
   transport.single = false;
+  transport.paragraph = false;
   void runTtsTransport(transport);
 }
 
@@ -4383,6 +4420,7 @@ function stepTtsParagraph(direction) {
   stopTtsPlayback();
   transport.index = index;
   transport.single = false;
+  transport.paragraph = false;
   void runTtsTransport(transport);
 }
 
@@ -4400,6 +4438,7 @@ async function playTtsUtterance(messageId, utteranceId, side = null) {
       stopTtsPlayback();
       existing.index = index;
       existing.single = true;
+      existing.paragraph = false;
       existing.generateOnly = !ttsSettings().playAfterGenerate;
       await runTtsTransport(existing);
       return;
@@ -4444,6 +4483,7 @@ async function playTtsParagraph(messageId, lineId, side = null) {
       stopTtsPlayback();
       existing.index = index;
       existing.single = false;
+      existing.paragraph = true;
       existing.generateOnly = !ttsSettings().playAfterGenerate;
       await runTtsTransport(existing);
       return;
@@ -4455,7 +4495,7 @@ async function playTtsParagraph(messageId, lineId, side = null) {
     const prepared = await ttsPrepared(messageId, wantedSide);
     const first = prepared.items.find(item => item.segment.lineId === lineId);
     if (!first) throw new Error('这一段不在当前的朗读范围里。');
-    const transport = await createTtsTransport(messageId, { single: false, fromUtterance: first.segment.id, side: wantedSide });
+    const transport = await createTtsTransport(messageId, { single: false, paragraph: true, fromUtterance: first.segment.id, side: wantedSide });
     if (!transport) return;
     await runTtsTransport(transport);
   } catch (error) {
@@ -4886,19 +4926,21 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
   if (!parsed.labels.size) throw new Error('副模型没有返回可用的修正，标注保持原样。');
   const key = ttsLabelKey(floor);
   const known = runtime.tts.analysis.get(key);
+  // The floor keeps the depth it was read at; a correction is not a shallower reading.
+  const depth = known?.depth === 'deep' ? 'deep' : 'simple';
   const labels = new Map(known?.labels ?? base);
   const voices = new Map(known?.voices ?? []);
   for (const [id, label] of parsed.labels) labels.set(id, label);
   // A sentence the model rewrote without a voice of its own loses the old one: it belonged to the old mood.
   for (const item of scope) if (parsed.labels.has(item.id) && !parsed.voices.has(item.id)) voices.delete(item.id);
   for (const [id, voice] of parsed.voices) voices.set(id, voice);
-  runtime.tts.analysis.set(key, { labels, voices, depth: 'simple' });
+  runtime.tts.analysis.set(key, { labels, voices, depth });
   // Kept where the reading looks for it next time, so a reload does not undo the correction.
   await ttsStore().putAnalysis({
-    key: await analysisCacheKey({ utterances, source: 'model', depth: 'simple', side: floor.side }),
+    key: await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side }),
     floorId: floor.floorId,
     version: floor.version,
-    depth: 'simple',
+    depth,
     labels: [...labels],
     voices: [...voices],
   }).catch(() => {});
@@ -6848,6 +6890,7 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
     'tts-fish': tts.fish.key ? `已填 Key · ${tts.fish.model}` : '还没填 API Key',
     'tts-voices': `旁白${tts.narratorVoice ? '已设' : '未设'} · 对白默认${tts.dialogueVoice ? '已设' : '未设'} · ${voices.length} 个角色（${owned} 个专属）${tts.voiceScope === 'chat' ? ' · 每个聊天一份' : ''}`,
     'tts-library': library.length ? `${library.length} 个音色` : '空',
+    'tts-deep': DEEP_STATUS.available ? (tts.deepChannelId ? '用自己选的连接' : '跟随翻译的连接') : DEEP_STATUS.note,
   };
   for (const [id, text] of Object.entries(summaries)) setText(root, `[data-jy-fold="${id}"] [data-jy-fold-summary]`, text);
   setText(root, '[data-jy-tts-scope-note]', tts.voiceScope === 'chat'
@@ -6985,10 +7028,10 @@ function syncTtsFields(root, settings = runtime.settings) {
   // The built-in prompt shows as the placeholder, so an empty box means "the default, whatever it is".
   for (const element of root.querySelectorAll('[data-jy-tts-prompt]')) {
     element.value = tts.prompts[element.dataset.jyTtsPrompt] ?? '';
-    element.placeholder = DEFAULT_TTS_PROMPTS[element.dataset.jyTtsPrompt] ?? '';
+    element.placeholder = TTS_PROMPT_DEFAULTS[element.dataset.jyTtsPrompt] ?? '';
   }
-  // The saved connections, for the reading's own choice of model.
-  const channelSelect = root.querySelector('[data-jy-tts-field="channelId"]');
+  // The saved connections, for the deep reading's own choice of model.
+  const channelSelect = root.querySelector('[data-jy-tts-field="deepChannelId"]');
   if (channelSelect) {
     const doc = root.ownerDocument;
     channelSelect.replaceChildren();
@@ -7002,7 +7045,7 @@ function syncTtsFields(root, settings = runtime.settings) {
       option.textContent = channel.model ? `${channel.name} · ${channel.model}` : channel.name;
       channelSelect.appendChild(option);
     }
-    channelSelect.value = (settings.channels ?? []).some(channel => channel.id === tts.channelId) ? tts.channelId : '';
+    channelSelect.value = (settings.channels ?? []).some(channel => channel.id === tts.deepChannelId) ? tts.deepChannelId : '';
   }
   setText(root, '[data-jy-tts-title="narrator"]', tts.narratorTitle ? `· ${tts.narratorTitle}` : '');
   setText(root, '[data-jy-tts-title="dialogue"]', tts.dialogueTitle ? `· ${tts.dialogueTitle}` : '');
@@ -7026,16 +7069,20 @@ function updateTtsModeHelp(root) {
   const help = root.querySelector('[data-jy-tts-mode-help]');
   if (!help) return;
   const mode = root.querySelector('[data-jy-tts-field="mode"]')?.value ?? 'simple';
+  // What to do with a floor nobody translated or analysed is the plain reading's question alone: the
+  // others analyse such a floor as a matter of course.
+  const askField = root.querySelector('[data-jy-tts-ask-field]');
+  if (askField) askField.hidden = mode !== 'off';
   if (mode === 'off') {
-    help.textContent = '不分析：一次副模型都不请求。正文按引号分成旁白和对白，谁在说由程序按上下文认（引号前后的人名和动作、话里叫到的名字、两人轮流），认不出的沿用翻译时标好的说话人，再没有就用对白默认音色；发给 Fish 的只有正文本身，加上调音台里「标点情绪标签」配好的标签。想让副模型认一次，点朗读页的「分析这一楼」，只做那一楼。';
+    help.textContent = '不分析：不额外请求副模型。翻译过的楼直接用翻译时标好的说话人和情绪——翻译那一次请求本身就带了分析，和简单分析一样；没翻译的楼由程序按上下文认谁在说（引号前后的人名和动作、话里叫到的名字、两人轮流），认不出的用对白默认音色。想让副模型认一次，点朗读页的「分析这一楼」，或者在右边选按播放时怎么办。';
     return;
   }
   if (mode === 'simple') {
-    help.textContent = '简单分析：副模型判断每一句谁在说、什么情绪、强度多大、有没有明显的语气、语速、音量、停顿和声音，调音台的设置是它必须遵守的规则；只用 Fish 官方认得的标签。开着翻译时翻译顺手就标好了，零次额外调用；不开翻译的楼按播放时问你要不要分析一次，分析过的楼以后直接用。标点标签在这个模式里也生效。';
+    help.textContent = '简单分析：副模型判断每一句谁在说、什么情绪、强度多大、有没有明显的语气、语速、音量、停顿和声音，调音台的设置是它必须遵守的规则；只用 Fish 官方认得的标签。开着翻译时翻译顺手就标好了，零次额外调用；没翻译的楼按播放时自动分析一次，整楼一次，走翻译用的那条连接，分析过的楼以后直接用。标点标签在这个模式里也生效。';
     return;
   }
   help.textContent = mode === 'deep'
-    ? '深度模式：开着翻译时一共两次调用（翻译一次，细读一次）；不开翻译一次细读连骨架一起做。细读带着角色卡、世界书、前几楼和各角色上一句的语气，判断情绪的因果和变化，写成配音演员能照着演的中文指令。长楼分批细读，第一批回来就先出声。'
+    ? '深度分析：在简单分析的骨架上，带着角色卡、世界书、前几楼和各角色上一句的念法再看一遍，判断每句情绪的因果和浓度，定下情绪、强度、语气、语速、音量、停顿和声音，全是 Fish 官方认得的标签。开着翻译时一楼两次调用（翻译一次、深度一次）；不开翻译一次深度分析连骨架一起做。走「05 深度分析」栏里选的连接。'
     : '简单模式：开着翻译时零次额外调用，翻译时顺手标好的骨架直接转成 Fish 能读的中文指令；不开翻译或没骨架的楼问一次副模型。一段一次 Fish 请求，几段一起发，先到先播。';
 }
 
@@ -8085,12 +8132,12 @@ function createControlCenter(rootDocument = document) {
         syncTtsFields(root, runtime.settings);
         toast('success', '已恢复内置提示词。');
       } else if (action === 'tts-copy-prompt') {
-        await copyText(DEFAULT_TTS_PROMPTS[button.dataset.prompt] ?? '');
+        await copyText(TTS_PROMPT_DEFAULTS[button.dataset.prompt] ?? '');
         toast('success', `${button.dataset.prompt === 'deep' ? '深度' : '简单'}分析的内置提示词已复制。`);
       } else if (action === 'tts-fill-prompt') {
         const textarea = root.querySelector(`[data-jy-tts-prompt="${button.dataset.prompt}"]`);
         if (textarea) {
-          textarea.value = DEFAULT_TTS_PROMPTS[button.dataset.prompt] ?? '';
+          textarea.value = TTS_PROMPT_DEFAULTS[button.dataset.prompt] ?? '';
           textarea.focus();
         }
         toast('info', '内置提示词已填进去，改完记得保存。');
@@ -9811,7 +9858,7 @@ async function openMiniWindow() {
       note.hidden = prepared.items.length > 0 && !unread && prepared.depth !== 'pending';
       note.textContent = !prepared.items.length ? '这一楼在当前范围里没有可读的句子。'
         : prepared.depth === 'pending' ? '这一楼还没分析。按播放或「朗读本楼」时才请求副模型，不会自己开始。'
-          : unread ? '这一楼还没细读，列表里是翻译时的骨架。按播放或「朗读本楼」时才请求副模型，不会自己开始。' : '';
+          : unread ? '这一楼还没深度分析，列表里是翻译时的骨架。按播放或「朗读本楼」时才请求副模型，不会自己开始。' : '';
     }
     markCurrentSentence();
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
@@ -11496,6 +11543,9 @@ export const __testing = Object.freeze({
   syncTtsTransport,
   runTtsTransport,
   playTtsUtterance,
+  playTtsParagraph,
+  resetTtsPlayer: () => { runtime.tts.player = null; },
+  playTtsFloor,
   regenerateTtsSentence,
   regenerateTtsParagraph,
   ttsCast,

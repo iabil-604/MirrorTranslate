@@ -1,7 +1,7 @@
-import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.26.3';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.26.3';
-import { EMOTION_KEYS } from './palette.js?v=0.26.3';
-import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.26.3';
+import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.28.0';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.28.0';
+import { EMOTION_KEYS } from './palette.js?v=0.28.0';
+import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.28.0';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -220,10 +220,13 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
 function annotationRequest(settings, phase, requestMeta) {
   if (phase === 'style_repair') return null;
   const coloring = settings?.coloring;
-  // The plain reading (mode off) wants nothing from the translation; the simple one wants the skeleton
-  // without directions; only the deep one asks how each line should be read.
-  const reading = settings?.tts?.enabled === true && settings?.tts?.mode !== 'off';
-  const directions = reading && settings?.tts?.mode === 'deep';
+  // Every reading wants the skeleton from the translation, the plain one included: the translation
+  // has read the floor already, so who speaks and how comes with it for nothing, and a translated
+  // floor reads from those marks whatever the mode. Only the deep one asks how each line should be read.
+  const reading = settings?.tts?.enabled === true;
+  // Directions in the reader's own words read badly; the deep reading asks the sub-model in Fish's
+  // words instead, so the translation is never asked for them.
+  const directions = false;
   const speakers = coloring?.speakers === true || reading;
   const emotions = coloring?.emotions === true || reading;
   if (!speakers && !emotions) return null;

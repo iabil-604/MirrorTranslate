@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.26.3';
+} from './prompts.js?v=0.28.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.26.3';
+export const APP_VERSION = '0.28.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -536,9 +536,9 @@ export const DEFAULT_TTS = Object.freeze({
   // The reader's own system prompts for the two readings; empty means the built-in ones.
   prompts: Object.freeze({ simple: '', deep: '' }),
   // The saved connection the readings go to; empty follows the translation's own setting.
-  channelId: '',
+  deepChannelId: '',
   // Sentences per analysis batch; 0 sends the whole floor in one request.
-  batchSize: 12,
+  batchSize: 0,
   // A play on a floor the simple reading has not seen: ask first, always analyse, or read the plain text.
   askAnalysis: 'ask',
   // The deep reading is shelved while it is reworked; this hatch keeps it reachable for tests.
@@ -1049,9 +1049,7 @@ export function normalizeTts(value) {
   const wanted = TTS_MODES.includes(source.mode)
     ? source.mode
     : source.analysis === 'deep' ? 'deep' : ['light', 'annotations'].includes(source.analysis) ? 'simple' : legacyMode;
-  // The deep reading is shelved while it is reworked: a stored choice falls back to the simple one
-  // unless the hatch is open.
-  const mode = wanted === 'deep' && source.deepUnlocked !== true ? 'simple' : wanted;
+  const mode = wanted;
   return {
     enabled: source.enabled === true,
     side: TTS_SIDES.includes(source.side) ? source.side : DEFAULT_TTS.side,
@@ -1072,7 +1070,9 @@ export function normalizeTts(value) {
         : typeof source.prompts?.light === 'string' ? normalizeNewlines(source.prompts.light).slice(0, 12000) : '',
       deep: typeof source.prompts?.deep === 'string' ? normalizeNewlines(source.prompts.deep).slice(0, 12000) : '',
     },
-    channelId: String(source.channelId ?? '').trim().slice(0, 80),
+    // The connection chosen for analysis in earlier versions is the deep reading's now; the simple
+    // reading follows the translation.
+    deepChannelId: String(source.deepChannelId ?? source.channelId ?? '').trim().slice(0, 80),
     batchSize: normalizeBatchSize(source.batchSize),
     askAnalysis: TTS_ASK_MODES.includes(source.askAnalysis) ? source.askAnalysis : DEFAULT_TTS.askAnalysis,
     deepUnlocked: source.deepUnlocked === true,
