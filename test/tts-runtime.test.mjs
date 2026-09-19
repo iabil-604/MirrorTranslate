@@ -12,9 +12,31 @@ import {
 } from '../core.js';
 import { __testing } from '../index.js';
 
+// One answer in one SSE frame: how the host's generate endpoint replies to a streamed request.
+function sseAnswer(text) {
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: String(text ?? '') } }] })}\n\n`));
+      controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+  return { ok: true, status: 200, body, text: async () => '' };
+}
+
 // The host pieces the read-aloud runtime touches, with a chat of its own so labels and cached audio from
 // one test never answer for another.
 function mockHost(chatId, { processRequest } = {}) {
+  const answer = processRequest ?? (async () => ({ content: '{}' }));
+  // The reading's own requests go out as a stream, straight to the host's endpoint; the same handler
+  // answers them, so a test writes one `processRequest` and asserts on one payload either way.
+  const otherFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).includes('chat-completions/generate')) return otherFetch ? otherFetch(url, init) : new Response('', { status: 404 });
+    const payload = init?.body ? JSON.parse(init.body) : {};
+    const reply = await answer(payload);
+    return sseAnswer(typeof reply === 'string' ? reply : reply?.content ?? '');
+  };
   const toasts = [];
   globalThis.toastr = Object.fromEntries(['success', 'error', 'warning', 'info'].map(kind => [kind, message => toasts.push([kind, message])]));
   const context = {
@@ -32,7 +54,7 @@ function mockHost(chatId, { processRequest } = {}) {
     saveSettingsDebounced: () => {},
     eventTypes: {},
     eventSource: { emit: () => {}, on: () => {}, removeListener: () => {} },
-    ChatCompletionService: { processRequest: processRequest ?? (async () => ({ content: '{}' })) },
+    ChatCompletionService: { processRequest: answer },
   };
   globalThis.SillyTavern = { getContext: () => context };
   __testing.initializeSettings();
@@ -85,7 +107,9 @@ function restoreGlobals(t) {
 // each sentence lands on its own stretch of the timeline. The bodies are kept for the assertions.
 function mockFish({ status = 200, body = null, audio = null } = {}) {
   const calls = [];
+  const toSubModel = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
+    if (String(url).includes('chat-completions/generate') && toSubModel) return toSubModel(url, init);
     const sent = init?.body ? JSON.parse(init.body) : null;
     calls.push({ url, init, body: sent });
     if (status !== 200) return new Response(body ?? '', { status });
@@ -1736,4 +1760,71 @@ test('an analysis that fails does not leave the floor saying 正在分析 for go
   context.chat.push(await translatedFloor('一。', [[1, '「这一句要读。」']], settings));
   await __testing.reanalyzeTtsFloor(0);
   assert.equal(__testing.ttsStatusOf(0), null, 'the line under the floor is cleared however the request ended');
+});
+
+test('a paragraph Fish did not answer is asked again as often as the reader allowed, a refusal only once', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-fish-retry');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: { ...FISH, retries: 2 } } },
+  });
+  __testing.resetTtsPlayer();
+  context.chat.push(await translatedFloor('一。\n\n二。', [[1, '第一段要读。'], [2, '第二段也要读。']], settings));
+  const calls = mockFish();
+  const toFish = globalThis.fetch;
+  let attempts = 0;
+  let refuse = 0;
+  let status = 502;
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).includes('/v1/tts/')) return toFish(url, init);
+    attempts += 1;
+    if (refuse > 0) {
+      refuse -= 1;
+      return new Response('boom', { status });
+    }
+    return toFish(url, init);
+  };
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+
+  // Two failures of the kind that passes, then the answer: three attempts, one recording.
+  refuse = 2;
+  const { record } = await __testing.ensureTtsRecording(floor, 'line:1', items.filter(item => item.segment.lineId === 1), settings);
+  assert.equal(attempts, 3, 'asked again twice, as 失败后自动重试次数 says');
+  assert.equal(refuse, 0);
+  assert.ok(record.parts.length, 'the paragraph was recorded in the end');
+
+  // A refusal is answered once: asking again would buy the same answer.
+  attempts = 0;
+  refuse = 9;
+  status = 401;
+  await assert.rejects(__testing.ensureTtsRecording(floor, 'line:2', items.filter(item => item.segment.lineId === 2), settings));
+  assert.equal(attempts, 1, 'a key Fish will not take is not worth three requests');
+  assert.ok(calls.length >= 1);
+});
+
+test('a request that timed out is asked again: the timeout is not a stop', async t => {
+  restoreGlobals(t);
+  mockHost('tts-fish-timeout');
+  const fish = { ...FISH, retries: 1, timeoutSec: 10, model: 's2.1-pro-free', format: 'mp3' };
+  const calls = mockFish();
+  const toFish = globalThis.fetch;
+  let seen = 0;
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).includes('/v1/tts/')) return toFish(url, init);
+    seen += 1;
+    // The first attempt never answers, and is cut off by the timeout window. That abort used to be
+    // read as 「the reader pressed 停止」, and the second attempt was never made.
+    if (seen === 1) {
+      return new Promise((resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+      });
+    }
+    return toFish(url, init);
+  };
+  const result = await __testing.streamFishTimestamps({ text: '这一段要读。' }, fish, undefined);
+  assert.equal(seen, 2, 'the second attempt was made');
+  assert.ok(result.audio.length, 'and it came back');
+  assert.equal(calls.length, 1, 'Fish answered once, on the attempt that got through');
 });

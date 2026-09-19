@@ -937,7 +937,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini[data-size="max"][data-keyboard="true"] { height: var(--jy-mini-vh, 100dvh); max-height: var(--jy-mini-vh, 100dvh); }
 
 /* 问一下再分析的小弹窗 */
-.jy-ask-backdrop { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; background: #0006; padding: 16px; }
+.jy-ask-backdrop { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; background: #0006; padding: 16px; overflow: auto; }
 .jy-ask { width: min(420px, 100%); border-radius: 14px; background: var(--jy-surface, #f6f4ec); color: var(--jy-ink, #1f2a24); box-shadow: 0 18px 48px #0004; padding: 16px 16px 14px; font: 13.5px/1.6 system-ui, sans-serif; }
 .jy-ask h3 { margin: 0 0 6px; font-size: 15px; }
 .jy-ask-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }

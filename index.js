@@ -66,7 +66,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.29.0';
+} from './core.js?v=0.29.3';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -114,10 +114,10 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.29.0';
-import { createTtsStore } from './tts-store.js?v=0.29.0';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.0';
+} from './tts.js?v=0.29.3';
+import { createTtsStore } from './tts-store.js?v=0.29.3';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.3';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.3';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -126,7 +126,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.29.0';
+} from './processing.js?v=0.29.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -143,9 +143,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.29.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.0';
+} from './prompts.js?v=0.29.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.3';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.3';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -159,15 +159,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.29.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.29.0';
+} from './palette.js?v=0.29.3';
+import { sampleThemeBackground } from './theme-probe.js?v=0.29.3';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.29.0';
+} from './diagnostics.js?v=0.29.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -243,6 +243,8 @@ const runtime = {
     analysis: new Map(),
     // Cache key → in-flight promise, so a double click never pays for the same audio twice.
     jobs: new Map(),
+    // What each floor has cost Fish since it was last read, so the log can say it in one line.
+    fish: new Map(),
     // One pending 「the floor has closed」 pass per floor: a streamed translation announces the same
     // floor a dozen times and only the last one is worth acting on.
     closing: new Map(),
@@ -2883,10 +2885,20 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     };
     let raw;
     try {
-      if (request.apiMode === 'independent' && runtime.settings.streamingWriteback) {
-        // A thinking model answers in a wrapper; only what it finally wrote is the analysis.
-        const streamed = await streamTranslationBatch(messages, request, signal, announce);
-        raw = typeof streamed === 'string' ? streamed : String(streamed?.content ?? '');
+      if (request.apiMode === 'independent') {
+        try {
+          // A thinking model answers in a wrapper; only what it finally wrote is the analysis.
+          const streamed = await streamTranslationBatch(messages, request, signal, announce);
+          raw = typeof streamed === 'string' ? streamed : String(streamed?.content ?? '');
+        } catch (error) {
+          // A connection that refuses the stream outright answers in one piece instead; a timeout or
+          // a stop is not that, and is not asked a second time.
+          if (isAbortError(error) || !/流式请求失败/.test(safeError(error))) throw error;
+          recordDiagnostic('warn', 'tts.analysis', `这条连接不支持边收边读，改用整包请求：${safeError(error)}`, {
+            floor: floor.floorId, depth, endpoint: describeChannelEndpoint(request),
+          }, '', { floor: floor.messageId });
+          raw = await requestSubModelRaw(messages, request, signal);
+        }
       } else {
         raw = await requestSubModelRaw(messages, request, signal);
       }
@@ -3328,9 +3340,38 @@ async function fishRequestOnce(path, fish, { method = 'POST', body, signal } = {
   return response;
 }
 
-async function streamFishTimestamps(body, fish, signal) {
+/**
+ * One paragraph's audio, asked again when the answer never came.
+ *
+ * The retry sits outside the timeout, not inside it: a timed-out request is aborted, and a loop
+ * within that window would see an aborted signal, read it as 停止, and stop — which is exactly what
+ * made 「失败后自动重试次数」 look like it did nothing. Each attempt opens a window of its own. A
+ * refusal (bad key, no credit, rate limit) is answered once; asking again would buy the same answer.
+ */
+async function streamFishTimestamps(body, fish, signal, { onAttempt = null } = {}) {
+  const attempts = Math.max(0, Number(fish.retries) || 0) + 1;
+  let failure = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    onAttempt?.(attempt);
+    try {
+      return await streamFishTimestampsOnce(body, fish, signal);
+    } catch (error) {
+      // The reader stopped, or this is the last try: the failure is theirs to see.
+      if (isAbortError(error) || signal?.aborted || attempt === attempts - 1) throw error;
+      const status = Number(error.status) || 0;
+      if (status !== 0 && status < 500) throw error;
+      failure = error;
+      recordDiagnostic('info', 'tts.retry', `Fish 这一段没生成，第 ${attempt + 1} 次重试（共 ${attempts - 1} 次）：${safeError(error)}`, {
+        status: status || null, attempt: attempt + 1, attempts, timeoutSec: fish.timeoutSec,
+      });
+    }
+  }
+  throw failure;
+}
+
+async function streamFishTimestampsOnce(body, fish, signal) {
   return withTtsTimeout(signal, fish.timeoutSec, async (requestSignal, renew) => {
-    const response = await fishRequest('/v1/tts/stream/with-timestamp', fish, { body, signal: requestSignal });
+    const response = await fishRequestOnce('/v1/tts/stream/with-timestamp', fish, { body, signal: requestSignal });
     const collector = createTimestampCollector();
     let unreadable = 0;
     const parser = createSseParser(event => {
@@ -3361,6 +3402,25 @@ async function streamFishTimestamps(body, fish, signal) {
     }
     return { ...result, unreadable };
   });
+}
+
+/** What this floor has cost Fish so far: requests actually sent, paragraphs reused, failures. */
+function ttsFishTally(floor) {
+  const key = floor.floorId;
+  if (!runtime.tts.fish.has(key)) runtime.tts.fish.set(key, { requests: 0, reused: 0, failed: 0 });
+  if (runtime.tts.fish.size > 40) runtime.tts.fish.delete(runtime.tts.fish.keys().next().value);
+  return runtime.tts.fish.get(key);
+}
+
+/** One line per floor when it stops being made, so nobody has to count requests by hand. */
+function reportTtsFish(floor) {
+  if (!floor) return;
+  const tally = runtime.tts.fish.get(floor.floorId);
+  if (!tally || !(tally.requests || tally.reused)) return;
+  runtime.tts.fish.delete(floor.floorId);
+  recordDiagnostic(tally.failed ? 'warn' : 'info', 'tts.recording', `第 ${floor.messageId} 楼${floor.side === 'source' ? '原文' : '译文'}这次朗读向 Fish 发了 ${tally.requests} 次请求，${tally.reused} 段直接用了已有音频${tally.failed ? `，${tally.failed} 段没生成成功` : ''}。`, {
+    floor: floor.floorId, requests: tally.requests, reused: tally.reused, failed: tally.failed,
+  }, '', { floor: floor.messageId });
 }
 
 // Everything that changes the sound, hashed once per distinct settings.
@@ -3461,6 +3521,7 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
   const cached = await ttsStore().getAudio(key);
   if (cached?.parts?.length && Array.isArray(cached.timeline)) {
     rememberRecording(floor, cached);
+    ttsFishTally(floor).reused += 1;
     onStep?.(stepId, { state: 'done', label: ttsUnitLabel(unit), detail: '已有音频' });
     return { record: cached, cached: true };
   }
@@ -3495,7 +3556,7 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
         const { body, spans } = provider.payload(part, tts);
         let stream;
         try {
-          stream = await streamFishTimestamps(body, tts.fish, group.signal);
+          stream = await streamFishTimestamps(body, tts.fish, group.signal, { onAttempt: () => { ttsFishTally(floor).requests += 1; } });
         } catch (error) {
           if (!isAbortError(error)) {
             failure ??= error;
@@ -3540,6 +3601,7 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
         return { part, blob, duration, aligned };
       });
     } catch (error) {
+      if (!isAbortError(failure ?? error)) ttsFishTally(floor).failed += 1;
       // Siblings cancelled by the first failure report as aborted; the failure itself is what is thrown.
       throw failure ?? error;
     } finally {
@@ -3958,7 +4020,8 @@ async function askTtsAnalysis(floor, settings = runtime.settings) {
   return 'go';
 }
 
-function askTtsChoice(floor) {
+async function askTtsChoice(floor) {
+  const css = await loadPanelCss();
   return new Promise(resolve => {
     document.getElementById(`${MODULE_ID}-ask`)?.remove();
     const host = document.createElement('div');
@@ -3966,7 +4029,7 @@ function askTtsChoice(floor) {
     host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;';
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
-    style.textContent = runtime.panelCss ?? '';
+    style.textContent = css;
     const backdrop = document.createElement('div');
     backdrop.className = 'jy-ask-backdrop';
     backdrop.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="要不要先分析">
@@ -4002,7 +4065,8 @@ function askTtsChoice(floor) {
  * The ✕, the backdrop and Escape all answer 'cancel', because a dialog about writing a file has to
  * be as easy to leave as to use.
  */
-function ttsAskBox(body, { label = '选择' } = {}) {
+async function ttsAskBox(body, { label = '选择' } = {}) {
+  const css = await loadPanelCss();
   return new Promise(resolve => {
     document.getElementById(`${MODULE_ID}-save`)?.remove();
     const host = document.createElement('div');
@@ -4010,7 +4074,7 @@ function ttsAskBox(body, { label = '选择' } = {}) {
     host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;';
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
-    style.textContent = runtime.panelCss ?? '';
+    style.textContent = css;
     const backdrop = document.createElement('div');
     backdrop.className = 'jy-ask-backdrop';
     const box = document.createElement('div');
@@ -4168,6 +4232,7 @@ async function createTtsTransport(messageId, { single = false, paragraph = false
       transport.items = everything;
       if (rest.length) transport.batches.push({ unit: `chunk:${transport.batches.length + 1}`, ids: new Set(rest.map(item => item.segment.id)) });
       runtime.tts.floors.set(ttsPreparedKey(messageId, floor.side), { floor, segments: result.segments, items: everything, settings });
+      await announceTtsUnits(floor, everything, settings, tts);
       transport.prepared = true;
       transport.wake?.();
       return result;
@@ -4196,6 +4261,9 @@ async function createTtsTransport(messageId, { single = false, paragraph = false
   transport.items = items;
   runtime.tts.floors.set(ttsPreparedKey(messageId, floor.side), { floor, segments, items, settings });
   if (fromUtterance !== null) transport.index = items.findIndex(item => item.segment.id === fromUtterance);
+  // Reading the whole floor: say up front which paragraphs are already made, so what follows reads
+  // as 「这几段要做」 rather than 「整楼重做」.
+  if (!single && !paragraph && fromUtterance === null) await announceTtsUnits(floor, items, settings, tts);
   return transport;
 }
 
@@ -4347,6 +4415,7 @@ async function runTtsTransport(transport) {
 
 function finishTtsTransport(transport) {
   if (!isTtsTransport(transport)) return;
+  reportTtsFish(transport.floor);
   highlightTtsUtterance(transport.messageId, null);
   setTransport(transport, { state: 'idle', message: '', progress: { time: 0, duration: 0 } });
   // The transport stays around so the panel can still step through, save, or play again.
@@ -4370,6 +4439,7 @@ function clearTtsBusyMarks(messageId) {
 
 function stopTtsTransport(transport, clearStatus = true) {
   if (!transport) return;
+  reportTtsFish(transport.floor);
   clearTtsBusyMarks(transport.messageId);
   transport.generation += 1;
   transport.wake?.();
@@ -4655,8 +4725,8 @@ async function pregenerateTtsBody(floor, messageId, settings, tts, quiet) {
     const { items } = await ttsItemsFor(floor, segments, settings);
     if (!items.length) return null;
     const units = ttsUnitsOf(tts, items);
-    // Every unit is announced first, so the list shows what is still to come.
-    for (const target of units) ttsStep(floor, `record:${target.unit}`, { state: 'pending', label: ttsUnitLabel(target.unit) });
+    // Every paragraph is listed first: what is already made, and what is still to come.
+    await announceTtsUnits(floor, items, settings, tts);
     let made = 0;
     // As many paragraphs at once as Fish allows; each one already recorded in any unit is skipped.
     await runInLanes(units, Math.max(1, Number(tts.fish.concurrency) || 1), async (target, index) => {
@@ -4682,6 +4752,23 @@ async function pregenerateTtsBody(floor, messageId, settings, tts, quiet) {
     }
     if (!quiet && made) toast('success', `第 ${messageId} 楼的音频已生成，${made} 段。`);
     return made;
+  }
+}
+
+/**
+ * The floor's paragraphs, listed before anything is made: the ones already recorded marked 已有音频,
+ * the rest pending. Without this the list showed only what was being generated, and a floor that
+ * reused fourteen paragraphs out of seventeen looked like it was being made again from nothing.
+ */
+async function announceTtsUnits(floor, items, settings, tts) {
+  for (const target of ttsUnitsOf(tts, items)) {
+    const covered = await Promise.all(target.items.map(item => findTtsEntry(floor, item, settings)));
+    if (covered.every(Boolean)) {
+      ttsFishTally(floor).reused += 1;
+      ttsStep(floor, `record:${target.unit}`, { state: 'done', label: ttsUnitLabel(target.unit), detail: '已有音频' });
+    } else {
+      ttsStep(floor, `record:${target.unit}`, { state: 'pending', label: ttsUnitLabel(target.unit) });
+    }
   }
 }
 
@@ -5199,7 +5286,8 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
  *
  * The choice only exists the second time — a floor nobody has analysed has nothing to build on.
  */
-function askTtsRefine({ messageId, sentence = null }) {
+async function askTtsRefine({ messageId, sentence = null }) {
+  const css = await loadPanelCss();
   return new Promise(resolve => {
     document.getElementById(`${MODULE_ID}-refine`)?.remove();
     const host = document.createElement('div');
@@ -5207,7 +5295,7 @@ function askTtsRefine({ messageId, sentence = null }) {
     host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;';
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
-    style.textContent = runtime.panelCss ?? '';
+    style.textContent = css;
     const backdrop = document.createElement('div');
     backdrop.className = 'jy-ask-backdrop';
     const short = sentence ? miniShort(sentence.text, 18) : '';
@@ -8737,6 +8825,12 @@ async function loadPanelCss() {
       .catch(error => {
         console.warn(`[${APP_NAME}] 无法读取完整样式，使用最小样式。`, error);
         return FALLBACK_PANEL_CSS;
+      })
+      // Kept on the runtime: the small dialogs read it from here, and without it they used to open
+      // as bare text over the page — no backdrop, no card, no buttons.
+      .then(css => {
+        runtime.panelCss = css;
+        return css;
       });
   }
   return runtime.panelCssPromise;
@@ -11871,6 +11965,8 @@ export const __testing = Object.freeze({
   downloadTtsAudio,
   downloadNeedsSplice,
   ttsStatusOf: messageId => runtime.tts.status.get(Number(messageId)) ?? null,
+  streamFishTimestamps,
+  ttsProgressFor,
   ttsSaveSource,
   ttsSplicedWav,
   currentTtsLabels,
