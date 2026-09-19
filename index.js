@@ -66,7 +66,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.29.5';
+} from './core.js?v=0.29.6';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -114,10 +114,10 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.29.5';
-import { createTtsStore } from './tts-store.js?v=0.29.5';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.5';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.5';
+} from './tts.js?v=0.29.6';
+import { createTtsStore } from './tts-store.js?v=0.29.6';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.6';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.6';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -126,7 +126,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.29.5';
+} from './processing.js?v=0.29.6';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -143,9 +143,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.29.5';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.5';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.5';
+} from './prompts.js?v=0.29.6';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.6';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.6';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -159,15 +159,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.29.5';
-import { sampleThemeBackground } from './theme-probe.js?v=0.29.5';
+} from './palette.js?v=0.29.6';
+import { sampleThemeBackground } from './theme-probe.js?v=0.29.6';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.29.5';
+} from './diagnostics.js?v=0.29.6';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -4020,6 +4020,38 @@ async function askTtsAnalysis(floor, settings = runtime.settings) {
   return 'go';
 }
 
+/**
+ * Puts a dialog where the reader can actually see it.
+ *
+ * `showModal` hands the card to the browser's top layer: centred against the viewport, above every
+ * z-index, and out of reach of whatever the host page has done to its own containing blocks — which
+ * on a phone had been pushing the card half off the top of the screen. Where that is missing, the
+ * old fixed backdrop still does the job.
+ */
+function ttsDialogShell(shadow, card, onDismiss) {
+  const modal = typeof HTMLDialogElement === 'function' && typeof HTMLDialogElement.prototype.showModal === 'function';
+  const shell = document.createElement(modal ? 'dialog' : 'div');
+  shell.className = modal ? 'jy-ask-shell' : 'jy-ask-backdrop';
+  shell.appendChild(card);
+  shadow.appendChild(shell);
+  if (modal) {
+    shell.addEventListener('cancel', event => {
+      event.preventDefault();
+      onDismiss();
+    });
+    try {
+      shell.showModal();
+    } catch {
+      // Already open, or a browser that says it can and cannot: the card is visible either way.
+    }
+  }
+  // A tap on the dark around the card closes it, in both shapes.
+  shell.addEventListener('click', event => {
+    if (event.target === shell) onDismiss();
+  });
+  return { shell, modal };
+}
+
 async function askTtsChoice(floor) {
   const css = await loadPanelCss();
   return new Promise(resolve => {
@@ -4030,16 +4062,18 @@ async function askTtsChoice(floor) {
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
-    const backdrop = document.createElement('div');
-    backdrop.className = 'jy-ask-backdrop';
-    backdrop.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="要不要先分析">
+    const card = document.createElement('div');
+    card.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="要不要先分析">
   <h3>第 ${floor.messageId} 楼没有翻译标注，也没分析过</h3>
   <p>让副模型看一遍这一楼（谁在说、什么情绪）再读，只做这一楼，模式不变，之后这一楼都用它；或者直接读，谁在说由程序按上下文认，只加你配的标点标签。</p>
   <label><input type="checkbox" data-jy-ask-remember>以后都这样，不再问（朗读页里能改回来）</label>
   <div class="jy-ask-actions"><button type="button" class="is-primary" data-jy-ask="analyze">分析一次再读</button><button type="button" data-jy-ask="plain">直接读</button><button type="button" data-jy-ask="cancel">取消</button></div>
 </div>`;
-    shadow.append(style, backdrop);
+    shadow.append(style);
+    let done = false;
     const finish = choice => {
+      if (done) return;
+      done = true;
       const remember = shadow.querySelector('[data-jy-ask-remember]')?.checked === true;
       host.remove();
       document.removeEventListener('keydown', onKey, true);
@@ -4048,13 +4082,13 @@ async function askTtsChoice(floor) {
     const onKey = event => {
       if (event.key === 'Escape') { event.preventDefault(); finish('cancel'); }
     };
-    backdrop.addEventListener('click', event => {
-      const button = event.target.closest('[data-jy-ask]');
-      if (button) finish(button.dataset.jyAsk);
-      else if (event.target === backdrop) finish('cancel');
-    });
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(host);
+    const { shell } = ttsDialogShell(shadow, card, () => finish('cancel'));
+    shell.addEventListener('click', event => {
+      const button = event.target.closest('[data-jy-ask]');
+      if (button) finish(button.dataset.jyAsk);
+    });
     shadow.querySelector('[data-jy-ask="analyze"]')?.focus();
   });
 }
@@ -4075,8 +4109,6 @@ async function ttsAskBox(body, { label = '选择' } = {}) {
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
-    const backdrop = document.createElement('div');
-    backdrop.className = 'jy-ask-backdrop';
     const box = document.createElement('div');
     box.className = 'jy-ask';
     box.setAttribute('role', 'dialog');
@@ -4118,9 +4150,11 @@ async function ttsAskBox(body, { label = '选择' } = {}) {
       actions.appendChild(control);
     }
     box.append(head, text, actions);
-    backdrop.appendChild(box);
-    shadow.append(style, backdrop);
+    shadow.append(style);
+    let done = false;
     const finish = choice => {
+      if (done) return;
+      done = true;
       host.remove();
       document.removeEventListener('keydown', onKey, true);
       resolve(choice);
@@ -4128,13 +4162,13 @@ async function ttsAskBox(body, { label = '选择' } = {}) {
     const onKey = event => {
       if (event.key === 'Escape') { event.preventDefault(); finish('cancel'); }
     };
-    backdrop.addEventListener('click', event => {
-      const button = event.target.closest('[data-jy-save]');
-      if (button && !button.disabled) finish(button.dataset.jySave);
-      else if (event.target === backdrop) finish('cancel');
-    });
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(host);
+    const { shell } = ttsDialogShell(shadow, box, () => finish('cancel'));
+    shell.addEventListener('click', event => {
+      const button = event.target.closest('[data-jy-save]');
+      if (button && !button.disabled) finish(button.dataset.jySave);
+    });
     shadow.querySelector('.jy-ask-actions button:not([disabled])')?.focus();
   });
 }
@@ -4156,10 +4190,10 @@ async function ttsOfferFile(blob, name, { note = '' } = {}) {
   try {
     await ttsAskBox({
       title: '音频已经做好了',
-      text: `${name}（${formatBytes(blob.size)}）${note ? `。${note}` : ''}。点下面这行保存；有的手机浏览器要长按它再选「下载链接」。`,
+      text: `${name}（${formatBytes(blob.size)}）${note ? `。${note}` : ''}。点「保存文件」由浏览器下载；有的手机浏览器要长按它再选「下载链接」。`,
       actions: [
-        { value: 'save', label: `保存 ${name}`, primary: true, href: url, download: name },
-        ...(shareable ? [{ value: 'share', label: '分享 / 存到「文件」…', run: () => { void navigator.share({ files: [file], title: name }).catch(() => {}); } }] : []),
+        { value: 'save', label: '保存文件', primary: true, href: url, download: name },
+        ...(shareable ? [{ value: 'share', label: '分享', run: () => { void navigator.share({ files: [file], title: name }).catch(() => {}); } }] : []),
         { value: 'cancel', label: '关闭' },
       ],
     }, { label: '保存音频' });
@@ -5400,10 +5434,9 @@ async function askTtsRefine({ messageId, sentence = null }) {
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
-    const backdrop = document.createElement('div');
-    backdrop.className = 'jy-ask-backdrop';
+    const card = document.createElement('div');
     const short = sentence ? miniShort(sentence.text, 18) : '';
-    backdrop.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="重新分析">
+    card.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="重新分析">
   <h3>重新分析第 ${messageId} 楼</h3>
   <p>按你的意见改已有的分析：副模型不用再通读一遍正文，只看上次的结果和你的意见，快得多。也可以丢掉重来。说话人也可以不问副模型，在详细页的下拉框里直接改。</p>
   <div class="jy-ask-scope" data-jy-refine-scope>
@@ -5420,9 +5453,12 @@ async function askTtsRefine({ messageId, sentence = null }) {
   </div>
   <div class="jy-ask-actions"><button type="button" class="is-primary" data-jy-refine="refine">按意见改</button><button type="button" data-jy-refine="fresh">丢掉重来（整楼）</button><button type="button" data-jy-refine="cancel">取消</button></div>
 </div>`;
-    if (!sentence) backdrop.querySelector('[data-jy-refine-scope] label')?.remove();
-    shadow.append(style, backdrop);
+    if (!sentence) card.querySelector('[data-jy-refine-scope] label')?.remove();
+    shadow.append(style);
+    let done = false;
     const finish = choice => {
+      if (done) return;
+      done = true;
       const scope = shadow.querySelector('[name="jy-refine-scope"]:checked')?.value ?? 'floor';
       const feedback = shadow.querySelector('[data-jy-refine-feedback]')?.value.trim() ?? '';
       host.remove();
@@ -5432,7 +5468,10 @@ async function askTtsRefine({ messageId, sentence = null }) {
     const onKey = event => {
       if (event.key === 'Escape') { event.preventDefault(); finish('cancel'); }
     };
-    backdrop.addEventListener('click', event => {
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(host);
+    const { shell } = ttsDialogShell(shadow, card, () => finish('cancel'));
+    shell.addEventListener('click', event => {
       const chip = event.target.closest('[data-chip]');
       if (chip) {
         const box = shadow.querySelector('[data-jy-refine-feedback]');
@@ -5442,10 +5481,7 @@ async function askTtsRefine({ messageId, sentence = null }) {
       }
       const button = event.target.closest('[data-jy-refine]');
       if (button) finish(button.dataset.jyRefine);
-      else if (event.target === backdrop) finish('cancel');
     });
-    document.addEventListener('keydown', onKey, true);
-    document.body.appendChild(host);
     shadow.querySelector('[data-jy-refine-feedback]')?.focus();
   });
 }
@@ -7105,6 +7141,14 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   row.className = 'jy-tts-voice-row';
   row.dataset.jyTtsVoiceRow = '';
   row.open = open;
+  // Opening one closes the rest, so a table of a dozen characters never becomes a mile of scrolling.
+  row.addEventListener('toggle', () => {
+    if (!row.open) return;
+    for (const other of row.parentElement?.querySelectorAll('[data-jy-tts-voice-row][open]') ?? []) {
+      if (other !== row) other.open = false;
+    }
+    row.scrollIntoView?.({ block: 'nearest' });
+  });
   // The fetched title belongs to one id; a row whose id is edited loses it on the next save.
   row.dataset.voiceId = voice.voiceId ?? '';
   row.dataset.title = voice.title ?? '';

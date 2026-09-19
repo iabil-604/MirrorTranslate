@@ -558,7 +558,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-tts-voice-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; grid-template-areas: "name aliases lock" "voice voice title" "tools tools tools" "langs langs langs"; }
 .jy-tts-voice-row > .jy-tts-pick { grid-area: voice; }
 .jy-tts-voice-row .jy-tts-lock { grid-area: lock; justify-self: end; white-space: nowrap; }
-.jy-tts-voice-mute { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--jy-muted); }
+.jy-tts-voice-mute { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--jy-muted); cursor: pointer; }
 .jy-tts-voice-mute input { margin: 0; }
 .jy-tts-lock[data-muted="true"] { background: color-mix(in srgb, var(--jy-danger, #c0392b) 16%, transparent); color: var(--jy-danger, #c0392b); border-color: color-mix(in srgb, var(--jy-danger, #c0392b) 35%, transparent); }
 .jy-mini-sentence[data-muted="true"] { opacity: 0.55; }
@@ -676,13 +676,25 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-tts-voice-summary-name { font-weight: 650; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jy-tts-voice-summary-meta { color: var(--jy-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
 .jy-tts-voice-row .jy-tts-lock { flex: 0 0 auto; }
-.jy-tts-voice-body { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); grid-template-areas: "name aliases" "voice voice" "title title" "tools tools" "langs langs"; gap: 6px; padding: 2px 0 12px 14px; }
+.jy-tts-voice-body { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); grid-template-areas: "name aliases" "voice voice" "title title" "mute mute" "tools tools" "langs langs" "console console"; gap: 6px; padding: 2px 0 12px 14px; }
 .jy-tts-voice-body > .jy-tts-pick { grid-area: voice; }
 .jy-tts-voice-body .jy-tts-voice-tools { grid-area: tools; }
 .jy-tts-voice-body .jy-tts-lang-list { grid-area: langs; }
+.jy-tts-voice-body .jy-tts-voice-mute { grid-area: mute; }
 .jy-tts-voice-body .jy-tts-title:empty { display: none; }
 @media (max-width: 640px) {
-  .jy-tts-voice-body { grid-template-areas: "name name" "aliases aliases" "voice voice" "title title" "tools tools" "langs langs"; padding-left: 8px; }
+  /* No columns at all on a phone: one field per line, in the order they are read. A grid here only
+     ever had two narrow columns to give, and anything it could not place broke the rest. */
+  .jy-tts-voice-body { display: flex; flex-direction: column; align-items: stretch; gap: 9px; padding: 4px 0 14px 8px; }
+  .jy-tts-voice-body > * { min-width: 0; max-width: 100%; }
+  .jy-tts-voice-body > .jy-tts-pick { flex-direction: column; align-items: stretch; gap: 6px; }
+  .jy-tts-voice-body > .jy-tts-pick select { width: 100%; max-width: none; font-size: 12.5px; min-height: 36px; }
+  .jy-tts-voice-body input { min-height: 38px; }
+  .jy-tts-voice-body .jy-tts-voice-tools { gap: 6px; }
+  .jy-tts-voice-body .jy-tts-voice-tools > * { flex: 1 1 auto; min-height: 36px; white-space: nowrap; }
+  .jy-tts-voice-body .jy-tts-voice-mute { min-height: 38px; padding: 0 2px; font-size: 13px; }
+  .jy-tts-voice-body .jy-tts-voice-mute input { width: 20px; height: 20px; flex: 0 0 auto; }
+  .jy-tts-lang-list > * { flex-wrap: wrap; }
   .jy-fold-summary { display: none; }
 }
 /* A library voice shows its name in place of the id; the progress list under the transport. */
@@ -938,6 +950,10 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 
 /* 问一下再分析的小弹窗 */
 .jy-ask-backdrop { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; background: #0006; padding: 16px; overflow: auto; }
+/* The browser puts this one where it belongs — above everything, centred on the viewport — whatever
+   the host page has done to its own containing blocks. */
+.jy-ask-shell { padding: 16px; border: 0; background: transparent; max-width: 100vw; max-height: 100dvh; overflow: visible; color: inherit; }
+.jy-ask-shell::backdrop { background: #0007; }
 .jy-ask { width: min(420px, 100%); border-radius: 14px; background: var(--jy-surface, #f6f4ec); color: var(--jy-ink, #1f2a24); box-shadow: 0 18px 48px #0004; padding: 16px 16px 14px; font: 13.5px/1.6 system-ui, sans-serif; }
 .jy-ask h3 { margin: 0 0 6px; font-size: 15px; }
 .jy-ask-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
@@ -946,7 +962,12 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-ask label { display: flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--jy-muted, #5d6a63); margin-bottom: 10px; }
 .jy-ask-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .jy-ask-actions button, .jy-ask-actions a { flex: 1 1 0; min-height: 40px; border-radius: 10px; border: 1px solid var(--jy-line, #cfd6cf); background: transparent; color: inherit; font-size: 13.5px; cursor: pointer; }
-.jy-ask-actions a { display: flex; align-items: center; justify-content: center; padding: 0 10px; text-align: center; text-decoration: none; word-break: break-all; }
+.jy-ask-actions a { display: flex; align-items: center; justify-content: center; padding: 0 10px; text-align: center; text-decoration: none; }
+/* Three choices side by side on a phone left each one four characters wide; they stack instead. */
+@media (max-width: 560px) {
+  .jy-ask-actions { flex-direction: column; }
+  .jy-ask-actions button, .jy-ask-actions a { width: 100%; min-height: 44px; }
+}
 .jy-ask-actions button.is-primary, .jy-ask-actions a.is-primary { background: var(--jy-accent, #2f6b4f); color: #fff; border-color: transparent; }
 
 /* 重新分析的小窗：范围、意见、几个常见的说法 */
