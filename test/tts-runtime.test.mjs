@@ -1740,13 +1740,15 @@ test('the audio saves from the floor the window is looking at, with nothing play
     createElement: () => ({ set download(name) { saves.push(name); }, click() {}, remove() {}, style: {} }),
   };
   t.after(() => { delete globalThis.document; });
+  // The file is built and handed back; writing it is the reader's own tap on a link in the dialog.
   const whole = await __testing.downloadTtsAudio({ messageId: 0, scope: 'floor' });
-  assert.equal(saves[0], '镜译-第0楼.mp3');
+  assert.equal(whole.name, '镜译-第0楼.mp3');
   assert.ok(whole.bytes > 0);
-  assert.equal(whole.handedOff, undefined, 'the floor save reports its own shape');
+  assert.equal(whole.blob.size, whole.bytes, 'the audio itself comes back, not a promise that it was saved');
+  assert.deepEqual(saves, [], 'nothing is written behind the reader’s back');
   // One paragraph, named by its place in the floor rather than by what is playing.
   const one = await __testing.downloadTtsAudio({ messageId: 0, lineId: 2 });
-  assert.equal(saves[1], '镜译-第0楼-第2段.mp3');
+  assert.equal(one.name, '镜译-第0楼-第2段.mp3');
   assert.ok(one.bytes > 0);
   assert.ok(calls.length >= 1, 'what had not been made was made for the save');
   await assert.rejects(__testing.downloadTtsAudio({ messageId: 0, lineId: 99 }), /没有可朗读的句子/);

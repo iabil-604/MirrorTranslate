@@ -66,7 +66,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.29.4';
+} from './core.js?v=0.29.5';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -114,10 +114,10 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.29.4';
-import { createTtsStore } from './tts-store.js?v=0.29.4';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.4';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.4';
+} from './tts.js?v=0.29.5';
+import { createTtsStore } from './tts-store.js?v=0.29.5';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.5';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.5';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -126,7 +126,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.29.4';
+} from './processing.js?v=0.29.5';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -143,9 +143,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.29.4';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.4';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.4';
+} from './prompts.js?v=0.29.5';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.5';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.5';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -159,15 +159,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.29.4';
-import { sampleThemeBackground } from './theme-probe.js?v=0.29.4';
+} from './palette.js?v=0.29.5';
+import { sampleThemeBackground } from './theme-probe.js?v=0.29.5';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.29.4';
+} from './diagnostics.js?v=0.29.5';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -4099,13 +4099,23 @@ async function ttsAskBox(body, { label = '选择' } = {}) {
     const actions = document.createElement('div');
     actions.className = 'jy-ask-actions';
     for (const action of body.actions) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      if (action.primary) button.className = 'is-primary';
-      button.dataset.jySave = action.value;
-      button.disabled = action.disabled === true;
-      button.textContent = action.label;
-      actions.appendChild(button);
+      const control = document.createElement(action.href ? 'a' : 'button');
+      if (action.href) {
+        // A real link: the browser acts on the reader's own tap, which is the only kind of tap it
+        // will write a file for. The dialog stays open, because removing the link mid-click can
+        // cancel the download on its way out.
+        control.href = action.href;
+        control.setAttribute('download', action.download ?? '');
+        control.rel = 'noopener';
+      } else {
+        control.type = 'button';
+        control.disabled = action.disabled === true;
+      }
+      if (action.primary) control.className = 'is-primary';
+      if (action.run) control.addEventListener('click', event => { event.preventDefault(); action.run(); });
+      else if (!action.href) control.dataset.jySave = action.value;
+      control.textContent = action.label;
+      actions.appendChild(control);
     }
     box.append(head, text, actions);
     backdrop.appendChild(box);
@@ -4127,6 +4137,42 @@ async function ttsAskBox(body, { label = '选择' } = {}) {
     document.body.appendChild(host);
     shadow.querySelector('.jy-ask-actions button:not([disabled])')?.focus();
   });
+}
+
+/**
+ * The finished file, handed over on a tap of the reader's own.
+ *
+ * Everything before this point — the choosing, the asking again, the requests to Fish for whatever
+ * was missing — takes long enough that a browser no longer counts the original tap as a gesture, and
+ * a download started from code is dropped on the floor. The link below is tapped by the reader, so
+ * the browser treats it as theirs. 分享 appears where the phone supports it: a WebView that will not
+ * write a blob to disk will still pass it to another app.
+ */
+async function ttsOfferFile(blob, name, { note = '' } = {}) {
+  if (!blob?.size) throw new Error('这段音频是空的，没有东西可以保存。');
+  const url = URL.createObjectURL(blob);
+  const file = typeof File === 'function' ? new File([blob], name, { type: blob.type || 'audio/mpeg' }) : null;
+  const shareable = Boolean(file && navigator.canShare?.({ files: [file] }));
+  try {
+    await ttsAskBox({
+      title: '音频已经做好了',
+      text: `${name}（${formatBytes(blob.size)}）${note ? `。${note}` : ''}。点下面这行保存；有的手机浏览器要长按它再选「下载链接」。`,
+      actions: [
+        { value: 'save', label: `保存 ${name}`, primary: true, href: url, download: name },
+        ...(shareable ? [{ value: 'share', label: '分享 / 存到「文件」…', run: () => { void navigator.share({ files: [file], title: name }).catch(() => {}); } }] : []),
+        { value: 'cancel', label: '关闭' },
+      ],
+    }, { label: '保存音频' });
+  } finally {
+    // Let go long after the browser has had its chance; a revoked url is a dead link.
+    const timer = globalThis.setTimeout(() => {
+      runtime.timers.delete(timer);
+      URL.revokeObjectURL(url);
+    }, 600000);
+    timer?.unref?.();
+    runtime.timers.add(timer);
+  }
+  return { name, bytes: blob.size };
 }
 
 /** What to save, and then the same question again, because a file is not a thing to write by accident. */
@@ -4931,8 +4977,7 @@ async function downloadTtsSentence(messageId, utteranceId, side = null) {
   const format = tts.fish.format === 'opus' ? 'ogg' : tts.fish.format;
   const who = item.segment.type === 'narration' ? '旁白' : (item.segment.speaker || '对白');
   const name = `镜译-第${messageId}楼-${who}-第${item.segment.id}句.${alone ? format : 'wav'}`;
-  const saved = saveBlobAsFile(blob, name);
-  return { ...saved, cut: !alone };
+  return { blob, name, bytes: blob.size, cut: !alone };
 }
 
 /**
@@ -5001,8 +5046,7 @@ async function downloadTtsAudio(options = null) {
   const blob = spliced ? await ttsSplicedWav(entries) : await ttsDownloadBlob(records, tts.fish.format);
   const extension = spliced ? 'wav' : (tts.fish.format === 'opus' ? 'ogg' : tts.fish.format);
   const name = `镜译-第${source.messageId}楼${wanted === 'current' ? `-第${(lineIndex >= 0 ? lineIndex : 0) + 1}段` : ''}.${extension}`;
-  saveBlobAsFile(blob, name);
-  return { name, bytes: blob.size, records: records.length, spliced };
+  return { blob, name, bytes: blob.size, records: records.length, spliced };
 }
 
 /**
@@ -10199,14 +10243,13 @@ async function openMiniWindow() {
     if (choice === 'cancel') return;
     if (button) button.disabled = true;
     try {
-      const saved = await downloadTtsAudio({
+      const built = await downloadTtsAudio({
         scope: choice === 'current' ? 'current' : 'floor',
         messageId: target.messageId,
         side: target.side,
         lineId: choice === 'current' ? target.lineId : null,
       });
-      // Handed to the browser, not written by us: a dismissed save box leaves no file behind.
-      toast('success', `已交给浏览器下载：${saved.name}（${formatBytes(saved.bytes)}）${saved.spliced ? '，改过和单独重做的句子已按顺序拼在原位置，所以是 wav' : ''}。浏览器弹的保存框如果取消了，就不会有文件。`);
+      await ttsOfferFile(built.blob, built.name, { note: built.spliced ? '改过和单独重做的句子已按顺序拼在原位置，所以是 wav' : '' });
     } catch (error) {
       if (!isAbortError(error)) toast('error', safeError(error));
     } finally {
@@ -11027,8 +11070,8 @@ async function openMiniWindow() {
     }
     if (action === 'tts-save-sentence') {
       if (!inspecting) throw new Error('先打开一句的详细页，再保存它。');
-      const saved = await downloadTtsSentence(inspecting.messageId, inspecting.utteranceId, inspecting.side);
-      toast('success', `已交给浏览器下载：${saved.name}${saved.cut ? '（从这一段的音频里剪出来的，wav）' : ''}。取消了保存框就不会有文件。`);
+      const built = await downloadTtsSentence(inspecting.messageId, inspecting.utteranceId, inspecting.side);
+      await ttsOfferFile(built.blob, built.name, { note: built.cut ? '从这一段的音频里剪出来的，wav' : '' });
       return;
     }
     if (action === 'sentence-play' || action === 'sentence-regen') {
