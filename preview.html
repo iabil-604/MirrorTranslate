@@ -111,8 +111,12 @@
     let insertedImageTag = false;
 
     const translatePayload = prompt => {
-      const user = Array.isArray(prompt) ? prompt.findLast(item => item.role === 'user') : null;
-      const body = user ? JSON.parse(user.content) : { segments: [{ id: 1 }] };
+      // The last user message is not always the input: a connection can carry a postscript, which
+      // rides after everything else. What is wanted is the last one that parses as the request.
+      const parsed = (Array.isArray(prompt) ? prompt : []).filter(item => item.role === 'user')
+        .map(item => { try { return JSON.parse(item.content); } catch { return null; } })
+        .filter(Boolean);
+      const body = parsed.at(-1) ?? { segments: [{ id: 1 }] };
       // The read-aloud analysis: labels by id, the speaker taken from a name in the narration before a
       // quote, and a mood from the closing punctuation.
       if (body.task === 'refine_voices_for_audiobook') {

@@ -67,7 +67,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.30.0';
+} from './core.js?v=0.31.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -115,10 +115,10 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.30.0';
-import { createTtsStore } from './tts-store.js?v=0.30.0';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.30.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.30.0';
+} from './tts.js?v=0.31.0';
+import { createTtsStore } from './tts-store.js?v=0.31.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.31.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.31.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -127,7 +127,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.30.0';
+} from './processing.js?v=0.31.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -144,9 +144,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.30.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.30.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.30.0';
+} from './prompts.js?v=0.31.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.31.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.31.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -160,15 +160,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.30.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.30.0';
+} from './palette.js?v=0.31.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.31.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.30.0';
+} from './diagnostics.js?v=0.31.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -356,7 +356,7 @@ const CONTROL_CENTER_MARKUP = `
  </div></div>
  <details class="jy-advanced"><summary>请求参数</summary><div class="jy-form-grid">
  <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
- </div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">列出全局挂载与当前角色卡激活的世界书条目；勾选后节约模式下仅注入这些内容，白名单跟随当前角色卡保存。一个都不勾则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
+ </div></details><details class="jy-advanced"><summary>这条连接的后置提示词（附在每次请求的最末尾）</summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">列出全局挂载与当前角色卡激活的世界书条目；勾选后节约模式下仅注入这些内容，白名单跟随当前角色卡保存。一个都不勾则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
 </div>
 <div class="jy-retry-setting"><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-field="retries" min="0" max="5" step="1"></label><p class="jy-muted">适用于当前翻译通道。</p></div>
 <footer class="jy-footer"><span class="jy-save-note">修改后保存设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-settings">保存设置</button></footer>
@@ -399,6 +399,8 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep">深度分析：在骨架上再看一遍，定情绪浓度和表演</option></select></label><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
+<div class="jy-form-grid jy-form-grid-tight"><label title="朗读的分析走哪条连接。留空就跟翻译用同一条。"><span class="jy-label">朗读分析用的副 API</span><select data-jy-tts-field="analysisChannelId"><option value="">跟随翻译的连接</option></select></label></div>
+<p class="jy-muted">翻译和朗读现在各挑各的连接：翻译在「模型连接」页最上面选，朗读在这里选，深度分析还能在「05 深度分析」里再单挑一条。连接本身（地址、密钥、模型、后置提示词）都在「模型连接」页里存着，这三处只是挑用哪一条。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">生成完自动播放（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
 <p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读本楼」时才请求，整楼一次，走翻译用的那条连接；勾了「自动生成音频」才会翻完就做。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
@@ -2960,8 +2962,23 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
  * translation's: the model that translated the floor has read it already, and what is asked of it
  * is light. Only the deep reading may have a connection of its own, chosen in its own section.
  */
+/**
+ * The settings one analysis request goes out under: the same settings with the connection swapped
+ * for the one that feature was given. Left empty, the reading follows the translation and the deep
+ * reading follows the reading, which is what someone who has set nothing expects.
+ */
 function ttsRequestSettings(settings = runtime.settings, depth = 'simple') {
-  return depth === 'deep' ? deepRequestSettings(settings) : settings;
+  const base = onChannel(settings, ttsSettings(settings).analysisChannelId);
+  return depth === 'deep' ? deepRequestSettings(base) : base;
+}
+
+/** The same settings, pointed at one saved connection; unknown or empty ids change nothing. */
+function onChannel(settings, id) {
+  const wanted = String(id ?? '').trim();
+  if (!wanted) return settings;
+  const channels = Array.isArray(settings?.channels) ? settings.channels : [];
+  if (!channels.some(channel => channel.id === wanted)) return settings;
+  return { ...settings, apiMode: 'independent', selectedChannelId: wanted };
 }
 
 // A floor of more than this many sentences is read in batches when the connection allows more than
@@ -7694,23 +7711,28 @@ function syncTtsFields(root, settings = runtime.settings) {
     element.value = tts.prompts[element.dataset.jyTtsPrompt] ?? '';
     element.placeholder = TTS_PROMPT_DEFAULTS[element.dataset.jyTtsPrompt] ?? '';
   }
-  // The saved connections, for the deep reading's own choice of model.
-  const channelSelect = root.querySelector('[data-jy-tts-field="deepChannelId"]');
-  if (channelSelect) {
+  // The saved connections, for the reading's own choice of model and the deep reading's own.
+  const fillChannels = (field, chosen, followText) => {
+    const select = root.querySelector(`[data-jy-tts-field="${field}"]`);
+    if (!select) return;
     const doc = root.ownerDocument;
-    channelSelect.replaceChildren();
+    select.replaceChildren();
     const follow = doc.createElement('option');
     follow.value = '';
-    follow.textContent = settings.apiMode === 'independent' ? `跟随翻译的模型设置（${getActiveChannel(settings).name}）` : '跟随翻译的模型设置（酒馆当前连接）';
-    channelSelect.appendChild(follow);
+    follow.textContent = followText;
+    select.appendChild(follow);
     for (const channel of Array.isArray(settings.channels) ? settings.channels : []) {
       const option = doc.createElement('option');
       option.value = channel.id;
       option.textContent = channel.model ? `${channel.name} · ${channel.model}` : channel.name;
-      channelSelect.appendChild(option);
+      select.appendChild(option);
     }
-    channelSelect.value = (settings.channels ?? []).some(channel => channel.id === tts.deepChannelId) ? tts.deepChannelId : '';
-  }
+    select.value = (settings.channels ?? []).some(channel => channel.id === chosen) ? chosen : '';
+  };
+  const translating = settings.apiMode === 'independent' ? getActiveChannel(settings).name : '酒馆当前连接';
+  fillChannels('analysisChannelId', tts.analysisChannelId, `跟随翻译的连接（${translating}）`);
+  const analysing = (settings.channels ?? []).find(channel => channel.id === tts.analysisChannelId)?.name ?? translating;
+  fillChannels('deepChannelId', tts.deepChannelId, `跟随朗读分析的连接（${analysing}）`);
   setText(root, '[data-jy-tts-title="narrator"]', tts.narratorTitle ? `· ${tts.narratorTitle}` : '');
   setText(root, '[data-jy-tts-title="dialogue"]', tts.dialogueTitle ? `· ${tts.dialogueTitle}` : '');
   syncTtsPickers(root, settings);
@@ -9121,7 +9143,7 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="channelId"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="channelId"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
       // The feature switch lives on two pages; the one just clicked decides, the other follows.
       if (event.target.matches('[data-jy-tts-field="enabled"]')) {
         for (const twin of root.querySelectorAll('[data-jy-tts-field="enabled"]')) twin.checked = event.target.checked;
@@ -9797,7 +9819,7 @@ async function openMiniWindow() {
     <button type="button" class="jy-button jy-mini-auto" data-jy-action="mini-auto" aria-pressed="true" title="新楼生成完自动翻译">自动 开</button>
   </div>
   <div class="jy-mini-quick">
-    <label><span class="jy-label">模型</span><select data-jy-mini-channel></select></label>
+    <label title="翻译走哪条连接。朗读分析在控制中心「朗读 → 01 读什么」里另选。"><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
     <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
     <button type="button" class="jy-text-button" data-jy-action="mini-translate-all" data-jy-mini-untranslated hidden></button>
   </div>

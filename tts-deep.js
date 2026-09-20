@@ -1,4 +1,4 @@
-import { normalizeTts } from './core.js?v=0.30.0';
+import { normalizeTts } from './core.js?v=0.31.0';
 import {
   FISH_EMOTIONS,
   FISH_SOUNDS,
@@ -9,7 +9,7 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.30.0';
+} from './tts.js?v=0.31.0';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -49,6 +49,7 @@ export const DEEP_PROMPT = [
  * the translation's. The simple reading never comes here; it always follows the translation.
  */
 export function deepRequestSettings(settings) {
+  // Empty means 「whatever the reading is already using」, which the caller has already applied.
   const id = normalizeTts(settings?.tts).deepChannelId;
   if (!id) return settings;
   const channel = (Array.isArray(settings?.channels) ? settings.channels : []).find(item => item.id === id);

@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.30.0';
+} from './prompts.js?v=0.31.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.30.0';
+export const APP_VERSION = '0.31.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -540,7 +540,9 @@ export const DEFAULT_TTS = Object.freeze({
   tamePunctuation: true,
   // The reader's own system prompts for the two readings; empty means the built-in ones.
   prompts: Object.freeze({ simple: '', deep: '' }),
-  // The saved connection the readings go to; empty follows the translation's own setting.
+  // The connection the reading's analysis goes to; empty follows the translation's.
+  analysisChannelId: '',
+  // The saved connection the deep reading goes to; empty follows the analysis connection above.
   deepChannelId: '',
   // The longest one analysis may take, counted from the request going out, whether or not the model
   // is still writing. The connection's own timeout only counts silence, so a model that thinks out
@@ -744,6 +746,10 @@ export function normalizeChannel(value = {}, fallbackId = DEFAULT_CHANNEL.id) {
     reasoningEffort: REASONING_EFFORTS.includes(source.reasoningEffort) ? source.reasoningEffort : '',
     excludeParams: parseExcludedParams(source.excludeParams),
     concurrency: clampInteger(source.concurrency, 1, MAX_CHANNEL_CONCURRENCY, DEFAULT_CHANNEL.concurrency),
+    // Appended to every request on this connection, whoever made it. This is where a model is told
+    // not to think out loud, and the reading needs to be able to say it as much as the translation.
+    postscript: String(source.postscript ?? '').slice(0, 2000),
+    postscriptRole: ['system', 'user', 'assistant'].includes(source.postscriptRole) ? source.postscriptRole : 'user',
   };
 }
 
@@ -1105,6 +1111,7 @@ export function normalizeTts(value) {
     },
     // The connection chosen for analysis in earlier versions is the deep reading's now; the simple
     // reading follows the translation.
+    analysisChannelId: String(source.analysisChannelId ?? '').trim().slice(0, 80),
     deepChannelId: String(source.deepChannelId ?? source.channelId ?? '').trim().slice(0, 80),
     analysisLimitSec: clampInteger(source.analysisLimitSec, 20, 900, DEFAULT_TTS.analysisLimitSec),
     batchSize: normalizeBatchSize(source.batchSize),
@@ -1318,9 +1325,12 @@ export function createIndependentRequest(settings, messages) {
   const model = String(channel.model ?? '').trim();
   if (!model) throw new Error('请填写独立副 API 模型。');
   if (!Array.isArray(messages) || !messages.length) throw new Error('翻译请求没有消息内容。');
+  // The connection's own last word, after everything the feature had to say.
+  const tail = String(channel.postscript ?? '').trim();
+  const sent = tail ? [...messages, { role: channel.postscriptRole || 'user', content: tail }] : messages;
   const payload = {
     stream: false,
-    messages,
+    messages: sent,
     model,
     chat_completion_source: 'openai',
     reverse_proxy: normalizeOpenAiBaseUrl(channel.url),

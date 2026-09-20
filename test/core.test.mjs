@@ -1203,3 +1203,16 @@ test('the colouring leaves a quote set off inside a sentence uncoloured', async 
   assert.equal(isEmbeddedQuote('友達', 'いわゆる', 'という関係'), true);
   assert.deepEqual(foldEmbeddedQuotes([{ text: '关于', spoken: false }, { text: '“它”', spoken: true }, { text: '的事', spoken: false }]), [{ text: '关于“它”的事', spoken: false }]);
 });
+
+test('a connection carries its own last word, and every request on it sends it', async () => {
+  const { normalizeChannel } = await import('../core.js');
+  const channel = normalizeChannel({ id: 'c1', name: '翻译', url: 'https://relay.example/v1', key: 'k', model: 'm', postscript: ' 不要输出思考过程。 ', postscriptRole: 'system' });
+  assert.equal(channel.postscript, ' 不要输出思考过程。 ', 'kept as written; trimmed only when sent');
+  assert.equal(channel.postscriptRole, 'system');
+  assert.equal(normalizeChannel({ postscriptRole: 'nonsense' }).postscriptRole, 'user');
+  const sent = createIndependentRequest({ channels: [channel], selectedChannelId: 'c1' }, [{ role: 'user', content: '正文' }]);
+  assert.deepEqual(sent.messages, [{ role: 'user', content: '正文' }, { role: 'system', content: '不要输出思考过程。' }]);
+  // A connection without one changes nothing, which is what every existing setup has.
+  const bare = normalizeChannel({ id: 'c2', url: 'https://relay.example/v1', key: 'k', model: 'm' });
+  assert.equal(createIndependentRequest({ channels: [bare], selectedChannelId: 'c2' }, [{ role: 'user', content: '正文' }]).messages.length, 1);
+});

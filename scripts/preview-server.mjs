@@ -212,7 +212,11 @@ http.createServer(async (request, response) => {
     const body = await readBody(request);
     const asked = (() => {
       try {
-        return JSON.parse([...(body.messages ?? [])].reverse().find(message => message.role === 'user')?.content ?? '{}');
+        // The last user message can be the connection's postscript; the input is the last one that parses.
+        const inputs = (body.messages ?? []).filter(message => message.role === 'user')
+          .map(message => { try { return JSON.parse(message.content); } catch { return null; } })
+          .filter(Boolean);
+        return inputs.at(-1) ?? {};
       } catch {
         return {};
       }
