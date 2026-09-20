@@ -1,4 +1,4 @@
-import { normalizeTts } from './core.js?v=0.29.6';
+import { normalizeTts } from './core.js?v=0.29.9';
 import {
   FISH_EMOTIONS,
   FISH_SOUNDS,
@@ -9,7 +9,7 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.29.6';
+} from './tts.js?v=0.29.9';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -35,10 +35,11 @@ export const DEEP_PROMPT = [
   '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"名字","emotion":"英文情绪词","shifts":[{"at":"分句开头的词","emotion":"英文情绪词"}],"tone":"英文语气词","speed":"slow","volume":"quiet","pauses":[{"after":"词","length":"short"}],"stress":["词"],"sounds":[{"at":"start","tag":"英文声音词"},{"at":"after","after":"词","tag":"英文声音词"},{"at":"end","tag":"英文声音词"}]}]}。每个编号最多出现一次；不要输出 text；用不上的字段不写。',
   '1. speaker：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。看引号前后的人名和动作、话里叫到的名字（被叫到的是听的人）、一来一回的顺序。{{user}}看不出是谁说的就省略。输入里的 speakers 是用户手动定的说话人，那些编号照抄。',
   '2. emotion：这句开头的情绪，只能取 emotions 列表里的一个英文词，逐字照抄，直接选最贴切的，不加程度词。想一下这个人为什么这样说、表面和底下的情绪是不是一回事，按念出来该有的那个给。',
-  '3. shifts：一句里情绪变了，就在变的地方标：at 逐字照抄那个分句开头的词，emotion 是从这里起的情绪。最多三处，情绪没变就不写。',
-  '4. sounds：叹气、笑、轻笑、抽泣、大哭、喘气、呻吟、闷哼、清嗓、倒吸气，tag 只能取 sounds 列表里的词；at 是 start（句首）、end（句尾）或 after（某个词之后，after 逐字照抄那个词）。原文写了的一定加；原文没写但这个人这时候该有的也加；一句最多三处，别句句都加。',
+  '3. shifts：一句里情绪变了，就在变的地方标：at 逐字照抄那个分句开头的词，emotion 是从这里起的情绪。最多三处，情绪没变就不写。转折要落在句子真的转的地方（「可是」「但是」「……」之后、问句翻成陈述句这类），前后两个情绪不要是毫不相干的两头——从平静到不安是转，从大笑到崩溃要正文真的写了才算。',
+  '4. sounds：tag 只能取 sounds 列表里的词；at 是 start（句首）、end（句尾）或 after（某个词之后，after 逐字照抄那个词）。原文写了的一定加；原文没写但这个人这时候真的会有的，也可以加一个。它是可用的手段，不是每句都要用的手段：拿不准就不写，一句最多两处。moaning、groaning、panting 是拖着出声的，只有原文明写了呻吟、闷哼、喘息才用。',
   '5. pauses：某个词后面停一下，after 逐字照抄，length 是 short 或 long，最多三处；stress：重读的词，最多两个。tone 只能取 tones 列表里的词；speed 是 slow 或 fast；volume 是 quiet 或 loud；都只在明显时写。',
-  '6. 上一句的情绪只是参考，不是惯性；换了场景、事情已经过去，情绪就不延续。',
+  '6. 上一句的情绪只是参考，不是惯性；换了场景、事情已经过去，情绪就不延续。反过来也一样：还在同一件事里的两句，不要一句冷淡一句歇斯底里；一楼读下来该是一条走向，不是一串互不相干的情绪。',
+  '7. 大多数句子只要一个 emotion 就够了。shifts、pauses、stress、sounds 是给真的需要的那几句准备的，不是每句都要填；字段越少写得越快，也越像人说话。不要在回答之外写任何思考过程。',
   '{{lang_rule}}',
   '{{references_rule}}',
 ].join('\n');

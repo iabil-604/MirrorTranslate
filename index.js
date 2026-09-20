@@ -62,11 +62,12 @@ import {
   CONSOLE_KEYS,
   DEFAULT_CONSOLE,
   normalizeConsole,
+  normalizeConsolePresets,
   readAnnotationFields,
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.29.6';
+} from './core.js?v=0.29.9';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -114,10 +115,10 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.29.6';
-import { createTtsStore } from './tts-store.js?v=0.29.6';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.6';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.6';
+} from './tts.js?v=0.29.9';
+import { createTtsStore } from './tts-store.js?v=0.29.9';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.9';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.9';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -126,7 +127,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.29.6';
+} from './processing.js?v=0.29.9';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -143,9 +144,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.29.6';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.6';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.6';
+} from './prompts.js?v=0.29.9';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.9';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.9';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -159,15 +160,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.29.6';
-import { sampleThemeBackground } from './theme-probe.js?v=0.29.6';
+} from './palette.js?v=0.29.9';
+import { sampleThemeBackground } from './theme-probe.js?v=0.29.9';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.29.6';
+} from './diagnostics.js?v=0.29.9';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -432,13 +433,15 @@ const CONTROL_CENTER_MARKUP = `
 </div></details>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-deep"><summary class="jy-section-title"><span>05</span><h2>深度分析</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <p class="jy-muted">在简单分析的骨架上，带着角色卡、世界书、前几楼再看一遍，判断每句情绪的因果和浓度，定下情绪、强度、语气、语速、音量、停顿、句内转折和非语言声音，全是 Fish 官方认得的标签；调音台上你推到头的滑杆是它必须守的规则，留在中间的交给它判断。开着翻译时一楼两次调用（翻译一次、深度一次），不开翻译一次做完。这一栏里的东西只属于深度分析，改它不碰别的。</p>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">深度分析用的副 API</span><select data-jy-tts-field="deepChannelId"><option value="">跟随翻译的模型设置</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">深度分析用的副 API</span><select data-jy-tts-field="deepChannelId"><option value="">跟随翻译的模型设置</option></select></label><label title="从请求发出去算起，不管模型还在不在写。连接自己的「超时」只管「多久没动静」，思考型模型边想边写就永远不会超时。"><span class="jy-label">单次分析最长等待 / 秒</span><input type="number" data-jy-tts-field="analysisLimitSec" min="20" max="900" step="10"></label></div>
+<p class="jy-muted">「单次分析最长等待」是硬上限：到点就停，这一楼先按现有标注读，不会一直等下去。思考型模型嫌慢的话，把那条连接的「推理强度」调低比调大这个数更有用。</p>
 <p class="jy-muted">简单分析不在这里选：它走翻译用的那条连接——翻译的模型已经读过这一楼，要它做的又不多。深度分析可以换一个更会读人的模型。</p>
 <div class="jy-behaviors"><span class="jy-label">深度分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
 </div></details>
 <details class="jy-advanced" open><summary>默认调音台（没单独调过的角色和旁白都用这套）</summary>
-<p class="jy-muted">滑块只是倾向，中间是平常；拉到两头才会变成一句话交给副模型，比如「呼吸感明显但自然」「语速偏慢」。数字本身不发给任何模型。每个角色还能在音色那栏单独调。</p>
-<div class="jy-tts-console" data-jy-tts-console="default"><label class="jy-tts-console-field"><span>停顿感</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="pause"><output>50</output></label><label class="jy-tts-console-field"><span>气息感</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="breath"><output>50</output></label><label class="jy-tts-console-field"><span>口语颗粒度</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="grain"><output>50</output></label><label class="jy-tts-console-field"><span>情感强度</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="intensity"><output>50</output></label><label class="jy-tts-console-field"><span>情绪表现幅度</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="range"><output>50</output></label><label class="jy-tts-console-field"><span>语速倾向</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="speed"><output>50</output></label><label class="jy-tts-console-field"><span>声音表现倾向</span><input type="range" min="0" max="100" step="5" value="50" data-jy-console-key="expression"><output>50</output></label><label class="jy-tts-console-rules"><span class="jy-label">自定义配音规则（一行一条，直接交给副模型）</span><textarea rows="3" data-jy-console-rules spellcheck="false" placeholder="比如：害羞时不要过度娇柔；生气时保持克制；不要每句话都加呼吸"></textarea></label></div>
+<p class="jy-muted">每一项五档，停在哪一档就把哪一句话交给副模型。中间那档是「AI 判断」——这一项不写任何规则，由分析模型按剧情自己定，也是默认值。往两边走才会变成硬性要求，比如「呼吸感明显」「声音克制」。数字本身不发给任何模型。每个角色还能在音色那栏单独调；最下面的自定义规则永远原样交给副模型，那才是最细的一层。</p>
+<p class="jy-muted">非语言声音（叹气、笑、抽泣这些）由「声音表现倾向」一项决定用多少；「气息感」只说用哪一种，不会自己加量。两项都停在「AI 判断」时，加不加、加多少由分析模型看着办。</p>
+<div class="jy-tts-console" data-jy-tts-console="default"><div class="jy-tts-console-presets" data-jy-console-preset-host></div><label class="jy-tts-console-field"><span>停顿感</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="pause"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>气息感</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="breath"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>口语颗粒度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="grain"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>情感强度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="intensity"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>情绪表现幅度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="range"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>语速倾向</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="speed"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>声音表现倾向</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="expression"><output>AI 判断</output></label><label class="jy-tts-console-rules"><span class="jy-label">自定义配音规则（一行一条，直接交给副模型）</span><textarea rows="3" data-jy-console-rules spellcheck="false" placeholder="比如：害羞时不要过度娇柔；生气时保持克制；不要每句话都加呼吸"></textarea></label></div>
 </details>
 <details class="jy-advanced"><summary>副模型提示词（高级）</summary>
 <p class="jy-muted">留空用内置的。可用占位符：<code>{{user}}</code> 用户扮演的角色，<code>{{sounds}}</code> 声音词表，<code>{{references_rule}}</code> 读原文时关于译文的那条规则。JSON 的输出格式和字段名要照旧，不然解析不出来；深度模式里 skeleton 的省力原则建议留着，那是省时间的关键。</p>
@@ -927,10 +930,15 @@ function describeTimeout(timeoutSec, idle) {
 // stream: a run that kept delivering deltas past the channel timeout was cut off mid-translation.
 // The optional renew() handed to the task turns the window into an idle timer for whoever calls it,
 // and leaves it a total timeout for everyone who does not.
-async function withAbortTimeout(externalSignal, timeoutSec, task) {
+async function withAbortTimeout(externalSignal, timeout, task) {
+  // A plain number is the silence window. An object adds a deadline: the whole request, however much
+  // the model is writing, ends there — which is the only thing that stops a model that thinks aloud.
+  const timeoutSec = typeof timeout === 'object' && timeout ? timeout.seconds : timeout;
+  const ceiling = typeof timeout === 'object' && timeout ? Math.max(0, Number(timeout.limitSec) || 0) : 0;
   const controller = new AbortController();
   let timedOut = false;
   let renewed = false;
+  let hitLimit = false;
   const onAbort = () => controller.abort();
   if (externalSignal?.aborted) onAbort();
   else externalSignal?.addEventListener('abort', onAbort, { once: true });
@@ -949,12 +957,19 @@ async function withAbortTimeout(externalSignal, timeoutSec, task) {
     arm();
   };
   arm();
+  const wall = ceiling ? globalThis.setTimeout(() => {
+    hitLimit = true;
+    controller.abort();
+  }, ceiling * 1000) : null;
+  wall?.unref?.();
   try {
     return await task(controller.signal, renew);
   } catch (error) {
+    if (hitLimit) throw new Error(`这次分析写了 ${ceiling} 秒还没写完，已经停下，这一楼先按现有标注读。可以在「05 深度分析」里调大「单次分析最长等待」，或者把那条连接的推理强度调低。`);
     if (timedOut) throw new Error(describeTimeout(timeoutSec, renewed));
     throw error;
   } finally {
+    if (wall !== null) globalThis.clearTimeout(wall);
     if (timer !== null) globalThis.clearTimeout(timer);
     externalSignal?.removeEventListener('abort', onAbort);
   }
@@ -1511,13 +1526,13 @@ function withoutUntranslated(recovered, segments, settings, { quiet = false } = 
 
 // One whole-request call to the secondary model, on whichever channel the settings pick. Translation and
 // the read-aloud analysis both go through here, so a channel that works for one works for the other.
-async function requestSubModelRaw(messages, settings, signal) {
+async function requestSubModelRaw(messages, settings, signal, { limitSec = 0 } = {}) {
   const context = getContext();
   const channel = getActiveChannel(settings);
   if (settings.apiMode === 'independent') {
     const service = context.ChatCompletionService;
     if (!service?.processRequest) throw new Error('当前 SillyTavern 不提供独立聊天补全请求接口。');
-    return withAbortTimeout(signal, channel.timeoutSec, requestSignal => service.processRequest(
+    return withAbortTimeout(signal, { seconds: channel.timeoutSec, limitSec }, requestSignal => service.processRequest(
       createIndependentRequest(settings, messages),
       {},
       true,
@@ -2053,12 +2068,12 @@ async function translateMessage(messageId = null, { force = false, quiet = false
 // Streaming beta: same request content as the one-shot path, but the SSE deltas are folded into
 // the floor as completed JSON items arrive. The final pass reuses the ordinary write pipeline, so
 // the finished floor is byte-identical to a non-streaming run.
-async function streamTranslationBatch(messages, settings, signal, onDelta = null, onThinking = null) {
+async function streamTranslationBatch(messages, settings, signal, onDelta = null, onThinking = null, { limitSec = 0 } = {}) {
   const channel = getActiveChannel(settings);
   const payload = { ...createIndependentRequest(settings, messages), stream: true };
   // The whole-request path has always honoured the channel timeout. Without the same wrapper a
   // stalled upstream kept the task "running" forever once the response headers had arrived.
-  return withAbortTimeout(signal, channel.timeoutSec, async (streamSignal, renew) => {
+  return withAbortTimeout(signal, { seconds: channel.timeoutSec, limitSec }, async (streamSignal, renew) => {
     const response = await fetch('/api/backends/chat-completions/generate', {
       method: 'POST',
       headers: getContext().getRequestHeaders(),
@@ -2888,7 +2903,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       if (request.apiMode === 'independent') {
         try {
           // A thinking model answers in a wrapper; only what it finally wrote is the analysis.
-          const streamed = await streamTranslationBatch(messages, request, signal, announce);
+          const streamed = await streamTranslationBatch(messages, request, signal, announce, null, { limitSec: tts.analysisLimitSec });
           raw = typeof streamed === 'string' ? streamed : String(streamed?.content ?? '');
         } catch (error) {
           // A connection that refuses the stream outright answers in one piece instead; a timeout or
@@ -2897,10 +2912,10 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
           recordDiagnostic('warn', 'tts.analysis', `这条连接不支持边收边读，改用整包请求：${safeError(error)}`, {
             floor: floor.floorId, depth, endpoint: describeChannelEndpoint(request),
           }, '', { floor: floor.messageId });
-          raw = await requestSubModelRaw(messages, request, signal);
+          raw = await requestSubModelRaw(messages, request, signal, { limitSec: tts.analysisLimitSec });
         }
       } else {
-        raw = await requestSubModelRaw(messages, request, signal);
+        raw = await requestSubModelRaw(messages, request, signal, { limitSec: tts.analysisLimitSec });
       }
     } catch (error) {
       if (!isAbortError(error)) {
@@ -5438,8 +5453,8 @@ async function askTtsRefine({ messageId, sentence = null }) {
     const short = sentence ? miniShort(sentence.text, 18) : '';
     card.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="重新分析">
   <h3>重新分析第 ${messageId} 楼</h3>
-  <p>按你的意见改已有的分析：副模型不用再通读一遍正文，只看上次的结果和你的意见，快得多。也可以丢掉重来。说话人也可以不问副模型，在详细页的下拉框里直接改。</p>
-  <div class="jy-ask-scope" data-jy-refine-scope>
+  <p>${sentence ? '下面先选改哪里：你打开的那一句，还是整楼。' : '这次改的是<strong>整楼</strong>。想只改一句，先在句子列表里点那一句的「详细」，再回来点重新分析。'}按你的意见改已有的分析：副模型不用再通读一遍正文，只看上次的结果和你的意见，快得多。也可以丢掉重来。说话人也可以不问副模型，在详细页的下拉框里直接改。</p>
+  <div class="jy-ask-scope" data-jy-refine-scope${sentence ? '' : ' hidden'}>
     <label><input type="radio" name="jy-refine-scope" value="sentence" checked>只改这一句${short ? `：${short}` : ''}</label>
     <label><input type="radio" name="jy-refine-scope" value="floor"${sentence ? '' : ' checked'}>整楼都改</label>
   </div>
@@ -6978,12 +6993,80 @@ function readLanguageRows(container) {
  * so; one without follows the dialogue default and changes with it. Languages hang under the row.
  */
 // The sliders and the rules of one console, as elements; and read back from them.
+// What each stop of a console control sends, in the reader's words: the two low bands, the middle
+// that writes no rule at all, and the two high ones. They follow consoleDirections' own thresholds,
+// so the word shown is always the rule that goes out.
+const CONSOLE_STOPS = Object.freeze({
+  pause: ['不停顿', '停顿少', 'AI 判断', '停顿多', '停顿很多'],
+  breath: ['不要呼吸声', '呼吸声少', 'AI 判断', '呼吸感明显', '呼吸感很重'],
+  grain: ['利落', '毛边少', 'AI 判断', '口语感强', '口语感很强'],
+  intensity: ['情感极淡', '情感偏淡', 'AI 判断', '情感偏浓', '情感很浓'],
+  range: ['起伏极小', '起伏偏小', 'AI 判断', '起伏偏大', '起伏很大'],
+  speed: ['很慢', '偏慢', 'AI 判断', '偏快', '很快'],
+  expression: ['不要声音', '声音克制', 'AI 判断', '声音外放', '声音很外放'],
+});
+
+/** The word a console value sends, by the same thresholds the rules are chosen with. */
+function consoleWord(key, value) {
+  const stops = CONSOLE_STOPS[key];
+  if (!stops) return String(value);
+  const number = Number(value);
+  if (!Number.isFinite(number)) return stops[2];
+  if (number <= 15) return stops[0];
+  if (number <= 35) return stops[1];
+  if (number >= 85) return stops[4];
+  if (number >= 65) return stops[3];
+  return stops[2];
+}
+
 const CONSOLE_LABELS = Object.freeze({ pause: '停顿感', breath: '气息感', grain: '口语颗粒度', intensity: '情感强度', range: '情绪表现幅度', speed: '语速倾向', expression: '声音表现倾向' });
+
+/** The saved consoles, as a dropdown that remembers nothing until the reader picks. */
+function consolePresetRow(doc, settings = runtime.settings) {
+  const row = doc.createElement('div');
+  row.className = 'jy-tts-console-presets';
+  const pick = doc.createElement('select');
+  pick.dataset.jyConsolePreset = '';
+  pick.title = '保存过的调音台，选一个再点「套用」';
+  const first = doc.createElement('option');
+  first.value = '';
+  first.textContent = '预设…';
+  pick.appendChild(first);
+  for (const preset of normalizeConsolePresets(settings?.consolePresets)) {
+    const option = doc.createElement('option');
+    option.value = preset.id;
+    option.textContent = preset.name;
+    pick.appendChild(option);
+  }
+  const name = doc.createElement('input');
+  name.type = 'text';
+  name.maxLength = 40;
+  name.placeholder = '起个名字，比如「吵架」「深夜」';
+  name.dataset.jyConsolePresetName = '';
+  const tools = doc.createElement('span');
+  tools.className = 'jy-tts-console-preset-tools';
+  for (const [action, label, title] of [
+    ['console-preset-apply', '套用', '把选中的预设填进这一套调音台'],
+    ['console-preset-save', '存为预设', '把现在这一套存起来；名字和已有的一样就覆盖它'],
+    ['console-preset-delete', '删除', '删掉选中的预设'],
+  ]) {
+    const button = doc.createElement('button');
+    button.type = 'button';
+    button.className = 'jy-text-button';
+    button.dataset.jyAction = action;
+    button.textContent = label;
+    button.title = title;
+    tools.appendChild(button);
+  }
+  row.append(pick, name, tools);
+  return row;
+}
 
 function consoleFieldsElement(doc, console, { scope = 'row' } = {}) {
   const box = doc.createElement('div');
   box.className = 'jy-tts-console';
   box.dataset.jyTtsConsole = scope;
+  box.appendChild(consolePresetRow(doc));
   const values = normalizeConsole(console);
   for (const key of CONSOLE_KEYS) {
     const label = doc.createElement('label');
@@ -6994,11 +7077,11 @@ function consoleFieldsElement(doc, console, { scope = 'row' } = {}) {
     input.type = 'range';
     input.min = '0';
     input.max = '100';
-    input.step = '5';
+    input.step = '25';
     input.value = String(values[key]);
     input.dataset.jyConsoleKey = key;
     const output = doc.createElement('output');
-    output.textContent = String(values[key]);
+    output.textContent = consoleWord(key, values[key]);
     label.append(name, input, output);
     box.appendChild(label);
   }
@@ -7105,12 +7188,16 @@ function markRowElement(doc, mark = { punct: '', tag: '停顿', at: 'inline' }) 
 function fillConsoleFields(box, console) {
   if (!box) return;
   const values = normalizeConsole(console);
-  // The default console is static markup on the page; its marks rows are added on the first fill.
+  // The default console is static markup on the page; its marks rows and its preset row are built
+  // on the first fill, and the preset row is rebuilt every time so a newly saved name shows up in it.
   if (!box.querySelector('.jy-tts-marks-fold')) box.appendChild(marksFoldElement(box.ownerDocument, values.marks));
+  const host = box.querySelector('[data-jy-console-preset-host]');
+  if (host) host.replaceWith(consolePresetRow(box.ownerDocument));
   for (const input of box.querySelectorAll('[data-jy-console-key]')) {
     input.value = String(values[input.dataset.jyConsoleKey] ?? 50);
+    input.step = '25';
     const output = input.nextElementSibling;
-    if (output) output.textContent = input.value;
+    if (output) output.textContent = consoleWord(input.dataset.jyConsoleKey, input.value);
   }
   const rules = box.querySelector('[data-jy-console-rules]');
   if (rules) rules.value = values.rules;
@@ -8522,6 +8609,51 @@ function createControlCenter(rootDocument = document) {
           renderTtsVoiceList(root, runtime.settings);
           toast('success', '已解除绑定，这个角色改为跟随对白默认音色。');
         }
+      } else if (action.startsWith('console-preset-')) {
+        const box = button.closest('[data-jy-tts-console]');
+        const pick = box?.querySelector('[data-jy-console-preset]');
+        const nameInput = box?.querySelector('[data-jy-console-preset-name]');
+        const presets = normalizeConsolePresets(runtime.settings.consolePresets);
+        if (action === 'console-preset-apply') {
+          const preset = presets.find(item => item.id === pick?.value);
+          if (!preset) throw new Error('先在左边选一个预设。');
+          for (const input of box.querySelectorAll('[data-jy-console-key]')) {
+            input.value = String(preset.console[input.dataset.jyConsoleKey] ?? 50);
+            const output = input.parentElement?.querySelector('output');
+            if (output) output.textContent = consoleWord(input.dataset.jyConsoleKey, input.value);
+          }
+          const rules = box.querySelector('[data-jy-console-rules]');
+          if (rules) rules.value = preset.console.rules ?? '';
+          saveSettings(collectSettings(root));
+          toast('success', `已套用「${preset.name}」。`);
+        } else if (action === 'console-preset-save') {
+          const wanted = String(nameInput?.value ?? '').trim() || presets.find(item => item.id === pick?.value)?.name || '';
+          if (!wanted) throw new Error('先给这套调音台起个名字。');
+          const current = readConsoleFields(box);
+          const next = collectSettings(root);
+          const kept = normalizeConsolePresets(next.consolePresets).filter(item => item.name !== wanted);
+          next.consolePresets = [...kept, { id: `console-${Date.now().toString(36)}`, name: wanted, console: current }];
+          saveSettings(next);
+          if (nameInput) nameInput.value = '';
+          for (const other of root.querySelectorAll('[data-jy-tts-console]')) {
+            const list = other.querySelector('[data-jy-console-preset]');
+            const chosen = list?.value;
+            other.replaceChild(consolePresetRow(other.ownerDocument), other.firstElementChild);
+            const refreshed = other.querySelector('[data-jy-console-preset]');
+            if (refreshed && chosen) refreshed.value = chosen;
+          }
+          toast('success', `已存为预设「${wanted}」，在任何一套调音台上都能套用。`);
+        } else {
+          const preset = presets.find(item => item.id === pick?.value);
+          if (!preset) throw new Error('先在左边选一个预设。');
+          const next = collectSettings(root);
+          next.consolePresets = presets.filter(item => item.id !== preset.id);
+          saveSettings(next);
+          for (const other of root.querySelectorAll('[data-jy-tts-console]')) {
+            other.replaceChild(consolePresetRow(other.ownerDocument), other.firstElementChild);
+          }
+          toast('success', `已删掉预设「${preset.name}」。`);
+        }
       } else if (action === 'tts-add-lang') {
         const list = button.closest('[data-jy-tts-voice-row]')?.querySelector('[data-jy-tts-voice-langs]');
         if (list) {
@@ -8908,7 +9040,7 @@ function createControlCenter(rootDocument = document) {
     // A console slider shows its number beside it as it moves.
     if (event.target.matches('[data-jy-console-key]')) {
       const output = event.target.nextElementSibling;
-      if (output) output.textContent = event.target.value;
+      if (output) output.textContent = consoleWord(event.target.dataset.jyConsoleKey, event.target.value);
     }
     // A folded character row shows its name; the name typed into it shows up there at once.
     if (event.target.matches('[data-jy-tts-voice-name]')) {
@@ -11213,7 +11345,8 @@ async function openMiniWindow() {
         const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? viewFloor ?? latestAssistantMessageId(getContext());
         if (!Number.isInteger(messageId)) throw new Error('当前聊天里还没有 AI 楼层。');
         const side = inspecting?.side ?? null;
-        const sentenceId = action === 'tts-refine-sentence' ? inspecting?.utteranceId ?? null : null;
+        // Whichever button was pressed, the sentence the reader has open is one they can ask about.
+        const sentenceId = inspecting?.messageId === messageId ? inspecting?.utteranceId ?? null : null;
         const prepared = await ttsPrepared(messageId, side);
         // Nothing to build on: a floor nobody has analysed just gets its first pass. Anything already
         // labelled by the model or by the translation's own skeleton can be corrected; the text's own

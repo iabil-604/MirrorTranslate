@@ -10,9 +10,9 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.29.6';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.29.6';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.29.6';
+} from './core.js?v=0.29.9';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.29.9';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.29.9';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -381,11 +381,15 @@ export function referenceLines(translations) {
 // {{references_rule}} the rule about translations riding along when the original is read.
 export const DEFAULT_TTS_PROMPTS = Object.freeze({
   simple: [
-    '你是有声小说的配音助手。下面是一楼正文，按段给出，每句对白前面标着 ⟦编号⟧。你只做两件事：每句对白由谁念、带什么情绪念。不改写、不复述、不翻译任何句子。',
-    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"名字","emotion":"英文情绪词"}]}。只输出对白的条目，旁白不用输出；每个编号最多出现一次；不要输出 text。',
+    '你是有声小说的配音助手。下面是一楼正文，按段给出，每句对白前面标着 ⟦编号⟧。你定下每句对白怎么念：谁说的、什么情绪、哪里停一口气、哪个词咬重。旁白不用管，也不用输出。不改写、不复述、不翻译任何句子。',
+    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","pauses":[{"after":"词","length":"short"}],"stress":["词"],"sounds":[{"at":"start","tag":"英文声音词"}]}]}。只输出对白的条目；每个编号最多出现一次；不要输出 text；用不上的字段不写。',
     '1. speaker：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。看引号前后的人名和动作、话里叫到的名字（被叫到的是听的人，不是说的人）、两个人一来一回的顺序。{{user}}看不出是谁说的就省略，不要猜。输入里的 speakers 是用户手动定的说话人，那些编号照抄。',
     '2. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个，看不出明显情绪就省略。不要自己造词，不要加程度词。',
-    '3. 可选：tone 只在原文明确写了小声、耳语、喊、尖叫、急促时写，取 tones 列表里的词；sounds 只在原文明确写了笑、叹气、喘息这类声音时写：[{"at":"start 或 end","tag":"sounds 列表里的词"}]。styles 是角色的表达习惯和用户定下的规则，是硬性要求，不是参考。',
+    '3. pauses：这句里真的要换一口气的地方，after 逐字照抄那个词（停顿加在它后面），length 是 short 或 long，最多两处；一口气能说完的短句不要写。stress：这句真正的重点词，逐字照抄，最多两个；每句都标等于没标。两项里的词必须原样出现在这句话里。',
+    '4. tone 只在原文明确写了小声、耳语、喊、尖叫、急促时写，取 tones 列表里的词。',
+    '5. sounds：只在原文明确写了笑、叹气、喘息这类声音时写，一句最多一处：[{"at":"start 或 end","tag":"sounds 列表里的词"}]。喊叫、发火、追问的句子不要在开头加叹气这类泄气的声音。moaning、groaning、panting 是拖着出声的，只有原文明写了呻吟、闷哼、喘息才用，其他情况一律不用。',
+    '6. 一楼是有走向的：情绪跟着剧情走，剧情转了才转。相邻两句还在同一件事、同一口气里的时候，不要从一个极端跳到另一个极端；真的转了，就让转折落在转的那一句上。',
+    '7. styles 是角色的表达习惯和用户定下的规则，是硬性要求，不是参考。',
     '{{lang_rule}}',
     '{{references_rule}}',
   ].join('\n'),
@@ -406,11 +410,12 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
   refine: [
     '你是有声小说的配音助手。下面是一楼正文里的几句话、上一次给它们的标注（current），还有用户对上一次结果的意见（feedback）。你的工作不是重新通读正文，而是按用户的意见修正上一次的标注。',
     '只改用户的意见涉及到的句子。意见没有说到的句子，只输出 {"id":N}，表示上一次的标注原样保留——这是最重要的一条，不要把没提到的句子重写一遍。',
-    '只输出一个 JSON 对象，不要任何解释，格式和上一次一样：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","sounds":[{"at":"start","tag":"英文声音词"}]}]}',
+    '只输出一个 JSON 对象，不要任何解释，格式和上一次一样：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","speed":"slow","volume":"quiet","pauses":[{"after":"词","length":"short"}],"stress":["词"],"shifts":[{"at":"分句开头的词","emotion":"英文情绪词"}],"sounds":[{"at":"start","tag":"英文声音词"}]}]}',
+    '改一句的时候，只动用户说到的那一项，其余字段照抄 current 里这一句原有的值——current 里有 pauses、stress、shifts 就原样带上，不要因为这次只谈情绪就把它们丢掉。current 里没有的字段也不要凭空加。',
     '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。',
     '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称。用户说「说话人不对」时，重新判断这几句到底是谁在说，参考前后文和 roster；current 里 manual 为 true 的句子是用户手动定的说话人，不要改。',
     '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个。用户说「情绪不够」就换一个更贴切、更强的词；说「太夸张」就换平一点的；不要自己造词，不要加 slightly、very 这类程度词。',
-    '4. tone：可选，只能取 tones 列表里的一个；sounds：只能取 sounds 列表里的词，at 是 start 或 end。用户嫌声音多就删掉，嫌少就在真的合适的地方加。',
+    '4. tone：可选，只能取 tones 列表里的一个；sounds：只能取 sounds 列表里的词，at 是 start、end 或 after。用户嫌声音多就删掉，嫌少就在真的合适的地方加；moaning、groaning、panting 只有原文明写了才用。pauses 的 after、stress 的词、shifts 的 at 都必须逐字出现在这句话里。',
     '5. styles 是角色的表达习惯和用户定下的规则，改的时候要遵守。',
     '6. 每个 id 最多出现一次，不要输出 text。',
     '{{references_rule}}',
@@ -1340,14 +1345,14 @@ const CONSOLE_BANDS = Object.freeze({
   pause: [
     '几乎不停顿：pauses 一律不写。',
     '停顿少：pauses 只在真正哽住、话说一半的地方写，整楼两三处以内。',
-    '停顿感强：犹豫、转折、话没说完的地方写 pauses，允许 long，每三四句对白至少一处。',
-    '停顿感很强：几乎每句对白都找一处该停的地方写 pauses，转折和哽咽用 long。',
+    '停顿感强：犹豫、转折、话没说完的地方可以多写 pauses，允许 long。',
+    '停顿感很强：该停的地方尽量都写 pauses，转折和哽咽用 long；一口气说完更自然的句子仍然不写。',
   ],
   breath: [
     '不要呼吸声：sounds 里不写 gasping、panting、sighing。',
     '呼吸声少：只有原文明写了喘、叹气才在 sounds 里写。',
-    '呼吸感明显：紧张、害羞、疲惫、犹豫的句子在句首加 gasping、panting 或 sighing 这类 sounds，不要每句都加。',
-    '呼吸感很重：情绪起伏的句子大多在句首或句尾带 sighing、gasping、panting 这类 sounds。',
+    '呼吸感明显：紧张、害羞、疲惫、犹豫的句子可以在句首用 sighing 或 gasping，真的该有才写，一句最多一个。',
+    '呼吸感很重：情绪起伏的句子可以在句首或句尾用 sighing 或 gasping，一句仍然最多一个；不要用 panting、moaning 这类拖着的声音来表现呼吸。',
   ],
   grain: [
     '说话顺畅利落：不写表示迟疑的 pauses，不用 soft tone。',
@@ -1376,8 +1381,8 @@ const CONSOLE_BANDS = Object.freeze({
   expression: [
     '不要非语言声音：sounds 一律不写。',
     '声音表现克制：sounds 只在原文明写了笑、叹气、咳嗽时写。',
-    '声音表现外放：合适的地方写 sounds（笑声、叹气、喘息、清嗓子），每三四句对白至少一处，要贴合当下的情绪。',
-    '声音表现很外放：大多数带情绪的对白句都配一个 sounds，笑就 laughing 或 chuckling，难过就 sobbing 或 sighing，一句最多一个。',
+    '声音表现外放：合适的地方可以写 sounds（笑声、叹气、清嗓子），贴合当下的情绪就写，不必凑数。',
+    '声音表现很外放：情绪明显的对白句可以各配一个 sounds，笑就 laughing 或 chuckling，难过就 sobbing 或 sighing；一句最多一个，平静的句子仍然不写。',
   ],
 });
 
@@ -1389,9 +1394,14 @@ const CONSOLE_BANDS = Object.freeze({
 export function consoleDirections(console) {
   if (!console || typeof console !== 'object') return [];
   const lines = [];
+  // 声音表现倾向 decides whether there are non-verbal sounds at all. When it says none, 气息感 does not
+  // get to invite them back: two rules about the same field in one request is how a reader ends up
+  // with a moan on a line they asked to be silent.
+  const silent = Number(console.expression) <= 15;
   for (const [key, bands] of Object.entries(CONSOLE_BANDS)) {
     const value = Number(console[key]);
     if (!Number.isFinite(value)) continue;
+    if (key === 'breath' && silent && value >= 65) continue;
     if (value <= 15) lines.push(bands[0]);
     else if (value <= 35) lines.push(bands[1]);
     else if (value >= 85) lines.push(bands[3]);

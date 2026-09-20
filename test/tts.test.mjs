@@ -150,6 +150,10 @@ test('the analysis request carries the floor as it reads, and never offers the m
   assert.doesNotMatch(messages[0].content, /direction/, 'the simple reading asks for no directions');
   assert.match(messages[0].content, /不要自己造词，不要加程度词/);
   assert.doesNotMatch(messages[0].content, /lang：/, 'one language in this floor: nothing to ask about languages');
+  assert.match(messages[0].content, /pauses：这句里真的要换一口气的地方/, 'a breath and a stressed word are most of what makes a line sound spoken');
+  assert.match(messages[0].content, /stress：这句真正的重点词/);
+  assert.doesNotMatch(messages[0].content, /shifts/, 'a turn of feeling inside one sentence stays with the deep reading');
+  assert.doesNotMatch(messages[0].content, /intensity/, 'a mood, not a strength');
   assert.doesNotMatch(messages[0].content, /"text":/);
   // Two scripts in one floor, and each line is asked for its own language.
   const mixed = buildTtsAnalysisMessages(splitUtterances([{ lineId: 1, text: '「Sure, whatever.」' }, { lineId: 2, text: '「随便你。」' }]), {});
@@ -913,7 +917,7 @@ test('a console becomes sentences at its ends and says nothing in the middle', (
   // The further out a slider sits, the more it demands; the middle band is silent.
   assert.match(consoleDirections({ intensity: 90 })[0], /^情感强度很高：.*一半以上写 intensity 2/);
   assert.match(consoleDirections({ intensity: 10 })[0], /^情感强度极低：intensity 一律写 0/);
-  assert.match(consoleDirections({ expression: 70 })[0], /每三四句对白至少一处/);
+  assert.match(consoleDirections({ expression: 70 })[0], /贴合当下的情绪就写，不必凑数/, "a leaning, not a quota: a quota is an order and this is meant to be permission");
   assert.deepEqual(consoleDirections({ intensity: 40, expression: 60, pause: 64, breath: 36 }), []);
 });
 
@@ -974,8 +978,8 @@ test('punctuation marks: an inline mark replaces its run, a head mark opens the 
   assert.equal(applyPunctuationMarks('平常的一句。', marks), '平常的一句。');
   assert.equal(applyPunctuationMarks('这……不太好吧', []), '这……不太好吧');
   assert.deepEqual(normalizeMarks([{ punct: ' ', tag: '停顿' }, { punct: '……', tag: '不存在的' }, { punct: '……', tag: '停顿' }, { punct: '……', tag: '叹气' }]).length, 1, 'blank, unknown and repeated runs are dropped');
-  assert.equal(normalizeConsole({ marks: RECOMMENDED_MARKS }).marks.length, 3);
-  assert.equal(normalizeConsole({ marks: RECOMMENDED_MARKS }, { sparse: true })?.marks.length, 3, 'marks alone make a console worth keeping');
+  assert.equal(normalizeConsole({ marks: RECOMMENDED_MARKS }).marks.length, 2, "「……」 is not recommended any more: a pause tag inside a drawn-out line is performed, not obeyed");
+  assert.equal(normalizeConsole({ marks: RECOMMENDED_MARKS }, { sparse: true })?.marks.length, 2, 'marks alone make a console worth keeping');
 });
 
 test('the lean compile sends one of Fish\'s own words, the named tone and an official sound, and the marks ride along', () => {
@@ -1132,11 +1136,11 @@ test('the simple request sends the floor by paragraph with the dialogue numbered
   assert.equal('utterances' in input, false, 'the words are sent once, as the floor reads');
   assert.deepEqual(input.speakers, { 3: '顾旭禾' }, 'the reader\'s own word travels by number');
   assert.deepEqual(input.styles, [{ name: '顾旭禾', rules: ['语速偏慢。'] }]);
-  assert.match(messages[0].content, /只输出对白的条目，旁白不用输出/);
+  assert.match(messages[0].content, /旁白不用管，也不用输出/);
   assert.match(messages[0].content, /不要输出 text/);
   assert.match(messages[0].content, /硬性要求，不是参考/);
-  assert.doesNotMatch(messages[0].content, /intensity/, 'a mood, not a strength: the simple reading answers short');
-  assert.doesNotMatch(messages[0].content, /pauses/, 'pauses and stresses are the deep reading\'s work');
+  assert.doesNotMatch(messages[0].content, /intensity/, 'a mood, not a strength');
+  assert.doesNotMatch(messages[0].content, /"why"|shifts/, 'the reasons and the mid-sentence turns stay with the deep reading');
 });
 test('in a floor the character wrote, the reader is the one spoken to', () => {
   const cast = [{ name: '明日香', aliases: [] }, { name: '孟空', aliases: [] }];
@@ -1297,4 +1301,20 @@ test('a sentence whose feeling turns is heard turning: a word of Fish\'s before 
   const plain = fishTextOf({ segment: segments[0], voiceId: 'v' }, { model: 's1' }, { lean: true });
   assert.equal(plain, '(happy) 本来今天挺开心的 (chuckling) ， (sad) 可是你一走 (break) ， (lonely) 屋里就空了。 (sighing)');
   assert.ok(voiceSummary(voice).some(([term, value]) => term === '句内变化' && /可是/.test(value)));
+});
+
+test('one axis owns the non-verbal sounds: the console can permit them, and never contradicts itself', () => {
+  // The reader's own case: breath pushed to the top, sounds pushed to none. Two rules about the same
+  // field in one request is how a line they asked to be silent came back with a moan.
+  assert.deepEqual(consoleDirections({ expression: 0, breath: 100 }), ['不要非语言声音：sounds 一律不写。']);
+  assert.equal(consoleDirections({ expression: 75, breath: 100 }).length, 2, 'permitted by both, and both say so');
+  // Nothing on either axis asks for a quota any more: permission, not an order.
+  for (const value of [75, 100]) {
+    for (const key of ['expression', 'breath', 'pause']) {
+      const rule = consoleDirections({ [key]: value, expression: key === 'expression' ? value : 75 })[0];
+      assert.doesNotMatch(rule, /至少一处|大多数/, `${key} at ${value} must not set a quota: ${rule}`);
+    }
+  }
+  // And the sustained sounds are never what the breath axis asks for.
+  assert.doesNotMatch(consoleDirections({ expression: 75, breath: 75 }).join('\n'), /加 .*panting|panting 或/);
 });

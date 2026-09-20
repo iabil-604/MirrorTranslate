@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.29.6';
+} from './prompts.js?v=0.29.9';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.29.6';
+export const APP_VERSION = '0.29.9';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -344,8 +344,10 @@ export const MARK_TAGS = Object.freeze([
   ['疲惫', 'tired', 'head'], ['哀求', 'pleading', 'head'],
 ].map(([label, tag, at]) => Object.freeze({ label, tag, at })));
 export const MARK_TAG_LABELS = Object.freeze(MARK_TAGS.map(item => item.label));
+// 「……」 is deliberately not among these. A pause tag dropped into a drawn-out line is read by the
+// voice model as something to perform, and on a line like 「不……又甜又酸」 what it performs is a moan.
+// The models already hear an ellipsis; they do not need to be told to stop at one.
 export const RECOMMENDED_MARKS = Object.freeze([
-  Object.freeze({ punct: '……', tag: '停顿', at: 'inline' }),
   Object.freeze({ punct: '！！', tag: '加大音量', at: 'head' }),
   Object.freeze({ punct: '？！', tag: '惊讶', at: 'head' }),
 ]);
@@ -540,6 +542,10 @@ export const DEFAULT_TTS = Object.freeze({
   prompts: Object.freeze({ simple: '', deep: '' }),
   // The saved connection the readings go to; empty follows the translation's own setting.
   deepChannelId: '',
+  // The longest one analysis may take, counted from the request going out, whether or not the model
+  // is still writing. The connection's own timeout only counts silence, so a model that thinks out
+  // loud can hold a floor open for as long as it likes without this.
+  analysisLimitSec: 150,
   // Sentences per analysis batch; 0 sends the whole floor in one request.
   batchSize: 0,
   // A play on a floor the simple reading has not seen: ask first, always analyse, or read the plain text.
@@ -570,6 +576,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   ttsVoices: {},
   // Voice ids the reader has saved by name, shared across every character card.
   voiceLibrary: [],
+  // Whole consoles saved by name: the set of stops and rules that suits a kind of scene, kept so it
+  // can be put back when that kind of scene comes round again. Global, like the voice library.
+  consolePresets: [],
   theme: 'day',
   autoGeneration: true,
   autoSwipe: true,
@@ -970,6 +979,25 @@ export function normalizeFishSettings(value) {
 
 // Voices saved by name, independent of any character card. `id` is a local handle for the rows on the
 // settings page; `voiceId` is what the provider knows.
+/** Consoles saved by name. The console itself is normalised the same way as any other. */
+export function normalizeConsolePresets(value) {
+  const seen = new Set();
+  return (Array.isArray(value) ? value : [])
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const name = String(item.name ?? '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 40);
+      if (!name) return null;
+      const id = String(item.id ?? '').trim().slice(0, 40) || `console-${index + 1}`;
+      return { id, name, console: normalizeConsole(item.console) };
+    })
+    .filter(item => {
+      if (!item || seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    })
+    .slice(0, 40);
+}
+
 export function normalizeVoiceLibrary(value) {
   const seen = new Set();
   return (Array.isArray(value) ? value : [])
@@ -1078,6 +1106,7 @@ export function normalizeTts(value) {
     // The connection chosen for analysis in earlier versions is the deep reading's now; the simple
     // reading follows the translation.
     deepChannelId: String(source.deepChannelId ?? source.channelId ?? '').trim().slice(0, 80),
+    analysisLimitSec: clampInteger(source.analysisLimitSec, 20, 900, DEFAULT_TTS.analysisLimitSec),
     batchSize: normalizeBatchSize(source.batchSize),
     askAnalysis: TTS_ASK_MODES.includes(source.askAnalysis) ? source.askAnalysis : DEFAULT_TTS.askAnalysis,
     deepUnlocked: source.deepUnlocked === true,
@@ -1210,6 +1239,7 @@ export function mergeSettings(value = {}) {
     if (voices.length) merged.ttsVoices[characterKey] = voices;
   }
   merged.voiceLibrary = normalizeVoiceLibrary(source.voiceLibrary);
+  merged.consolePresets = normalizeConsolePresets(source.consolePresets);
   merged.includeWorldbook = Boolean(merged.includeWorldbook);
   merged.includeCharacterCard = Boolean(merged.includeCharacterCard);
   merged.includeRecentContext = Boolean(merged.includeRecentContext);
