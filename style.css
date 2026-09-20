@@ -770,7 +770,8 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-sentence[data-current="true"] .jy-mini-sentence-mark { color: var(--jy-accent); }
 .jy-mini-row-body, .jy-mini-sentence-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .jy-mini-row-src { color: var(--jy-muted); font-size: 11px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jy-mini-row-dst, .jy-mini-sentence-text { font-size: 12.5px; line-height: 1.6; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.jy-mini-row-dst, .jy-mini-sentence-echo { margin-top: 2px; font-size: 11.5px; color: var(--jy-muted); overflow: hidden; text-overflow: ellipsis; }
+.jy-mini-sentence-text { font-size: 12.5px; line-height: 1.6; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .jy-mini-row[data-state="missing"] .jy-mini-row-dst { color: var(--jy-error); }
 .jy-mini-row[data-state="running"] .jy-mini-row-dst, .jy-mini-row[data-state="pending"] .jy-mini-row-dst { color: var(--jy-muted); }
 .jy-mini-row-tags { display: flex; flex-wrap: wrap; gap: 4px; }

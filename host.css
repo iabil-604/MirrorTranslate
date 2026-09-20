@@ -533,3 +533,9 @@
     font-size: 0.9em;
   }
 }
+
+#chat .jy-tts-pick-box { display: none; align-items: center; margin-right: 3px; vertical-align: middle; }
+#chat .jy-tts-pick-box input { width: 17px; height: 17px; margin: 0; accent-color: var(--SmartThemeQuoteColor, #2f6b4f); }
+#chat .mes_text[data-jy-tts-pick] .jy-tts-pick-box { display: inline-flex; }
+#chat .jy-tts-bar-pick-count { font-size: 11.5px; opacity: 0.75; }
+#chat .jy-tts-bar-pick-save[disabled] { opacity: 0.5; }

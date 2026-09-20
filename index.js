@@ -67,7 +67,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.29.9';
+} from './core.js?v=0.30.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -115,10 +115,10 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.29.9';
-import { createTtsStore } from './tts-store.js?v=0.29.9';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.29.9';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.29.9';
+} from './tts.js?v=0.30.0';
+import { createTtsStore } from './tts-store.js?v=0.30.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.30.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.30.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -127,7 +127,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.29.9';
+} from './processing.js?v=0.30.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -144,9 +144,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.29.9';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.29.9';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.29.9';
+} from './prompts.js?v=0.30.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.30.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.30.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -160,15 +160,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.29.9';
-import { sampleThemeBackground } from './theme-probe.js?v=0.29.9';
+} from './palette.js?v=0.30.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.30.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.29.9';
+} from './diagnostics.js?v=0.30.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -4526,6 +4526,67 @@ function stopTtsPlayback() {
   if (typeof document !== 'undefined') highlightTtsUtterance(null, null);
 }
 
+/** Turns choosing on or off for one floor; the ticks themselves live in the floor's own markup. */
+function setTtsPicking(messageId, side) {
+  const root = ttsMessageText(messageId);
+  if (!root) return;
+  if (side) root.dataset.jyTtsPick = side;
+  else {
+    delete root.dataset.jyTtsPick;
+    for (const box of root.querySelectorAll('[data-jy-tts-pick-line]')) box.checked = false;
+  }
+  syncTtsPicking(messageId);
+}
+
+/** What the bar shows while choosing: how many paragraphs are ticked, and the controls for them. */
+function syncTtsPicking(messageId) {
+  const root = ttsMessageText(messageId);
+  const bar = root?.querySelector(':scope > .jy-tts-bar');
+  if (!root || !bar) return;
+  const side = root.dataset.jyTtsPick ?? '';
+  const chosen = ttsPickedLines(messageId, side);
+  const count = bar.querySelector('[data-jy-tts-pick-count]');
+  if (count) {
+    count.hidden = !side;
+    count.textContent = chosen.length ? `已选 ${chosen.length} 段` : '勾选要缓存的段落';
+  }
+  for (const [selector, shown] of [['.jy-tts-bar-pick', !side], ['.jy-tts-bar-pick-save', Boolean(side)], ['.jy-tts-bar-pick-all', Boolean(side)], ['.jy-tts-bar-pick-exit', Boolean(side)]]) {
+    const button = bar.querySelector(selector);
+    if (button) button.hidden = !shown;
+  }
+  const save = bar.querySelector('.jy-tts-bar-pick-save');
+  if (save) save.disabled = !chosen.length;
+}
+
+/** The paragraphs ticked on one floor, in the order they are read. */
+function ttsPickedLines(messageId, side) {
+  const root = ttsMessageText(messageId);
+  if (!root) return [];
+  return [...root.querySelectorAll('[data-jy-tts-pick-line]')]
+    .filter(box => box.checked && (!side || box.dataset.jyTtsSide === side))
+    .map(box => Number(box.dataset.jyTtsPickLine));
+}
+
+/** Makes the ticked paragraphs and hands the file over, the same way every other save does. */
+async function saveTtsPicked(messageId, side) {
+  const lineIds = ttsPickedLines(messageId, side);
+  if (!lineIds.length) throw new Error('先勾选要缓存的段落。');
+  const answer = await ttsAskBox({
+    title: `缓存第 ${messageId} 楼选中的 ${lineIds.length} 段`,
+    text: '还没生成的句子会先向 Fish 要一次，然后拼成一个文件交给你保存。',
+    actions: [{ value: 'yes', label: `确认缓存这 ${lineIds.length} 段`, primary: true }, { value: 'cancel', label: '再想想' }],
+  }, { label: '缓存选中的段落' });
+  if (answer !== 'yes') return;
+  setTtsStatus(messageId, `正在准备选中的 ${lineIds.length} 段…`, 'busy');
+  try {
+    const built = await downloadTtsAudio({ messageId, side, lineIds });
+    await ttsOfferFile(built.blob, built.name, { note: built.spliced ? '改过和单独重做的句子已按顺序拼在原位置，所以是 wav' : '' });
+    setTtsPicking(messageId, null);
+  } finally {
+    setTtsStatus(messageId, '', 'idle');
+  }
+}
+
 /** Nothing in a floor is still being made, so nothing in it still says it is. */
 function clearTtsBusyMarks(messageId) {
   if (typeof document === 'undefined') return;
@@ -5056,10 +5117,11 @@ async function ttsSaveSource({ messageId = null, side = null } = {}) {
  * order, made first when any is missing.
  */
 async function downloadTtsAudio(options = null) {
-  const { scope = null, messageId = null, side = null, lineId = null } = typeof options === 'string' ? { scope: options } : (options ?? {});
+  const { scope = null, messageId = null, side = null, lineId = null, lineIds = null } = typeof options === 'string' ? { scope: options } : (options ?? {});
   const source = await ttsSaveSource({ messageId, side });
   const tts = ttsSettings(source.settings);
-  const wanted = lineId !== null ? 'current' : (scope ?? (tts.downloadScope === 'auto' ? 'floor' : tts.downloadScope));
+  const picked = Array.isArray(lineIds) && lineIds.length ? new Set(lineIds.map(Number)) : null;
+  const wanted = picked ? 'picked' : lineId !== null ? 'current' : (scope ?? (tts.downloadScope === 'auto' ? 'floor' : tts.downloadScope));
   const { floor, items, settings } = source;
   const transport = runtime.tts.transport?.messageId === source.messageId ? runtime.tts.transport : null;
   if (wanted === 'sentence') {
@@ -5070,7 +5132,10 @@ async function downloadTtsAudio(options = null) {
   const lines = groupSegmentsByLine(items.map(item => item.segment));
   let chosen = items;
   let lineIndex = -1;
-  if (wanted === 'current') {
+  if (picked) {
+    chosen = items.filter(item => picked.has(item.segment.lineId));
+    if (!chosen.length) throw new Error('选中的段落里没有可朗读的句子。');
+  } else if (wanted === 'current') {
     const which = lineId ?? source.current?.lineId ?? lines[0]?.lineId;
     lineIndex = lines.findIndex(line => line.lineId === which);
     chosen = items.filter(item => item.segment.lineId === which);
@@ -5094,7 +5159,8 @@ async function downloadTtsAudio(options = null) {
   const spliced = downloadNeedsSplice(entries);
   const blob = spliced ? await ttsSplicedWav(entries) : await ttsDownloadBlob(records, tts.fish.format);
   const extension = spliced ? 'wav' : (tts.fish.format === 'opus' ? 'ogg' : tts.fish.format);
-  const name = `镜译-第${source.messageId}楼${wanted === 'current' ? `-第${(lineIndex >= 0 ? lineIndex : 0) + 1}段` : ''}.${extension}`;
+  const part = picked ? `-选中${picked.size}段` : wanted === 'current' ? `-第${(lineIndex >= 0 ? lineIndex : 0) + 1}段` : '';
+  const name = `镜译-第${source.messageId}楼${part}.${extension}`;
   return { blob, name, bytes: blob.size, records: records.length, spliced };
 }
 
@@ -5663,7 +5729,17 @@ function makeTtsLineTools(messageId, line, side) {
   box.dataset.jyTtsSide = side;
   box.setAttribute('contenteditable', 'false');
   const suffix = side === 'source' ? '（原文）' : '';
+  const pick = document.createElement('label');
+  pick.className = 'jy-tts-pick-box';
+  pick.title = '选中这一段，一起缓存到本地';
+  pick.setAttribute('contenteditable', 'false');
+  const tick = document.createElement('input');
+  tick.type = 'checkbox';
+  tick.dataset.jyTtsPickLine = String(line.lineId);
+  tick.dataset.jyTtsSide = side;
+  pick.appendChild(tick);
   box.append(
+    pick,
     makeTtsLineButton(messageId, line, side, {
       action: 'play-line', className: 'jy-tts-line-play', icon: TTS_ICON_PLAY, text: '播放',
       label: `从这一段读起（${line.ids.length} 句）${suffix}`,
@@ -5753,7 +5829,18 @@ function makeTtsBar(messageId, tts, count, readingStyle = '', sides = [tts.side]
   const stop = control('stop', 'jy-tts-bar-stop', `${TTS_ICON_STOP}<span>停止</span>`, true);
   const panel = control('panel', 'jy-tts-bar-panel', '<span>朗读面板</span>');
   panel.title = '打开悬浮窗的朗读面板：进度、上一段、下一段、暂停、缓存到本地';
-  bar.append(play, ...(playOther ? [playOther] : []), meta, status, pause, stop, panel);
+  // Choosing happens here rather than in the floating window: reading the original, the window's list
+  // is in the original's language, and the translation the reader can actually read is in the chat.
+  const pick = control('pick', 'jy-tts-bar-pick', '<span>缓存</span>', false, sides[0]);
+  pick.title = '勾选几段对白，一起缓存到本地';
+  const picked = document.createElement('span');
+  picked.className = 'jy-tts-bar-pick-count';
+  picked.dataset.jyTtsPickCount = '';
+  picked.hidden = true;
+  const save = control('pick-save', 'jy-tts-bar-pick-save', '<span>缓存所选</span>', true, sides[0]);
+  const all = control('pick-all', 'jy-tts-bar-pick-all', '<span>全选</span>', true, sides[0]);
+  const exit = control('pick-exit', 'jy-tts-bar-pick-exit', '<span>退出选择</span>', true);
+  bar.append(play, ...(playOther ? [playOther] : []), meta, status, pause, stop, pick, picked, save, all, exit, panel);
   return bar;
 }
 
@@ -5990,6 +6077,13 @@ function bindTtsDom() {
   if (typeof document === 'undefined' || !runtime.initialized || !ttsSettings().enabled) return;
   if (!runtime.tts.clickCleanup) {
     const onClick = event => {
+      const ticked = event.target instanceof Element ? event.target.closest('[data-jy-tts-pick-line]') : null;
+      if (ticked?.closest('#chat')) {
+        // A tick is its own business: it must not start reading the paragraph it sits beside.
+        event.stopPropagation();
+        syncTtsPicking(Number(ticked.closest('.mes[mesid]')?.getAttribute('mesid')));
+        return;
+      }
       const target = event.target instanceof Element ? event.target.closest('[data-jy-tts-action]') : null;
       if (!target || !target.closest('#chat')) return;
       event.preventDefault();
@@ -6001,6 +6095,18 @@ function bindTtsDom() {
       else if (action === 'pause') toggleTtsPause();
       else if (action === 'play-floor') void playTtsFloor(messageId, side);
       else if (action === 'panel') void openTtsPanel(messageId, null, side);
+      else if (action === 'pick' || action === 'pick-exit') setTtsPicking(messageId, action === 'pick' ? (side ?? primaryTtsSide()) : null);
+      else if (action === 'pick-all') {
+        const root = ttsMessageText(messageId);
+        const boxes = [...(root?.querySelectorAll('[data-jy-tts-pick-line]') ?? [])].filter(box => box.dataset.jyTtsSide === (side ?? primaryTtsSide()));
+        const wanted = boxes.some(box => !box.checked);
+        for (const box of boxes) box.checked = wanted;
+        syncTtsPicking(messageId);
+      } else if (action === 'pick-save') {
+        void saveTtsPicked(messageId, side ?? primaryTtsSide()).catch(error => {
+          if (!isAbortError(error)) toast('error', safeError(error));
+        });
+      }
       else if (action === 'inspect') void openTtsPanel(messageId, Number(target.dataset.jyTtsUtt), side);
       else if (action === 'play') {
         const utteranceId = Number(target.dataset.jyTtsUtt);
@@ -10494,6 +10600,16 @@ async function openMiniWindow() {
       text.className = 'jy-mini-sentence-text';
       text.textContent = segment.text;
       body.appendChild(text);
+      // Reading the original, the list is in the original's language. The translation of that line
+      // sits under it, because a reader who cannot read the original cannot choose anything in it.
+      const mirror = side === 'source' ? prepared.floor.references?.get(segment.lineId) : '';
+      if (mirror) {
+        const echo = document.createElement('div');
+        echo.className = 'jy-mini-sentence-echo';
+        echo.textContent = miniShort(mirror, 60);
+        echo.title = mirror;
+        body.appendChild(echo);
+      }
       const tags = document.createElement('div');
       tags.className = 'jy-mini-row-tags';
       const who = document.createElement('span');
