@@ -67,7 +67,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.31.0';
+} from './core.js?v=0.31.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -115,10 +115,10 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.31.0';
-import { createTtsStore } from './tts-store.js?v=0.31.0';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.31.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.31.0';
+} from './tts.js?v=0.31.1';
+import { createTtsStore } from './tts-store.js?v=0.31.1';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.31.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.31.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -127,7 +127,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.31.0';
+} from './processing.js?v=0.31.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -144,9 +144,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.31.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.31.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.31.0';
+} from './prompts.js?v=0.31.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.31.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.31.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -160,15 +160,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.31.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.31.0';
+} from './palette.js?v=0.31.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.31.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.31.0';
+} from './diagnostics.js?v=0.31.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -4976,38 +4976,48 @@ function ttsFloorClosed(messageId, { translated = false } = {}) {
     runtime.tts.closing.delete(id);
     runtime.timers.delete(timer);
     if (runtime.mainGenerationActive) return;
-    // A translation is still writing this floor paragraph by paragraph. Nothing is read from a text
-    // that is still changing: the appointment is simply moved.
-    if (ttsFloorTranslating(id)) {
-      ttsFloorClosed(id, { translated });
-      return;
-    }
-    if (translated) {
-      forgetTtsItems(id);
-      scheduleTtsDecorate(id, { force: true });
-    }
     const settings = runtime.settings;
     const current = ttsSettings(settings);
     const message = getContext().chat?.[id];
     if (!current.enabled || !message || message.is_user || message.is_system) return;
+    const reads = ttsSides(settings);
+    // A translation is still being written into this floor. The original is untouched by that, so a
+    // reading of the original goes ahead now, in parallel; a reading of the translation waits for a
+    // text that does not exist yet, and the appointment is simply moved.
+    const busy = ttsFloorTranslating(id);
+    if (busy && !reads.includes('source')) {
+      ttsFloorClosed(id, { translated });
+      return;
+    }
+    // Throwing the prepared floor away under a running analysis would abort it; that tidy-up belongs
+    // to the pass that happens once the writing has stopped.
+    if (translated && !busy) {
+      forgetTtsItems(id);
+      scheduleTtsDecorate(id, { force: true });
+    }
     // A translation on its way brings the simple reading's marks with it; its side is read once it lands.
     const translating = settings.enabled !== false && settings.autoGeneration === true && !translated;
-    // The original is read: the analysis can be made now. Only the translation is read: it has to
-    // exist first, so the reading waits for it to land and goes out then.
-    const side = ttsSides(settings).includes('source') ? 'source' : 'translation';
-    const readable = side === 'source' ? !translated : (translated || !translating);
+    // The original is read: it is there whatever the translation is doing, so every announcement of
+    // this floor is a chance to read it. Asking twice costs nothing — the analysis is kept per text
+    // version, and the second call finds it. Only the translation is read: it has to exist first, so
+    // that one waits until it lands.
+    const side = reads.includes('source') ? 'source' : 'translation';
+    const readable = side === 'source' || translated || !translating;
     try {
       if (readable && (current.mode === 'deep' || (current.mode === 'simple' && !translating))) await analyseTtsFloorNow(id, side, current.mode);
       if (current.autoGenerate) {
-        for (const each of ttsSides(settings)) {
+        for (const each of reads) {
           // The translation's own side is made once the translation is there to read.
-          if (each === 'translation' && translating) continue;
+          if (each === 'translation' && (translating || busy)) continue;
           await pregenerateTtsFloor(id, { quiet: true, side: each, once: true });
         }
       }
     } catch (error) {
       if (!isAbortError(error)) recordDiagnostic('warn', 'tts.auto', `第 ${id} 楼正文闭合后的自动处理失败：${safeError(error)}`, { floor: id });
     }
+    // The original was read while the translation was still coming; the translation's own side, and
+    // the tidy-up that goes with it, are what this floor is asked about again once it lands.
+    if (busy && reads.includes('translation')) ttsFloorClosed(id, { translated });
   }, translated ? 800 : 1200);
   runtime.tts.closing.set(id, timer);
   runtime.timers.add(timer);
@@ -10767,7 +10777,8 @@ async function openMiniWindow() {
       const failed = parts.some(step => step.state === 'error');
       pill(`${failed ? '! ' : active ? '◌ ' : done === parts.length ? '✓ ' : ''}生成 ${done}/${parts.length}${active?.detail ? ` · ${active.detail}` : ''}`, failed ? 'error' : active ? 'active' : done === parts.length ? 'done' : 'pending');
     }
-    const request = ttsRequestSettings(runtime.settings);
+    // Named for the reading in force: a deep floor shows the deep connection, not the translation's.
+    const request = ttsRequestSettings(runtime.settings, ttsAnalysisDepth(ttsSettings()));
     if (request.apiMode === 'independent') pill(getActiveChannel(request).name, 'plain');
     box.hidden = false;
   };
@@ -11443,9 +11454,12 @@ async function openMiniWindow() {
     button.disabled = true;
     try {
       if (action === 'tts-read-floor') {
-        const messageId = inspecting?.messageId ?? runtime.tts.transport?.messageId ?? viewFloor ?? latestAssistantMessageId(getContext());
+        // The sentence open in the inspector counts only while it belongs to the floor on screen;
+        // otherwise this read the floor whose detail happened to be open last.
+        const opened = inspecting && (!Number.isInteger(viewFloor) || inspecting.messageId === viewFloor) ? inspecting.messageId : null;
+        const messageId = opened ?? viewFloor ?? runtime.tts.transport?.messageId ?? latestAssistantMessageId(getContext());
         if (!Number.isInteger(messageId)) throw new Error('当前聊天里还没有 AI 楼层。');
-        void playTtsFloor(messageId, inspecting?.side ?? null);
+        void playTtsFloor(messageId, inspecting?.messageId === messageId ? inspecting.side : null);
       } else if (action === 'tts-apply') {
         if (!inspecting) throw new Error('先选一句。');
         button.textContent = '生成中…';

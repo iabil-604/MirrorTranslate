@@ -1,4 +1,4 @@
-import { unifySpeakerNames } from './core.js?v=0.31.0';
+import { unifySpeakerNames } from './core.js?v=0.31.1';
 
 // ---------------------------------------------------------------------------------------------
 // Who is speaking, read off the text itself.
