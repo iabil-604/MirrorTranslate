@@ -13,9 +13,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.32.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.32.0';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.32.0';
+} from './core.js?v=0.32.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.32.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.32.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -1662,42 +1662,146 @@ export function stripCues(text) {
 /**
  * Cuts a floor into requests.
  *
- * A new request starts where a model that cannot switch speakers mid-text changes voice, where a
- * sentence with a voice meets one without (the provider's default voice cannot be indexed in a speaker
- * array), where the prosody steps change, and when the character budget would run out.
+ * Some cuts are the provider's: where a model that cannot switch speakers mid-text changes voice, where
+ * a sentence with a voice meets one without (the provider's default voice cannot be indexed in a speaker
+ * array), and — unless the floor goes whole — where the prosody steps change. Between those, the budget
+ * decides, and it counts what the request carries: every sentence as it is sent (`textOf`, its cues
+ * included), the line breaks between sentences and the speaker tags.
  */
-export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosodySplit = true } = {}) {
+export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosodySplit = true, wholeFloor = false, textOf = null } = {}) {
   const multi = fishSupportsMultiSpeaker(model);
   const budget = Math.max(1, Number(maxChars) || 1500);
-  const parts = [];
-  let current = [];
-  let characters = 0;
+  const sent = typeof textOf === 'function' ? item => String(textOf(item)) : item => String(item.segment.text);
+  const runs = [];
+  let run = [];
   let voice = null;
   let voiced = null;
   let prosody = null;
   for (const item of Array.isArray(items) ? items : []) {
-    const length = String(item.segment.text).length;
     const hasVoice = Boolean(item.voiceId);
-    const step = JSON.stringify(sentenceProsody(item, { speed: 1, volume: 0, model }, { prosodySplit }));
-    const breaks = current.length && (
-      (!multi && item.voiceId !== voice)
-      || hasVoice !== voiced
-      || step !== prosody
-      || characters + length > budget
-    );
-    if (breaks) {
-      parts.push(current);
-      current = [];
-      characters = 0;
+    // Sent as one piece, the floor keeps one prosody: a change of speed or volume is no reason to cut it.
+    const step = wholeFloor ? '' : JSON.stringify(sentenceProsody(item, { speed: 1, volume: 0, model }, { prosodySplit }));
+    if (run.length && ((!multi && item.voiceId !== voice) || hasVoice !== voiced || step !== prosody)) {
+      runs.push(run);
+      run = [];
     }
-    current.push(item);
-    characters += length;
+    run.push(item);
     voice = item.voiceId;
     voiced = hasVoice;
     prosody = step;
   }
-  if (current.length) parts.push(current);
-  return parts;
+  if (run.length) runs.push(run);
+  return runs.flatMap(each => cutToBudget(each, { budget, multi, sent }));
+}
+
+// What a sentence feels, as far as a cut is concerned: its mood at its strength, or nothing.
+function feltMood(item) {
+  const segment = item?.segment ?? {};
+  const word = String(segment.voice?.emotion || segment.emotion || '').trim().toLowerCase();
+  if (!word || word === 'neutral') return '';
+  return `${word}/${normalizeIntensity(segment.voice?.intensity ?? segment.intensity ?? 1)}`;
+}
+
+// What a cut costs the listening. Inside one request Fish reads every chunk against the audio before
+// it; a new request starts cold. Cold costs nothing where the paragraph after the cut opens on the
+// narrator with no feeling of their own: whatever is said next gets its lead-in inside the new request.
+// It costs a little where the feeling is the same on both sides. It costs most where the feeling turns
+// right at the cut, since that turn is what sending the floor whole was for. A cut inside a paragraph
+// is worse than any of them, and is only ever made in a paragraph over the budget by itself.
+const CUT_COST = Object.freeze({ calm: 0, steady: 1, turn: 3, inside: 4 });
+
+function cutCost(before, after, inside) {
+  const mood = feltMood(after);
+  const kind = after?.segment?.type === 'narration' && !mood ? 'calm' : mood === feltMood(before) ? 'steady' : 'turn';
+  return CUT_COST[kind] + (inside ? CUT_COST.inside : 0);
+}
+
+/**
+ * One run of sentences that may share a request, in as few requests as the budget allows.
+ *
+ * Cuts fall between paragraphs; a paragraph over the budget by itself is the only one cut between its
+ * sentences. Of the ways to make that few requests, the one taken puts its cuts where they cost the
+ * listening least, and keeps the requests close to the same length, so no tail of a sentence or two
+ * is read with nothing before it.
+ */
+function cutToBudget(run, { budget, multi, sent }) {
+  const count = run.length;
+  if (count <= 1) return count ? [run] : [];
+  const lengths = run.map(item => sent(item).length);
+  // reach[from]: every request [from, to) that fits, as [to, characters]. A lone sentence always fits:
+  // there is nowhere to cut it.
+  const reach = [];
+  for (let from = 0; from < count; from += 1) {
+    const options = [];
+    const voices = [];
+    let words = 0;
+    let tags = 0;
+    let last = null;
+    for (let to = from + 1; to <= count; to += 1) {
+      const item = run[to - 1];
+      if (item.voiceId && !voices.includes(item.voiceId)) voices.push(item.voiceId);
+      if (to - 1 === from || item.voiceId !== last) tags += `<|speaker:${voices.indexOf(item.voiceId)}|>`.length;
+      last = item.voiceId;
+      words += lengths[to - 1];
+      const characters = words + (to - from - 1) + (multi && voices.length > 1 ? tags : 0);
+      if (characters > budget && to > from + 1) break;
+      options.push([to, characters]);
+    }
+    reach.push(options);
+  }
+  const fits = (from, to) => reach[from].some(([end]) => end === to);
+  // Where a cut may go: between paragraphs, and between the sentences of a paragraph too long to send alone.
+  const open = new Array(count + 1).fill(false);
+  const inside = new Array(count + 1).fill(false);
+  open[0] = true;
+  open[count] = true;
+  for (let start = 0; start < count;) {
+    let end = start + 1;
+    while (end < count && run[end].segment?.lineId === run[start].segment?.lineId) end += 1;
+    if (end < count) open[end] = true;
+    if (!fits(start, end)) {
+      for (let at = start + 1; at < end; at += 1) {
+        open[at] = true;
+        inside[at] = true;
+      }
+    }
+    start = end;
+  }
+  // The fewest requests first: every cut is a cold start.
+  const fewest = new Array(count + 1).fill(Infinity);
+  fewest[0] = 0;
+  for (let from = 0; from < count; from += 1) {
+    if (!open[from] || fewest[from] === Infinity) continue;
+    for (const [to] of reach[from]) if (open[to] && fewest[from] + 1 < fewest[to]) fewest[to] = fewest[from] + 1;
+  }
+  const parts = fewest[count];
+  if (parts <= 1) return [run];
+  // Then, among the ways to make that many, the cheapest cuts and the most even requests.
+  const even = lengths.reduce((sum, length) => sum + length, 0) / parts;
+  const cost = Array.from({ length: parts + 1 }, () => new Array(count + 1).fill(Infinity));
+  const back = Array.from({ length: parts + 1 }, () => new Array(count + 1).fill(-1));
+  cost[0][0] = 0;
+  for (let made = 0; made < parts; made += 1) {
+    for (let from = 0; from < count; from += 1) {
+      if (!open[from] || cost[made][from] === Infinity) continue;
+      for (const [to, characters] of reach[from]) {
+        if (!open[to] || (to === count) !== (made + 1 === parts)) continue;
+        const cut = to < count ? cutCost(run[to - 1], run[to], inside[to]) : 0;
+        const total = cost[made][from] + cut + ((characters - even) / even) ** 2;
+        if (total < cost[made + 1][to]) {
+          cost[made + 1][to] = total;
+          back[made + 1][to] = from;
+        }
+      }
+    }
+  }
+  const result = [];
+  for (let made = parts, to = count; made > 0; made -= 1) {
+    const from = back[made][to];
+    result.unshift(run.slice(from, to));
+    to = from;
+  }
+  return result;
 }
 
 /**
@@ -1706,9 +1810,10 @@ export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosod
  * One voice sends a plain reference id and no speaker tags, which every model accepts. Several voices
  * send the id array and a `<|speaker:N|>` tag wherever the voice changes, N indexing that array. No
  * voice at all sends no reference id and lets Fish choose. The mood rides as cues at the start of its
- * sentence, where Fish says sentence-level cues work best, and the prosody is the part's.
+ * sentence, where Fish says sentence-level cues work best, and the prosody is the part's. A floor sent
+ * whole keeps the settings' own speed and volume: one sentence's pace must not become the floor's.
  */
-export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit = true, tamePunctuation = false, directions = true, lean = false } = {}) {
+export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit = true, tamePunctuation = false, directions = true, lean = false, wholeFloor = false } = {}) {
   const list = Array.isArray(items) ? items : [];
   const voices = [];
   for (const item of list) if (item.voiceId && !voices.includes(item.voiceId)) voices.push(item.voiceId);
@@ -1726,7 +1831,7 @@ export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit
     text += sentence;
     spans.push({ id: item.segment.id, text: item.override?.text ? stripCues(sentence) : item.segment.text });
   });
-  const prosody = list.length ? sentenceProsody(list[0], fish, { prosodySplit }) : { speed: fish.speed, volume: fish.volume };
+  const prosody = list.length && !wholeFloor ? sentenceProsody(list[0], fish, { prosodySplit }) : flatProsody(fish);
   const body = {
     text,
     ...(voices.length ? { reference_id: multi ? voices : voices[0] } : {}),
@@ -1754,6 +1859,19 @@ export const FISH_MIME = Object.freeze({ mp3: 'audio/mpeg', opus: 'audio/ogg', w
 // the wiser.
 // ---------------------------------------------------------------------------------------------
 
+/** The settings' own speed and volume, with nothing of any one sentence in them. */
+function flatProsody(fish) {
+  return {
+    speed: Number(Math.min(2, Math.max(0.5, Number(fish?.speed) || 1)).toFixed(2)),
+    volume: Number(Math.min(20, Math.max(-20, Number(fish?.volume) || 0)).toFixed(1)),
+  };
+}
+
+/** Whether the floor goes to the provider as one request: the reading's choice of request unit. */
+function sendsWholeFloor(tts) {
+  return tts?.requestUnit === 'floor';
+}
+
 /** How the reading's marks are compiled for this provider under these settings. */
 function fishCompileOptions(tts) {
   return {
@@ -1774,14 +1892,24 @@ export const FISH_ADAPTER = Object.freeze({
   vocabulary: Object.freeze({ emotions: FISH_EMOTIONS, tones: FISH_TONES, sounds: FISH_SOUNDS }),
   /** The text one sentence sends: its cues in the provider's markup ahead of the words. */
   sentenceText: (item, tts) => sentenceFishText(item, tts.fish, fishCompileOptions(tts)),
-  /** The provider's prosody parameters for one sentence. */
-  prosody: (item, tts) => sentenceProsody(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false }),
-  /** A unit's items cut into requests. */
-  parts: (items, tts) => planFishParts(items, { model: tts.fish.model, maxChars: tts.fish.maxChars, prosodySplit: tts?.prosodySplit !== false }),
+  /** The provider's prosody parameters for one sentence; a floor sent whole has the floor's. */
+  prosody: (item, tts) => (sendsWholeFloor(tts) ? flatProsody(tts.fish) : sentenceProsody(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false })),
+  /** A unit's items cut into requests, measured by the text each sentence is actually sent as. */
+  parts: (items, tts) => planFishParts(items, {
+    model: tts.fish.model,
+    maxChars: tts.fish.maxChars,
+    prosodySplit: tts?.prosodySplit !== false,
+    wholeFloor: sendsWholeFloor(tts),
+    textOf: item => sentenceFishText(item, tts.fish, fishCompileOptions(tts)),
+  }),
   /** One request's body, with the span each sentence occupies in its text. */
-  payload: (items, tts) => buildFishPayload(items, tts.fish, fishCompileOptions(tts)),
-  /** Everything in the settings that changes the audio, so a change retires the recordings. */
-  fingerprint: (tts, { consoles = '' } = {}) => fishFingerprint(tts.fish, { ...fishCompileOptions(tts), mode: tts.mode, consoles }),
+  payload: (items, tts) => buildFishPayload(items, tts.fish, { ...fishCompileOptions(tts), wholeFloor: sendsWholeFloor(tts) }),
+  /**
+   * Everything in the settings that changes the audio, so a change retires the recordings. A floor
+   * sent whole is one continuous take with one prosody, a different recording from the same floor sent
+   * a paragraph at a time; paragraphs and single sentences are the same sound and share their audio.
+   */
+  fingerprint: (tts, { consoles = '' } = {}) => fishFingerprint(tts.fish, { ...fishCompileOptions(tts), mode: tts.mode, consoles, wholeFloor: sendsWholeFloor(tts) }),
   mime: format => FISH_MIME[format] ?? 'audio/mpeg',
   supportsMultiSpeaker: model => fishSupportsMultiSpeaker(model),
 });
@@ -2087,7 +2215,7 @@ export function playbackWindow(entries, index, duration = 0) {
   };
 }
 
-export function fishFingerprint(fish, { emotionCues = true, prosodySplit = true, tamePunctuation = false, mode = '', consoles = '' } = {}) {
+export function fishFingerprint(fish, { emotionCues = true, prosodySplit = true, tamePunctuation = false, mode = '', consoles = '', wholeFloor = false } = {}) {
   return {
     provider: 'fish',
     // The reading mode and the consoles change the text and the prosody, so they retire recordings too.
@@ -2105,6 +2233,8 @@ export function fishFingerprint(fish, { emotionCues = true, prosodySplit = true,
     emotionCues,
     prosodySplit,
     tamePunctuation,
+    // Only present when set, so every recording made before the choice existed keeps its fingerprint.
+    ...(wholeFloor ? { wholeFloor: true } : {}),
   };
 }
 

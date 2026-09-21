@@ -466,7 +466,10 @@ test('a floor is split into requests by voice on S1, by voicelessness, by prosod
   const items = [item(1, 'a'), item(2, 'a'), item(3, 'b'), item(4, 'a')];
   assert.deepEqual(planFishParts(items, { model: 's1' }).map(part => part.map(entry => entry.segment.id)), [[1, 2], [3], [4]]);
   assert.deepEqual(planFishParts(items, { model: 's2-pro' }).map(part => part.length), [4]);
-  assert.deepEqual(planFishParts(items, { model: 's2-pro', maxChars: 25 }).map(part => part.map(entry => entry.segment.id)), [[1, 2], [3, 4]]);
+  // By size, and the size is what the request carries: 10 + 1 + 10 fits in 25; two voices with their
+  // speaker tags, 13 + 10 + 1 + 13 + 10, do not.
+  assert.deepEqual(planFishParts(items, { model: 's2-pro', maxChars: 25 }).map(part => part.map(entry => entry.segment.id)), [[1, 2], [3], [4]]);
+  assert.deepEqual(planFishParts(items, { model: 's2-pro', maxChars: 47 }).map(part => part.map(entry => entry.segment.id)), [[1, 2], [3, 4]]);
   // A sentence read faster is its own request, since Fish sets speed per request.
   const paced = [item(1, 'a'), item(2, 'a', { voice: { speed: 'fast' } }), item(3, 'a', { voice: { speed: 'fast' } }), item(4, 'a')];
   assert.deepEqual(planFishParts(paced, { model: 's2-pro' }).map(part => part.map(entry => entry.segment.id)), [[1], [2, 3], [4]]);
@@ -1317,4 +1320,184 @@ test('one axis owns the non-verbal sounds: the console can permit them, and neve
   }
   // And the sustained sounds are never what the breath axis asks for.
   assert.doesNotMatch(consoleDirections({ expression: 75, breath: 75 }).join('\n'), /加 .*panting|panting 或/);
+});
+
+test('what one Fish request carries is the reader\'s choice: a floor sent whole keeps every voice in one take and one pace', () => {
+  const item = (id, lineId, voiceId, speed) => ({ segment: { id, lineId, type: 'dialogue', text: `第${id}句。`, voice: speed ? { emotion: 'happy', speed } : null }, voiceId });
+  const items = [item(1, 1, 'v-a', null), item(2, 1, 'v-b', 'fast'), item(3, 2, 'v-a', 'slow'), item(4, 3, 'v-b', null)];
+  const paced = { fish: { model: 's2-pro', maxChars: 1500, speed: 1, volume: 0, format: 'mp3' }, prosodySplit: true, requestUnit: 'line' };
+  // A paragraph at a time still cuts where the pace changes.
+  assert.ok(FISH_ADAPTER.parts(items, paced).length > 1);
+  // The whole floor does not: one request, every voice in it.
+  const whole = { ...paced, requestUnit: 'floor' };
+  const parts = FISH_ADAPTER.parts(items, whole);
+  assert.equal(parts.length, 1);
+  const { body } = FISH_ADAPTER.payload(parts[0], whole);
+  assert.deepEqual(body.reference_id, ['v-a', 'v-b']);
+  assert.equal((body.text.match(/<\|speaker:\d\|>/g) ?? []).length, 4, 'the voice changes at every turn');
+  assert.deepEqual(body.prosody, { speed: 1, volume: 0 }, 'one sentence\'s pace is not the floor\'s');
+  assert.deepEqual(FISH_ADAPTER.prosody(items[1], whole), { speed: 1, volume: 0 });
+  // Still cut where it has to be: past the budget, or where a voice meets no voice.
+  assert.deepEqual(FISH_ADAPTER.parts(items, { ...whole, fish: { ...whole.fish, maxChars: 60 } }).map(part => part.map(entry => entry.segment.id)), [[1, 2], [3, 4]]);
+  assert.equal(FISH_ADAPTER.parts([...items, item(5, 3, '', null)], whole).length, 2);
+  // A floor sent whole is a recording of its own; a paragraph and a sentence share theirs.
+  assert.equal(FISH_ADAPTER.fingerprint(whole).wholeFloor, true);
+  assert.equal('wholeFloor' in FISH_ADAPTER.fingerprint(paced), false, 'recordings made before the choice existed keep their fingerprint');
+  assert.deepEqual(FISH_ADAPTER.fingerprint({ ...paced, requestUnit: 'sentence' }), FISH_ADAPTER.fingerprint(paced));
+  assert.equal(normalizeTts({}).requestUnit, 'line');
+  assert.equal(normalizeTts({ requestUnit: 'floor' }).requestUnit, 'floor');
+  assert.equal(normalizeTts({ requestUnit: 'whatever' }).requestUnit, 'line');
+});
+
+// A floor in the shape the reading makes: paragraphs of narration and dialogue, four voices, moods.
+function classroomFloor() {
+  const voiceOf = { 旁白: 'v-narrator', 小周: 'v-zhou', 阿岚: 'v-lan', 班长: 'v-monitor' };
+  const items = [];
+  const paragraph = (lineId, ...sentences) => {
+    for (const [who, text, emotion = null, intensity = null] of sentences) {
+      const narration = who === '旁白';
+      items.push({
+        segment: {
+          id: items.length + 1, lineId, type: narration ? 'narration' : 'dialogue', text, speaker: who, lang: 'zh',
+          emotion, intensity, voice: emotion ? { emotion, intensity: intensity ?? 1 } : null,
+        },
+        voiceId: voiceOf[who],
+      });
+    }
+  };
+  paragraph(1, ['旁白', '放学后的教室里只剩下三个人，窗外的蝉叫得正响。']);
+  paragraph(2, ['小周', '「嘿嘿，今天的值日就拜托你啦~」', 'happy', 2], ['旁白', '小周把扫把往阿岚怀里一塞。']);
+  paragraph(3, ['阿岚', '「凭什么又是我？上周也是我！」', 'angry', 1]);
+  paragraph(4, ['班长', '「小周，你再跑一个试试。」', 'angry', 2], ['旁白', '班长一把揪住了小周的后领。']);
+  paragraph(5, ['小周', '「疼疼疼！班长饶命！」', 'scared', 1]);
+  paragraph(6, ['旁白', '三个人闹完，教室又安静下来。夕阳照在黑板上，粉笔灰在光里慢慢往下落。']);
+  paragraph(7, ['阿岚', '「……其实，我下周就要转学了。」', 'sad', 1]);
+  paragraph(8, ['班长', '「你说什么？」', 'surprised', 2]);
+  paragraph(9, ['旁白', '没有人再说话。']);
+  paragraph(10, ['小周', '「那、那今天的值日我来做吧。」', 'sad', 0]);
+  return items;
+}
+
+function wholeFloorSettings(maxChars, extra = {}) {
+  return {
+    fish: { model: 's2-pro', maxChars, speed: 1, volume: 0, format: 'mp3', latency: 'normal', normalize: true, temperature: 0.7, topP: 0.7, mp3Bitrate: 128 },
+    prosodySplit: true, emotionCues: true, requestUnit: 'floor', ...extra,
+  };
+}
+
+test('a whole floor goes to Fish as one request: the voices as an array, each turn a speaker tag, each mood a cue', () => {
+  const items = classroomFloor();
+  const tts = wholeFloorSettings(10000);
+  const parts = FISH_ADAPTER.parts(items, tts);
+  assert.equal(parts.length, 1);
+  const { body, spans } = FISH_ADAPTER.payload(parts[0], tts);
+  // The same thing a speakers-plus-segments API is sent, in Fish's spelling: the voices in the order
+  // they first speak, and every stretch of text under the index of the voice that reads it.
+  assert.deepEqual(body.reference_id, ['v-narrator', 'v-zhou', 'v-lan', 'v-monitor']);
+  const segments = [...body.text.matchAll(/<\|speaker:(\d+)\|>([^<]*)/g)].map(([, index, text]) => ({ voice: body.reference_id[Number(index)], text: text.trim() }));
+  assert.equal(segments.length, 12, 'the voice changes at every one of the twelve sentences');
+  assert.deepEqual(segments.map(segment => segment.voice), items.map(item => item.voiceId));
+  assert.deepEqual(segments.slice(1, 5).map(segment => segment.text), [
+    '[delighted] 「嘿嘿，今天的值日就拜托你啦~」',
+    '小周把扫把往阿岚怀里一塞。',
+    '[angry] 「凭什么又是我？上周也是我！」',
+    '[furious] 「小周，你再跑一个试试。」',
+  ]);
+  assert.equal(segments.at(-1).text, '[disappointed] 「那、那今天的值日我来做吧。」');
+  assert.deepEqual(spans.map(span => span.text), items.map(item => item.segment.text), 'alignment still sees the words alone');
+  assert.deepEqual(body.prosody, { speed: 1, volume: 0 });
+  // What counts against the budget is all of it: 183 characters of story go out as 422.
+  const words = items.reduce((sum, item) => sum + item.segment.text.length, 0);
+  assert.equal(words, 183);
+  assert.equal(body.text.length, 422);
+  assert.equal((body.text.match(/<\|speaker:\d+\|>/g) ?? []).join('').length, 156, 'the speaker tags');
+  assert.equal((body.text.match(/\[[a-z ]+\] /g) ?? []).join('').length, 72, 'the mood cues');
+});
+
+test('a floor too long for one request is cut between paragraphs, where the cut costs the feeling least', () => {
+  const items = classroomFloor();
+  const ids = parts => parts.map(part => part.map(item => item.segment.id));
+  // 422 characters as sent, 350 without the mood cues: a budget of 400 holds the plain floor and not
+  // the cued one. The cues are counted.
+  assert.equal(FISH_ADAPTER.parts(items, wholeFloorSettings(400, { emotionCues: false })).length, 1);
+  const cued = FISH_ADAPTER.parts(items, wholeFloorSettings(400));
+  assert.equal(cued.length, 2);
+  // The one cut goes before the paragraph where the narrator lets the classroom go quiet: the joke is
+  // over on one side, and on the other the news of the move keeps its lead-in and everything after it.
+  // Not before 阿岚's sad line, which would start a request cold on the turn itself.
+  assert.equal(cued[1][0].segment.lineId, 6);
+  assert.equal(cued[1][0].segment.type, 'narration');
+  for (const part of cued) assert.ok(FISH_ADAPTER.payload(part, wholeFloorSettings(400)).body.text.length <= 400);
+  // Tighter still: three requests, every one of them starting where a paragraph starts, none past the budget.
+  const tight = FISH_ADAPTER.parts(items, wholeFloorSettings(200));
+  assert.deepEqual(ids(tight), [[1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11, 12]]);
+  for (const part of tight) {
+    const first = items.indexOf(part[0]);
+    assert.ok(first === 0 || items[first - 1].segment.lineId !== part[0].segment.lineId, 'a paragraph is never split between requests');
+    assert.ok(FISH_ADAPTER.payload(part, wholeFloorSettings(200)).body.text.length <= 200);
+  }
+  // The same floor sent a paragraph at a time is not cut at all: every paragraph fits.
+  const byParagraph = { ...wholeFloorSettings(200), requestUnit: 'line' };
+  for (const lineId of [1, 2, 4, 6]) assert.equal(FISH_ADAPTER.parts(items.filter(item => item.segment.lineId === lineId), byParagraph).length, 1);
+});
+
+test('only a paragraph too long for a request by itself is cut between its sentences, and there at the calmest place', () => {
+  const sentence = (id, lineId, type, text, emotion = null) => ({
+    segment: { id, lineId, type, text, lang: 'zh', emotion, intensity: emotion ? 1 : null, voice: emotion ? { emotion, intensity: 1 } : null },
+    voiceId: type === 'narration' ? 'v-n' : 'v-a',
+  });
+  const long = [
+    sentence(1, 1, 'dialogue', '「你听我说完。」'.padEnd(30, '啊'), 'sad'),
+    sentence(2, 1, 'dialogue', '「那天我不是故意的。」'.padEnd(30, '啊'), 'sad'),
+    sentence(3, 1, 'narration', '她低下头，手指绞着衣角。'.padEnd(30, '。')),
+    sentence(4, 1, 'dialogue', '「可是你一直不肯听。」'.padEnd(30, '啊'), 'angry'),
+    sentence(5, 1, 'dialogue', '「现在也不肯。」'.padEnd(30, '啊'), 'angry'),
+  ];
+  const tts = { fish: { model: 's2-pro', maxChars: 160, speed: 1, volume: 0 }, prosodySplit: false, emotionCues: true, requestUnit: 'line' };
+  const parts = FISH_ADAPTER.parts(long, tts);
+  // Two requests, cut where the narrator takes over — not between the two sad lines, not on the turn to anger.
+  assert.deepEqual(parts.map(part => part.map(item => item.segment.id)), [[1, 2], [3, 4, 5]]);
+  // Beside it, a short paragraph is still never cut, and never shares a request across the long one's cut.
+  const floor = [sentence(0, 0, 'narration', '雨停了。'), ...long, sentence(6, 2, 'narration', '他没有回头。')];
+  const whole = FISH_ADAPTER.parts(floor, { ...tts, requestUnit: 'floor' });
+  assert.deepEqual(whole.map(part => part.map(item => item.segment.id)), [[0, 1, 2], [3, 4, 5, 6]]);
+});
+
+test('whatever the floor, every request fits the budget as sent and nothing is lost or reordered', () => {
+  let seed = 7;
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  const moods = [null, null, 'happy', 'sad', 'angry', 'scared'];
+  for (let round = 0; round < 200; round += 1) {
+    const items = [];
+    let lineId = 0;
+    const size = 1 + Math.floor(random() * 30);
+    for (let index = 0; index < size; index += 1) {
+      if (!index || random() < 0.45) lineId += 1;
+      const narration = random() < 0.35;
+      const emotion = narration ? null : moods[Math.floor(random() * moods.length)];
+      items.push({
+        segment: {
+          id: index + 1, lineId, type: narration ? 'narration' : 'dialogue', text: '字'.repeat(4 + Math.floor(random() * 60)), lang: 'zh',
+          emotion, intensity: emotion ? Math.floor(random() * 3) : null, voice: emotion ? { emotion, intensity: Math.floor(random() * 3) } : null,
+        },
+        voiceId: narration ? 'v-n' : ['v-a', 'v-b', 'v-c'][Math.floor(random() * 3)],
+      });
+    }
+    const tts = wholeFloorSettings(80 + Math.floor(random() * 400));
+    const parts = FISH_ADAPTER.parts(items, tts);
+    assert.deepEqual(parts.flat().map(item => item.segment.id), items.map(item => item.segment.id), `round ${round}`);
+    for (const part of parts) {
+      const sent = FISH_ADAPTER.payload(part, tts).body.text.length;
+      assert.ok(part.length === 1 || sent <= tts.fish.maxChars, `round ${round}: ${sent} > ${tts.fish.maxChars}`);
+      // A cut inside a paragraph is made only in a paragraph that cannot be sent in one request.
+      const first = items.indexOf(part[0]);
+      if (first > 0 && items[first - 1].segment.lineId === part[0].segment.lineId) {
+        const paragraph = items.filter(item => item.segment.lineId === part[0].segment.lineId);
+        assert.ok(FISH_ADAPTER.payload(paragraph, tts).body.text.length > tts.fish.maxChars, `round ${round}: a paragraph that fits was cut`);
+      }
+    }
+  }
 });

@@ -2153,3 +2153,50 @@ test('the speaker-mark entry goes into the card\'s own book, is rewritten in pla
   context.chat.push({ mes: '<story_scene>“早。”她说。“今天也很热。”</story_scene>', swipe_id: 0, extra: {} });
   assert.match(__testing.speechEntryContent(runtime(), context), /<say who="说话人" mood="情绪">“台词”<\/say>/);
 });
+
+
+test('the whole floor can go to Fish as one request with every voice in it, or one sentence at a time', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-request-unit');
+  const settings = __testing.configureForTest({
+    settings: {
+      tts: { enabled: true, mode: 'off', requestUnit: 'floor', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro' }, { name: '樱井', voiceId: 'voice-sakurai' }] },
+    },
+  });
+  context.chat.push(await translatedFloor('一。\n\n二。\n\n三。', [[1, '泰罗推开门，说：「我回来了。」'], [2, '樱井抬起头：「欢迎回家。」'], [3, '两个人都笑了。']], settings));
+  const fish = mockFish();
+  const audio = mockAudio();
+  t.after(audio.restore);
+  const createUrl = URL.createObjectURL;
+  let urls = 0;
+  URL.createObjectURL = () => `blob:unit-${urls += 1}`;
+  t.after(() => { URL.createObjectURL = createUrl; });
+
+  const transport = await __testing.createTtsTransport(0, { single: false });
+  await __testing.runTtsTransport(transport);
+  assert.equal(fish.length, 1, 'three paragraphs, two characters and the narrator: one request');
+  assert.deepEqual([].concat(fish[0].body.reference_id).sort(), ['voice-narrator', 'voice-sakurai', 'voice-taro']);
+  assert.match(fish[0].body.text, /<\|speaker:\d\|>/);
+  assert.match(fish[0].body.text, /我回来了[\s\S]*欢迎回家[\s\S]*两个人都笑了/, 'in reading order');
+  assert.deepEqual(fish[0].body.prosody, { speed: 1, volume: 0 });
+  assert.equal(audio.plays.length, 1, 'heard as one continuous take');
+
+  // A paragraph made again is a take of its own, and it is the one heard.
+  const before = audio.plays.length;
+  await __testing.regenerateTtsParagraph(0, 2);
+  assert.equal(fish.length, 2);
+  assert.match(fish[1].body.text, /欢迎回家/);
+  assert.doesNotMatch(fish[1].body.text, /我回来了/, 'only that paragraph');
+  assert.equal(audio.plays.length, before + 1);
+  assert.notEqual(audio.plays.at(-1).src, audio.plays[0].src, 'the new take, not the floor\'s');
+
+  // One sentence at a time: a request per sentence, and the floor's take is not reused for it.
+  __testing.configureForTest({ settings: { tts: { ...runtime().tts, requestUnit: 'sentence' } } });
+  __testing.resetTtsPlayer();
+  const bySentence = await __testing.createTtsTransport(0, { single: false });
+  await __testing.runTtsTransport(bySentence);
+  const sentences = fish.slice(2);
+  assert.equal(sentences.length, 5, 'five sentences, five requests');
+  assert.ok(sentences.every(call => !/\n/.test(call.body.text)), 'each carries one sentence');
+});

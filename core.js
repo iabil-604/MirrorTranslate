@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.32.0';
+} from './prompts.js?v=0.32.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.32.0';
+export const APP_VERSION = '0.32.1';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -372,6 +372,10 @@ export const TTS_RANGES = Object.freeze(['all', 'dialogue', 'narration']);
 export const TTS_SIDES = Object.freeze(['translation', 'source', 'both']);
 // What one request of the stream carries: a paragraph, or a single sentence.
 export const TTS_STREAM_UNITS = Object.freeze(['line', 'sentence']);
+// What one request to the voice provider carries: the whole floor with every speaker in it, one
+// paragraph at a time (the default: the first paragraph plays while the rest are made), or one
+// sentence at a time.
+export const TTS_REQUEST_UNITS = Object.freeze(['floor', 'line', 'sentence']);
 // 'auto' reads deeply for a whole floor and lightly for a stream; the rest pin one depth.
 export const TTS_ANALYSIS_MODES = Object.freeze(['auto', 'deep', 'light', 'annotations']);
 
@@ -503,8 +507,8 @@ export const DEFAULT_FISH = Object.freeze({
   temperature: 0.7,
   topP: 0.7,
   normalize: true,
-  // Characters of story text per request in whole-floor mode. Longer floors are cut at sentence
-  // boundaries and played back as consecutive parts.
+  // Characters per request, counted as sent: the words with their cues, the speaker tags and the line
+  // breaks. A longer unit is cut between paragraphs and played back as consecutive parts.
   maxChars: 1500,
   timeoutSec: 180,
   // How many times one Fish request is asked again after a network error, a timeout or a 5xx.
@@ -533,6 +537,9 @@ export const DEFAULT_TTS = Object.freeze({
   autoGenerate: false,
   // What 「保存到本地」 saves: the whole floor, the paragraph being read, or one or the other by mode.
   downloadScope: 'auto',
+  // What one Fish request carries: 'line' a paragraph, 'floor' the whole floor with all its voices in
+  // one take, 'sentence' one sentence. See TTS_REQUEST_UNITS.
+  requestUnit: 'line',
   voiceScope: 'character',
   // Off means a click makes the audio and stops there; a second click on a made sentence plays it.
   playAfterGenerate: true,
@@ -1120,6 +1127,7 @@ export function normalizeTts(value) {
     prosodySplit: source.prosodySplit === undefined ? DEFAULT_TTS.prosodySplit : source.prosodySplit !== false,
     autoGenerate: source.autoGenerate === true,
     downloadScope: TTS_DOWNLOAD_SCOPES.includes(source.downloadScope) ? source.downloadScope : DEFAULT_TTS.downloadScope,
+    requestUnit: TTS_REQUEST_UNITS.includes(source.requestUnit) ? source.requestUnit : DEFAULT_TTS.requestUnit,
     voiceScope: TTS_VOICE_SCOPES.includes(source.voiceScope) ? source.voiceScope : DEFAULT_TTS.voiceScope,
     playAfterGenerate: source.playAfterGenerate === undefined ? DEFAULT_TTS.playAfterGenerate : source.playAfterGenerate !== false,
     tamePunctuation: source.tamePunctuation === undefined ? DEFAULT_TTS.tamePunctuation : source.tamePunctuation !== false,
