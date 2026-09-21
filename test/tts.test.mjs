@@ -708,7 +708,7 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.deepEqual(normalizeVoiceList([{ name: '樱井', console: { breath: 80, rules: '害羞时别太娇' } }])[0].console, { pause: 50, breath: 80, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '害羞时别太娇', marks: [] });
   assert.equal(normalizeVoiceList([{ name: '樱井', console: { breath: 50 } }])[0].console, null, 'a console left in the middle is no console');
   assert.deepEqual(settings.voiceLibrary, [{ id: 'voice-1', name: '少年', voiceId: 'lib-1', lang: 'zh', title: '' }]);
-  assert.deepEqual(mergeSettings({}).tts, normalizeTts(undefined));
+  assert.deepEqual(mergeSettings({}).tts, { ...normalizeTts(undefined), analysisChannelId: 'follow' }, 'a fresh install reads through the host connection, as its translation does');
   assert.deepEqual(mergeSettings({}).tts.sourceTags, ['jy-translation']);
   assert.deepEqual(mergeSettings({}).tts.quotePairs, ['「」', '『』', '“”', '""']);
   assert.equal(mergeSettings({ tts: { quotePairs: '' } }).tts.quotePairs.length, 0, 'an emptied field means no quote pairs');

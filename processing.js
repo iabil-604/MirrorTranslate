@@ -1,7 +1,7 @@
 import {
   DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END,
   deepClone, mergeSettings, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors,
-} from './core.js?v=0.31.1';
+} from './core.js?v=0.32.0';
 
 export const PROCESSING_FIELDS = Object.freeze([
   'bodyTags', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
@@ -169,8 +169,24 @@ export function syncNativeRegex(existing, profile) {
     replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
     runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
     [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
-  }, ...PROMPT_GUARD_RULES);
+  }, speechMarkRule(), ...PROMPT_GUARD_RULES);
   return kept;
+}
+
+// The story's own speaker marks, <say who="…" mood="…">…</say>: the reading reads them, the reader never
+// sees them. The host already drops a tag it does not know when it draws a floor and keeps the words
+// inside; this does the same for a reader whose host is set to show tags as text. Only the drawing
+// loses them — the main model still sees them in its context and keeps writing them, and the words
+// between them are shown as always.
+// A fresh object every time: the host's regex panel edits rules in place.
+function speechMarkRule() {
+  return {
+    id: `${MODULE_ID}:speech-marks`, scriptName: '镜译 · 隐藏说话人标记',
+    findRegex: '/<\\/?say(?=[\\s/>])[^<>]*>/gi',
+    replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
+    runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
+    [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
+  };
 }
 
 // Third line of defence for the prompt. The generation interceptor is the primary path and the

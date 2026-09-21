@@ -1,4 +1,4 @@
-import { normalizeTts } from './core.js?v=0.31.1';
+import { normalizeTts } from './core.js?v=0.32.0';
 import {
   FISH_EMOTIONS,
   FISH_SOUNDS,
@@ -9,7 +9,7 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.31.1';
+} from './tts.js?v=0.32.0';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -45,15 +45,17 @@ export const DEEP_PROMPT = [
 ].join('\n');
 
 /**
- * The connection the deep reading goes out on: its own when one is chosen and still exists, else
- * the translation's. The simple reading never comes here; it always follows the translation.
+ * The connection the deep reading goes out on: its own when one is chosen and still exists — a saved
+ * connection, or 'follow' for the host's own — else the one the reading's analysis already goes to,
+ * which the caller has applied. The simple reading never comes here.
  */
 export function deepRequestSettings(settings) {
-  // Empty means 「whatever the reading is already using」, which the caller has already applied.
   const id = normalizeTts(settings?.tts).deepChannelId;
   if (!id) return settings;
+  if (id === 'follow') return settings?.apiMode === 'follow' ? settings : { ...settings, apiMode: 'follow' };
   const channel = (Array.isArray(settings?.channels) ? settings.channels : []).find(item => item.id === id);
   if (!channel) return settings;
+  if (settings?.apiMode === 'independent' && settings?.selectedChannelId === id) return settings;
   return { ...settings, apiMode: 'independent', selectedChannelId: id };
 }
 

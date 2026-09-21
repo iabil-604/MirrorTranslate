@@ -230,6 +230,18 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding-top: 19px; }
 .jy-retry-setting { display: flex; align-items: center; gap: 20px; padding-top: 25px; }
 .jy-retry-setting > label { width: 180px; }
+.jy-brief-field { display: block; margin-top: 8px; }
+.jy-brief-field .jy-label { margin-bottom: 4px; }
+.jy-brief-channel .jy-badge { margin-top: 8px; }
+.jy-brief-retry input { max-width: 96px; }
+.jy-channel-uses { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 12px; }
+.jy-channel-use { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 11px 14px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
+.jy-channel-use strong { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.jy-channel-use small { color: var(--jy-muted-soft); font-size: 11px; overflow-wrap: anywhere; }
+.jy-channel-use .jy-text-button { align-self: flex-start; margin-top: 2px; }
+.jy-channel-use[data-editing="true"] { border-color: var(--jy-accent); background: var(--jy-accent-tint); }
+/* The buttons below pull themselves up under the picker; the line between them keeps its own room. */
+.jy-form-body [data-jy-channel-usage] { margin: 6px 0 18px; }
 .jy-processing-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; border-bottom: 1px solid var(--jy-line); padding-bottom: 26px; }
 .jy-text-scope { padding: 15px 17px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
 .jy-text-scope h2 { margin-bottom: 12px; font-size: 14px; }
@@ -391,6 +403,10 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-connection-choice span { padding: 13px; }
   .jy-connection-choice strong { font-size: 12px; }
   .jy-connection-choice small { font-size: 10px; }
+  .jy-channel-uses { grid-template-columns: 1fr; gap: 6px; }
+  .jy-channel-use { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 1px; padding: 8px 12px; }
+  .jy-channel-use > .jy-label, .jy-channel-use > strong, .jy-channel-use > small { grid-column: 1; }
+  .jy-channel-use .jy-text-button { grid-column: 2; grid-row: 1 / span 3; align-self: center; margin: 0; }
   .jy-processing-columns { grid-template-columns: 1fr; gap: 18px; }
   .jy-text-scope h2 { font-size: 18px; }
   /* A select sizes itself to its longest option; without min-width 0 that intrinsic width becomes
@@ -985,6 +1001,10 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-ask-field { display: flex; flex-direction: column; gap: 4px; align-items: stretch; margin-bottom: 8px; }
 .jy-ask-field > span { font-size: 12px; color: var(--jy-muted, #5d6a63); }
 .jy-ask-field textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--jy-line, #cfd6cf); background: transparent; color: inherit; resize: vertical; }
+.jy-ask-picks { display: flex; flex-direction: column; gap: 2px; max-height: min(46vh, 360px); overflow: auto; margin: 0 0 12px; padding: 4px 8px; border: 1px solid var(--jy-line, #cfd6cf); border-radius: 10px; }
+.jy-ask-picks label { align-items: flex-start; margin: 0; padding: 6px 2px; color: inherit; font-size: 13px; }
+.jy-ask-picks input { margin-top: 3px; flex: none; }
+.jy-ask-picks small { display: block; color: var(--jy-muted, #5d6a63); font-size: 11.5px; }
 .jy-ask-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .jy-ask-chips button { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--jy-line, #cfd6cf); background: transparent; color: var(--jy-muted, #5d6a63); font-size: 12px; cursor: pointer; }
 .jy-ask-chips button:hover { color: inherit; border-color: var(--jy-accent, #2f6b4f); }

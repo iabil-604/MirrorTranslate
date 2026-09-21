@@ -1,5 +1,14 @@
 # 验证边界
 
+## v0.32.0 · 按时间重做、连接分家、说话人标记、识别角色
+
+- **自动回归**：268 项通过（新增 test/speech-marks.test.mjs 10 项；tts-runtime 新增「按时间重做 + 刷新后 + 恢复播放」「连接是架子」「识别角色被核对」「标记：不分析 / 部分标记 / 读译文 / 写世界书」共 7 项）。
+- **重新分析**：分析开始时刻记在每个标注的 at 上（stampLabels），段落 analyzedAt；findCoveringEntry 的 since、ensureTtsRecording 对同 key 旧录音的 recordPredates 判断，保证旧分析的音频既不被找到也不被按 key 复用。有过音频的段落改从存储读（recordedLines），不再靠标注身份去对。时钟用单调的 ttsClock，存储也用它盖时间，避免同一毫秒的平局。被动查看（ttsPrepared）现在会读已存的分析（cacheOnly），刷新后「按意见改」有底稿；不分析模式和翻译过的楼只认「这一楼自己」存的分析（floorId 相同），分析缓存按文本做 key，同一段开场白在别的聊天分析过也不会串过来。
+- **连接**：translationChannelChoice / resolveFeatureChannel；mergeSettings 把 analysisChannelId 的空值和失效值定成当时翻译的选择；deepChannelId 失效清空；onChannel 与 deepRequestSettings 认 'follow'，选的就是当前连接时原样返回同一个对象。连接页的编辑对象是 runtime.editingChannelId，和任何功能的选择无关；删除正在被用的连接会被拒绝。
+- **说话人标记**：core 的 segmentSource 多返回 speech 旁表（段落对象不变，翻译请求原样），私用区哨兵 U+E0A1–E0A3 穿过 plainLineText；tts.js 的 readSpeechLine / speechMarkLabels / speechTagReading；resolveSpeakers 的 tagged 排在 manual 之后、一切推断之前；processing.js 新增内部显示规则「镜译 · 隐藏说话人标记」（只作用于显示）；workflow 的 cleanReferenceText 去掉条目本身和标记。
+- **识别角色**：castLoreEntries（角色卡的书 → 聊天 → 人设 → 全局，跳过 disable）、内容按 30000 字预算、每条最多 800 字；tts-speakers.js 的 refineCast / castNameOccurs 核对；askCastPicks 勾选。
+- **无头实机**（本地预览宿主，1280 与 375 宽）：新建连接只进入编辑、翻译仍跟随酒馆；在翻译台切到新连接后朗读分析仍是「跟随酒馆」，连接页顶部三格显示正确；删除正在给翻译用的连接被拒绝；切换「正在编辑」不动翻译；悬浮窗「翻译模型」可选、切换不带动朗读；朗读页两个下拉框没有「跟随翻译」；识别角色弹出勾选框（正文里出现过的樱井勾上、老胡不勾），只加勾上的；写入说话人标记世界书在没有任何世界书时新建并挂到聊天；按格式写的一楼显示时不见标签，不分析模式读出三个说话人（tag）和情绪、音量，一次副模型请求都没有，楼层按钮三段都挂上。
+- **尚未验证**：真实酒馆里主模型对这条条目的遵守程度（不同模型、不同预设差异会很大）；世界书写入在 TauriTavern 上的表现。
 ## v0.31.1 · 并行与触发
 
 - **自动回归**：251 项通过。

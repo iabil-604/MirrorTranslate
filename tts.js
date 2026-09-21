@@ -10,9 +10,12 @@ import {
   parsePairList,
   unifySpeakerNames,
   MARK_TAGS,
-} from './core.js?v=0.31.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.31.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.31.1';
+  SPEECH_OPEN,
+  SPEECH_SEP,
+  SPEECH_CLOSE,
+} from './core.js?v=0.32.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.32.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.32.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -362,6 +365,184 @@ function annotationVoice(mark, text = '') {
 /** The labels alone, for callers that have no use for the voices. */
 export function labelsFromAnnotations(utterances, annotations) {
   return annotationReading(utterances, annotations).labels;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Speaker marks the story wrote itself — <say who="樱井" mood="开心">「……」</say> — read on this side.
+//
+// The main model is asked, through a worldbook entry, to wrap each line of dialogue that way. The
+// author of the floor knows who says what better than anyone reading it afterwards, so a mark is
+// taken as the text saying so outright: no request, no guess.
+// ---------------------------------------------------------------------------------------------
+
+// The moods the worldbook entry offers, in the words the main model writes, each with Fish's word.
+export const SPEECH_MOODS = Object.freeze([
+  ['平静', 'calm'], ['开心', 'happy'], ['兴奋', 'excited'], ['温柔', 'tender'], ['害羞', 'shy'], ['撒娇', 'playful'],
+  ['得意', 'proud'], ['调侃', 'playful'], ['好奇', 'curious'], ['感动', 'moved'], ['难过', 'sad'], ['委屈', 'upset'],
+  ['失望', 'disappointed'], ['生气', 'angry'], ['不耐烦', 'frustrated'], ['害怕', 'scared'], ['紧张', 'nervous'],
+  ['惊讶', 'surprised'], ['疑惑', 'confused'], ['冷淡', 'indifferent'], ['严肃', 'serious'], ['坚定', 'determined'],
+  ['无奈', 'resigned'], ['疲惫', 'tired'], ['恳求', 'pleading'], ['嘲讽', 'sarcastic'],
+]);
+// How loud or how fast, as the same kind of word; they go out as Fish's tone.
+export const SPEECH_TONES = Object.freeze([
+  ['小声', 'soft tone'], ['耳语', 'whispering'], ['大喊', 'shouting'], ['尖叫', 'screaming'], ['急促', 'in a hurry tone'],
+]);
+
+let speechWords = null;
+function speechVocabulary() {
+  if (speechWords) return speechWords;
+  const moods = new Map();
+  // Every Chinese label the panel shows for one of Fish's moods is understood too; the offered words win.
+  for (const [english, chinese] of Object.entries(FISH_TAG_LABELS)) if (FISH_EMOTIONS.includes(english)) moods.set(chinese, english);
+  for (const [chinese, english] of SPEECH_MOODS) moods.set(chinese, english);
+  const tones = new Map(SPEECH_TONES);
+  for (const tone of FISH_TONES) if (FISH_TAG_LABELS[tone]) tones.set(FISH_TAG_LABELS[tone], tone);
+  speechWords = { moods, tones };
+  return speechWords;
+}
+
+/** A mark's mood as Fish's words: one mood, one tone, whichever the words name, in either language. */
+export function speechMood(value) {
+  const { moods, tones } = speechVocabulary();
+  let emotion = '';
+  let tone = '';
+  for (const raw of String(value ?? '').split(/[、,，;；+/|｜\s]+/u)) {
+    const word = raw.trim();
+    if (!word) continue;
+    const lower = word.toLowerCase();
+    const asTone = tones.get(word) ?? (FISH_TONES.includes(lower) ? lower : '');
+    if (asTone) {
+      tone ||= asTone;
+      continue;
+    }
+    const asMood = moods.get(word) ?? (FISH_EMOTIONS.includes(lower) ? lower : '');
+    if (asMood) emotion ||= asMood;
+  }
+  return { emotion, tone };
+}
+
+/**
+ * One marked line as the reading takes it: the words, cleaned the way every line is, and where each
+ * mark's run starts and ends in them. `marked` is what core's speechMarkedLine left: the text with
+ * markers where the tags stood, and what each tag said.
+ *
+ * A mark that encloses words with no quotation marks round them — the model wrapped the dialogue but
+ * left the quotes off — gets the first configured pair put round those words, so the run is dialogue
+ * like any other. A self-closing mark encloses nothing; it names the run that follows it.
+ */
+export function readSpeechLine(marked, { quotePairs = DEFAULT_QUOTE_PAIRS } = {}) {
+  const raw = plainLineText(marked?.text ?? '');
+  const marks = Array.isArray(marked?.marks) ? marked.marks : [];
+  let text = '';
+  const spans = [];
+  const open = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index];
+    if (character === SPEECH_OPEN) {
+      const stop = raw.indexOf(SPEECH_SEP, index + 1);
+      const mark = stop > index ? marks[Number(raw.slice(index + 1, stop))] : null;
+      if (mark) {
+        const span = { start: text.length, end: null, speaker: mark.speaker ?? '', mood: mark.mood ?? '' };
+        spans.push(span);
+        if (!mark.open) open.push(span);
+        index = stop;
+      }
+      continue;
+    }
+    if (character === SPEECH_CLOSE) {
+      const span = open.pop();
+      if (span) span.end = text.length;
+      continue;
+    }
+    if (character === SPEECH_SEP) continue;
+    // The markers stood where the tags stood; two spaces they separated are one space again.
+    if (/[ \t]/.test(character) && (!text || text.endsWith(' '))) continue;
+    text += character === '\t' ? ' ' : character;
+  }
+  // The same trim every line gets, with the marks moved along.
+  text = text.trimEnd();
+  for (const span of spans) {
+    span.start = Math.min(span.start, text.length);
+    if (span.end !== null) span.end = Math.min(span.end, text.length);
+  }
+  const pairs = pairsOf(quotePairs, DEFAULT_QUOTE_PAIRS);
+  const first = pairs[0];
+  if (first) {
+    for (const span of [...spans].sort((left, right) => right.start - left.start)) {
+      if (span.end === null || span.end <= span.start) continue;
+      const inner = text.slice(span.start, span.end);
+      if (!SPEAKABLE_RE.test(inner) || pairs.some(pair => inner.includes(pair.open))) continue;
+      const start = span.start + (inner.length - inner.trimStart().length);
+      const end = span.end - (inner.length - inner.trimEnd().length);
+      // Already quoted from outside the mark: nothing to add.
+      if (pairs.some(pair => text.slice(Math.max(0, start - pair.open.length), start) === pair.open && text.slice(end, end + pair.close.length) === pair.close)) continue;
+      text = `${text.slice(0, start)}${first.open}${text.slice(start, end)}${first.close}${text.slice(end)}`;
+      const shift = position => (position <= start ? position : position < end ? position + first.open.length : position + first.open.length + first.close.length);
+      for (const other of spans) {
+        other.start = other === span ? Math.min(other.start, start) : shift(other.start);
+        if (other.end !== null) other.end = shift(other.end);
+      }
+    }
+  }
+  return { text, spans: spans.filter(span => span.speaker || span.mood) };
+}
+
+/**
+ * Which quoted run each mark belongs to, by where the runs stand in the line: every run that starts
+ * inside a mark that encloses, the first run after a mark that does not.
+ */
+export function speechMarkLabels(utterances, lines) {
+  const found = new Map();
+  const marked = new Map((Array.isArray(lines) ? lines : []).filter(line => Array.isArray(line?.speech) && line.speech.length).map(line => [line.lineId, line]));
+  if (!marked.size) return found;
+  const perLine = new Map();
+  for (const utterance of Array.isArray(utterances) ? utterances : []) {
+    if (!marked.has(utterance.lineId)) continue;
+    if (!perLine.has(utterance.lineId)) perLine.set(utterance.lineId, []);
+    perLine.get(utterance.lineId).push(utterance);
+  }
+  for (const [lineId, list] of perLine) {
+    const line = marked.get(lineId);
+    let cursor = 0;
+    // A run's anchor is the run exactly as it stands in the line, so walking the line finds each one.
+    const placed = list.map(utterance => {
+      const at = line.text.indexOf(utterance.anchor, cursor);
+      if (at >= 0) cursor = at + String(utterance.anchor).length;
+      return { utterance, start: at >= 0 ? at : -1 };
+    }).filter(item => item.start >= 0 && item.utterance.kind === 'quoted');
+    const spans = [...line.speech].sort((left, right) => left.start - right.start);
+    spans.forEach((span, index) => {
+      if (span.end !== null && span.end !== undefined) {
+        for (const item of placed) if (item.start >= span.start && item.start < span.end && !found.has(item.utterance.id)) found.set(item.utterance.id, span);
+        return;
+      }
+      const limit = spans[index + 1]?.start ?? Infinity;
+      const next = placed.find(item => item.start >= span.start && item.start < limit && !found.has(item.utterance.id));
+      if (next) found.set(next.utterance.id, span);
+    });
+  }
+  return found;
+}
+
+/**
+ * The story's own marks read onto the utterances, in the same shape the translation's are: who, in
+ * which of the palette's moods, and beside it the voice — Fish's own word for the mood, and the tone.
+ * A name the mark gives is the text saying who speaks outright, and says so in `speakerSource`.
+ */
+export function speechTagReading(utterances, lines) {
+  const labels = new Map();
+  const voices = new Map();
+  for (const [id, span] of speechMarkLabels(utterances, lines)) {
+    const { emotion, tone } = speechMood(span.mood);
+    const label = readTtsLabel({ type: 'dialogue', speaker: span.speaker, emotion: emotion || undefined }) ?? { type: 'dialogue' };
+    if (label.speaker) label.speakerSource = 'tag';
+    labels.set(id, label);
+    const voice = {};
+    if (emotion && !Object.hasOwn(EMOTION_STYLES, emotion)) voice.emotion = emotion;
+    if (tone) voice.tone = tone;
+    if (Object.keys(voice).length) voices.set(id, voice);
+  }
+  return { labels, voices };
 }
 
 const EMOTION_GLOSS = EMOTION_KEYS.map(key => `${key}=${EMOTION_STYLES[key].label}`).join('、');
@@ -733,7 +914,8 @@ export function parseVoiceAnalysis(raw, utterances, { hints = null } = {}) {
   const labels = new Map();
   const voices = new Map();
   let candidates = 0;
-  let reused = 0;
+  // The sentences that came back as they went in: an id alone, or not answered at all.
+  const kept = new Set();
   for (const candidate of parseJsonCandidates(raw)) {
     candidates += 1;
     for (const item of labelItemsOf(candidate, ['voices', 'labels', 'utterances', 'items'])) {
@@ -746,7 +928,7 @@ export function parseVoiceAnalysis(raw, utterances, { hints = null } = {}) {
         // An id alone: the hint stands, and counts as an answer.
         if (hints instanceof Map && hints.has(id)) {
           labels.set(id, { ...hints.get(id) });
-          reused += 1;
+          kept.add(id);
         }
         continue;
       }
@@ -760,11 +942,11 @@ export function parseVoiceAnalysis(raw, utterances, { hints = null } = {}) {
     for (const [id, hint] of hints) {
       if (!labels.has(id) && byId.has(id)) {
         labels.set(id, { ...hint });
-        reused += 1;
+        kept.add(id);
       }
     }
   }
-  return { labels, voices, candidates, reused, scene: '', characters: [] };
+  return { labels, voices, candidates, reused: kept.size, keptIds: kept, scene: '', characters: [] };
 }
 
 /**
@@ -877,6 +1059,8 @@ export function buildSegments(utterances, labels = new Map(), { knownNames = [],
       ? { emotion: label.emotion, intensity: label.intensity ?? 1, ...rawVoice }
       : rawVoice;
     const base = { id: utterance.id, lineId: utterance.lineId, type, text: utterance.text, anchor: utterance.anchor, lang, voice };
+    // When the reading this sentence goes by was asked for: audio from before then is not its audio.
+    if (Number(label.at) > 0) base.analyzedAt = Number(label.at);
     if (type === 'narration') {
       // Narration keeps a mood only when the deep reading gave it one; the light labels never do.
       const mood = voice?.emotion ? voice.emotion : null;
@@ -1985,10 +2169,13 @@ export function recordCovers(items, timeline) {
 /**
  * The entry in one of `records` that already holds this sentence, newest first. With an identity to
  * match, the entry must have been made of the same everything; a recording from before identities
- * were kept is matched by its words and voice alone, as it always was.
+ * were kept is matched by its words and voice alone, as it always was. `since` is when the sentence
+ * was last analysed: a recording made before that moment was made from a reading that has since been
+ * replaced, and is not this sentence's audio any more, whatever it holds.
  */
-export function findCoveringEntry(records, { text, voiceId, fingerprint, identity = null }) {
-  const list = (Array.isArray(records) ? records : []).filter(record => Array.isArray(record?.timeline) && record.fingerprint === fingerprint);
+export function findCoveringEntry(records, { text, voiceId, fingerprint, identity = null, since = 0 }) {
+  const list = (Array.isArray(records) ? records : []).filter(record => Array.isArray(record?.timeline) && record.fingerprint === fingerprint
+    && !recordPredates(record, since));
   list.sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0));
   for (const record of list) {
     const index = record.timeline.findIndex(entry => entry.text === text && (entry.voiceId ?? '') === (voiceId ?? '') && !entry.edited
@@ -1996,6 +2183,44 @@ export function findCoveringEntry(records, { text, voiceId, fingerprint, identit
     if (index >= 0) return { record, index };
   }
   return null;
+}
+
+/** Whether a recording was made before `since`: before the analysis its sentences now read by. */
+export function recordPredates(record, since = 0) {
+  const moment = Number(since) || 0;
+  return moment > 0 && (Number(record?.createdAt) || 0) < moment;
+}
+
+/** The labels of one analysis, each marked with the moment that analysis was asked for. */
+export function stampLabels(labels, at) {
+  const moment = Number(at) || 0;
+  const out = new Map();
+  for (const [id, label] of labels instanceof Map ? labels : []) out.set(id, moment ? { ...label, at: moment } : { ...label });
+  return out;
+}
+
+/** The latest analysis any of these items reads by: the moment a recording of all of them must postdate. */
+export function unitAnalyzedAt(items) {
+  let latest = 0;
+  for (const item of Array.isArray(items) ? items : []) latest = Math.max(latest, Number(item?.segment?.analyzedAt) || 0);
+  return latest;
+}
+
+/**
+ * The paragraphs of a floor that have any recording at all, whatever reading it was made from: what a
+ * reader has already been able to hear. Told apart by each timeline entry's paragraph, or, for a
+ * recording from before entries carried one, by the sentence's own place in the floor.
+ */
+export function recordedLines(records, utterances = []) {
+  const lineOf = new Map((Array.isArray(utterances) ? utterances : []).map(item => [item.id, item.lineId]));
+  const lines = new Set();
+  for (const record of Array.isArray(records) ? records : []) {
+    for (const entry of Array.isArray(record?.timeline) ? record.timeline : []) {
+      const lineId = entry?.lineId ?? lineOf.get(entry?.id);
+      if (lineId !== undefined && lineId !== null) lines.add(lineId);
+    }
+  }
+  return lines;
 }
 
 // The text, the depth and the language side: nothing else. The cast list, the worldbook and the floors

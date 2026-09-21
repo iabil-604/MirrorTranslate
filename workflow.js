@@ -1,12 +1,14 @@
-import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, MESSAGE_META_KEY } from './core.js?v=0.31.1';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.31.1';
-import { EMOTION_KEYS } from './palette.js?v=0.31.1';
-import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.31.1';
+import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, MESSAGE_META_KEY } from './core.js?v=0.32.0';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.32.0';
+import { EMOTION_KEYS } from './palette.js?v=0.32.0';
+import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.32.0';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
 function cleanReferenceText(value, metadata) {
-  return stripGeneratedTranslationLines(String(value ?? ''), metadata)
+  // The worldbook's request for speaker marks, and the marks, are the reading's business: a translator
+  // shown them could start marking its own translation.
+  return withoutSpeechMarks(stripGeneratedTranslationLines(String(value ?? ''), metadata))
     .replace(/<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/[ \t]+\n/g, '\n')

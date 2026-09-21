@@ -1,4 +1,4 @@
-import { unifySpeakerNames } from './core.js?v=0.31.1';
+import { isPlaceholderSpeaker, unifySpeakerNames } from './core.js?v=0.32.0';
 
 // ---------------------------------------------------------------------------------------------
 // Who is speaking, read off the text itself.
@@ -17,6 +17,7 @@ import { unifySpeakerNames } from './core.js?v=0.31.1';
 
 export const SPEAKER_SOURCE_LABELS = Object.freeze({
   manual: '手动指定',
+  tag: '正文里的说话人标记',
   local: '本地识别',
   hint: '翻译时的标注',
   model: '副模型',
@@ -183,7 +184,7 @@ class Tally {
  * after 看着 or inside a quote is spoken to, never speaking; a name beside a verb of speech has
  * spoken outright; the translation's and the reader's labels count as speaking too.
  */
-function surveyFloor(list, people, { hints, manual }) {
+function surveyFloor(list, people, { hints, manual, tagged }) {
   const roles = new Map();
   const role = name => {
     if (!roles.has(name)) roles.set(name, { subject: 0, addressee: 0, explicit: 0, spoken: 0, called: 0 });
@@ -192,7 +193,7 @@ function surveyFloor(list, people, { hints, manual }) {
   list.forEach((utterance, index) => {
     if (utterance.kind === 'quoted') {
       for (const name of calledOut(utterance.text, people)) role(name).called += 1;
-      for (const source of [hints, manual]) {
+      for (const source of [hints, manual, tagged]) {
         const named = source instanceof Map ? canonical(source.get(utterance.id), people) : '';
         if (named) role(named).spoken += 1;
       }
@@ -218,23 +219,25 @@ function surveyFloor(list, people, { hints, manual }) {
  * `utterances` are the floor's, in order, as `splitUtterances` cuts them. `cast` lists the people the
  * reading knows, each as `{ name, aliases }` or a bare name; `protagonists` names the card's character
  * and the reader among them. `hints` are the speakers the translation named per utterance id;
- * `manual` the ones the reader set by hand. The reader's word is final; then what the text says
- * outright (a name beside a verb of speech, the script form); then the translation's label; then
- * what the text merely suggests — who acts beside the quote, who is called by name, who takes turns
- * with whom, who alone carries the floor. `infer: false` skips the text and keeps only the reader's
- * and the translation's words — for a language the labels were carried over to rather than read in.
+ * `manual` the ones the reader set by hand; `tagged` the ones the story marked itself with
+ * <say who="…">. The reader's word is final; then the story's own mark, which is its author saying
+ * who speaks; then what the text says outright (a name beside a verb of speech, the script form); then
+ * the translation's label; then what the text merely suggests — who acts beside the quote, who is
+ * called by name, who takes turns with whom, who alone carries the floor. `infer: false` skips the
+ * text and keeps only the reader's, the marks' and the translation's words — for a language the labels
+ * were carried over to rather than read in.
  *
  * Returns a map from each quoted utterance's id to `{ speaker, source, confidence, evidence }`, with
  * `speaker` null where nobody could be named. Names come back as the cast spells them.
  */
-export function resolveSpeakers(utterances, { cast = [], hints = null, manual = null, infer = true, protagonists = null } = {}) {
+export function resolveSpeakers(utterances, { cast = [], hints = null, manual = null, tagged = null, infer = true, protagonists = null } = {}) {
   const list = Array.isArray(utterances) ? utterances : [];
   const people = buildLookup(cast);
   const known = name => (people.lookup.has(String(name ?? '').trim()) ? canonical(name, people) : '');
   const character = known(protagonists?.character);
   const user = known(protagonists?.user);
   const result = new Map();
-  const roles = infer ? surveyFloor(list, people, { hints, manual }) : new Map();
+  const roles = infer ? surveyFloor(list, people, { hints, manual, tagged }) : new Map();
   // The reader counts as a speaker only where the text or a label has them speaking outright: in a
   // floor the character wrote, the reader's name is mostly the one being addressed.
   const speaksOutright = name => ((roles.get(name)?.explicit ?? 0) + (roles.get(name)?.spoken ?? 0)) > 0;
@@ -344,8 +347,11 @@ export function resolveSpeakers(utterances, { cast = [], hints = null, manual = 
 
     let entry = null;
     const chosen = manual instanceof Map ? canonical(manual.get(utterance.id), people) : '';
+    const marked = tagged instanceof Map ? canonical(tagged.get(utterance.id), people) : '';
     if (chosen) {
       entry = { speaker: chosen, source: 'manual', confidence: 1, evidence: [SPEAKER_SOURCE_LABELS.manual] };
+    } else if (marked) {
+      entry = { speaker: marked, source: 'tag', confidence: 1, evidence: [SPEAKER_SOURCE_LABELS.tag] };
     } else {
       const best = infer ? tally.best() : null;
       const hinted = hints instanceof Map ? canonical(hints.get(utterance.id), people) : '';
@@ -408,4 +414,116 @@ export function speakersOf(resolved) {
   const map = new Map();
   for (const [id, entry] of resolved instanceof Map ? resolved : []) if (entry?.speaker) map.set(id, entry.speaker);
   return map;
+}
+
+// ---------------------------------------------------------------------------------------------
+// A cast read out of a card and a worldbook.
+//
+// The model is asked who in there is a person; what it answers is checked here before anything reaches
+// the voice table. A worldbook is mostly rules, places and formats, and a model asked for people will
+// hand back a few of those, invent a spelling nobody wrote, or name the reader. What survives is a name
+// the lore actually contains, that is not a crowd, a role or a placeholder, and that is not the reader.
+// ---------------------------------------------------------------------------------------------
+
+// Words that name a crowd, a role or the machinery rather than a person, in the languages the lore
+// comes in. A name made only of one of these is not a character to give a voice to.
+const CAST_NOT_PEOPLE = new Set([
+  '众人', '大家', '所有人', '路人', '路人甲', '路人乙', '群众', '人群', '观众', '围观群众', '系统', '玩家', '用户', '作者', '主角', '角色',
+  '人物', '配角', '反派', '你', '我', '他', '她', '它', '他们', '她们', '我们', '你们', '对方', '某人', '陌生人', '神秘人', '未知人物',
+  'npc', 'npcs', 'ai', 'assistant', 'user', 'system', 'player', 'narrator', 'char', 'character', 'protagonist', 'everyone', 'crowd',
+  'みんな', '皆', '全員', '主人公', '俺', '僕', '私',
+]);
+// Sentence punctuation inside a name means the model copied a phrase, not a name.
+const CAST_PHRASE_RE = /[。！？!?，,；;：:、\n\r\t]|\s{2,}/u;
+const CAST_WRAPPERS_RE = /^[\s「『“"'‘《【\[（(]+|[\s」』”"'’》】\]）)]+$/gu;
+
+function castSpelling(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').replace(CAST_WRAPPERS_RE, '').trim();
+}
+
+function castRejects(spelling) {
+  if (!spelling) return 'empty';
+  if ([...spelling].length > 24) return 'long';
+  if (CAST_PHRASE_RE.test(spelling)) return 'phrase';
+  if (/^\{\{.*\}\}$/.test(spelling) || /^[\p{N}\p{P}\p{S}\s]+$/u.test(spelling)) return 'placeholder';
+  if (isPlaceholderSpeaker(spelling) || CAST_NOT_PEOPLE.has(spelling.toLowerCase())) return 'not-a-person';
+  // A plural of people — 村民们, 士兵们 — is a crowd.
+  if (/们$/u.test(spelling) && [...spelling].length <= 5) return 'not-a-person';
+  return '';
+}
+
+function escapeForRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Whether a spelling occurs in a text. Latin names are whole words and any case — 「Ann」 is not in
+ * 「Anne」 or 「annual」; everything else is a plain substring, since those scripts have no spaces.
+ */
+export function castNameOccurs(spelling, text) {
+  const wanted = String(spelling ?? '');
+  const source = String(text ?? '');
+  if (!wanted || !source) return false;
+  if (!/[A-Za-z]/.test(wanted)) return source.includes(wanted);
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeForRegex(wanted)}(?:$|[^\\p{L}\\p{N}])`, 'iu').test(source);
+}
+
+/**
+ * The model's cast, checked.
+ *
+ * `people` are `{ name, aliases, lang }` as the model gave them. `sourceText` is every word the model
+ * was shown out of the card and the lore; `storyText` the recent floors of the chat; `exclude` the
+ * reader's names. A person is kept only when one of their spellings occurs in the card, the lore or
+ * the story — the model is not allowed a person nobody wrote — and an alias only when it occurs there
+ * too. People who share a spelling are one person. `seen` says whether the story itself mentions them,
+ * which is what a reader deciding whom to add wants to know first.
+ *
+ * Returns `{ cast, dropped }`, each dropped entry with the reason in the reader's words.
+ */
+export function refineCast(people, { sourceText = '', storyText = '', exclude = [] } = {}) {
+  const occurs = spelling => castNameOccurs(spelling, sourceText) || castNameOccurs(spelling, storyText);
+  const excluded = new Set((Array.isArray(exclude) ? exclude : []).map(castSpelling).filter(Boolean).map(name => name.toLowerCase()));
+  const dropped = [];
+  const cast = [];
+  const REASONS = {
+    empty: '名字是空的', long: '太长，不像名字', phrase: '是一句话，不是名字', placeholder: '是占位符',
+    'not-a-person': '是群体、身份或称呼，不是具体的人', user: '是你自己扮演的角色', absent: '角色卡、世界书和最近的正文里都找不到这个名字',
+  };
+  for (const person of Array.isArray(people) ? people : []) {
+    const raw = castSpelling(typeof person === 'string' ? person : person?.name);
+    const reason = castRejects(raw);
+    if (reason) {
+      if (raw) dropped.push({ name: raw, reason: REASONS[reason] });
+      continue;
+    }
+    const aliases = [...new Set((Array.isArray(person?.aliases) ? person.aliases : []).map(castSpelling))]
+      .filter(alias => alias && alias !== raw && !castRejects(alias));
+    const spellings = [raw, ...aliases];
+    if (spellings.some(spelling => excluded.has(spelling.toLowerCase()))) {
+      dropped.push({ name: raw, reason: REASONS.user });
+      continue;
+    }
+    // The name itself may be the model's tidier spelling; one spelling the lore or the story really
+    // uses is enough to keep the person, and an alias nobody wrote is dropped.
+    const found = spellings.filter(occurs);
+    if (!found.length) {
+      dropped.push({ name: raw, reason: REASONS.absent });
+      continue;
+    }
+    const kept = aliases.filter(alias => found.includes(alias)).slice(0, 8);
+    const seen = spellings.some(spelling => castNameOccurs(spelling, storyText));
+    const lang = typeof person?.lang === 'string' ? person.lang : '';
+    const same = cast.find(other => [other.name, ...other.aliases].some(spelling => spellings.some(mine => mine.toLowerCase() === spelling.toLowerCase())));
+    if (same) {
+      for (const spelling of [raw, ...kept]) {
+        if (spelling.toLowerCase() !== same.name.toLowerCase() && !same.aliases.some(alias => alias.toLowerCase() === spelling.toLowerCase())) same.aliases.push(spelling);
+      }
+      same.aliases = same.aliases.slice(0, 8);
+      same.seen = same.seen || seen;
+      if (!same.lang && lang) same.lang = lang;
+      continue;
+    }
+    cast.push({ name: raw, aliases: kept, lang, seen });
+  }
+  return { cast: cast.slice(0, 60), dropped };
 }

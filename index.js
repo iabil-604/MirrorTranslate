@@ -29,6 +29,8 @@ import {
   extractTranslationBlockText,
   getActiveChannel,
   getActivePromptProfile,
+  resolveFeatureChannel,
+  translationChannelChoice,
   hashText,
   interceptGenerationChat,
   planTranslationBatches,
@@ -57,6 +59,8 @@ import {
   normalizeLanguageCode,
   languageLabel,
   formatPairList,
+  parsePairList,
+  SPEECH_ENTRY_HEAD,
   parseJsonCandidates,
   TTS_LANGUAGES,
   CONSOLE_KEYS,
@@ -67,7 +71,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.31.1';
+} from './core.js?v=0.32.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -115,10 +119,18 @@ import {
   consoleDirections,
   SOUND_TAGS,
   detectTtsHost,
-} from './tts.js?v=0.31.1';
-import { createTtsStore } from './tts-store.js?v=0.31.1';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.31.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.31.1';
+  recordPredates,
+  recordedLines,
+  stampLabels,
+  unitAnalyzedAt,
+  readSpeechLine,
+  speechTagReading,
+  SPEECH_MOODS,
+  SPEECH_TONES,
+} from './tts.js?v=0.32.0';
+import { createTtsStore } from './tts-store.js?v=0.32.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.32.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.32.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -127,7 +139,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.31.1';
+} from './processing.js?v=0.32.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -144,9 +156,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.31.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.31.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.31.1';
+} from './prompts.js?v=0.32.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.32.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.32.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -160,15 +172,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.31.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.31.1';
+} from './palette.js?v=0.32.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.32.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.31.1';
+} from './diagnostics.js?v=0.32.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -237,6 +249,9 @@ const runtime = {
   floatingHoldTimer: null,
   floatingPlace: null,
   panelCssPromise: null,
+  // The saved connection the connection page has open. Opening one there is only editing: it is never
+  // what any feature uses.
+  editingChannelId: null,
   // Reading aloud. Audio and analyses persist in IndexedDB; everything here is per session.
   tts: {
     store: null,
@@ -314,7 +329,7 @@ const CONTROL_CENTER_MARKUP = `
  </div>
  <aside class="jy-desk-side">
   <div class="jy-brief"><span class="jy-overline">翻译方案</span><h3 data-jy-active-profile>待读取</h3><button type="button" class="jy-button" data-jy-action="open-prompt">编辑规则 →</button></div>
-  <div class="jy-brief"><span class="jy-overline">当前连接</span><h3 data-jy-channel-name>跟随当前连接</h3><span class="jy-badge" data-jy-channel-mode>主 API</span><p class="jy-muted" data-jy-channel-summary></p><button type="button" class="jy-button" data-jy-action="open-settings">管理连接 →</button></div>
+  <div class="jy-brief jy-brief-channel"><span class="jy-overline">翻译用的连接</span><label class="jy-brief-field"><span class="jy-sr-only">翻译用哪条连接</span><select data-jy-translation-channel aria-label="翻译用哪条连接"></select></label><span class="jy-badge" data-jy-channel-mode>主 API</span><p class="jy-muted" data-jy-channel-summary></p><label class="jy-brief-field jy-brief-retry"><span class="jy-label">翻译失败后自动重试</span><input type="number" data-jy-field="retries" min="0" max="5" step="1"></label><p class="jy-muted">只管翻译。朗读分析用哪条在「朗读」页单独选，互不牵连。</p><button type="button" class="jy-button" data-jy-action="open-settings">管理连接（地址、密钥、模型）→</button></div>
   <div class="jy-brief"><span class="jy-overline">参考资料</span><p class="jy-muted" data-jy-context-summary></p></div>
  </aside>
 </div>
@@ -341,11 +356,11 @@ const CONTROL_CENTER_MARKUP = `
 </section>
 
 <section class="jy-page" data-jy-page="settings" role="tabpanel" hidden>
-<header class="jy-page-heading"><div><h1>模型连接</h1><span class="jy-page-context" data-jy-channel-context></span></div><button type="button" class="jy-button" data-jy-action="test-api">测试连接</button></header>
-<div class="jy-connection-choice" role="radiogroup" aria-label="翻译通道"><label><input type="radio" name="jy-api-mode" value="follow" data-jy-field="apiMode"><span><strong>跟随酒馆</strong><small>使用当前连接和模型</small></span></label><label><input type="radio" name="jy-api-mode" value="independent" data-jy-field="apiMode"><span><strong>独立副 API</strong><small>为翻译单独选择模型</small></span></label></div>
-<p class="jy-muted" data-jy-api-help></p>
+<header class="jy-page-heading"><div><h1>模型连接</h1><span class="jy-page-context" data-jy-channel-context>连接库：只存连接，谁用哪条各自去选</span></div><button type="button" class="jy-button" data-jy-action="test-api">测试这条连接</button></header>
+<div class="jy-channel-uses" data-jy-channel-uses></div>
+<p class="jy-muted" data-jy-api-help>这一页只存连接：地址、密钥、模型、请求参数、后置提示词。下面「正在编辑」选哪一条，只决定你在改哪一条，不会换掉任何功能正在用的连接。翻译用哪条在「翻译台」选，朗读分析和深度分析用哪条在「朗读」页选；「跟随酒馆」不需要在这里存，那几处的下拉框里直接有。</p>
 <div class="jy-connection-form" data-jy-independent-panel>
- <div class="jy-form-section"><div class="jy-section-title"><span>01</span><h2>保存的连接</h2></div><div class="jy-form-body"><label><span class="jy-label">选择预设</span><select data-jy-field="selectedChannelId"></select></label><div class="jy-inline-actions"><button type="button" class="jy-button" data-jy-action="add-channel">＋ 新建连接</button><button type="button" class="jy-button" data-jy-action="delete-channel">删除当前连接</button></div><label><span class="jy-label">预设名称</span><input type="text" data-jy-channel-field="name" placeholder="给这个连接起个名字"></label></div></div>
+ <div class="jy-form-section"><div class="jy-section-title"><span>01</span><h2>保存的连接</h2></div><div class="jy-form-body"><label><span class="jy-label">正在编辑</span><select data-jy-edit-channel></select></label><p class="jy-muted" data-jy-channel-usage></p><div class="jy-inline-actions"><button type="button" class="jy-button" data-jy-action="add-channel">＋ 新建连接</button><button type="button" class="jy-button" data-jy-action="delete-channel">删除这条连接</button></div><label><span class="jy-label">连接名称</span><input type="text" data-jy-channel-field="name" placeholder="给这个连接起个名字"></label></div></div>
  <div class="jy-form-section"><div class="jy-section-title"><span>02</span><h2>接口与模型</h2></div><div class="jy-form-body">
  <label><span class="jy-label">API 基础地址</span><input type="url" data-jy-channel-field="url" placeholder="https://example.com/v1" autocomplete="off"></label>
  <label><span class="jy-label">API 密钥</span><input type="password" data-jy-channel-field="key" placeholder="无密钥接口可留空" autocomplete="new-password"></label>
@@ -358,7 +373,6 @@ const CONTROL_CENTER_MARKUP = `
  <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
  </div></details><details class="jy-advanced"><summary>这条连接的后置提示词（附在每次请求的最末尾）</summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">列出全局挂载与当前角色卡激活的世界书条目；勾选后节约模式下仅注入这些内容，白名单跟随当前角色卡保存。一个都不勾则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
 </div>
-<div class="jy-retry-setting"><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-field="retries" min="0" max="5" step="1"></label><p class="jy-muted">适用于当前翻译通道。</p></div>
 <footer class="jy-footer"><span class="jy-save-note">修改后保存设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-settings">保存设置</button></footer>
 </section>
 
@@ -372,7 +386,7 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <div class="jy-processing-columns">
 <div class="jy-text-scope"><span class="jy-overline">送去翻译</span><h2>提取正文</h2><label><span class="jy-label">提取标签</span><textarea rows="4" data-jy-field="bodyTags" placeholder="story_scene" spellcheck="false"></textarea></label><p class="jy-muted">每行一个标签名，只取每种标签的最后一组完整内容。</p><label><span class="jy-label">替换标签（译文直接替换原文）</span><textarea rows="3" data-jy-field="replaceTags" placeholder="replace_scene" spellcheck="false"></textarea></label><p class="jy-muted">该标签内的内容照常翻译，但写回时译文直接顶替原文：显示与主模型都只看到译文，原文隐藏保留在楼层里，点小铅笔可见，重新翻译时自动还原。</p></div>
-<div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位。</p></div>
+<div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位。镜译自己的 <code>&lt;say&gt;</code> 说话人标记不用加在这里：翻译时自动去掉，显示时自动隐藏，朗读时自动读取。</p></div>
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 匹配整行。纯边框、纯符号与标签行自动保留。</p></details>
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
@@ -399,11 +413,11 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep">深度分析：在骨架上再看一遍，定情绪浓度和表演</option></select></label><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<div class="jy-form-grid jy-form-grid-tight"><label title="朗读的分析走哪条连接。留空就跟翻译用同一条。"><span class="jy-label">朗读分析用的副 API</span><select data-jy-tts-field="analysisChannelId"><option value="">跟随翻译的连接</option></select></label></div>
-<p class="jy-muted">翻译和朗读现在各挑各的连接：翻译在「模型连接」页最上面选，朗读在这里选，深度分析还能在「05 深度分析」里再单挑一条。连接本身（地址、密钥、模型、后置提示词）都在「模型连接」页里存着，这三处只是挑用哪一条。</p>
+<div class="jy-form-grid jy-form-grid-tight"><label title="简单分析、「分析这一楼」、按意见改、从角色卡和世界书识别角色，都走这条。和翻译用哪条互不相干。"><span class="jy-label">朗读分析用的连接</span><select data-jy-tts-field="analysisChannelId"><option value="follow">跟随酒馆（酒馆当前的连接和模型）</option></select></label></div>
+<p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译在「翻译台」选，朗读在这里选，深度分析还能在「05 深度分析」里再单挑一条。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）存在「模型连接」页——那一页只是个架子，在那里点开哪条都不改变这里的选择。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">生成完自动播放（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
-<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读本楼」时才请求，整楼一次，走翻译用的那条连接；勾了「自动生成音频」才会翻完就做。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
+<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读本楼」时才请求，整楼一次，走上面选的朗读分析连接；勾了「自动生成音频」才会翻完就做。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
 <label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label>
@@ -424,9 +438,10 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-tts-lang-block" data-jy-tts-multilang><div class="jy-row-between"><div><h3>多国语言</h3><p class="jy-muted">同一个人读中文、英语、日语可以各用一个音色，英语还分美式和英式（伦敦腔）。这里给旁白加；每个角色行里各有一个「＋ 多国语言音色」按钮。句子的语言由副模型判断，没判断按文字本身。</p></div><button type="button" class="jy-button" data-jy-action="tts-add-narrator-lang">＋ 旁白加一门语言</button></div><div class="jy-tts-lang-list" data-jy-tts-narrator-langs></div></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">角色表保存范围</span><select data-jy-tts-field="voiceScope"><option value="character">跟着角色卡（这张卡的所有聊天共用一张表）</option><option value="chat">每个聊天单独一份（不同周目各配各的）</option></select></label></div>
 <p class="jy-muted" data-jy-tts-scope-note></p>
-<div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button><button type="button" class="jy-button" data-jy-action="tts-add-voice">添加角色</button><button type="button" class="jy-button" data-jy-action="tts-import-speakers">导入已知说话人</button><button type="button" class="jy-button" data-jy-action="tts-lookup-voices">查询音色名</button><button type="button" class="jy-text-button" data-jy-action="tts-prune-voices">删掉没绑音色的行</button><button type="button" class="jy-text-button" data-jy-action="tts-clear-voices">清空角色表</button></div>
+<div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button><button type="button" class="jy-button" data-jy-action="tts-install-speech-entry">写入说话人标记世界书</button><button type="button" class="jy-button" data-jy-action="tts-add-voice">添加角色</button><button type="button" class="jy-button" data-jy-action="tts-import-speakers">导入已知说话人</button><button type="button" class="jy-button" data-jy-action="tts-lookup-voices">查询音色名</button><button type="button" class="jy-text-button" data-jy-action="tts-prune-voices">删掉没绑音色的行</button><button type="button" class="jy-text-button" data-jy-action="tts-clear-voices">清空角色表</button></div>
 <div class="jy-tts-voice-list" data-jy-tts-voice-list></div>
-<p class="jy-muted">角色表跟着当前角色卡保存。「从角色卡和世界书识别角色」让副模型读一遍角色卡和世界书条目，把人物名单一次导进来（需要副模型能连上，模型没回应就什么都不加）；导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「＋ 多国语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色。</p>
+<p class="jy-muted">「写入说话人标记世界书」往世界书里写一条常驻条目，让主模型把每句台词写成 <code>&lt;say who="名字" mood="情绪"&gt;「……」&lt;/say&gt;</code>。之后不用任何副模型，朗读就知道每句是谁说的、什么情绪：不分析模式也能分角色、带情绪读，简单分析模式碰到整楼都标好的楼也不再请求。标记在楼层里自动隐藏，翻译时自动去掉，主模型自己看得到、会接着写。条目写进角色卡绑定的世界书，没有就写进这个聊天的世界书，都没有就新建一本挂到这个聊天上；名单用的是下面角色表里的名字，加了角色再点一次就会更新。</p>
+<p class="jy-muted">角色表跟着当前角色卡保存。「从角色卡和世界书识别角色」让副模型读一遍角色卡和世界书条目（连同最近几楼正文，好按故事里的写法给名字），把人物名单列出来，你勾选后再导进来（需要副模型能连上，模型没回应就什么都不加）；世界书里没有、只是模型编的名字，群体和身份称呼，还有你自己扮演的角色，都会被程序挡掉，关掉的世界书条目也不读；导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「＋ 多国语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色。</p>
 </div></details>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-library"><summary class="jy-section-title"><span>04</span><h2>音色库</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-add-library">添加音色</button></div>
@@ -435,9 +450,9 @@ const CONTROL_CENTER_MARKUP = `
 </div></details>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-deep"><summary class="jy-section-title"><span>05</span><h2>深度分析</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <p class="jy-muted">在简单分析的骨架上，带着角色卡、世界书、前几楼再看一遍，判断每句情绪的因果和浓度，定下情绪、强度、语气、语速、音量、停顿、句内转折和非语言声音，全是 Fish 官方认得的标签；调音台上你推到头的滑杆是它必须守的规则，留在中间的交给它判断。开着翻译时一楼两次调用（翻译一次、深度一次），不开翻译一次做完。这一栏里的东西只属于深度分析，改它不碰别的。</p>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">深度分析用的副 API</span><select data-jy-tts-field="deepChannelId"><option value="">跟随翻译的模型设置</option></select></label><label title="从请求发出去算起，不管模型还在不在写。连接自己的「超时」只管「多久没动静」，思考型模型边想边写就永远不会超时。"><span class="jy-label">单次分析最长等待 / 秒</span><input type="number" data-jy-tts-field="analysisLimitSec" min="20" max="900" step="10"></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">深度分析用的连接</span><select data-jy-tts-field="deepChannelId"><option value="">和朗读分析用同一条</option></select></label><label title="从请求发出去算起，不管模型还在不在写。连接自己的「超时」只管「多久没动静」，思考型模型边想边写就永远不会超时。"><span class="jy-label">单次分析最长等待 / 秒</span><input type="number" data-jy-tts-field="analysisLimitSec" min="20" max="900" step="10"></label></div>
 <p class="jy-muted">「单次分析最长等待」是硬上限：到点就停，这一楼先按现有标注读，不会一直等下去。思考型模型嫌慢的话，把那条连接的「推理强度」调低比调大这个数更有用。</p>
-<p class="jy-muted">简单分析不在这里选：它走翻译用的那条连接——翻译的模型已经读过这一楼，要它做的又不多。深度分析可以换一个更会读人的模型。</p>
+<p class="jy-muted">简单分析用的连接在「01 读什么」里选；这里只管深度分析，可以换一个更会读人的模型，不选就和简单分析同一条。</p>
 <div class="jy-behaviors"><span class="jy-label">深度分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
 </div></details>
 <details class="jy-advanced" open><summary>默认调音台（没单独调过的角色和旁白都用这套）</summary>
@@ -725,6 +740,10 @@ function saveSettings(next) {
   syncFloatingButton();
   syncSpeakerStylesheet(runtime.settings);
   if (runtime.panel?.host) runtime.panel.host.dataset.theme = runtime.settings.theme || 'day';
+  // The desk's picker is the translation's choice. One made in the floating window must show there
+  // too, or the next save from the open control centre would put the old choice back.
+  const deskPicker = runtime.panel?.shadow?.querySelector?.('[data-jy-translation-channel]');
+  if (deskPicker) fillChannelPicker(deskPicker, runtime.settings, translationChannelChoice(runtime.settings));
   if (runtime.mini?.host) {
     runtime.mini.host.dataset.theme = runtime.settings.theme || 'day';
     runtime.mini.syncQuickPickers?.();
@@ -861,6 +880,8 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     preserveLineRules: settings.preserveLineRules,
   };
   const segments = [];
+  // Segment id → the speaker marks the story wrote into that line, for the reading alone.
+  const speech = new Map();
   let paragraphs = 0;
   let nextId = 1;
   for (const region of extraction.regions) {
@@ -869,6 +890,7 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     region.segments = segmented.segments;
     region.paragraphs = segmented.paragraphs;
     segments.push(...segmented.segments);
+    for (const [id, marked] of segmented.speech ?? []) speech.set(id, marked);
     paragraphs += segmented.paragraphs;
     nextId += segmented.segments.length;
   }
@@ -911,6 +933,7 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     messageHash,
     extraction,
     segments,
+    speech,
     paragraphs,
     existingTranslations,
     // Only trusted while the segmentation still matches, which is the same condition that makes the
@@ -2452,43 +2475,49 @@ async function editTranslationSegment(messageId, segmentId, text) {
   return written;
 }
 
-async function testTranslationChannel() {
-  updateTask({ status: 'running', title: '正在测试翻译通道', message: '发送一段最小测试文本。', progress: 25 });
+/**
+ * One short request through one connection. From the connection page that is the connection being
+ * edited, whoever uses it; without one named, the translation's own.
+ */
+async function testTranslationChannel({ channelId = null } = {}) {
+  const settings = channelId ? onChannel(runtime.settings, channelId) : runtime.settings;
+  const name = settings.apiMode === 'independent' ? `连接「${getActiveChannel(settings).name}」` : '酒馆当前连接';
+  updateTask({ status: 'running', title: `正在测试${name}`, message: '发送一段最小测试文本。', progress: 25 });
   try {
     let packet = {};
     try {
-      packet = await collectTranslationContext(await readMessageSnapshot(), runtime.settings);
+      packet = await collectTranslationContext(await readMessageSnapshot(), settings);
     } catch {
       // A channel test also works before a translatable story exists.
     }
-    const result = await invokeWithRetries([{ id: 1, text: '雨が降っている。' }], runtime.settings, undefined, packet);
+    const result = await invokeWithRetries([{ id: 1, text: '雨が降っている。' }], settings, undefined, packet);
     const sample = result.translations.get(1);
-    updateTask({ status: 'success', title: '翻译通道可用', message: `单句连通测试通过：${sample}（不代表长正文不会被截断）`, progress: 100 });
-    recordDiagnostic('info', 'channel.test', '翻译通道测试成功。', {
-      apiMode: runtime.settings.apiMode,
-      model: getActiveChannel(runtime.settings).model || 'follow-current',
-      endpoint: describeChannelEndpoint(),
+    updateTask({ status: 'success', title: `${name}可用`, message: `单句连通测试通过：${sample}（不代表长正文不会被截断）`, progress: 100 });
+    recordDiagnostic('info', 'channel.test', `${name}测试成功。`, {
+      apiMode: settings.apiMode,
+      model: settings.apiMode === 'independent' ? getActiveChannel(settings).model : 'follow-current',
+      endpoint: describeChannelEndpoint(settings),
     });
-    toast('success', '翻译通道测试成功。');
+    toast('success', `${name}测试成功。`);
     return sample;
   } catch (error) {
     const message = safeError(error);
-    updateTask({ status: 'error', title: '翻译通道测试失败', message, progress: 0 });
+    updateTask({ status: 'error', title: `${name}测试失败`, message, progress: 0 });
     recordDiagnostic('error', 'channel.test', message, {
-      apiMode: runtime.settings.apiMode,
-      model: getActiveChannel(runtime.settings).model || 'follow-current',
-      endpoint: describeChannelEndpoint(),
+      apiMode: settings.apiMode,
+      model: settings.apiMode === 'independent' ? getActiveChannel(settings).model : 'follow-current',
+      endpoint: describeChannelEndpoint(settings),
     });
     toast('error', message);
     throw error;
   }
 }
 
-async function fetchChannelModels() {
+async function fetchChannelModels(channelId = null) {
   const context = getContext();
   if (typeof context.getRequestHeaders !== 'function') throw new Error('当前 SillyTavern 不提供模型列表请求接口。');
-  const channel = getActiveChannel(runtime.settings);
-  if (!channel.url) throw new Error('请先填写当前副 API 预设的地址。');
+  const channel = runtime.settings.channels.find(item => item.id === channelId) ?? getActiveChannel(runtime.settings);
+  if (!channel.url) throw new Error('请先填写这条连接的地址。');
   updateTask({ status: 'running', title: '正在读取模型列表', message: `连接 ${channel.name}…`, progress: 35 });
   try {
     const data = await withAbortTimeout(undefined, channel.timeoutSec, async signal => {
@@ -2528,8 +2557,8 @@ async function fetchChannelModels() {
     // Without this the log stayed empty for the one failure that points straight at a wrong base
     // URL: a relay that answers /chat/completions but has no /models under the same path.
     recordDiagnostic('error', 'channel.models', message, {
-      apiMode: runtime.settings.apiMode,
-      endpoint: describeChannelEndpoint(),
+      channel: channel.name,
+      endpoint: describeChannelEndpoint(onChannel(runtime.settings, channel.id)),
     });
     throw error;
   }
@@ -2563,8 +2592,18 @@ function ttsSettings(settings = runtime.settings) {
 }
 
 function ttsStore() {
-  runtime.tts.store ??= createTtsStore();
+  runtime.tts.store ??= createTtsStore({ now: ttsClock });
   return runtime.tts.store;
+}
+
+// One clock for everything the reading stamps — the moment an analysis was asked for, the moment a
+// recording was made — that never shows the same moment twice. 「Made before the analysis」 is a
+// comparison of two of its readings, and a tie inside one millisecond must not decide it.
+let ttsClockLast = 0;
+function ttsClock() {
+  const now = Date.now();
+  ttsClockLast = now > ttsClockLast ? now : ttsClockLast + 1;
+  return ttsClockLast;
 }
 
 // Where this cast's voice table is kept: under the character card, or under this one chat when the
@@ -2651,6 +2690,20 @@ function ttsUtterances(floor, settings = runtime.settings) {
 }
 
 /**
+ * The speaker marks the story wrote into a floor, read onto the utterances being prepared: straight
+ * off the original's lines, or, for the translation, off the original's and carried over line by line
+ * and quote by quote — the translator never saw the marks and its text has none.
+ */
+function ttsTagReading(floor, utterances, tts) {
+  if (floor.lines?.some(line => line.speech)) return speechTagReading(utterances, floor.lines);
+  if (!floor.speechSource?.length) return { labels: new Map(), voices: new Map() };
+  const originals = splitUtterances(floor.speechSource, { quotePairs: tts.quotePairs, skipPairs: tts.skipPairs });
+  const own = speechTagReading(originals, floor.speechSource);
+  if (!own.labels.size) return own;
+  return deriveLabelsForSide(originals, own.labels, own.voices, utterances);
+}
+
+/**
  * The lines one floor would read, with the version they are cached under.
  *
  * A floor this extension translated is read through its own boundaries, which do not care what the
@@ -2682,6 +2735,8 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
   let source = 'tags';
   let complete = false;
   let sources = null;
+  // The original's lines with the speaker marks the story wrote into them, when it wrote any.
+  let speechSource = null;
   // The original is readable on any floor whose body tags extract, translated or not; the translation
   // only on a floor this extension wrote, or through the literal source tags below.
   if (side === 'source' || message.extra?.[MESSAGE_META_KEY]) {
@@ -2689,10 +2744,17 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
       const snapshot = await readMessageSnapshot(id, settings, { quiet: true });
       annotations = canonicalAnnotations(settings, snapshot.existingAnnotations);
       complete = snapshot.translated === true;
+      // A line the story marked with <say> is read off its marks: the words as every line is cleaned,
+      // and which run each mark names. A line without marks is taken exactly as it always was.
+      const quotePairs = ttsSettings(settings).quotePairs;
+      const originalLine = segment => {
+        const marked = snapshot.speech?.get(segment.id);
+        if (!marked) return { lineId: segment.id, text: plainLineText(segment.text) };
+        const read = readSpeechLine(marked, { quotePairs });
+        return read.spans.length ? { lineId: segment.id, text: read.text, speech: read.spans } : { lineId: segment.id, text: read.text };
+      };
       if (side === 'source') {
-        lines = snapshot.segments
-          .map(segment => ({ lineId: segment.id, text: plainLineText(segment.text) }))
-          .filter(line => line.text);
+        lines = snapshot.segments.map(originalLine).filter(line => line.text);
         references = new Map([...snapshot.existingTranslations].map(([lineId, text]) => [lineId, plainLineText(text)]));
         source = 'source';
       } else {
@@ -2702,6 +2764,12 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
           .filter(line => line.text);
         sources = new Map(snapshot.segments.map(segment => [segment.id, plainLineText(segment.text)]));
         source = 'translation';
+        // The translation carries no marks of its own; the original's are carried over to it, line by
+        // line and quote by quote, when the reading is prepared.
+        if (snapshot.speech?.size) {
+          const original = snapshot.segments.map(originalLine).filter(line => line.text);
+          if (original.some(line => line.speech)) speechSource = original;
+        }
       }
     } catch {
       lines = [];
@@ -2725,6 +2793,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
     references: references?.size ? references : null,
     // The original of each translated line, for the details page of a bilingual reader.
     sources: sources?.size ? sources : null,
+    ...(speechSource ? { speechSource } : {}),
     source,
     // Whether the translation this floor reads is finished; the original is always whole.
     complete: side === 'source' || source === 'tags' ? true : complete,
@@ -2823,8 +2892,9 @@ async function ttsContextPacket(floor, settings) {
   if (!wants.character && !wants.worldbook && !wants.recent) return { character: '', worldbook: '', recent: '' };
   try {
     const snapshot = await readMessageSnapshot(floor.messageId, settings, { quiet: true });
+    // On the deep reading's own connection, so that connection's token saving is the one that applies.
     const scoped = {
-      ...settings,
+      ...ttsRequestSettings(settings, 'deep'),
       includeCharacterCard: wants.character,
       includeWorldbook: wants.worldbook,
       includeRecentContext: wants.recent && wants.floors > 0,
@@ -2850,18 +2920,27 @@ async function ttsContextPacket(floor, settings) {
  * Either way the answer is labels keyed by id and never text. `onRequest` is told only when a request
  * actually goes out, so a cached reading never claims to be thinking.
  */
-async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, onPrefix = null, speakers = null } = {}) {
+async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, onPrefix = null, speakers = null, cacheOnly = false } = {}) {
   const roster = ttsKnownNames(settings);
   const tts = ttsSettings(settings);
   const key = await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side });
   if (!force) {
     const stored = await ttsStore().getAnalysis(key);
     if (Array.isArray(stored?.labels) && stored.labels.length) {
-      return { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), depth, cached: true };
+      // Which floor it was asked for: the key is the text alone, and the same words in another chat
+      // find the same reading.
+      return { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), depth, cached: true, floorId: stored.floorId ?? '' };
     }
   }
+  // Only looking: what the store holds, or nothing. Never a request.
+  if (cacheOnly) return null;
   return dedupeTtsJob(key, floor.messageId, async (signal, notifyPrefix) => {
     onRequest?.();
+    // The moment this reading was asked for. Every label it returns carries it, and audio made before
+    // it — from whatever reading this one replaces — is no longer the audio of those sentences. The
+    // moment of asking rather than of answering: paragraphs heard while the answer still streams in
+    // were made from this reading, and are its audio.
+    const askedAt = ttsClock();
     const request = ttsRequestSettings(settings, depth);
     const packet = depth === 'deep' ? await ttsContextPacket(floor, settings) : null;
     const context = getContext();
@@ -2895,7 +2974,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       if (ready <= announced) return;
       announced = ready;
       try {
-        notifyPrefix({ labels: partial.labels, voices: partial.voices, readyIds, ready, total: paragraphs.length });
+        notifyPrefix({ labels: stampLabels(partial.labels, askedAt), voices: partial.voices, readyIds, ready, total: paragraphs.length });
       } catch (error) {
         recordDiagnostic('warn', 'tts.analysis', `边到边读时处理已回的段落出错：${safeError(error)}`, { floor: floor.floorId, ready }, '', { floor: floor.messageId });
       }
@@ -2932,6 +3011,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       throw error;
     }
     const parsed = parseVoiceAnalysis(raw, utterances);
+    parsed.labels = stampLabels(parsed.labels, askedAt);
     const seconds = Number(((Date.now() - started) / 1000).toFixed(1));
     recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.analysis', parsed.labels.size
       ? `${depth === 'deep' ? '深度分析' : '简单分析'}给 ${parsed.labels.size} 句对白标了说话人或情绪${parsed.voices.size ? `，${parsed.voices.size} 句带表演` : ''}，用时 ${seconds} 秒。`
@@ -2949,35 +3029,35 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     }, raw, { fullRequest: messages, floor: floor.messageId });
     // An empty answer is not cached: the next play asks again instead of living with a failed reply.
     if (parsed.labels.size) {
-      await ttsStore().putAnalysis({ key, floorId: floor.floorId, version: floor.version, depth, labels: [...parsed.labels], voices: [...parsed.voices] });
+      await ttsStore().putAnalysis({ key, floorId: floor.floorId, version: floor.version, depth, labels: [...parsed.labels], voices: [...parsed.voices], analyzedAt: askedAt });
     }
-    return { labels: parsed.labels, voices: parsed.voices, depth, cached: false };
+    return { labels: parsed.labels, voices: parsed.voices, depth, cached: false, analyzedAt: askedAt };
   }, { onPrefix });
 }
 
-// The connection the readings go to: the reading's own saved connection when one is chosen, else
-// whatever the translation uses.
-/**
- * The connection an analysis goes out on. The simple reading and its corrections follow the
- * translation's: the model that translated the floor has read it already, and what is asked of it
- * is light. Only the deep reading may have a connection of its own, chosen in its own section.
- */
 /**
  * The settings one analysis request goes out under: the same settings with the connection swapped
- * for the one that feature was given. Left empty, the reading follows the translation and the deep
- * reading follows the reading, which is what someone who has set nothing expects.
+ * for the one the reading chose on its own page — the host's connection or a saved one — and, for
+ * the deep reading, the one chosen in its own section when there is one. The translation's choice
+ * never decides where the reading goes.
  */
 function ttsRequestSettings(settings = runtime.settings, depth = 'simple') {
   const base = onChannel(settings, ttsSettings(settings).analysisChannelId);
   return depth === 'deep' ? deepRequestSettings(base) : base;
 }
 
-/** The same settings, pointed at one saved connection; unknown or empty ids change nothing. */
+/**
+ * The same settings, pointed at one connection: 'follow' for the host's own, else a saved one's id.
+ * Unknown or empty ids change nothing — the same object comes back, as it does when the connection
+ * asked for is the one these settings already point at.
+ */
 function onChannel(settings, id) {
   const wanted = String(id ?? '').trim();
   if (!wanted) return settings;
+  if (wanted === 'follow') return settings?.apiMode === 'follow' ? settings : { ...settings, apiMode: 'follow' };
   const channels = Array.isArray(settings?.channels) ? settings.channels : [];
   if (!channels.some(channel => channel.id === wanted)) return settings;
+  if (settings?.apiMode === 'independent' && settings?.selectedChannelId === wanted) return settings;
   return { ...settings, apiMode: 'independent', selectedChannelId: wanted };
 }
 
@@ -3015,6 +3095,16 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   const utterances = ttsUtterances(floor, settings);
   // What the translation already said about every quoted run: who, in what mood, in Fish's own words.
   const reading = annotationReading(utterances, floor.annotations);
+  const annotated = reading.labels.size > 0;
+  // What the story marked itself with <say>: its author's word on who says each line and how. It is
+  // laid over the translation's, and costs nothing.
+  const tagged = ttsTagReading(floor, utterances, tts);
+  for (const [id, label] of tagged.labels) reading.labels.set(id, { ...(reading.labels.get(id) ?? {}), ...label });
+  for (const [id, voice] of tagged.voices) reading.voices.set(id, { ...(reading.voices.get(id) ?? {}), ...voice });
+  const tagSpeakers = speakerHints(tagged.labels);
+  // Every line of dialogue marked: nobody needs to be asked who speaks it, or how.
+  const fullyTagged = tagged.labels.size > 0 && utterances.every(item => item.kind !== 'quoted' || tagged.labels.has(item.id));
+  const marksFrom = annotated && tagged.labels.size ? '翻译时的标注和正文里的说话人标记' : annotated ? '翻译时的标注' : '正文里的说话人标记';
   let labels = reading.labels;
   let voices = reading.voices.size ? reading.voices : null;
   // `analyze` asks for one reading regardless of the mode: the plain reading's own request for a
@@ -3026,13 +3116,40 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   const cast = ttsCast(settings);
   const host = getContext();
   const protagonists = { character: host.name2 ?? '', user: host.name1 ?? '' };
-  let resolved = resolveSpeakers(utterances, { cast, manual, infer: false });
+  let resolved = resolveSpeakers(utterances, { cast, manual, tagged: tagSpeakers, infer: false });
   // Where a label's speaker came from when nobody else named one: the translation's mark or the model.
   let fallback = 'hint';
   const floorKey = ttsLabelKey(floor);
+  // A model's reading with the translation's marks under it: the translation's name where the model
+  // named nobody, its Fish words under whatever the model added — an id-only answer keeps them whole.
+  const adopt = analyzed => {
+    const adopted = new Map(analyzed.labels);
+    for (const [id, hint] of reading.labels) {
+      const label = adopted.get(id);
+      if (hint.speaker && label && !label.speaker) adopted.set(id, { ...label, speaker: hint.speaker, speakerSource: 'hint' });
+    }
+    return { labels: adopted, voices: mergeVoiceMaps(reading.voices, analyzed.voices) };
+  };
+  // A reading of this very text kept from before — an earlier session, a page reloaded, a reading asked
+  // for by hand — is this floor's reading. Finding it asks nobody. Without this a reload forgot every
+  // floor's analysis until it was played, so a correction was built on nothing and the audio made
+  // from the analysis no longer matched what the floor showed.
+  // Where something else speaks for the floor without a model — the plain reading, the translation's
+  // marks — only a reading asked for on this very floor outranks it: the store is keyed by the words
+  // alone, and a greeting read in one chat must not decide how the same greeting reads in another.
+  const stored = async (wanted, { thisFloor = false } = {}) => {
+    if (force || !utterances.length) return null;
+    const found = await analyzeTtsFloor(floor, utterances, settings, wanted, { cacheOnly: true }).catch(() => null);
+    if (!found?.labels?.size || (thisFloor && found.floorId !== floor.floorId)) return null;
+    const entry = { ...found, ...adopt(found), depth: wanted };
+    runtime.tts.analysis.set(floorKey, entry);
+    return entry;
+  };
   // A floor the plain reading asked to have analysed once keeps that analysis.
-  const asked = depth === 'off' && !runtime.tts.plainFloors.has(floorKey) ? runtime.tts.analysis.get(floorKey) : null;
+  const plainKept = runtime.tts.plainFloors.has(floorKey);
+  let asked = depth === 'off' && !plainKept ? runtime.tts.analysis.get(floorKey) : null;
   const primary = await ttsPrimaryFloor(floor, settings);
+  if (!primary && depth === 'off' && !plainKept && !asked) asked = await stored('simple', { thisFloor: true });
   if (primary) {
     const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep, passive });
     const derived = deriveLabelsForSide(read.utterances, read.labels, read.voices, utterances);
@@ -3047,25 +3164,32 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
     depth = asked.depth ?? 'simple';
     fallback = depth === 'annotations' ? 'hint' : 'model';
     onStep?.('analysis', { state: 'done', label: '简单分析', detail: depth === 'annotations' ? '用翻译时的标注' : '这一楼按你的要求分析过' });
-  } else if (depth === 'off' && labels.size) {
+  } else if (depth === 'off' && annotated) {
     // Translated with the reading on: the translation marked who speaks and how. That one request
     // was the simple reading already, so the plain reading uses it whole rather than reading the
     // text again on its own.
     depth = 'annotations';
     runtime.tts.analysis.set(floorKey, { labels, voices, depth });
-    onStep?.('analysis', { state: 'done', label: '简单分析', detail: `用翻译时的标注，${labels.size} 句` });
-  } else if (depth === 'off' || runtime.tts.plainFloors.has(floorKey)) {
-    // The plain reading: the text as written, no moods and no request. Who speaks is read off the
-    // text itself — the reader's word first, then what the text says outright, then the translation's
-    // mark, then what the text suggests. A floor the reader chose to hear plain when asked is the same.
+    onStep?.('analysis', { state: 'done', label: '简单分析', detail: `用${marksFrom}，${labels.size} 句` });
+  } else if (depth === 'off' || plainKept) {
+    // The plain reading: the text as written, no request. Who speaks is read off the text itself — the
+    // reader's word first, then the story's own marks, then what the text says outright, then the
+    // translation's mark, then what the text suggests. A floor the reader chose to hear plain when
+    // asked is the same. Moods come only from the story's own marks, which cost nothing.
     labels = speakersOnly(labels);
     voices = null;
     depth = 'off';
-    resolved = resolveSpeakers(utterances, { cast, hints: speakerHints(reading.labels), manual, protagonists });
-    onStep?.('analysis', { state: 'done', label: '不分析', detail: '直接读正文' });
+    for (const [id, label] of tagged.labels) if (label.emotion) labels.set(id, { ...(labels.get(id) ?? {}), emotion: label.emotion });
+    if (tagged.voices.size) voices = new Map(tagged.voices);
+    resolved = resolveSpeakers(utterances, { cast, hints: speakerHints(reading.labels), manual, tagged: tagSpeakers, protagonists });
+    onStep?.('analysis', { state: 'done', label: '不分析', detail: tagged.labels.size ? `按正文里的说话人标记读，${tagged.labels.size} 句带标记` : '直接读正文' });
   } else if (depth !== 'annotations' && utterances.length) {
-    const key = ttsLabelKey(floor);
-    const known = force ? null : runtime.tts.analysis.get(key);
+    const key = floorKey;
+    let known = force ? null : runtime.tts.analysis.get(key);
+    // The store is looked in wherever the rest of this branch would not look: a look at the floor,
+    // and a translated floor whose marks would otherwise speak for it — the reader may have asked for
+    // a reading of it by hand, and that reading is the one they want to hear.
+    if (!known && (passive || (depth === 'simple' && labels.size))) known = await stored(depth, { thisFloor: depth === 'simple' && labels.size > 0 });
     if (known && (known.depth === depth || (depth === 'simple' && ['deep', 'annotations'].includes(known.depth)))) {
       labels = known.labels;
       voices = known.voices;
@@ -3075,17 +3199,19 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
     } else if (passive) {
       // Only looking, not reading: the floor shows what the translation already said and asks nothing.
       depth = labels.size ? 'annotations' : 'pending';
-    } else if (depth === 'simple' && labels.size && !force) {
-      // The translation labelled this floor as it was written. The simple reading would only ask the
-      // same question again, so the floor reads at once and the model hears nothing.
+    } else if (depth === 'simple' && (annotated || fullyTagged) && !force) {
+      // The translation labelled this floor as it was written, or the story marked every line of its
+      // dialogue itself. The simple reading would only ask the same question again, so the floor reads
+      // at once and the model hears nothing. A floor marked only here and there is still asked, with
+      // the marked speakers handed over as settled.
       depth = 'annotations';
       runtime.tts.analysis.set(key, { labels, voices, depth });
-      onStep?.('analysis', { state: 'done', label: '简单分析', detail: `用翻译时的标注，${labels.size} 句` });
+      onStep?.('analysis', { state: 'done', label: '简单分析', detail: `用${marksFrom}，${labels.size} 句` });
       const noteKey = `${key}|annotations`;
       if (!runtime.tts.anchorWarned.has(noteKey)) {
         runtime.tts.anchorWarned.add(noteKey);
-        recordDiagnostic('info', 'tts.analysis', `这一楼用翻译时的标注朗读，没有请求副模型：${labels.size} 句带说话人或情绪，${reading.voices.size} 句带 Fish 的情绪词或语气。`, {
-          floor: floor.floorId, depth, utterances: utterances.length, labeled: labels.size, voiced: reading.voices.size,
+        recordDiagnostic('info', 'tts.analysis', `这一楼用${marksFrom}朗读，没有请求副模型：${labels.size} 句带说话人或情绪，${reading.voices.size} 句带 Fish 的情绪词或语气。`, {
+          floor: floor.floorId, depth, utterances: utterances.length, labeled: labels.size, voiced: reading.voices.size, tagged: tagged.labels.size,
         }, '', { floor: floor.messageId });
       }
     } else {
@@ -3113,16 +3239,12 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           },
         });
         if (analyzed.labels.size) {
-          labels = analyzed.labels;
           // Where the reading named nobody, the translation's own mark still knows who spoke.
-          for (const [id, hint] of reading.labels) {
-            const label = labels.get(id);
-            if (hint.speaker && label && !label.speaker) labels.set(id, { ...label, speaker: hint.speaker, speakerSource: 'hint' });
-          }
+          const adopted = adopt(analyzed);
+          labels = adopted.labels;
           fallback = 'model';
-          // The translation's Fish words stay under whatever the model added; an id-only answer keeps them whole.
-          voices = mergeVoiceMaps(reading.voices, analyzed.voices);
-          runtime.tts.analysis.set(key, { ...analyzed, voices, depth });
+          voices = adopted.voices;
+          runtime.tts.analysis.set(key, { ...analyzed, ...adopted, depth });
           if (runtime.tts.analysis.size > 200) runtime.tts.analysis.delete(runtime.tts.analysis.keys().next().value);
           dropPreparedFloors(floor.messageId);
           onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '深度分析' : '简单分析', detail: analyzed.cached ? '已有结果' : `${labels.size} 句` });
@@ -3535,7 +3657,8 @@ async function findTtsEntry(floor, item, settings) {
     if (own.length) return { record: own[0], index: 0 };
     return null;
   }
-  return findCoveringEntry(records, { text: item.segment.text, voiceId: item.voiceId, fingerprint, identity: itemIdentity(item) });
+  // Audio made before this sentence's reading was asked for belongs to the reading it replaced.
+  return findCoveringEntry(records, { text: item.segment.text, voiceId: item.voiceId, fingerprint, identity: itemIdentity(item), since: Number(item.segment?.analyzedAt) || 0 });
 }
 
 /**
@@ -3551,12 +3674,18 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
   const { fingerprint, key: fingerprintId } = await ttsFingerprint(settings);
   const key = await recordingCacheKey({ floorId: floor.floorId, version: floor.version, unit, maxChars: tts.fish.maxChars, items, fingerprint });
   const cached = await ttsStore().getAudio(key);
-  if (cached?.parts?.length && Array.isArray(cached.timeline)) {
+  // The same words under the same labels make the same key, so a reading asked for again that came
+  // out word for word the same would find the take made before it. That take predates the reading
+  // and is made again: a floor analysed afresh is heard afresh.
+  const stale = cached && recordPredates(cached, unitAnalyzedAt(items));
+  if (cached?.parts?.length && Array.isArray(cached.timeline) && !stale) {
     rememberRecording(floor, cached);
     ttsFishTally(floor).reused += 1;
     onStep?.(stepId, { state: 'done', label: ttsUnitLabel(unit), detail: '已有音频' });
     return { record: cached, cached: true };
   }
+  // Replaced under the same key: the urls made from the old take must not play in place of the new one.
+  if (stale) dropTtsObjectUrls(key);
   requireFishKey(tts);
   const record = await dedupeTtsJob(key, floor.messageId, async signal => {
     const provider = ttsProviderFor(settings);
@@ -4129,7 +4258,9 @@ async function askTtsChoice(floor) {
  * A small dialog in the page's own styling, resolved by whichever control was pressed.
  *
  * The ✕, the backdrop and Escape all answer 'cancel', because a dialog about writing a file has to
- * be as easy to leave as to use.
+ * be as easy to leave as to use. `body.picks`, when given, is a list of ticks shown above the buttons
+ * — `{ value, label, note, checked }` — and the answer is then `{ choice, picked }`, the values still
+ * ticked when a button was pressed.
  */
 async function ttsAskBox(body, { label = '选择' } = {}) {
   const css = await loadPanelCss();
@@ -4181,15 +4312,39 @@ async function ttsAskBox(body, { label = '选择' } = {}) {
       control.textContent = action.label;
       actions.appendChild(control);
     }
-    box.append(head, text, actions);
+    const parts = [head, text];
+    if (Array.isArray(body.picks)) {
+      const list = document.createElement('div');
+      list.className = 'jy-ask-picks';
+      for (const pick of body.picks) {
+        const row = document.createElement('label');
+        const tick = document.createElement('input');
+        tick.type = 'checkbox';
+        tick.value = String(pick.value);
+        tick.checked = pick.checked !== false;
+        tick.dataset.jyPick = '';
+        const words = document.createElement('span');
+        words.textContent = pick.label;
+        if (pick.note) {
+          const note = document.createElement('small');
+          note.textContent = pick.note;
+          words.appendChild(note);
+        }
+        row.append(tick, words);
+        list.appendChild(row);
+      }
+      parts.push(list);
+    }
+    box.append(...parts, actions);
     shadow.append(style);
     let done = false;
     const finish = choice => {
       if (done) return;
       done = true;
+      const picked = [...shadow.querySelectorAll('[data-jy-pick]')].filter(tick => tick.checked).map(tick => tick.value);
       host.remove();
       document.removeEventListener('keydown', onKey, true);
-      resolve(choice);
+      resolve(Array.isArray(body.picks) ? { choice, picked } : choice);
     };
     const onKey = event => {
       if (event.key === 'Escape') { event.preventDefault(); finish('cancel'); }
@@ -5359,67 +5514,138 @@ function forgetTtsItems(messageId) {
   }
 }
 
-/** Which paragraphs of this floor can already be heard, before an analysis changes the labels. */
-async function ttsHeardLines(messageId, side) {
+/**
+ * The paragraphs of this floor that have any audio at all, on one side: read off the store, whatever
+ * reading the audio was made from. Taken before an analysis moves the labels.
+ *
+ * This used to be asked of the floor as the reading saw it — which paragraph's sentences a recording
+ * matched — and after a reload the reading saw no analysis at all, matched nothing, and a re-analysis
+ * went on to remake nothing: 「之前没有生成过音频」 on a floor full of audio.
+ */
+async function ttsRecordedLines(messageId, side, settings = runtime.settings) {
   try {
-    const prepared = await ttsPrepared(messageId, side);
-    const heard = new Set();
-    for (const item of prepared.items) {
-      if (heard.has(item.segment.lineId)) continue;
-      if (await findTtsEntry(prepared.floor, item, prepared.settings)) heard.add(item.segment.lineId);
-    }
-    return heard;
+    const floor = await collectTtsFloor(messageId, settings, side);
+    if (!floor) return new Set();
+    return recordedLines(await ttsRecordings(floor), ttsUtterances(floor, settings));
   } catch {
-    // No prepared floor means nothing has been made from it; there is nothing to make again.
     return new Set();
   }
 }
 
+/** Every side a floor is read in, with the one asked about first. */
+function ttsSidesWith(side, settings = runtime.settings) {
+  return [...new Set([side, ...ttsSides(settings)].filter(Boolean))];
+}
+
 /**
- * The paragraphs that had audio, made again under the labels the analysis just wrote.
+ * The paragraphs that had audio, each looked at by time: audio made before its sentences' reading was
+ * asked for is made again from that reading, audio made after it is kept.
  *
- * A paragraph the analysis left alone is found in the store and costs nothing, so this only pays for
- * what actually changed. Failures are reported and do not stop the rest: the analysis itself landed.
+ * A paragraph no analysis touches — narration the reading does not label — keeps its audio: nothing
+ * it is made of has moved. Failures are reported and do not stop the rest; the analysis itself landed,
+ * and a paragraph that could not be made now is made when it is played.
  */
 async function remakeTtsLines(messageId, side, heard) {
-  if (!heard?.size) return 0;
+  const summary = { made: 0, kept: 0, failed: 0 };
+  if (!heard?.size) return summary;
   const settings = runtime.settings;
   const prepared = await ttsPrepared(messageId, side, { fresh: true });
   const tts = ttsSettings(settings);
   const { floor } = prepared;
   const units = ttsUnitsOf(tts, prepared.items).filter(target => target.items.some(item => heard.has(item.segment.lineId)));
-  if (!units.length) return 0;
+  if (!units.length) return summary;
   for (const target of units) ttsStep(floor, `record:${target.unit}`, { state: 'pending', label: ttsUnitLabel(target.unit) });
-  let made = 0;
   await runInLanes(units, Math.max(1, Number(tts.fish.concurrency) || 1), async (target, index) => {
     const covered = await Promise.all(target.items.map(item => findTtsEntry(floor, item, settings)));
     if (covered.every(Boolean)) {
-      ttsStep(floor, `record:${target.unit}`, { state: 'done', detail: '标注没变，音频照用' });
+      summary.kept += 1;
+      ttsStep(floor, `record:${target.unit}`, { state: 'done', detail: unitAnalyzedAt(target.items) ? '音频是这次分析之后做的，照用' : '这段不受分析影响，音频照用' });
       return;
     }
     try {
       const { cached } = await ensureTtsRecording(floor, target.unit, target.items, settings,
         text => setTtsStatus(messageId, units.length > 1 ? `${text}（${index + 1}/${units.length}）` : text, 'busy'),
         (id, patch) => ttsStep(floor, id, patch));
-      if (!cached) made += 1;
+      if (cached) summary.kept += 1;
+      else summary.made += 1;
     } catch (error) {
       if (isAbortError(error)) throw error;
+      summary.failed += 1;
       ttsStep(floor, `record:${target.unit}`, { state: 'error', detail: safeError(error) });
     }
   });
   reportTtsFish(floor);
-  return made;
+  return summary;
 }
 
-/** Throws away the floor's reading and asks the model again, every sentence from scratch. */
+/** What remaking a floor after an analysis came to, in the words the floor bar and the toast use. */
+function describeTtsRemake(summary) {
+  if (!summary || (!summary.made && !summary.kept && !summary.failed)) return '这一楼之前没有生成过音频，按播放时按新分析生成';
+  const parts = [];
+  if (summary.made) parts.push(`${summary.made} 段音频已按新分析重做`);
+  if (summary.kept) parts.push(`${summary.kept} 段不受影响，照用`);
+  if (summary.failed) parts.push(`${summary.failed} 段没做成，播放时会再做`);
+  return parts.join('，');
+}
+
+/** Remakes the audio of every side of a floor that had any, after its reading changed. */
+async function remakeTtsSides(messageId, heard) {
+  const total = { made: 0, kept: 0, failed: 0 };
+  for (const [side, lines] of heard) {
+    const summary = await remakeTtsLines(messageId, side, lines);
+    total.made += summary.made;
+    total.kept += summary.kept;
+    total.failed += summary.failed;
+  }
+  return total;
+}
+
+/** Where a floor was being read when an analysis stopped it, to pick up from afterwards. */
+function ttsResumePoint(messageId) {
+  const transport = runtime.tts.transport;
+  if (!transport || transport.messageId !== Number(messageId) || transport.generateOnly) return null;
+  if (!['playing', 'loading'].includes(transport.state)) return null;
+  const item = transport.items[transport.index];
+  return item ? { messageId: transport.messageId, side: transport.side, lineId: item.segment.lineId } : null;
+}
+
+/**
+ * The floor read on from the paragraph it was stopped at, once the audio of the new reading is made.
+ * Only a reading that was playing is picked up again, and only when nothing else started meanwhile.
+ */
+async function resumeTtsReading(point) {
+  if (!point || runtime.tts.transport || !ttsSettings().playAfterGenerate) return;
+  try {
+    const prepared = await ttsPrepared(point.messageId, point.side);
+    const first = prepared.items.find(item => item.segment.lineId === point.lineId) ?? prepared.items[0];
+    if (!first || runtime.tts.transport) return;
+    const transport = await createTtsTransport(point.messageId, { single: false, fromUtterance: first.segment.id, side: point.side });
+    if (transport) await runTtsTransport(transport);
+  } catch (error) {
+    if (!isAbortError(error)) setTtsStatus(point.messageId, safeError(error), 'error');
+  }
+}
+
+/**
+ * Throws away the floor's reading and asks the model again, every sentence from scratch — and then
+ * makes the audio again, without a second click.
+ *
+ * Every paragraph that had audio is looked at by time: made before this reading was asked for, it was
+ * made from the reading being thrown away, and it is made again from the new one; made after, it
+ * stays. A floor nobody generated stays ungenerated until it is played. A reading that was playing
+ * picks up where it was.
+ */
 async function reanalyzeTtsFloor(messageId, side = null) {
   const settings = runtime.settings;
   requireClosedFloor(messageId);
   const which = side ?? primaryTtsSide(settings);
   const floor = await collectTtsFloor(messageId, settings, which);
   if (!floor) throw new Error('这一楼没有可朗读的文字。');
-  // Noted before the labels move: what could be heard is what will be made again afterwards.
-  const heard = await ttsHeardLines(messageId, which);
+  // Noted before the labels move, on every side the floor is read in: a reading of one language is
+  // carried over to the other, and the other side's audio was made from it too.
+  const heard = new Map();
+  for (const each of ttsSidesWith(which, settings)) heard.set(each, await ttsRecordedLines(messageId, each, settings));
+  const resume = ttsResumePoint(messageId);
   forgetTtsItems(messageId);
   runtime.tts.analysis.delete(ttsLabelKey(floor));
   // A floor the reader once chose to hear plain is being asked about now.
@@ -5437,9 +5663,12 @@ async function reanalyzeTtsFloor(messageId, side = null) {
     setTtsStatus(messageId, '', 'idle');
     scheduleTtsDecorate(messageId, { force: true });
   }
-  // The audio follows the analysis that was asked for, without a second click.
-  floor.remade = await remakeTtsLines(messageId, which, heard);
-  setTtsStatus(messageId, floor.remade ? `重新分析完了，${floor.remade} 段音频已重做` : '', 'idle');
+  const summary = await remakeTtsSides(messageId, heard);
+  floor.remade = summary.made;
+  floor.remake = summary;
+  setTtsStatus(messageId, summary.made || summary.failed ? `重新分析完了，${describeTtsRemake(summary)}` : '', 'idle');
+  notifyTtsPanels();
+  void resumeTtsReading(resume);
   return floor;
 }
 
@@ -5447,7 +5676,9 @@ async function reanalyzeTtsFloor(messageId, side = null) {
 function currentTtsLabels(prepared) {
   return new Map(prepared.segments.map(segment => [segment.id, {
     type: segment.type,
-    ...(segment.speaker ? { speaker: segment.speaker, ...(segment.speakerSource === 'manual' ? { manual: true } : {}) } : {}),
+    // A name the reader set, or the story marked, is settled: the correction is told not to move it,
+    // and it would be pinned over whatever came back anyway.
+    ...(segment.speaker ? { speaker: segment.speaker, ...(['manual', 'tag'].includes(segment.speakerSource) ? { manual: true } : {}) } : {}),
     ...(segment.emotion ? { emotion: segment.emotion, intensity: segment.intensity ?? 1 } : {}),
     ...(segment.voice?.tone ? { tone: segment.voice.tone } : {}),
   }]));
@@ -5458,20 +5689,27 @@ function currentTtsLabels(prepared) {
  *
  * The model is handed last time's answer and the complaint, not the job of reading the floor again,
  * and only the sentences in scope: fixing one line is one short request. Sentences the complaint does
- * not touch come back as a bare id and keep what they had. The audio of whatever was asked about is
- * dropped, so the next play is heard with the correction rather than from the old take.
+ * not touch come back as a bare id and keep what they had — their label, their voice, and the moment
+ * they were read. The ones it changed carry the moment of this request, so their old audio is made
+ * again from the correction by itself, and nothing else of the floor's is.
  */
 async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, feedback = '' } = {}) {
   const settings = runtime.settings;
   const which = side ?? primaryTtsSide(settings);
   const prepared = await ttsPrepared(messageId, which);
   const { floor } = prepared;
-  const heard = await ttsHeardLines(messageId, which);
+  const heard = new Map();
+  for (const each of ttsSidesWith(which, settings)) heard.set(each, await ttsRecordedLines(messageId, each, settings));
   const utterances = ttsUtterances(floor, settings);
   const base = currentTtsLabels(prepared);
   const scope = utteranceId === null ? utterances : utterances.filter(item => item.id === Number(utteranceId));
   if (!scope.length) throw new Error('这一句不在当前的朗读范围里。');
-  const request = ttsRequestSettings(settings);
+  const key = ttsLabelKey(floor);
+  const known = runtime.tts.analysis.get(key);
+  // The floor keeps the depth it was read at; a correction is not a shallower reading, and it goes to
+  // the connection that reading goes to.
+  const depth = known?.depth === 'deep' || (!known && prepared.depth === 'deep') ? 'deep' : 'simple';
+  const request = ttsRequestSettings(settings, depth);
   const context = getContext();
   const messages = buildRefineAnalysisMessages(scope, {
     roster: ttsKnownNames(settings),
@@ -5483,30 +5721,37 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
     feedback,
   });
   const started = Date.now();
+  // The moment of asking, which every sentence this correction changes will carry.
+  const askedAt = ttsClock();
   const raw = await requestSubModelRaw(messages, request, undefined);
   const parsed = parseVoiceAnalysis(raw, scope, { hints: base });
+  const answered = [...parsed.labels.keys()].filter(id => !parsed.keptIds.has(id));
   recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.refine', parsed.labels.size
-    ? `按你的意见改了第 ${messageId} 楼的 ${parsed.labels.size} 句标注（${scope.length} 句在范围里，${parsed.reused} 句原样保留），用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒。`
+    ? `按你的意见改了第 ${messageId} 楼的 ${answered.length} 句标注（${scope.length} 句在范围里，${parsed.reused} 句原样保留），用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒。`
     : `副模型没有返回可用的修正，第 ${messageId} 楼的标注保持原样。`, {
     floor: floor.floorId,
     scope: utteranceId === null ? 'floor' : `utterance:${utteranceId}`,
     feedback: String(feedback ?? '').slice(0, 200),
     sentences: scope.length,
-    changed: parsed.labels.size,
+    changed: answered.length,
+    depth,
     apiMode: request.apiMode,
     endpoint: describeChannelEndpoint(request),
   }, raw, { fullRequest: messages, floor: messageId });
   if (!parsed.labels.size) throw new Error('副模型没有返回可用的修正，标注保持原样。');
-  const key = ttsLabelKey(floor);
-  const known = runtime.tts.analysis.get(key);
-  // The floor keeps the depth it was read at; a correction is not a shallower reading.
-  const depth = known?.depth === 'deep' ? 'deep' : 'simple';
   const labels = new Map(known?.labels ?? base);
   const voices = new Map(known?.voices ?? []);
-  for (const [id, label] of parsed.labels) labels.set(id, label);
-  // A sentence the model rewrote without a voice of its own loses the old one: it belonged to the old mood.
-  for (const item of scope) if (parsed.labels.has(item.id) && !parsed.voices.has(item.id)) voices.delete(item.id);
+  for (const id of answered) {
+    // What the request said about the reader's own naming was for the model; the label keeps the rest,
+    // and the language the reading had found, which the correction is not asked about.
+    const { manual, ...label } = parsed.labels.get(id);
+    const lang = labels.get(id)?.lang;
+    labels.set(id, { ...label, ...(lang && !label.lang ? { lang } : {}), at: askedAt });
+    // A sentence the model rewrote without a voice of its own loses the old one: it belonged to the old mood.
+    if (!parsed.voices.has(id)) voices.delete(id);
+  }
   for (const [id, voice] of parsed.voices) voices.set(id, voice);
+  // A sentence that came back as it went in keeps its label, its voice and its moment untouched.
   runtime.tts.analysis.set(key, { labels, voices, depth });
   // Kept where the reading looks for it next time, so a reload does not undo the correction.
   await ttsStore().putAnalysis({
@@ -5517,14 +5762,16 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
     labels: [...labels],
     voices: [...voices],
   }).catch(() => {});
-  // What was asked about is said again: the old take was made from the old labels.
-  const affected = prepared.items.filter(item => parsed.labels.has(item.segment.id));
-  if (affected.length) await dropTtsRecordings(prepared, affected);
+  const resume = ttsResumePoint(messageId);
   dropPreparedFloors(messageId);
   forgetTtsItems(messageId);
   scheduleTtsDecorate(messageId, { force: true });
-  const remade = await remakeTtsLines(messageId, which, heard);
-  return { remade, changed: parsed.labels.size, kept: parsed.reused, sentences: scope.length };
+  // What was changed is heard changed without a second click: its paragraphs' audio predates the
+  // correction and is made again; every other paragraph keeps what it had.
+  const summary = await remakeTtsSides(messageId, heard);
+  notifyTtsPanels();
+  void resumeTtsReading(resume);
+  return { remade: summary.made, remake: summary, changed: answered.length, kept: parsed.reused, sentences: scope.length };
 }
 
 /**
@@ -6573,8 +6820,109 @@ function collectPromptFields(root, settings) {
   return settings;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Connections. The connection page is a shelf: it keeps connections and nothing else. Which one is
+// being edited there is its own business and nobody else's; each feature names the connection it
+// uses where that feature is set up — the translation on the desk (and in the floating window), the
+// reading on its own page. A choice is 'follow' for the host's own connection, or a saved one's id.
+// ---------------------------------------------------------------------------------------------
+
+/** A connection as the pickers and the page name it; `short` where it sits inside another sentence. */
+function channelLabel(settings, choice, { short = false } = {}) {
+  if (choice === 'follow') return short ? '跟随酒馆' : '跟随酒馆（酒馆当前的连接和模型）';
+  const channel = (Array.isArray(settings?.channels) ? settings.channels : []).find(item => item.id === choice);
+  if (!channel) return '（这条连接已经不在了）';
+  return channel.model ? `${channel.name} · ${channel.model}` : channel.name;
+}
+
+/** A picker offering the host's own connection and every saved one, with an optional entry ahead of them. */
+function fillChannelPicker(select, settings, chosen, { lead = null } = {}) {
+  const doc = select.ownerDocument;
+  const add = (value, text) => {
+    const option = doc.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    return option;
+  };
+  const options = [
+    ...(lead ? [add(lead.value, lead.text)] : []),
+    add('follow', channelLabel(settings, 'follow')),
+    ...(Array.isArray(settings?.channels) ? settings.channels : []).map(channel => add(channel.id, channelLabel(settings, channel.id))),
+  ];
+  select.replaceChildren(...options);
+  select.value = options.some(option => option.value === chosen) ? chosen : (options[0]?.value ?? '');
+}
+
+/** The translation's choice written back: the host's own connection, or one saved connection. */
+function applyTranslationChoice(settings, choice) {
+  if (choice === 'follow') settings.apiMode = 'follow';
+  else if ((settings.channels ?? []).some(channel => channel.id === choice)) {
+    settings.apiMode = 'independent';
+    settings.selectedChannelId = choice;
+  }
+  return settings;
+}
+
+/** Which connection each feature uses right now, and where that is chosen. */
+function channelUsers(settings = runtime.settings) {
+  const tts = ttsSettings(settings);
+  const analysis = resolveFeatureChannel(tts.analysisChannelId, settings);
+  return [
+    { feature: '翻译', choice: translationChannelChoice(settings), action: 'open-main', where: '翻译台' },
+    { feature: '朗读分析', choice: analysis, action: 'open-tts', where: '朗读页', note: tts.enabled ? '' : '朗读没开，眼下不会用到' },
+    { feature: '深度分析', choice: tts.deepChannelId || analysis, action: 'open-tts', where: '朗读页', note: tts.deepChannelId ? '' : '和朗读分析同一条' },
+  ];
+}
+
+/** The connection the page is editing: the one last opened, else the translation's, else the first. */
+function editingChannelId(settings = runtime.settings) {
+  const channels = Array.isArray(settings?.channels) ? settings.channels : [];
+  if (channels.some(channel => channel.id === runtime.editingChannelId)) return runtime.editingChannelId;
+  const translation = translationChannelChoice(settings);
+  return channels.some(channel => channel.id === translation) ? translation : (channels[0]?.id ?? '');
+}
+
+/** The strip at the top of the connection page: who uses what, each with the way to where it is chosen. */
+function renderChannelUses(root, settings, editing) {
+  const users = channelUsers(settings);
+  const box = root.querySelector('[data-jy-channel-uses]');
+  if (box) {
+    const doc = box.ownerDocument;
+    box.replaceChildren(...users.map(user => {
+      const card = doc.createElement('div');
+      card.className = 'jy-channel-use';
+      card.dataset.editing = String(user.choice === editing);
+      const label = doc.createElement('span');
+      label.className = 'jy-label';
+      label.textContent = user.feature;
+      const name = doc.createElement('strong');
+      name.textContent = channelLabel(settings, user.choice, { short: true });
+      const parts = [label, name];
+      if (user.note) {
+        const note = doc.createElement('small');
+        note.textContent = user.note;
+        parts.push(note);
+      }
+      const go = doc.createElement('button');
+      go.type = 'button';
+      go.className = 'jy-text-button';
+      go.dataset.jyAction = user.action;
+      go.textContent = `在${user.where}换 →`;
+      parts.push(go);
+      card.append(...parts);
+      return card;
+    }));
+  }
+  const using = users.filter(user => user.choice === editing).map(user => user.feature);
+  setText(root, '[data-jy-channel-usage]', using.length
+    ? `正在编辑的这条现在给${using.join('、')}用${using.length > 1 ? '，改它这几处都会跟着变' : '，改它就是改这一处用的连接'}。`
+    : '正在编辑的这条现在没有功能在用；要用它，去翻译台或朗读页的下拉框里选。');
+}
+
 function syncChannelFields(root, settings) {
-  const select = root.querySelector('[data-jy-field="selectedChannelId"]');
+  const editing = editingChannelId(settings);
+  runtime.editingChannelId = editing;
+  const select = root.querySelector('[data-jy-edit-channel]');
   if (select) {
     select.replaceChildren(...settings.channels.map(channel => {
       const option = document.createElement('option');
@@ -6582,9 +6930,12 @@ function syncChannelFields(root, settings) {
       option.textContent = channel.name;
       return option;
     }));
-    select.value = settings.selectedChannelId;
+    select.value = editing;
   }
-  const channel = getActiveChannel(settings);
+  const translation = root.querySelector('[data-jy-translation-channel]');
+  if (translation) fillChannelPicker(translation, settings, translationChannelChoice(settings));
+  renderChannelUses(root, settings, editing);
+  const channel = settings.channels.find(item => item.id === editing) ?? getActiveChannel(settings);
   root.dataset.jyEditingChannelId = channel.id;
   for (const element of root.querySelectorAll('[data-jy-channel-field]')) {
     const key = element.dataset.jyChannelField;
@@ -6619,14 +6970,13 @@ function updateSummary(root, settings) {
   const channel = getActiveChannel(settings);
   const promptProfile = getActivePromptProfile(settings);
   const independent = settings.apiMode === 'independent';
-  setText(root, '[data-jy-channel-name]', independent ? channel.name : '跟随当前连接');
-  setText(root, '[data-jy-channel-mode]', independent ? '副 API' : '主 API');
+  setText(root, '[data-jy-channel-mode]', independent ? '保存的连接' : '酒馆当前连接');
   setText(
     root,
     '[data-jy-channel-summary]',
     independent
       ? `${channel.model || '尚未选择模型'} · 目标：${normalizeTargetLanguage(promptProfile.targetLanguage)} · ${channel.url || '尚未填写地址'}`
-      : `使用酒馆当前连接进行翻译。目标：${normalizeTargetLanguage(promptProfile.targetLanguage)}。`,
+      : `用酒馆当前连接的 API 和模型翻译。目标：${normalizeTargetLanguage(promptProfile.targetLanguage)}。`,
   );
   const sources = [
     '当前角色',
@@ -6667,8 +7017,9 @@ function collectSettings(root) {
     if (rule) rule.disabled = !control.checked;
   }
   collectPromptFields(root, current);
-  const radio = root.querySelector('[data-jy-field="apiMode"]:checked');
-  if (radio) current.apiMode = radio.value;
+  // The translation's own choice, from the desk; the connection page only ever edits.
+  const translationChoice = root.querySelector('[data-jy-translation-channel]')?.value;
+  if (translationChoice) applyTranslationChoice(current, translationChoice);
   for (const name of [
     'autoGeneration',
     'autoSwipe',
@@ -6734,8 +7085,6 @@ function collectSettings(root) {
     if (wiPicks.length) current.worldInfoWhitelist[characterKey] = wiPicks;
     else delete current.worldInfoWhitelist[characterKey];
   }
-  const selected = root.querySelector('[data-jy-field="selectedChannelId"]')?.value;
-  if (selected && current.channels.some(channel => channel.id === selected)) current.selectedChannelId = selected;
   collectColoringFields(root, current);
   collectTtsFields(root, current);
   return captureProcessingProfile(normalizeProcessingSettings(current));
@@ -7581,7 +7930,7 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
     'tts-fish': tts.fish.key ? `已填 Key · ${tts.fish.model}` : '还没填 API Key',
     'tts-voices': `旁白${tts.narratorVoice ? '已设' : '未设'} · 对白默认${tts.dialogueVoice ? '已设' : '未设'} · ${voices.length} 个角色（${owned} 个专属）${tts.voiceScope === 'chat' ? ' · 每个聊天一份' : ''}`,
     'tts-library': library.length ? `${library.length} 个音色` : '空',
-    'tts-deep': DEEP_STATUS.available ? (tts.deepChannelId ? '用自己选的连接' : '跟随翻译的连接') : DEEP_STATUS.note,
+    'tts-deep': DEEP_STATUS.available ? (tts.deepChannelId ? `走 ${channelLabel(settings, tts.deepChannelId, { short: true })}` : '和朗读分析同一条连接') : DEEP_STATUS.note,
   };
   for (const [id, text] of Object.entries(summaries)) setText(root, `[data-jy-fold="${id}"] [data-jy-fold-summary]`, text);
   setText(root, '[data-jy-tts-scope-note]', tts.voiceScope === 'chat'
@@ -7721,28 +8070,13 @@ function syncTtsFields(root, settings = runtime.settings) {
     element.value = tts.prompts[element.dataset.jyTtsPrompt] ?? '';
     element.placeholder = TTS_PROMPT_DEFAULTS[element.dataset.jyTtsPrompt] ?? '';
   }
-  // The saved connections, for the reading's own choice of model and the deep reading's own.
-  const fillChannels = (field, chosen, followText) => {
-    const select = root.querySelector(`[data-jy-tts-field="${field}"]`);
-    if (!select) return;
-    const doc = root.ownerDocument;
-    select.replaceChildren();
-    const follow = doc.createElement('option');
-    follow.value = '';
-    follow.textContent = followText;
-    select.appendChild(follow);
-    for (const channel of Array.isArray(settings.channels) ? settings.channels : []) {
-      const option = doc.createElement('option');
-      option.value = channel.id;
-      option.textContent = channel.model ? `${channel.name} · ${channel.model}` : channel.name;
-      select.appendChild(option);
-    }
-    select.value = (settings.channels ?? []).some(channel => channel.id === chosen) ? chosen : '';
-  };
-  const translating = settings.apiMode === 'independent' ? getActiveChannel(settings).name : '酒馆当前连接';
-  fillChannels('analysisChannelId', tts.analysisChannelId, `跟随翻译的连接（${translating}）`);
-  const analysing = (settings.channels ?? []).find(channel => channel.id === tts.analysisChannelId)?.name ?? translating;
-  fillChannels('deepChannelId', tts.deepChannelId, `跟随朗读分析的连接（${analysing}）`);
+  // The reading's own choice of connection, and the deep reading's: the host's own or a saved one.
+  // Nothing here follows the translation; an old 「follow the translation」 was pinned when read.
+  const analysisChoice = resolveFeatureChannel(tts.analysisChannelId, settings);
+  const analysisSelect = root.querySelector('[data-jy-tts-field="analysisChannelId"]');
+  if (analysisSelect) fillChannelPicker(analysisSelect, settings, analysisChoice);
+  const deepSelect = root.querySelector('[data-jy-tts-field="deepChannelId"]');
+  if (deepSelect) fillChannelPicker(deepSelect, settings, tts.deepChannelId || '', { lead: { value: '', text: `和朗读分析用同一条：${channelLabel(settings, analysisChoice, { short: true })}` } });
   setText(root, '[data-jy-tts-title="narrator"]', tts.narratorTitle ? `· ${tts.narratorTitle}` : '');
   setText(root, '[data-jy-tts-title="dialogue"]', tts.dialogueTitle ? `· ${tts.dialogueTitle}` : '');
   syncTtsPickers(root, settings);
@@ -7770,11 +8104,11 @@ function updateTtsModeHelp(root) {
   const askField = root.querySelector('[data-jy-tts-ask-field]');
   if (askField) askField.hidden = mode !== 'off';
   if (mode === 'off') {
-    help.textContent = '不分析：不额外请求副模型。翻译过的楼直接用翻译时标好的说话人和情绪——翻译那一次请求本身带了分析；没翻译的楼由程序按上下文认谁在说，认不出的用对白默认音色。想让副模型认一次，点朗读页的「分析这一楼」，或者在右边选按播放时怎么办。';
+    help.textContent = '不分析：不额外请求副模型。翻译过的楼直接用翻译时标好的说话人和情绪——翻译那一次请求本身带了分析；正文里带 <say> 说话人标记的楼，按标记分角色、带情绪读（「03 音色」里能一键写入让主模型加标记的世界书）；其余的楼由程序按上下文认谁在说，认不出的用对白默认音色。想让副模型认一次，点朗读页的「分析这一楼」，或者在右边选按播放时怎么办。';
     return;
   }
   if (mode === 'simple') {
-    help.textContent = '简单分析：开着翻译时，说话人和情绪随翻译一起标好，零次额外调用；不开翻译时，正文一闭合就把原文发给副模型标一次，只回对白的说话人和情绪，快。走翻译用的那条连接。';
+    help.textContent = '简单分析：开着翻译时，说话人和情绪随翻译一起标好，零次额外调用；不开翻译时，正文一闭合就把原文发给副模型标一次，只回对白的说话人和情绪，快。走「01 读什么」里选的朗读分析连接。';
     return;
   }
   help.textContent = mode === 'deep'
@@ -7874,50 +8208,130 @@ function collectTtsFields(root, current) {
   else delete current.ttsVoices[tableKey];
 }
 
+// Where the people of this story are written down, most particular first: this card's own books, this
+// chat's, the reader's persona's, then whatever is switched on for every chat. The old order put the
+// global books first and cut the list at two hundred entries, so a large global book pushed the
+// card's own book out of the request altogether.
+const CAST_LORE_ORDER = Object.freeze(['characterLore', 'chatLore', 'personaLore', 'globalLore']);
+// How much entry text one request may carry, and how much of any one entry. A title and its keys
+// always go; the content is what the budget is spent on, in the order above.
+const CAST_CONTENT_BUDGET = 30000;
+const CAST_ENTRY_LIMIT = 800;
+const CAST_STORY_LIMIT = 4000;
+
+/** The lore entries the cast is read from: in the order above, each once, the ones switched off left out. */
+function castLoreEntries() {
+  const lore = runtime.wiEntries;
+  if (!lore || typeof lore !== 'object') return [];
+  const seen = new Set();
+  const entries = [];
+  for (const source of CAST_LORE_ORDER) {
+    for (const entry of Array.isArray(lore[source]) ? lore[source] : []) {
+      // An entry the reader switched off is not part of this story, and neither is anyone in it.
+      if (!entry || typeof entry !== 'object' || entry.disable === true) continue;
+      const key = `${entry.world}.${entry.uid}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push(entry);
+    }
+  }
+  return entries;
+}
+
+/** The cards whose people are in this chat: the character's, or every member's in a group chat. */
+function castCards(context) {
+  const characters = Array.isArray(context.characters) ? context.characters : [];
+  if (context.groupId !== null && context.groupId !== undefined) {
+    const group = (Array.isArray(context.groups) ? context.groups : []).find(item => String(item?.id) === String(context.groupId));
+    const muted = new Set(Array.isArray(group?.disabled_members) ? group.disabled_members : []);
+    return (Array.isArray(group?.members) ? group.members : [])
+      .filter(member => !muted.has(member))
+      .map(member => characters.find(character => character?.avatar === member))
+      .filter(Boolean);
+  }
+  const character = characters[Number(context.characterId)];
+  return character ? [character] : [];
+}
+
+/** The last floors of the chat as plain words: how the story itself spells its people. */
+function castStorySample(context, limit = CAST_STORY_LIMIT) {
+  const chat = Array.isArray(context.chat) ? context.chat : [];
+  const parts = [];
+  let size = 0;
+  for (let index = chat.length - 1; index >= 0 && size < limit; index -= 1) {
+    const message = chat[index];
+    if (!message || message.is_system || typeof message.mes !== 'string') continue;
+    const text = plainLineText(stripGeneratedTranslationLines(message.mes, message.extra?.[MESSAGE_META_KEY])).replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    const piece = text.slice(-(limit - size));
+    parts.unshift(piece);
+    size += piece.length;
+  }
+  return parts.join('\n');
+}
+
 /**
  * Finds the cast in the character card and the worldbook.
  *
- * The card's own text and the entries the host reports (titles, keys and a slice of each content) go
- * to the secondary model with the question 'who in here is a person'; the answer is names and aliases
- * only. There is deliberately no guess without the model: a worldbook is mostly rules, places and
- * formats, and a list made from its titles is a list of rubbish. The rows come back unlocked, so they
- * follow the dialogue default until someone gives them a voice of their own.
+ * The cards and the entries the host reports go to the secondary model with the question 'who in here
+ * is a person', with the last floors of the chat alongside so a name comes back spelled the way the
+ * story spells it. The answer is names and aliases only, and every one of them is checked here
+ * (`refineCast`): a name that occurs nowhere in the card, the lore or the story is the model's own
+ * invention, a crowd or a role is not a character, the reader is not cast, and two spellings of one
+ * person are one row. There is deliberately no guess without the model: a worldbook is mostly rules,
+ * places and formats, and a list made from its titles is a list of rubbish.
+ *
+ * Returns `{ cast, dropped, entries }`; each person carries `seen`, whether the story mentions them yet.
  */
 async function importCastFromWorldbook(settings = runtime.settings, { signal } = {}) {
   const context = getContext();
-  let entries = readableWorldInfoEntries();
+  let entries = castLoreEntries();
   if (!entries.length) {
     // The host only reports entries after a scan; a dry scan is enough to make it.
     try { await context.getWorldInfoPrompt?.([''], 8, true); } catch { /* best-effort */ }
-    entries = readableWorldInfoEntries();
+    entries = castLoreEntries();
   }
   const substitute = typeof context.substituteParams === 'function' ? value => String(context.substituteParams(value) ?? value) : value => value;
-  const clean = (value, limit) => substitute(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, limit);
-  const digest = entries.slice(0, 200).map(entry => ({
-    title: clean(entry.comment, 60),
-    keys: (Array.isArray(entry.key) ? entry.key : []).map(key => clean(key, 40)).filter(Boolean).slice(0, 8),
-    content: clean(entry.content, 360),
-  })).filter(entry => entry.title || entry.keys.length || entry.content);
-  // The card is a source of people too: its own protagonist, and whoever its description names.
-  const character = context.groupId === null || context.groupId === undefined ? context.characters?.[Number(context.characterId)] : null;
-  const cardName = clean(character?.name, 60);
-  const cardText = character ? [character.description, character.personality, character.scenario].map(value => clean(value, 1200)).filter(Boolean).join(' ') : '';
-  const card = cardName || cardText ? { title: `角色卡：${cardName}`, keys: cardName ? [cardName] : [], content: cardText.slice(0, 2400) } : null;
-  if (!digest.length && !card) throw new Error('没有可读的世界书条目，也没有角色卡。先给这个角色启用一本世界书，或者发一条消息让酒馆扫描一次，再来识别。');
+  const flat = value => substitute(String(value ?? '')).replace(/\s+/g, ' ').trim();
+  // What the checking step reads: every word of the cards and the entries, whole.
+  const sources = [];
+  let budget = CAST_CONTENT_BUDGET;
+  const digest = [];
+  for (const entry of entries.slice(0, 400)) {
+    const title = flat(entry.comment).slice(0, 60);
+    const keys = (Array.isArray(entry.key) ? entry.key : []).map(key => flat(key).slice(0, 40)).filter(Boolean).slice(0, 8);
+    const whole = flat(entry.content);
+    const content = whole.slice(0, Math.max(0, Math.min(CAST_ENTRY_LIMIT, budget)));
+    budget -= content.length;
+    if (!title && !keys.length && !content) continue;
+    digest.push({ title, keys, content });
+    sources.push(title, ...keys, whole);
+  }
+  // The cards are a source of people too: their own protagonists, and whoever their text names.
+  const cards = castCards(context).map(character => {
+    const name = flat(character?.name).slice(0, 60);
+    const text = [character?.description, character?.personality, character?.scenario].map(flat).filter(Boolean).join(' ');
+    sources.push(name, text);
+    return { title: `角色卡：${name}`, keys: name ? [name] : [], content: text.slice(0, 3000) };
+  }).filter(card => card.keys.length || card.content);
+  if (!digest.length && !cards.length) throw new Error('没有可读的世界书条目，也没有角色卡。先给这个角色启用一本世界书，或者发一条消息让酒馆扫描一次，再来识别。');
+  const story = castStorySample(context);
+  const cardNames = cards.flatMap(card => card.keys);
   const messages = [
     {
       role: 'system',
       content: [
-        '下面是一张角色扮演用的角色卡和它的世界书条目（标题、关键词、内容片段）。请从中找出所有人物角色，也就是剧情里会说话的人。',
+        '下面是一场角色扮演用到的角色卡和世界书条目（entries：标题、关键词、内容片段），还有最近几楼正文（story，只用来确认名字在故事里怎么写）。请找出其中所有具体的人物角色，也就是剧情里会开口说话的人。',
         '只输出一个 JSON 对象：{"characters":[{"name":"名字","aliases":["别名"],"lang":"zh"}]}',
-        '1. 只列人物。地点、物品、组织、设定、规则、格式说明、写作指导都不是人物；标题像「XX 条目」「XX 设定」「XX 指导」的条目通常不是人物，除非内容里明确写了一个人。',
-        '2. name 用正文里最常见、最完整的称呼；aliases 放其他写法（原文名、昵称、姓氏、称号），没有就给空数组。',
-        '3. lang 是这个人主要说的语言代码（zh、en、ja、ko、de、fr……），英语可以细分 en-US / en-GB，看不出就省略。',
-        `4. ${context.name1 ? `用户扮演的角色叫 ${context.name1}，不用列。` : ''}${cardName ? `标题以「角色卡：」开头的是当前角色卡，它的主角叫 ${cardName}，照常列出。` : ''}`,
-        '5. 不要编造条目里没有的人。没有人物就输出 {"characters":[]}。',
+        '1. 只列具体的一个个人。地点、物品、组织、种族、群体，职业或身份的泛称（村民、店员、士兵们、路人），设定、规则、格式说明、写作指导、状态栏、系统提示，都不是人物；标题像「XX 条目」「XX 设定」「XX 指导」「XX 规则」的条目通常不是人物，除非内容里明确写了一个人。',
+        '2. name 写 story 里实际用的称呼；story 里还没出现的人，写条目里最常用、最完整的称呼。aliases 放同一个人的其他写法（原文名、昵称、姓氏、称号），必须是条目、角色卡或 story 里真的出现过的写法，没有就给空数组。不要翻译名字，不要自己造写法。',
+        '3. 同一个人只列一次，别的写法都放进 aliases。',
+        '4. lang 是这个人主要说的语言代码（zh、en、ja、ko、de、fr……），英语可以细分 en-US / en-GB，看不出就省略。',
+        `5. ${context.name1 ? `用户扮演的角色叫 ${context.name1}，不列。` : ''}${cardNames.length ? `标题以「角色卡：」开头的是当前角色卡，主角是 ${cardNames.join('、')}，照常列出。` : ''}`,
+        '6. 不要编造条目里没有的人。只在 story 里出现、角色卡和条目里都没有的人不用列。没有人物就输出 {"characters":[]}。',
       ].join('\n'),
     },
-    { role: 'user', content: JSON.stringify({ task: 'list_characters_from_worldbook', entries: [card, ...digest].filter(Boolean) }) },
+    { role: 'user', content: JSON.stringify({ task: 'list_characters_from_worldbook', entries: [...cards, ...digest], ...(story ? { story } : {}) }) },
   ];
   let raw;
   const request = ttsRequestSettings(settings);
@@ -7926,36 +8340,195 @@ async function importCastFromWorldbook(settings = runtime.settings, { signal } =
   } catch (error) {
     if (isAbortError(error)) throw error;
     recordDiagnostic('error', 'tts.cast-import', `副模型识别角色失败：${safeError(error)}`, {
-      entries: digest.length, card: Boolean(card), apiMode: request.apiMode, endpoint: describeChannelEndpoint(request),
+      entries: digest.length, cards: cards.length, apiMode: request.apiMode, endpoint: describeChannelEndpoint(request),
     }, describeRequestFailure(error), { fullRequest: messages });
-    throw new Error(`识别角色需要副模型，这次没有回应：${safeError(error)} 酒馆当前没连上模型的话，先在「模型连接」里连一个，或者配一个独立副 API。`);
+    throw new Error(`识别角色需要副模型，这次没有回应：${safeError(error)} 识别走的是朗读分析用的连接「${channelLabel(settings, resolveFeatureChannel(ttsSettings(settings).analysisChannelId, settings), { short: true })}」，可以在朗读页「01 读什么」里换一条，或者去「模型连接」页检查它。`);
   }
-  const characters = [];
+  const answered = [];
   for (const candidate of parseJsonCandidates(raw)) {
     const list = Array.isArray(candidate) ? candidate : Array.isArray(candidate?.characters) ? candidate.characters : [];
     for (const item of list) {
-      const name = String(item?.name ?? item ?? '').trim().slice(0, 60);
-      if (!name) continue;
-      characters.push({
-        name,
-        aliases: (Array.isArray(item?.aliases) ? item.aliases : []).map(alias => String(alias ?? '').trim()).filter(alias => alias && alias !== name).slice(0, 8),
+      answered.push({
+        name: String(item?.name ?? item ?? '').slice(0, 80),
+        aliases: Array.isArray(item?.aliases) ? item.aliases.map(alias => String(alias ?? '').slice(0, 80)) : [],
         lang: normalizeLanguageCode(item?.lang),
       });
     }
-    if (characters.length) break;
+    if (answered.length) break;
   }
-  const seen = new Set();
-  const cast = characters.filter(person => {
-    if (seen.has(person.name) || person.name === context.name1) return false;
-    seen.add(person.name);
-    return true;
-  }).slice(0, 60);
+  const { cast, dropped } = refineCast(answered, {
+    sourceText: sources.filter(Boolean).join('\n'),
+    storyText: story,
+    exclude: [context.name1].filter(Boolean),
+  });
   recordDiagnostic(cast.length ? 'info' : 'warn', 'tts.cast-import', cast.length
-    ? `副模型从角色卡和 ${digest.length} 条世界书条目里识别出 ${cast.length} 个角色。`
-    : `副模型没有从角色卡和 ${digest.length} 条世界书条目里识别出人物。`, {
-    entries: digest.length, card: Boolean(card), characters: cast.map(person => person.name),
+    ? `副模型从 ${cards.length} 张角色卡和 ${digest.length} 条世界书条目里识别出 ${cast.length} 个角色${dropped.length ? `，另有 ${dropped.length} 个说法没通过核对` : ''}。`
+    : `副模型没有从角色卡和 ${digest.length} 条世界书条目里识别出人物${dropped.length ? `（${dropped.length} 个说法没通过核对）` : ''}。`, {
+    entries: digest.length,
+    cards: cards.length,
+    characters: cast.map(person => person.name),
+    dropped: dropped.map(item => `${item.name}：${item.reason}`),
   }, raw, { fullRequest: messages });
-  return { cast, source: 'model', entries: digest.length };
+  return { cast, dropped, source: 'model', entries: digest.length };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The speaker-mark worldbook entry. One click writes an entry asking the main model to wrap every
+// line of dialogue as <say who="名字" mood="情绪">「……」</say>. The reading then knows who says each
+// line, and how, from the text itself: several voices with no request to anybody. The marks are
+// hidden where the floor is drawn, stripped from what the translator is sent, and kept in the main
+// model's own context so it goes on writing them.
+// ---------------------------------------------------------------------------------------------
+
+const SPEECH_ENTRY_TITLE = '镜译 · 说话人与情绪标记';
+
+/** The names the entry asks the story to mark its dialogue with: the voice table, the palette, the cards. */
+function speechRoster(settings = runtime.settings) {
+  const context = getContext();
+  const names = [];
+  const add = name => {
+    const clean = String(name ?? '').trim();
+    if (clean && clean !== context.name1 && !names.includes(clean)) names.push(clean);
+  };
+  for (const row of ttsVoicesFor(settings)) add(row.name);
+  for (const speaker of speakerPaletteFor(settings)) add(speaker.name);
+  for (const card of castCards(context)) add(card?.name);
+  return names.slice(0, 40);
+}
+
+/** The quotation marks the story has been writing its dialogue in, so the example does not change them. */
+function storyQuotePair(context, settings = runtime.settings) {
+  const pairs = parsePairList(ttsSettings(settings).quotePairs);
+  const recent = (Array.isArray(context.chat) ? context.chat : []).filter(message => message && !message.is_user && !message.is_system).slice(-4)
+    .map(message => String(message.mes ?? '')).join('\n');
+  let best = null;
+  let most = 0;
+  for (const pair of pairs) {
+    const count = recent.split(pair.open).length - 1;
+    if (count > most) {
+      best = pair;
+      most = count;
+    }
+  }
+  return best ?? pairs[0] ?? { open: '「', close: '」' };
+}
+
+/** The entry's words, with this cast's names and the moods the reading understands. */
+function speechEntryContent(settings = runtime.settings, context = getContext()) {
+  const names = speechRoster(settings);
+  const quote = storyQuotePair(context, settings);
+  const moods = [...new Set(SPEECH_MOODS.map(([word]) => word))].join('、');
+  const tones = SPEECH_TONES.map(([word]) => word).join('、');
+  return [
+    SPEECH_ENTRY_HEAD,
+    `正文里角色说出口的每一句台词，都用 <say> 标签连同引号一起包起来，标明是谁说的、带什么情绪：`,
+    `<say who="说话人" mood="情绪">${quote.open}台词${quote.close}</say>`,
+    `1. who 写说话人的名字。${names.length ? `这些人照抄这个写法：${names.join('、')}。` : ''}名单外的人写正文里对他的称呼。`,
+    `2. mood 从这些词里选一个最贴切的：${moods}。要表现音量或语速，可以再加一个：${tones}，用顿号隔开，比如 mood="生气、大喊"。拿不准就写「平静」。`,
+    `3. 只包台词本身，连同引号。旁白、动作、心理描写不包；一段里几个人轮流说话，每一句各包各的。`,
+    `4. 这个标签只是记号：不要在正文里提到它，不要因为它改变文风、引号的写法或者台词的多少。`,
+    `例：{{char}}放下茶杯。<say who="{{char}}" mood="温柔">${quote.open}回来啦？${quote.close}</say>`,
+  ].join('\n');
+}
+
+/**
+ * Where the entry goes: this card's own book, else this chat's, else a new book of its own that is
+ * hung on this chat — the one change to a chat's setup that touches no card and no other chat.
+ */
+function speechEntryTarget(context) {
+  const known = typeof context.getWorldInfoNames === 'function' ? context.getWorldInfoNames() : [];
+  const exists = name => Boolean(name) && (!known.length || known.includes(name));
+  const character = context.groupId === null || context.groupId === undefined ? context.characters?.[Number(context.characterId)] : null;
+  const own = character?.data?.extensions?.world;
+  if (exists(own)) return { name: own, where: 'character' };
+  const chatBook = context.chatMetadata?.world_info;
+  if (exists(chatBook)) return { name: chatBook, where: 'chat' };
+  const base = `镜译说话人标记-${String(character?.name ?? context.name2 ?? '聊天').replace(/[\\/:*?"<>|]/g, '').trim() || '聊天'}`;
+  let name = base;
+  for (let copy = 2; known.includes(name); copy += 1) name = `${base} (${copy})`;
+  return { name, where: 'new' };
+}
+
+/** A constant entry near the end of the prompt, where a format rule is kept to best. */
+function speechEntryTemplate(uid) {
+  return {
+    uid, key: [], keysecondary: [], comment: SPEECH_ENTRY_TITLE, content: '', constant: true, vectorized: false, selective: false,
+    selectiveLogic: 0, addMemo: true, order: 999, position: 4, disable: false, ignoreBudget: true, excludeRecursion: true,
+    preventRecursion: true, matchPersonaDescription: false, matchCharacterDescription: false, matchCharacterPersonality: false,
+    matchCharacterDepthPrompt: false, matchScenario: false, matchCreatorNotes: false, delayUntilRecursion: 0, probability: 100,
+    useProbability: true, depth: 1, outletName: '', group: '', groupOverride: false, groupWeight: 100, scanDepth: null,
+    caseSensitive: null, matchWholeWords: null, useGroupScoring: null, automationId: '', role: 0, sticky: null, cooldown: null,
+    delay: null, triggers: [], displayIndex: uid,
+  };
+}
+
+/**
+ * Writes the entry, or rewrites it with the cast as it is now when it is already there: pressing the
+ * button again after adding characters is how their names reach the main model.
+ */
+async function installSpeechEntry(settings = runtime.settings) {
+  const context = getContext();
+  if (typeof context.loadWorldInfo !== 'function' || typeof context.saveWorldInfo !== 'function') {
+    throw new Error('这个酒馆版本没有给扩展写世界书的接口，没法一键写入。');
+  }
+  const target = speechEntryTarget(context);
+  let data = target.where === 'new' ? null : await context.loadWorldInfo(target.name);
+  if (!data || typeof data !== 'object') data = { entries: {} };
+  if (!data.entries || typeof data.entries !== 'object') data.entries = {};
+  const content = speechEntryContent(settings, context);
+  let entry = Object.values(data.entries).find(item => item?.comment === SPEECH_ENTRY_TITLE);
+  const updated = Boolean(entry);
+  if (!entry) {
+    let uid = 0;
+    while (Object.hasOwn(data.entries, String(uid))) uid += 1;
+    entry = speechEntryTemplate(uid);
+    data.entries[uid] = entry;
+  }
+  Object.assign(entry, { content, comment: SPEECH_ENTRY_TITLE, constant: true, disable: false });
+  await context.saveWorldInfo(target.name, data, true);
+  if (target.where === 'new') {
+    await context.updateWorldInfoList?.();
+    if (context.chatMetadata && typeof context.chatMetadata === 'object') {
+      context.chatMetadata.world_info = target.name;
+      await context.saveMetadata?.();
+    }
+  }
+  try { context.reloadWorldInfoEditor?.(target.name); } catch { /* the editor may not be open */ }
+  // A dry scan, so the lore the extension sees includes the entry at once.
+  try { await context.getWorldInfoPrompt?.([''], 8, true); } catch { /* best-effort */ }
+  recordDiagnostic('info', 'tts.speech-entry', `${updated ? '更新' : '写入'}了世界书「${target.name}」里的「${SPEECH_ENTRY_TITLE}」条目。`, {
+    book: target.name, where: target.where, updated, names: speechRoster(settings),
+  }, content);
+  return { ...target, updated, content };
+}
+
+/**
+ * The people found, shown before any of them is added: the ones the story already mentions ticked,
+ * the rest there to tick by hand — a large world's book lists far more people than one story meets.
+ * Without anyone to show it to, the ticked ones are the answer.
+ */
+async function askCastPicks(people, { already = 0, dropped = [] } = {}) {
+  const anySeen = people.some(person => person.seen);
+  const picks = people.map((person, index) => ({
+    value: String(index),
+    label: person.aliases.length ? `${person.name}（${person.aliases.join('、')}）` : person.name,
+    note: person.seen ? '最近的正文里出现过' : '最近的正文里还没出现',
+    // A chat that has barely begun mentions nobody yet; then everybody found is offered ticked.
+    checked: person.seen || !anySeen,
+  }));
+  if (typeof document === 'undefined') return people.filter((_, index) => picks[index].checked);
+  const notes = [
+    already ? `另有 ${already} 个已经在角色表里，没有列出来。` : '',
+    dropped.length ? `${dropped.length} 个说法没通过核对（不是具体的人、找不到这个名字、或者就是你自己），没有列出来，运行记录里有明细。` : '',
+  ].filter(Boolean).join('');
+  const answer = await ttsAskBox({
+    title: `识别出 ${people.length} 个角色`,
+    text: `勾上的加进角色表，先用对白默认音色读，之后可以逐个绑专属音色。${notes}`,
+    picks,
+    actions: [{ value: 'add', label: '加入勾选的角色', primary: true }, { value: 'cancel', label: '取消' }],
+  }, { label: '识别角色' });
+  if (answer?.choice !== 'add') return null;
+  return answer.picked.map(value => people[Number(value)]).filter(Boolean);
 }
 
 // The structure of the latest floor as it would be read: the type, speaker and mood of every sentence,
@@ -8114,17 +8687,11 @@ async function readProcessingJson(file) {
   return JSON.parse((await file.text()).replace(/^\uFEFF/, ''));
 }
 
+// The saved connections are always there to edit: which one the translation uses is not this page's
+// question, so following the host for translating no longer hides the shelf from the reading.
 function updateApiPanels(root) {
-  const mode = root.querySelector('[data-jy-field="apiMode"]:checked')?.value || runtime.settings.apiMode;
   const panel = root.querySelector('[data-jy-independent-panel]');
-  if (panel) panel.hidden = mode !== 'independent';
-  setText(
-    root,
-    '[data-jy-api-help]',
-    mode === 'independent'
-      ? '使用镜译单独保存的 OpenAI 兼容地址、密钥和模型，不改变主聊天连接。'
-      : '使用酒馆当前已连接的 API 和模型。',
-  );
+  if (panel) panel.hidden = false;
 }
 
 function updateTaskUi(root, task) {
@@ -8589,9 +9156,12 @@ function createControlCenter(rootDocument = document) {
         await startTranslation(null, { force: false });
       } else if (action === 'test-api') {
         saveSettings(collectSettings(root));
-        await testTranslationChannel();
+        // The connection being edited is the one tested, whoever uses it.
+        await testTranslationChannel({ channelId: root.dataset.jyEditingChannelId || editingChannelId() });
       } else if (action === 'refresh') {
         await refreshCurrentCard(root);
+      } else if (action === 'open-main') {
+        selectTab('main');
       } else if (action === 'open-settings') {
         selectTab('settings');
       } else if (action === 'open-prompt') {
@@ -8675,28 +9245,39 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'add-channel') {
         const next = collectSettings(root);
         const id = globalThis.crypto?.randomUUID?.() || `channel-${Date.now()}`;
-        next.channels.push(normalizeChannel({ ...DEFAULT_CHANNEL, id, name: `副 API ${next.channels.length + 1}` }, id));
-        next.selectedChannelId = id;
+        next.channels.push(normalizeChannel({ ...DEFAULT_CHANNEL, id, name: `连接 ${next.channels.length + 1}` }, id));
+        // Opened for editing, and used by nothing until a feature picks it.
+        runtime.editingChannelId = id;
         saveSettings(next);
         syncFields(root, runtime.settings);
-        toast('success', '已新增一个副 API 预设。');
+        toast('success', '新建了一条连接。填好地址和模型后，在翻译台或朗读页的下拉框里选它才会用上。');
       } else if (action === 'delete-channel') {
         const next = collectSettings(root);
-        if (next.channels.length <= 1) throw new Error('至少保留一个副 API 预设。');
-        next.channels = next.channels.filter(channel => channel.id !== next.selectedChannelId);
-        next.selectedChannelId = next.channels[0].id;
+        const id = root.dataset.jyEditingChannelId || editingChannelId(next);
+        if (next.channels.length <= 1) throw new Error('至少保留一条连接。');
+        // A connection in use is not taken away from under the feature using it: which connection a
+        // feature falls back to is the reader's decision, made where that feature is set up.
+        const users = channelUsers(next).filter(user => user.choice === id);
+        if (users.length) {
+          throw new Error(`${users.map(user => user.feature).join('、')}正在用这条连接。先在${[...new Set(users.map(user => user.where))].join('和')}给${users.length > 1 ? '它们' : '它'}换一条，再回来删。`);
+        }
+        next.channels = next.channels.filter(channel => channel.id !== id);
+        // The translation follows the host and only remembers this one; what it remembers must exist.
+        if (next.selectedChannelId === id) next.selectedChannelId = next.channels[0].id;
+        runtime.editingChannelId = null;
         saveSettings(next);
         syncFields(root, runtime.settings);
-        toast('success', '当前副 API 预设已删除。');
+        toast('success', '这条连接已删除。');
       } else if (action === 'fetch-models') {
         saveSettings(collectSettings(root));
-        await fetchChannelModels();
+        const id = root.dataset.jyEditingChannelId || editingChannelId();
+        const models = await fetchChannelModels(id);
         syncFields(root, runtime.settings);
-        toast('success', `模型列表已更新，共 ${getActiveChannel(runtime.settings).models.length} 个，请选择需要使用的模型。`);
+        toast('success', `模型列表已更新，共 ${models.length} 个，请选择需要使用的模型。`);
       } else if (action === 'save-channel') {
         saveSettings(collectSettings(root));
         syncFields(root, runtime.settings);
-        toast('success', '当前副 API 预设已保存。');
+        toast('success', '这条连接已保存。');
       } else if (action === 'save-settings') {
         saveSettings(collectSettings(root));
         await runtime.processingRefresh;
@@ -8821,25 +9402,44 @@ function createControlCenter(rootDocument = document) {
         syncTtsFields(root, runtime.settings);
       } else if (action === 'tts-import-worldbook') {
         const next = collectSettings(root);
-        setText(root, '[data-jy-tts-save-note]', '正在读世界书、识别角色…');
-        const { cast, source } = await importCastFromWorldbook(next);
+        setText(root, '[data-jy-tts-save-note]', '正在读角色卡和世界书、识别角色…');
+        let found;
+        try {
+          found = await importCastFromWorldbook(next);
+        } finally {
+          setText(root, '[data-jy-tts-save-note]', '修改后保存朗读设置');
+        }
+        const { cast, dropped } = found;
         const characterKey = ttsVoicesKey(next);
         const existing = ttsVoicesFor(next);
-        const known = new Set(voiceRosterNames(existing));
-        const added = [];
-        for (const person of cast) {
-          if (known.has(person.name)) continue;
-          known.add(person.name);
-          for (const alias of person.aliases) known.add(alias);
-          // Unlocked: no voice of their own, so they read in the dialogue default until given one.
-          added.push({ name: person.name, aliases: person.aliases, voiceId: '', voices: {}, locked: false, title: '' });
+        // Somebody already in the table under any spelling is the same somebody: a row is not added
+        // for 桜井 next to the 樱井 who has 桜井 among her aliases.
+        const known = new Set(voiceRosterNames(existing).map(spelling => spelling.toLowerCase()));
+        const fresh = cast.filter(person => ![person.name, ...person.aliases].some(spelling => known.has(spelling.toLowerCase())));
+        if (!fresh.length) {
+          throw new Error(cast.length
+            ? `识别出的 ${cast.length} 个角色都已经在表里了。`
+            : `副模型没有从角色卡和世界书里识别出人物角色${dropped.length ? `；它说的 ${dropped.length} 个都没通过核对，运行记录里有明细` : ''}。`);
         }
-        setText(root, '[data-jy-tts-save-note]', '修改后保存朗读设置');
-        if (!added.length) throw new Error(cast.length ? '识别出的角色都已经在表里了。' : '副模型没有从角色卡和世界书里识别出人物角色。');
+        const chosen = await askCastPicks(fresh, { already: cast.length - fresh.length, dropped });
+        if (!chosen) return;
+        if (!chosen.length) throw new Error('一个都没勾，角色表没有变。');
+        // Unlocked: no voice of their own, so they read in the dialogue default until given one.
+        const added = chosen.map(person => ({ name: person.name, aliases: person.aliases, voiceId: '', voices: {}, locked: false, title: '' }));
         next.ttsVoices = { ...(next.ttsVoices || {}), [characterKey]: [...existing, ...added] };
         saveSettings(next);
         renderTtsVoiceList(root, runtime.settings);
-        toast('success', `副模型识别并加入 ${added.length} 个角色${source === 'model' ? '' : ''}。它们先跟随对白默认音色，绑定专属音色后就会锁定。`);
+        toast('success', `加入 ${added.length} 个角色。它们先跟随对白默认音色，绑定专属音色后就会锁定。`);
+      } else if (action === 'tts-install-speech-entry') {
+        saveSettings(collectSettings(root));
+        const written = await installSpeechEntry(runtime.settings);
+        const where = written.where === 'character'
+          ? `角色卡绑定的世界书「${written.name}」`
+          : written.where === 'chat'
+            ? `这个聊天的世界书「${written.name}」`
+            : `新建的世界书「${written.name}」（已挂到这个聊天上）`;
+        setText(root, '[data-jy-tts-save-note]', `说话人标记条目${written.updated ? '已更新' : '已写入'}：${written.name}`);
+        toast('success', `${written.updated ? '已更新' : '已写入'}${where}里的「${SPEECH_ENTRY_TITLE}」。从下一楼起，主模型写的对白会带上说话人和情绪，不分析也能分角色、带情绪读。角色表加了人再点一次，名单会跟着更新。`);
       } else if (action === 'tts-clear-voices') {
         const next = collectSettings(root);
         const characterKey = ttsVoicesKey(next);
@@ -9103,9 +9703,19 @@ function createControlCenter(rootDocument = document) {
     if (event.target.matches('[data-jy-profile-field="styleMode"], [data-jy-profile-field="leaningMode"], [data-jy-profile-field="honorificMode"], [data-jy-profile-field="nameMode"], [data-jy-profile-field="punctuationMode"]')) {
       updatePromptConditionalFields(root);
     }
-    if (event.target.matches('[data-jy-field="apiMode"], [data-jy-field="selectedChannelId"]')) {
+    if (event.target.matches('[data-jy-edit-channel]')) {
+      // What was typed into the connection being left is kept before another one is opened; opening
+      // one changes nothing any feature uses.
+      saveSettings(collectSettings(root));
+      runtime.editingChannelId = event.target.value;
+      syncFields(root, runtime.settings);
+      return;
+    }
+    if (event.target.matches('[data-jy-translation-channel]')) {
       saveSettings(collectSettings(root));
       syncFields(root, runtime.settings);
+      toast('success', `翻译改用：${channelLabel(runtime.settings, translationChannelChoice(runtime.settings))}。朗读用的连接不受影响。`);
+      return;
     }
     if (event.target.matches('[data-jy-field="floatingStyle"]')) {
       saveSettings(collectSettings(root));
@@ -9153,7 +9763,7 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="channelId"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
       // The feature switch lives on two pages; the one just clicked decides, the other follows.
       if (event.target.matches('[data-jy-tts-field="enabled"]')) {
         for (const twin of root.querySelectorAll('[data-jy-tts-field="enabled"]')) twin.checked = event.target.checked;
@@ -9161,6 +9771,8 @@ function createControlCenter(rootDocument = document) {
       try {
         saveSettings(collectSettings(root));
         syncTtsFields(root, runtime.settings);
+        // The connection page says who uses what; a choice made here shows there at once.
+        if (event.target.matches('[data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="deepChannelId"]')) syncChannelFields(root, runtime.settings);
       } catch (error) {
         toast('error', safeError(error));
       }
@@ -9829,7 +10441,7 @@ async function openMiniWindow() {
     <button type="button" class="jy-button jy-mini-auto" data-jy-action="mini-auto" aria-pressed="true" title="新楼生成完自动翻译">自动 开</button>
   </div>
   <div class="jy-mini-quick">
-    <label title="翻译走哪条连接。朗读分析在控制中心「朗读 → 01 读什么」里另选。"><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
+    <label title="只管翻译走哪条连接，和控制中心「翻译台」里那个是同一个选择。朗读分析在「朗读 → 01 读什么」里另选，互不影响。"><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
     <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
     <button type="button" class="jy-text-button" data-jy-action="mini-translate-all" data-jy-mini-untranslated hidden></button>
   </div>
@@ -10070,24 +10682,9 @@ async function openMiniWindow() {
 
   const syncQuickPickers = () => {
     const current = runtime.settings;
-    channelSelect.replaceChildren();
-    if (current.apiMode === 'independent') {
-      for (const channel of current.channels) {
-        const option = document.createElement('option');
-        option.value = channel.id;
-        option.textContent = channel.model ? `${channel.name} · ${channel.model}` : channel.name;
-        channelSelect.appendChild(option);
-      }
-      channelSelect.value = current.selectedChannelId;
-      channelSelect.disabled = false;
-    } else {
-      const option = document.createElement('option');
-      option.value = 'follow';
-      option.textContent = '跟随酒馆当前连接';
-      channelSelect.appendChild(option);
-      channelSelect.value = 'follow';
-      channelSelect.disabled = true;
-    }
+    // The translation's choice, the same one as the desk's: the host's connection or any saved one.
+    fillChannelPicker(channelSelect, current, translationChannelChoice(current));
+    channelSelect.disabled = false;
     profileSelect.replaceChildren();
     for (const profile of current.promptProfiles) {
       const option = document.createElement('option');
@@ -11329,7 +11926,7 @@ async function openMiniWindow() {
   };
   const onQuickChange = event => {
     const next = mergeSettings(runtime.settings);
-    if (event.target === channelSelect) next.selectedChannelId = channelSelect.value;
+    if (event.target === channelSelect) applyTranslationChoice(next, channelSelect.value);
     else next.selectedPromptProfileId = profileSelect.value;
     saveSettings(next);
     syncQuickPickers();
@@ -11517,11 +12114,11 @@ async function openMiniWindow() {
         button.textContent = '分析中…';
         if (answer.choice === 'refine') {
           const result = await refineTtsAnalysis(messageId, { side, utteranceId: answer.scope === 'sentence' ? sentenceId : null, feedback: answer.feedback });
-          toast('success', `改了 ${result.changed} 句，${result.kept} 句保持原样${result.remade ? `；${result.remade} 段音频已按新标注重做` : ''}。`);
+          toast(result.remake?.failed ? 'warning' : 'success', `改了 ${result.changed} 句，${result.kept} 句保持原样；${describeTtsRemake(result.remake)}。`);
         } else {
           const done = await reanalyzeTtsFloor(messageId, side);
-          const audio = done.remade ? `，${done.remade} 段音频已按新标注重做` : '，之前没有生成过音频，按播放时再做';
-          toast('success', ttsSettings().mode === 'off'
+          const audio = `，${describeTtsRemake(done.remake)}`;
+          toast(done.remake?.failed ? 'warning' : 'success', ttsSettings().mode === 'off'
             ? `第 ${messageId} 楼简单分析完了，这一楼以后按分析结果读${audio}。`
             : `第 ${messageId} 楼重新分析完了${audio}。`);
         }
@@ -12413,4 +13010,19 @@ export const __testing = Object.freeze({
   createTtsTransport,
   ttsRequestSettings,
   seekTts,
+  ttsRecordedLines,
+  describeTtsRemake,
+  resumeTtsReading,
+  applyTranslationChoice,
+  channelUsers,
+  editingChannelId,
+  installSpeechEntry,
+  speechEntryContent,
+  ttsTransport: () => runtime.tts.transport,
+  // A page reload as the reading sees it: everything held for the session gone, the store kept.
+  forgetTtsSession: () => {
+    for (const key of ['analysis', 'floors', 'recordings', 'overrides', 'plainFloors', 'pregenerated', 'progress']) runtime.tts[key].clear();
+    runtime.tts.transport = null;
+    runtime.tts.player = null;
+  },
 });

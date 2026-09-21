@@ -550,19 +550,19 @@ test('the cast is read out of the card and the worldbook by the model, and never
     ],
     characterLore: [], chatLore: [], personaLore: [],
   };
-  const settings = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1' }, worldInfoEntries: lore });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { analysisChannelId: 'c1' } }, worldInfoEntries: lore });
   const result = await __testing.importCastFromWorldbook(settings);
   assert.equal(result.source, 'model');
-  assert.deepEqual(result.cast, [{ name: '樱井', aliases: ['桜井'], lang: 'ja' }, { name: '泰罗', aliases: [], lang: 'en-GB' }], 'the user is left out, blanks dropped, accents kept');
+  assert.deepEqual(result.cast, [{ name: '樱井', aliases: ['桜井'], lang: 'ja', seen: false }, { name: '泰罗', aliases: [], lang: 'en-GB', seen: false }], 'the user is left out, blanks dropped, accents kept');
   const input = JSON.parse(requests[0].messages.at(-1).content);
   assert.equal(input.task, 'list_characters_from_worldbook');
   assert.deepEqual(input.entries.map(entry => entry.title), ['角色卡：泰罗', '樱井', '体型指导条目', ''], 'the card goes first');
   assert.match(input.entries[0].content, /怕热，嘴硬/);
-  assert.match(requests[0].messages[0].content, /「XX 指导」的条目通常不是人物/);
+  assert.match(requests[0].messages[0].content, /「XX 指导」[^。]*的条目通常不是人物/);
 
   // Without a model there is no list at all: titles are not names.
   mockHost('tts-cast-offline', { async processRequest() { throw new Error('relay down'); } });
-  const offline = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1' }, worldInfoEntries: lore });
+  const offline = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { analysisChannelId: 'c1' } }, worldInfoEntries: lore });
   await assert.rejects(__testing.importCastFromWorldbook(offline), /识别角色需要副模型/);
 
   // Nothing readable at all is its own message.
@@ -570,6 +570,59 @@ test('the cast is read out of the card and the worldbook by the model, and never
   context.characters = [];
   const bare = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1' }, worldInfoEntries: { globalLore: [], characterLore: [], chatLore: [], personaLore: [] } });
   await assert.rejects(__testing.importCastFromWorldbook(bare), /没有可读的世界书条目/);
+});
+
+test('the cast the model names is checked: nobody the lore never wrote, no crowds, not the reader, one row per person, the card\'s own book first', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-cast-checked', {
+    async processRequest(payload) {
+      requests.push(payload);
+      return { content: JSON.stringify({ characters: [
+        { name: '艾莉丝', aliases: ['Alice', '爱丽丝大人'] },
+        // The same person again under her other spelling: one row, not two.
+        { name: 'Alice', aliases: ['艾莉丝'] },
+        // A name the lore never wrote: the model's own invention.
+        { name: '赛巴斯蒂安', aliases: [] },
+        { name: '村民们' },
+        { name: '「旁白」' },
+        { name: '冒险者公会是一个组织，里面有很多人' },
+        { name: '主人' },
+        { name: '格雷', aliases: ['Grey'] },
+        { name: '玛莎' },
+      ] }) };
+    },
+  });
+  context.name1 = '主人';
+  context.chat.push({ mes: '<story_scene>艾莉丝推开门：「欢迎回来！」</story_scene>', is_user: false, swipe_id: 0, extra: {} });
+  const lore = {
+    globalLore: Array.from({ length: 260 }, (_, index) => ({ world: 'big', uid: index, comment: `地名${index}`, key: [`地名${index}`], content: '一个小镇。'.repeat(40) })),
+    characterLore: [
+      { world: 'own', uid: 1, comment: '艾莉丝', key: ['艾莉丝', 'Alice'], content: '女仆长，叫主人「主人」。' },
+      { world: 'own', uid: 2, comment: '格雷', key: ['格雷'], content: '管家，英国人。' },
+      // Switched off by the reader: whoever is in it is not in this story.
+      { world: 'own', uid: 3, comment: '玛莎', key: ['玛莎'], content: '旧版设定里的厨娘。', disable: true },
+    ],
+    chatLore: [], personaLore: [],
+  };
+  const settings = __testing.configureForTest({ settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { analysisChannelId: 'c1' } }, worldInfoEntries: lore });
+  const { cast, dropped } = await __testing.importCastFromWorldbook(settings);
+  const input = JSON.parse(requests[0].messages.at(-1).content);
+  assert.deepEqual(input.entries.slice(1, 3).map(entry => entry.title), ['艾莉丝', '格雷'], 'the card\'s own book goes before a global book of 260 entries, which used to push it out');
+  assert.ok(!input.entries.some(entry => entry.title === '玛莎'), 'an entry switched off is not sent');
+  assert.match(input.story, /艾莉丝推开门/, 'the story rides along, so names come back spelled the way it spells them');
+  assert.match(requests[0].messages[0].content, /不要翻译名字/);
+  assert.deepEqual(cast, [
+    { name: '艾莉丝', aliases: ['Alice'], lang: '', seen: true },
+    { name: '格雷', aliases: [], lang: '', seen: false },
+  ], 'one row for one person, only spellings someone wrote, and whether the story has met them yet');
+  const reasons = Object.fromEntries(dropped.map(item => [item.name, item.reason]));
+  assert.match(reasons['赛巴斯蒂安'], /找不到这个名字/);
+  assert.match(reasons['村民们'], /群体/);
+  assert.match(reasons['旁白'], /群体|占位|称呼/);
+  assert.match(reasons['冒险者公会是一个组织，里面有很多人'], /一句话|太长/);
+  assert.match(reasons['主人'], /你自己/);
+  assert.match(reasons['玛莎'], /找不到/, 'a person only in a switched-off entry is not in this story');
 });
 
 test('a long floor is one request: the whole floor at once, and never read twice', async t => {
@@ -600,7 +653,7 @@ test('a long floor is one request: the whole floor at once, and never read twice
   await __testing.prepareTtsSegments(floor, runtime());
   assert.equal(requests.length, 1);
 });
-test('the simple reading follows the translation\'s connection; only the deep reading may have one of its own', async t => {
+test('an old setting that left the reading on the translation\'s connection still reads there; the deep reading may have one of its own', async t => {
   restoreGlobals(t);
   const requests = [];
   const { context } = mockHost('tts-channel', {
@@ -628,6 +681,40 @@ test('the simple reading follows the translation\'s connection; only the deep re
   assert.equal(__testing.ttsRequestSettings(gone, 'deep'), gone, 'a connection that no longer exists means following the translation');
   const { normalizeTts } = await import('../core.js');
   assert.equal(normalizeTts({ channelId: 'c2' }).deepChannelId, 'c2', 'the connection chosen for analysis before is the deep reading\'s now');
+});
+
+test('the connection page is a shelf: the translation and the reading each keep their own connection, and neither follows the other', () => {
+  const cheap = normalizeChannel({ id: 'c2', name: 'cheap', url: 'https://cheap.example/v1', key: 'k2', model: 'flash' });
+  // An old setting: the reading followed the translation, which used c1. It is pinned to c1 when read.
+  const settings = mergeSettings({ apiMode: 'independent', channels: [CHANNEL, cheap], selectedChannelId: 'c1', tts: { enabled: true, analysisChannelId: '' } });
+  assert.equal(settings.tts.analysisChannelId, 'c1', 'pinned to what the translation used on the day it was read');
+  assert.equal(mergeSettings({ apiMode: 'follow', tts: {} }).tts.analysisChannelId, 'follow', 'a translation on the host connection pins the reading there');
+  assert.equal(mergeSettings({ apiMode: 'follow', channels: [CHANNEL], tts: { analysisChannelId: 'gone' } }).tts.analysisChannelId, 'follow', 'a deleted connection is replaced the same way');
+  assert.equal(mergeSettings({ apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { analysisChannelId: 'follow' } }).tts.analysisChannelId, 'follow', 'a choice made is kept');
+  assert.equal(mergeSettings({ channels: [CHANNEL], tts: { deepChannelId: 'gone' } }).tts.deepChannelId, '', 'a deep connection that is gone is the reading one again');
+  // The translation moves to c2: the reading does not move with it.
+  const moved = __testing.applyTranslationChoice(mergeSettings(settings), 'c2');
+  assert.equal(moved.apiMode, 'independent');
+  assert.equal(moved.selectedChannelId, 'c2');
+  const reading = __testing.ttsRequestSettings(moved);
+  assert.equal(reading.selectedChannelId, 'c1', 'the reading stays where it was put');
+  assert.equal(reading.apiMode, 'independent');
+  // The translation goes to the host connection: the reading still does not move.
+  const hosted = __testing.applyTranslationChoice(mergeSettings(settings), 'follow');
+  assert.equal(hosted.apiMode, 'follow');
+  assert.equal(__testing.ttsRequestSettings(hosted).selectedChannelId, 'c1');
+  assert.equal(__testing.ttsRequestSettings(hosted).apiMode, 'independent');
+  // The host connection, chosen for the reading alone; the deep reading left empty goes with it.
+  const onHost = mergeSettings({ ...moved, tts: { ...moved.tts, analysisChannelId: 'follow', deepChannelId: '' } });
+  assert.equal(__testing.ttsRequestSettings(onHost).apiMode, 'follow');
+  assert.equal(__testing.ttsRequestSettings(onHost, 'deep').apiMode, 'follow');
+  const deepOwn = mergeSettings({ ...onHost, tts: { ...onHost.tts, deepChannelId: 'c2' } });
+  assert.equal(__testing.ttsRequestSettings(deepOwn, 'deep').selectedChannelId, 'c2');
+  assert.equal(__testing.ttsRequestSettings(deepOwn, 'deep').apiMode, 'independent');
+  const deepHost = mergeSettings({ ...moved, tts: { ...moved.tts, deepChannelId: 'follow' } });
+  assert.equal(__testing.ttsRequestSettings(deepHost, 'deep').apiMode, 'follow');
+  // Who uses what, as the connection page lists it and as deleting a connection is checked against.
+  assert.deepEqual(__testing.channelUsers(moved).map(user => [user.feature, user.choice]), [['翻译', 'c2'], ['朗读分析', 'c1'], ['深度分析', 'c1']]);
 });
 
 test('the stream reads from the translation\'s own labels and asks the sub-model nothing', async t => {
@@ -1833,4 +1920,236 @@ test('a request that timed out is asked again: the timeout is not a stop', async
   assert.equal(seen, 2, 'the second attempt was made');
   assert.ok(result.audio.length, 'and it came back');
   assert.equal(calls.length, 1, 'Fish answered once, on the attempt that got through');
+});
+
+// ---------------------------------------------------------------------------------------------
+// A floor analysed again is heard again: audio made before the analysis was asked for is not its audio.
+// ---------------------------------------------------------------------------------------------
+
+async function waitFor(check, { tries = 80, step = 10 } = {}) {
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    if (await check()) return true;
+    await new Promise(resolve => setTimeout(resolve, step));
+  }
+  return false;
+}
+
+test('a floor analysed again remakes by time every paragraph that had audio, after a reload too, and picks the reading up where it was', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-remake-by-time', {
+    async processRequest(payload) {
+      requests.push(payload);
+      const input = JSON.parse(payload.messages.at(-1).content);
+      if (input.task === 'refine_voices_for_audiobook') {
+        return { content: JSON.stringify({ voices: [{ id: 2 }, { id: 3, type: 'dialogue', speaker: '樱井', emotion: 'sad' }] }) };
+      }
+      // The same answer every time: a reading asked for again that comes out word for word the same.
+      return { content: JSON.stringify({ voices: [
+        { id: 2, type: 'dialogue', speaker: '泰罗', emotion: 'determined', pauses: [{ after: '出发', length: 'short' }] },
+        { id: 3, type: 'dialogue', speaker: '樱井', emotion: 'pleading' },
+      ] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'simple', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro' }, { name: '樱井', voiceId: 'voice-sakurai' }] },
+    },
+  });
+  context.chat.push(await translatedFloor('風が止んだ。\n\n「行くぞ」\n\n「待って」', [[1, '风在桥头停了下来。'], [2, '「出发吧，别磨蹭。」'], [3, '「等一下嘛，鞋带开了。」']], settings));
+  const fish = mockFish();
+  const audio = mockAudio();
+  t.after(audio.restore);
+
+  // Every paragraph made once: one analysis, three Fish requests.
+  await __testing.pregenerateTtsFloor(0, { quiet: true });
+  assert.equal(requests.length, 1);
+  assert.equal(fish.length, 3);
+
+  // The page is reloaded. Nothing of the session is left but the store.
+  __testing.forgetTtsSession();
+  const look = await __testing.ttsInspect(0, 3);
+  assert.equal(look.depth, 'simple', 'a look after a reload finds the reading kept in the store');
+  assert.equal(look.segment.emotion, 'pleading');
+  assert.equal(look.recorded, true, 'and the audio made from it');
+  assert.equal(requests.length, 1, 'finding it asked nobody');
+  assert.deepEqual([...await __testing.ttsRecordedLines(0, 'translation')].sort(), [1, 2, 3], 'the paragraphs that had audio are read off the store');
+
+  // Analysed again: the answer is the same, and the audio is made again all the same — it predates
+  // the reading. The narration the reading never labels keeps its audio.
+  const done = await __testing.reanalyzeTtsFloor(0);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(done.remake, { made: 2, kept: 1, failed: 0 });
+  assert.equal(fish.length, 5, 'two paragraphs with dialogue made again, the narration kept');
+  assert.match(__testing.describeTtsRemake(done.remake), /2 段音频已按新分析重做，1 段不受影响/);
+  // What was made afterwards is the floor's audio now: reading the floor asks Fish nothing.
+  const transport = await __testing.createTtsTransport(0, { single: false });
+  await __testing.runTtsTransport(transport);
+  assert.equal(fish.length, 5);
+  assert.equal(requests.length, 2);
+
+  // A correction about one line: that line's paragraph is made again, the rest is left alone, and a
+  // line the model sent back untouched keeps its whole voice.
+  const refined = await __testing.refineTtsAnalysis(0, { feedback: '最后一句太撒娇了' });
+  assert.equal(refined.changed, 1);
+  assert.deepEqual(refined.remake, { made: 1, kept: 2, failed: 0 });
+  assert.equal(fish.length, 6);
+  const kept = await __testing.ttsInspect(0, 2);
+  assert.deepEqual(kept.segment.voice?.pauses, [{ after: '出发', length: 'short' }], 'the untouched line keeps its pause');
+  assert.equal((await __testing.ttsInspect(0, 3)).segment.emotion, 'sad');
+
+  // A reading that was playing when the floor was analysed again picks up at the paragraph it was on.
+  const playing = await __testing.createTtsTransport(0, { single: false });
+  playing.index = playing.items.findIndex(item => item.segment.lineId === 3);
+  playing.state = 'playing';
+  const plays = audio.plays.length;
+  await __testing.reanalyzeTtsFloor(0);
+  assert.ok(await waitFor(() => __testing.ttsTransport() && __testing.ttsTransport() !== playing && __testing.ttsTransport().state === 'idle'), 'a new reading ran');
+  assert.equal(audio.plays.length - plays, 1, 'from the third paragraph, not from the top');
+  assert.equal(fish.length, 8, 'the two paragraphs with dialogue were made again before it was heard');
+});
+
+
+// ---------------------------------------------------------------------------------------------
+// Speaker marks the story writes itself: several voices, with moods, and nobody asked.
+// ---------------------------------------------------------------------------------------------
+
+test('a floor the story marked itself reads by its marks: who, how, several voices, and no request to anybody', async t => {
+  restoreGlobals(t);
+  let requests = 0;
+  const { context } = mockHost('tts-say-plain', {
+    async processRequest() {
+      requests += 1;
+      return { content: '{}' };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'off', side: 'source', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro' }, { name: '樱井', voiceId: 'voice-sakurai' }] },
+    },
+  });
+  context.chat.push({ mes: '<story_scene>樱井推开家门。<say who="樱井" mood="开心">「你终于回来啦！」</say>\n\n<say who="泰罗" mood="生气、大喊">别碰我冰箱里的布丁！</say>泰罗在厨房里吼道。</story_scene>', swipe_id: 0, extra: {} });
+  const floor = await __testing.collectTtsFloor(0, settings);
+  assert.deepEqual(floor.lines.map(line => line.text), ['樱井推开家门。「你终于回来啦！」', '「别碰我冰箱里的布丁！」泰罗在厨房里吼道。'], 'the marks are gone from the words, and dialogue left unquoted is quoted');
+  const { segments, depth } = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests, 0, 'nobody is asked');
+  assert.equal(depth, 'off');
+  assert.deepEqual(segments.filter(segment => segment.type === 'dialogue').map(segment => [segment.speaker, segment.speakerSource, segment.emotion]), [['樱井', 'tag', 'happy'], ['泰罗', 'tag', 'angry']]);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.deepEqual(items.map(item => item.voiceId), ['voice-narrator', 'voice-sakurai', 'voice-taro', 'voice-narrator'], 'each character in their own voice');
+  const shout = await __testing.ttsInspect(0, 3);
+  assert.match(shout.text, /angry/);
+  assert.match(shout.text, /shouting/, 'how loud the mark said is heard too');
+  assert.equal(shout.speakerSource, 'tag');
+
+  // The same floor in the simple reading: every line is marked, so there is nothing to ask.
+  __testing.configureForTest({ settings: { tts: { ...runtime().tts, mode: 'simple' } } });
+  const simple = await __testing.prepareTtsSegments(await __testing.collectTtsFloor(0, runtime()), runtime());
+  assert.equal(requests, 0);
+  assert.equal(simple.depth, 'annotations');
+});
+
+test('a floor marked only here and there is still analysed in the simple reading, with the marked speakers settled', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-say-partial', {
+    async processRequest(payload) {
+      requests.push(JSON.parse(payload.messages.at(-1).content));
+      return { content: JSON.stringify({ voices: [{ id: 1, speaker: '泰罗', emotion: 'sad' }, { id: 2, speaker: '泰罗', emotion: 'calm' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'simple', side: 'source', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro' }, { name: '樱井', voiceId: 'voice-sakurai' }] },
+    },
+  });
+  context.chat.push({ mes: '<story_scene><say who="樱井" mood="害羞">「这个……给你的。」</say>\n\n「谢了。」泰罗接过盒子。</story_scene>', swipe_id: 0, extra: {} });
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests.length, 1, 'one line has no mark, so the reading asks once');
+  assert.deepEqual(requests[0].speakers, { 1: '樱井' }, 'the marked speaker goes out as settled');
+  assert.deepEqual([segments[0].speaker, segments[0].speakerSource], ['樱井', 'tag'], 'and the model could not move it');
+  assert.deepEqual([segments[1].speaker, segments[1].speakerSource], ['泰罗', 'model']);
+});
+
+test('reading the translation of a marked floor: the original\'s marks carry over line by line', async t => {
+  restoreGlobals(t);
+  let requests = 0;
+  const { context } = mockHost('tts-say-translation', {
+    async processRequest() {
+      requests += 1;
+      return { content: '{}' };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'off', side: 'translation', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro' }, { name: '樱井', voiceId: 'voice-sakurai' }] },
+    },
+  });
+  context.chat.push(await translatedFloor('<say who="樱井" mood="害羞">「……ありがとう。」</say>桜井は俯いた。', [[1, '「……谢谢你。」樱井低下了头。']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  assert.equal(floor.side, 'translation');
+  assert.ok(floor.speechSource?.length, 'the original\'s marks ride along with the translation');
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests, 0);
+  assert.deepEqual([segments[0].text, segments[0].speaker, segments[0].speakerSource, segments[0].emotion], ['……谢谢你。', '樱井', 'tag', 'shy']);
+});
+
+test('the speaker-mark entry goes into the card\'s own book, is rewritten in place, and a chat with no book gets one of its own', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-say-entry');
+  const books = new Map([['泰罗的书', { entries: { 0: { uid: 0, comment: '泰罗', content: '怕热。', key: ['泰罗'] } } }]]);
+  let metadataSaves = 0;
+  Object.assign(context, {
+    getWorldInfoNames: () => [...books.keys()],
+    loadWorldInfo: async name => (books.has(name) ? structuredClone(books.get(name)) : null),
+    saveWorldInfo: async (name, data) => { books.set(name, structuredClone(data)); },
+    updateWorldInfoList: async () => {},
+    chatMetadata: {},
+    saveMetadata: async () => { metadataSaves += 1; },
+  });
+  context.characters[0].data = { extensions: { world: '泰罗的书' } };
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', fish: FISH }, ttsVoices: { 'taro.png': [{ name: '泰罗' }, { name: '樱井' }] } },
+  });
+  const first = await __testing.installSpeechEntry(settings);
+  assert.deepEqual([first.where, first.name, first.updated], ['character', '泰罗的书', false]);
+  const entries = () => Object.values(books.get('泰罗的书').entries);
+  assert.equal(entries().length, 2, 'the entry sits beside what the book already had');
+  const entry = entries().find(item => item.comment === '镜译 · 说话人与情绪标记');
+  assert.equal(entry.constant, true);
+  assert.equal(entry.disable, false);
+  assert.equal(entry.uid, 1);
+  assert.match(entry.content, /<say who="说话人" mood="情绪">「台词」<\/say>/);
+  assert.match(entry.content, /泰罗、樱井/, 'the names the voices are registered under');
+  assert.doesNotMatch(entry.content, /玩家/, 'the reader is not on the list');
+  // Whatever the entry offers as a mood is a mood the reading understands.
+  const offered = entry.content.match(/mood 从这些词里选一个最贴切的：([^。]+)。/)[1].split('、');
+  assert.ok(offered.length > 10);
+
+  // Pressed again after a character was added: the same entry, with the new name.
+  __testing.configureForTest({ settings: { ttsVoices: { 'taro.png': [{ name: '泰罗' }, { name: '樱井' }, { name: '小林' }] } } });
+  const again = await __testing.installSpeechEntry(runtime());
+  assert.equal(again.updated, true);
+  assert.equal(entries().filter(item => item.comment === '镜译 · 说话人与情绪标记').length, 1, 'rewritten, not added twice');
+  assert.match(entries().find(item => item.comment === '镜译 · 说话人与情绪标记').content, /小林/);
+
+  // A card with no book in a chat with none: a book of its own, hung on this chat and nothing else.
+  delete context.characters[0].data;
+  const fresh = await __testing.installSpeechEntry(runtime());
+  assert.equal(fresh.where, 'new');
+  assert.ok(books.has(fresh.name));
+  assert.equal(context.chatMetadata.world_info, fresh.name);
+  assert.equal(metadataSaves, 1);
+  // The example quotes the way the story does.
+  context.chat.push({ mes: '<story_scene>“早。”她说。“今天也很热。”</story_scene>', swipe_id: 0, extra: {} });
+  assert.match(__testing.speechEntryContent(runtime(), context), /<say who="说话人" mood="情绪">“台词”<\/say>/);
 });

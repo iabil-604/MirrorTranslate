@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.31.1';
+} from './prompts.js?v=0.32.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.31.1';
+export const APP_VERSION = '0.32.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -540,9 +540,12 @@ export const DEFAULT_TTS = Object.freeze({
   tamePunctuation: true,
   // The reader's own system prompts for the two readings; empty means the built-in ones.
   prompts: Object.freeze({ simple: '', deep: '' }),
-  // The connection the reading's analysis goes to; empty follows the translation's.
+  // The connection the reading's analysis goes to: 'follow' for the host's own connection, or a saved
+  // connection's id. Empty only ever comes from an older setting, and is pinned to the translation's
+  // choice when the settings are read, so the reading never follows the translation silently.
   analysisChannelId: '',
-  // The saved connection the deep reading goes to; empty follows the analysis connection above.
+  // The connection the deep reading goes to: empty is the same one as the analysis above, 'follow' the
+  // host's own, else a saved connection's id.
   deepChannelId: '',
   // The longest one analysis may take, counted from the request going out, whether or not the model
   // is still writing. The connection's own timeout only counts silence, so a model that thinks out
@@ -751,6 +754,23 @@ export function normalizeChannel(value = {}, fallbackId = DEFAULT_CHANNEL.id) {
     postscript: String(source.postscript ?? '').slice(0, 2000),
     postscriptRole: ['system', 'user', 'assistant'].includes(source.postscriptRole) ? source.postscriptRole : 'user',
   };
+}
+
+/** The translation's own choice, as one value: 'follow' for the host's connection, else a saved one's id. */
+export function translationChannelChoice(settings) {
+  return settings?.apiMode === 'independent' ? String(settings?.selectedChannelId ?? '') : 'follow';
+}
+
+/**
+ * A feature's choice of connection, made explicit: 'follow' for the host's own connection, or the id
+ * of a saved one. Empty — the old 「follow the translation」 — and an id that no longer exists both
+ * become what the translation uses right now.
+ */
+export function resolveFeatureChannel(value, settings) {
+  const wanted = String(value ?? '').trim();
+  const channels = Array.isArray(settings?.channels) ? settings.channels : [];
+  if (wanted === 'follow' || channels.some(channel => channel.id === wanted)) return wanted;
+  return translationChannelChoice(settings);
 }
 
 export function getActiveChannel(settings) {
@@ -1109,8 +1129,8 @@ export function normalizeTts(value) {
         : typeof source.prompts?.light === 'string' ? normalizeNewlines(source.prompts.light).slice(0, 12000) : '',
       deep: typeof source.prompts?.deep === 'string' ? normalizeNewlines(source.prompts.deep).slice(0, 12000) : '',
     },
-    // The connection chosen for analysis in earlier versions is the deep reading's now; the simple
-    // reading follows the translation.
+    // The connection chosen for analysis in earlier versions is the deep reading's now. The reading's
+    // own choice is made explicit in mergeSettings, which knows the translation's.
     analysisChannelId: String(source.analysisChannelId ?? '').trim().slice(0, 80),
     deepChannelId: String(source.deepChannelId ?? source.channelId ?? '').trim().slice(0, 80),
     analysisLimitSec: clampInteger(source.analysisLimitSec, 20, 900, DEFAULT_TTS.analysisLimitSec),
@@ -1238,6 +1258,15 @@ export function mergeSettings(value = {}) {
     if (speakers.length) merged.speakerPalette[characterKey] = speakers;
   }
   merged.tts = normalizeTts(source.tts);
+  // The connection page is a shelf: each feature names the connection it uses, and nothing follows
+  // another feature's choice behind the reader's back. A reading that used to follow the translation
+  // is pinned, once, to whatever the translation used at the time, so nothing changes on the day this
+  // is read and nothing changes silently after it. A choice that points at a deleted connection is
+  // treated the same way.
+  merged.tts.analysisChannelId = resolveFeatureChannel(merged.tts.analysisChannelId, merged);
+  if (merged.tts.deepChannelId && merged.tts.deepChannelId !== 'follow' && !merged.channels.some(channel => channel.id === merged.tts.deepChannelId)) {
+    merged.tts.deepChannelId = '';
+  }
   // Voices follow the character card for the same reason the palette does.
   merged.ttsVoices = {};
   const rawVoices = source.ttsVoices && typeof source.ttsVoices === 'object' ? source.ttsVoices : {};
@@ -1865,6 +1894,82 @@ function stripStructuralTags(value, structuralTags) {
   });
 }
 
+// ---------------------------------------------------------------------------------------------
+// Speaker marks written into the story itself: <say who="樱井" mood="开心">「……」</say>.
+//
+// The main model is asked, through a worldbook entry, to wrap each line of dialogue this way. Like any
+// other tag it is stripped from what the translator is sent and hidden when the floor is shown; unlike
+// the others, what it says is kept for the reading. The tag is swapped for private-use markers that
+// survive every clean-up a line goes through on its way to the voice, and the reading turns them back
+// into who said which run and how. The translation's text is never touched by any of this.
+// ---------------------------------------------------------------------------------------------
+
+// The first line of the worldbook entry that asks for the marks, so the requests that quote the
+// worldbook back — the translator's, the deep reading's — can leave that request out.
+export const SPEECH_ENTRY_HEAD = '[对白标记：给朗读程序看的，读者看不到]';
+export const SPEECH_OPEN = '\uE0A1';
+export const SPEECH_SEP = '\uE0A2';
+export const SPEECH_CLOSE = '\uE0A3';
+const SPEECH_TAG_RE = /\\?<(\/?)say(?=[\s/>])([^<>]*)>/gi;
+const SPEECH_SPEAKER_KEYS = ['who', 'name', 'speaker', 'char', 'character', 'n', 's', '说话人', '角色', '人物', '名字'];
+const SPEECH_MOOD_KEYS = ['mood', 'emotion', 'feeling', 'e', 'm', '情绪', '心情', '语气', 'tone'];
+
+/**
+ * Text quoted back as context, without the speaker-mark entry and without the marks themselves: the
+ * translator and the readings get the story, not the request to mark it, and a mark is not theirs to
+ * copy into a translation.
+ */
+export function withoutSpeechMarks(text) {
+  const head = SPEECH_ENTRY_HEAD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return String(text ?? '')
+    .replace(new RegExp(`${head}[\\s\\S]*?例：[^\\n]*(?:\\n|$)`, 'g'), '')
+    .replace(SPEECH_TAG_RE, '');
+}
+
+/**
+ * Who and how, out of what stands inside one opening tag. Lenient on purpose — a model told to write
+ * who= and mood= will sometimes write name= or 情绪=, leave the quotes off, or write the bare form
+ * <say 樱井|开心> — because a mark it half-remembered is still a mark.
+ */
+export function readSpeechAttributes(inner) {
+  const text = String(inner ?? '').replace(/\/\s*$/, '').trim();
+  const attrs = {};
+  for (const match of text.matchAll(/([^\s="'“”]+)\s*[=＝]\s*(?:"([^"]*)"|'([^']*)'|“([^”]*)”|「([^」]*)」|([^\s"'“”]+))/gu)) {
+    attrs[match[1].toLowerCase()] = (match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? '').trim();
+  }
+  const pick = keys => keys.map(key => attrs[key]).find(value => value);
+  let speaker = pick(SPEECH_SPEAKER_KEYS) ?? '';
+  let mood = pick(SPEECH_MOOD_KEYS) ?? '';
+  if (!Object.keys(attrs).length && text) {
+    // The bare form: a name, then a mood, split by a bar or a space.
+    const [first = '', ...rest] = text.split(/\s*[|｜]\s*|\s+/u).filter(Boolean);
+    speaker = first;
+    mood = rest.join('、');
+  }
+  const clean = (value, limit) => String(value ?? '').replace(/^[「『“"'（(【\[]+|[」』”"'）)】\]]+$/gu, '').replace(/\s+/g, ' ').trim().slice(0, limit);
+  return { speaker: clean(speaker, 40), mood: clean(mood, 24) };
+}
+
+/**
+ * One source line with its speaker marks turned into markers: the text the reading will clean, and
+ * what each mark said, by its number in the line. Null for a line without any mark, which the reading
+ * then takes exactly as before.
+ */
+export function speechMarkedLine(value) {
+  const source = String(value ?? '');
+  if (!/<\/?say(?=[\s/>])/i.test(source)) return null;
+  const marks = [];
+  const replaced = source.replace(SPEECH_TAG_RE, (_whole, closing, inner) => {
+    if (closing) return SPEECH_CLOSE;
+    const mark = readSpeechAttributes(inner);
+    // A self-closing tag marks the run after it rather than enclosing one.
+    marks.push({ ...mark, open: /\/\s*$/.test(inner) });
+    return `${SPEECH_OPEN}${marks.length - 1}${SPEECH_SEP}`;
+  });
+  if (!marks.length) return null;
+  return { text: stripStructuralTags(replaced).trim(), marks };
+}
+
 // Presentation tags a preset puts around a line of dialogue. The translation is sent to the model
 // with every tag stripped — it has to be, or the model starts translating markup — and for a long
 // time it came back and was written down bare. A preset that paints dialogue therefore painted the
@@ -1973,6 +2078,8 @@ export function segmentSource(text, options = {}) {
   if (parsedRules.errors.length) throw new Error(parsedRules.errors.join(' '));
   const { masked, blocks } = maskExcludedTags(source, options.excludedTags);
   const structuralTags = new Set();
+  // Segment id → the line with its speaker marks as markers, for the reading; see speechMarkedLine.
+  const speech = new Map();
   let paragraphs = 0;
   let customPreservedLines = 0;
   let builtinPreservedLines = 0;
@@ -2008,6 +2115,8 @@ export function segmentSource(text, options = {}) {
         source: sourceLine,
         separator: line.separator,
         translationText,
+        // Who says what, when the story marked it; kept beside the segment, never on it.
+        speech: speechMarkedLine(withoutExcluded),
         semantic: Boolean(translationText) && !customPreserved && !builtinPreserved,
         closingTagOnly: isClosingTagOnlyLine(withoutExcluded),
         // Read from the masked text so an excluded block inside the line cannot be mistaken for
@@ -2042,6 +2151,7 @@ export function segmentSource(text, options = {}) {
         }
         const segment = { id: startId + segments.length, text: line.translationText };
         segments.push(segment);
+        if (line.speech) speech.set(segment.id, line.speech);
         layout.push({
           type: 'segment',
           id: segment.id,
@@ -2070,6 +2180,7 @@ export function segmentSource(text, options = {}) {
       if (!line.semantic) continue;
       const segment = { id: startId + segments.length, text: line.translationText };
       segments.push(segment);
+      if (line.speech) speech.set(segment.id, line.speech);
       ids.push(segment.id);
       unitTexts.push(segment.text);
       unitFormats.push(line.format ?? null);
@@ -2110,6 +2221,7 @@ export function segmentSource(text, options = {}) {
     customPreservedLines,
     builtinPreservedLines,
     structuralTags: [...structuralTags].sort(),
+    speech,
   };
 }
 

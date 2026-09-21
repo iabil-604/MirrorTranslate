@@ -130,10 +130,14 @@ test('native registration is isolated, stable across saves and switches, and rea
   const unrelated = { id: 'user-rule', scriptName: 'User rule', findRegex: 'x', replaceString: 'y', placement: [2] };
   const first = syncNativeRegex([unrelated], cute);
   assert.deepEqual(syncNativeRegex(first, cute), first);
-  // Internal rules sit ahead of everything else: two display rules (boundary cleanup + hidden
-  // replace originals) and four prompt guards.
+  // Internal rules sit ahead of everything else: three display rules (boundary cleanup, hidden
+  // replace originals, the story's own speaker marks) and four prompt guards.
   const internal = first.filter(rule => rule.jingyi_managed?.internal);
-  assert.equal(internal.length, 6);
+  assert.equal(internal.length, 7);
+  const marks = internal.find(rule => rule.id.endsWith(':speech-marks'));
+  assert.equal(marks.markdownOnly, true, 'the marks are hidden where the floor is drawn');
+  assert.equal(marks.promptOnly, false, 'and kept in what the main model reads, so it keeps writing them');
+  assert.equal('樱井笑了。<say who="樱井" mood="开心">「好。」</say><saying>留着</saying>'.replace(compileNativeRegex(marks.findRegex), ''), '樱井笑了。「好。」<saying>留着</saying>');
   assert.equal(first[internal.length], unrelated);
   const nativeRule = first.find(rule => rule.jingyi_managed?.profileId === cute.id);
   nativeRule.replaceString = '<p>edited in native manager</p>';
