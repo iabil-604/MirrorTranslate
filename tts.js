@@ -13,9 +13,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.32.2';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.32.2';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.32.2';
+} from './core.js?v=0.32.3';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.32.3';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.32.3';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -1956,13 +1956,20 @@ export function fishEndpoint(fish, path, { host = 'sillytavern' } = {}) {
  * Through the proxy the host's own headers go along: the CSRF token is what lets a disabled proxy answer
  * with its own explanation instead of a bare 403, and the proxy strips it before forwarding. A direct
  * call never carries the host's session token to a third party.
+ *
+ * Through the proxy the key rides in Fish's own `api-key` header, never in Authorization: that header
+ * is the tavern's there. With its login protection on (basicAuthMode) the browser carries the tavern's
+ * login in it on every request, and a Bearer token in its place reads as a failed login — the tavern
+ * answers 401 before anything reaches Fish, the browser asks for a password, and enough of them get
+ * the reader's address rate-limited. Fish takes either header, and ignores a Basic one beside api-key.
  */
 export function fishHeaders(fish, hostHeaders = {}, { host = 'sillytavern' } = {}) {
-  const base = fishGoesDirect(fish, host) ? {} : { ...hostHeaders };
+  const direct = fishGoesDirect(fish, host);
+  const key = String(fish?.key ?? '');
   return {
-    ...base,
+    ...(direct ? {} : { ...hostHeaders }),
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${fish?.key ?? ''}`,
+    ...(direct ? { Authorization: `Bearer ${key}` } : { 'api-key': key }),
     model: fish?.model ?? 's2-pro',
   };
 }
@@ -1986,6 +1993,12 @@ export function describeFishFailure({ status = 0, body = '', viaProxy = true, ne
     return '酒馆的 CORS 代理没有打开。在酒馆目录的 config.yaml 里把 enableCorsProxy 改成 true，重启酒馆后再试。';
   }
   if (Number(status) === 403 && /csrf/i.test(text)) return '酒馆拒绝了这次代理请求（CSRF）。刷新酒馆页面后再试。';
+  // The tavern's own login page: its login protection (basicAuthMode) turned the request away at the
+  // proxy's door, before anything reached Fish. The proxy rewrites Fish's own 401 to 400, so a 401 that
+  // arrives as one, with that page, is the tavern's.
+  if (viaProxy && Number(status) === 401 && /basicAuthUser|<title>\s*Unauthorized\s*<\/title>/i.test(text)) {
+    return '被酒馆的登录保护拦下了（config.yaml 里开着 basicAuthMode），请求没到 Fish，不是 Fish Key 的问题。刷新页面、重新登录酒馆后再试。';
+  }
   if (upstream === 401 || /api[- ]?key|unauthorized/i.test(message)) return 'Fish API Key 无效或没有填写。';
   if (upstream === 402) return 'Fish API 余额不足。API 额度和网页端的额度分开计算；可以先把模型换成 s2.1-pro-free（免费开发者档），或者去 fish.audio/app/developers 充值。';
   if (upstream === 429) return 'Fish 限流了，请求太频繁。等一会儿再试，免费档的限制更紧；「声音参数」里的「同时生成几段」调回 1 也会好一些。';

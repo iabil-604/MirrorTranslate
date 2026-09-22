@@ -396,7 +396,9 @@ test('the stream records one paragraph per request, and a sentence already recor
   assert.equal(second.cached, false);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/proxy/https://api.fish.audio/v1/tts/stream/with-timestamp');
-  assert.equal(calls[0].init.headers.Authorization, 'Bearer sk-test');
+  // The key in api-key: Authorization is the tavern's, where its login protection keeps the browser's login.
+  assert.equal(calls[0].init.headers['api-key'], 'sk-test');
+  assert.equal(calls[0].init.headers.Authorization, undefined);
   assert.equal(calls[0].init.headers.model, 's2.1-pro-free');
   assert.equal(calls[0].init.headers['X-CSRF-Token'], 'host-token');
   assert.equal(calls[0].body.text, '[surprised] 你怎么来了？');

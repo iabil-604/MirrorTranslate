@@ -623,12 +623,28 @@ test('Fish failures read as something a reader can act on', () => {
 test('requests go through the host proxy with its headers, and direct calls carry none of them', () => {
   const proxied = { ...FISH, key: 'sk-test' };
   assert.equal(fishEndpoint(proxied, '/v1/tts'), '/proxy/https://api.fish.audio/v1/tts');
+  // Through the proxy the key rides in api-key, and Authorization is left to the browser: with the
+  // tavern's login protection on, that is where the tavern's own login travels.
   assert.deepEqual(fishHeaders(proxied, { 'X-CSRF-Token': 'host-token' }), {
-    'X-CSRF-Token': 'host-token', 'Content-Type': 'application/json', Authorization: 'Bearer sk-test', model: 's2-pro',
+    'X-CSRF-Token': 'host-token', 'Content-Type': 'application/json', 'api-key': 'sk-test', model: 's2-pro',
   });
   const direct = { ...proxied, viaProxy: false, baseUrl: 'http://127.0.0.1:8080' };
   assert.equal(fishEndpoint(direct, '/v1/tts'), 'http://127.0.0.1:8080/v1/tts');
   assert.equal('X-CSRF-Token' in fishHeaders(direct, { 'X-CSRF-Token': 'host-token' }), false);
+  // A relay or Fish itself, reached directly, gets the key the way Fish documents it.
+  assert.equal(fishHeaders(direct).Authorization, 'Bearer sk-test');
+  assert.equal('api-key' in fishHeaders(direct), false);
+});
+
+test('the tavern\'s own login page is not read as a bad Fish key', () => {
+  // What the tavern answers when its login protection turns a request away, as a reader's log caught it.
+  const page = '<!DOCTYPE html>\r\n<html>\r\n\r\n<head>\r\n    <title>Unauthorized</title>\r\n</head>\r\n\r\n<body>\r\n    <h1>Unauthorized</h1>\r\n    <p>\r\n        If you are the system administrator, you can configure the\r\n        <code>basicAuthUser</code> credentials by editing\r\n        <code>config.yaml</code> in the root directory of your installation.\r\n    </p>\r\n</body>\r\n\r\n</html>\r\n';
+  const message = describeFishFailure({ status: 401, body: page, viaProxy: true });
+  assert.match(message, /登录保护/);
+  assert.match(message, /basicAuthMode/);
+  assert.doesNotMatch(message, /Fish API Key 无效/);
+  // Fish's own refusal still reads as the key's.
+  assert.match(describeFishFailure({ status: 400, body: '{"status":401,"message":"this route requires an api-key or Authorization: Bearer <api key> header"}' }), /Fish API Key 无效/);
 });
 
 test('utterances are found on the rendered floor after markdown and quote wrapping', () => {

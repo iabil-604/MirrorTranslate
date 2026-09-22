@@ -103,10 +103,12 @@ function synthesizeChunks(chunks) {
   return { wav: Buffer.concat([header, data]), alignments };
 }
 
-// The host proxy turns 401 into 400 and keeps the body, and so does this.
+// The host proxy turns 401 into 400 and keeps the body, and so does this. Like Fish, the key is taken
+// from api-key first, else from a Bearer Authorization; a Basic one (the tavern's login, which the host
+// proxy forwards) is no key at all.
 function fishAuthFailure(request, response) {
   const auth = String(request.headers.authorization ?? '');
-  const key = auth.replace(/^Bearer\s*/i, '').trim();
+  const key = String(request.headers['api-key'] ?? '').trim() || (/^Bearer\s/i.test(auth) ? auth.replace(/^Bearer\s*/i, '').trim() : '');
   if (!key) {
     response.writeHead(400, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ status: 401, message: 'this route requires an api-key or Authorization: Bearer <api key> header' }));

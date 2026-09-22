@@ -1,5 +1,12 @@
 # 验证边界
 
+## v0.32.3 · 酒馆登录保护
+
+- **登录保护**：279 项通过（新增 1 项：酒馆自己的 401 登录页不再读成 Key 无效，Fish 自己的 401 仍是；改 2 项：经代理的请求头是 api-key、没有 Authorization，直连仍是 Bearer）。
+- **改动**：fishHeaders 经代理用 api-key、直连用 Authorization: Bearer；describeFishFailure 认出酒馆 basicAuth 的 401 页（经代理、原样 401、页里有 basicAuthUser 或 Unauthorized 标题——酒馆代理会把 Fish 自己的 401 改成 400）；预览宿主的假 Fish 先认 api-key，Basic 不算 Key。
+- **核对**：酒馆源码 src/middleware/basicAuth.js（只认 Authorization: Basic，没有例外路径，失败回 401 + WWW-Authenticate，按 IP 限流）和 src/middleware/corsProxy.js（去掉的头里没有 authorization，会转发给目标）。真实 Fish：Bearer、api-key、api-key + Basic 都 200，什么都不带 401；api-key + Basic 生成一句成功。预览宿主里实际发出的请求头：api-key、X-CSRF-Token、Content-Type、model，没有 Authorization，假 Fish 放行，正常播放。
+- **尚未验证（登录保护）**：没有开着 basicAuthMode 的酒馆实例可测，靠的是源码和请求头核对。
+
 ## v0.32.2 · 边收边播、音色串人
 
 - **边收边播**：278 项通过（新增 4 项：settledSpans——时间戳到哪、音频到哪、下一句从哪开始、收完与存下的一致、按段时一段没收全整段都等；作者的例子：常夜灯两段，第一段整段播完、读到第二段就停下等，一段放一次，不在「常夜灯：」和台词中间断；运行时：两包的假 Fish，第一句在第二包到之前就开播，只发一个请求，按顺序不重播，最后一句来自完整的那条，存下的仍是一条 floor:all；中途断流：收全的那句播了，停在报错，没有第二个请求）。
