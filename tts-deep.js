@@ -1,4 +1,4 @@
-import { normalizeTts } from './core.js?v=0.32.3';
+import { normalizeTts } from './core.js?v=0.32.4';
 import {
   FISH_EMOTIONS,
   FISH_SOUNDS,
@@ -9,7 +9,7 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.32.3';
+} from './tts.js?v=0.32.4';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.

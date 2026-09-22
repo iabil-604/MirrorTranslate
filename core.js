@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.32.3';
+} from './prompts.js?v=0.32.4';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.32.3';
+export const APP_VERSION = '0.32.4';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -1395,16 +1395,38 @@ export function parseModelListResponse(data) {
     .map(item => item.trim()))].sort();
 }
 
+// A generation's type as SillyTavern means it: no type at all is its own 'normal'.
+function generationKind(type) {
+  return typeof type === 'string' && type ? type : 'normal';
+}
+
+/**
+ * The generation a rendered reply belongs to: opened when a real generation starts, consumed by the
+ * render of its reply.
+ *
+ * The render does not always report the type the generation started with. Saving a reply without
+ * streaming, SillyTavern turns every type but a continuation into 'normal' once the last message is
+ * the user's — which it always is after 重新生成, since the old reply is deleted first — and renders a
+ * continuation as 'appendFinal'; the match follows both. What never matches: the renders of messages no
+ * generation made, a greeting ('first_message') and a slash command's insert ('command'), and a
+ * 'normal' render while a continuation is pending.
+ */
 export function createGenerationGate() {
   let pending = null;
   return Object.freeze({
     begin(chatId, type, dryRun = false) {
-      if (!chatId || dryRun || typeof type !== 'string' || ['quiet', 'impersonate'].includes(type)) return false;
-      pending = { chatId: String(chatId), type };
+      const kind = generationKind(type);
+      if (!chatId || dryRun || ['quiet', 'impersonate'].includes(kind)) return false;
+      pending = { chatId: String(chatId), type: kind };
       return true;
     },
     consume(chatId, type) {
-      const matched = Boolean(pending && pending.chatId === String(chatId) && pending.type === type);
+      if (!pending || pending.chatId !== String(chatId)) return false;
+      const rendered = generationKind(type);
+      const continuing = ['continue', 'append', 'appendFinal'].includes(pending.type);
+      const matched = rendered === pending.type
+        || (pending.type === 'continue' && rendered === 'appendFinal')
+        || (rendered === 'normal' && !continuing);
       if (matched) pending = null;
       return matched;
     },

@@ -257,6 +257,36 @@ test('generation gate only consumes the matching real generation', () => {
   assert.equal(gate.peek(), null);
 });
 
+test('generation gate follows the types SillyTavern rewrites on the way to the render', () => {
+  const gate = createGenerationGate();
+  // 重新生成 without streaming: the old reply is deleted, the last message is the user's, and the
+  // reply is saved and rendered as 'normal'.
+  gate.begin('chat-a', 'regenerate');
+  assert.equal(gate.consume('chat-a', 'normal'), true);
+  // 继续 without streaming renders as 'appendFinal'.
+  gate.begin('chat-a', 'continue');
+  assert.equal(gate.consume('chat-a', 'appendFinal'), true);
+  // A generation started with no type is SillyTavern's own normal one, and so is its render.
+  assert.equal(gate.begin('chat-a', undefined), true);
+  assert.deepEqual(gate.peek(), { chatId: 'chat-a', type: 'normal' });
+  assert.equal(gate.consume('chat-a', undefined), true);
+  // Streaming keeps the type as it started.
+  gate.begin('chat-a', 'swipe');
+  assert.equal(gate.consume('chat-a', 'swipe'), true);
+  // Messages no generation made never take the reply's place.
+  gate.begin('chat-a', 'normal');
+  assert.equal(gate.consume('chat-a', 'first_message'), false);
+  assert.equal(gate.consume('chat-a', 'command'), false);
+  assert.equal(gate.consume('chat-a', 'normal'), true);
+  // A continuation is not closed by some other 'normal' render.
+  gate.begin('chat-a', 'continue');
+  assert.equal(gate.consume('chat-a', 'normal'), false);
+  assert.equal(gate.consume('chat-a', 'continue'), true);
+  // Nor by a render in another chat, whatever its type.
+  gate.begin('chat-a', 'regenerate');
+  assert.equal(gate.consume('chat-b', 'normal'), false);
+});
+
 test('only marked generated translation lines are stripped', () => {
   const text = `日文。\n{普通花括号内容}\n{${INVISIBLE_MARKER}中文。}\n次の文。`;
   assert.equal(stripGeneratedTranslationLines(text), '日文。\n{普通花括号内容}\n次の文。');

@@ -71,7 +71,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.32.3';
+} from './core.js?v=0.32.4';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -128,10 +128,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.32.3';
-import { createTtsStore } from './tts-store.js?v=0.32.3';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.32.3';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.32.3';
+} from './tts.js?v=0.32.4';
+import { createTtsStore } from './tts-store.js?v=0.32.4';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.32.4';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.32.4';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -140,7 +140,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.32.3';
+} from './processing.js?v=0.32.4';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -157,9 +157,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.32.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.32.3';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.32.3';
+} from './prompts.js?v=0.32.4';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.32.4';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.32.4';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -173,15 +173,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.32.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.32.3';
+} from './palette.js?v=0.32.4';
+import { sampleThemeBackground } from './theme-probe.js?v=0.32.4';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.32.3';
+} from './diagnostics.js?v=0.32.4';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -205,6 +205,8 @@ const runtime = {
   processingRevision: 0,
   nativeRegexInstalled: false,
   mainGenerationActive: false,
+  // The generation last stopped by hand, so the render that follows it can say why it is not translated.
+  stoppedGeneration: null,
   activeFloor: null,
   interceptorSeen: false,
   interceptorWarned: false,
@@ -12563,6 +12565,35 @@ function bindEvent(eventType, handler) {
   runtime.eventBindings.push({ source: context.eventSource, eventType, handler });
 }
 
+/**
+ * A reply the host rendered that no started generation accounts for, written down when automatic
+ * translation is on: it is left untranslated, and 「有时候不自动翻译」 is only answerable from the log if
+ * the log says which time and why. A greeting and a slash command's insert are no generation's reply
+ * and pass without a word.
+ */
+function noteUntranslatedRender(messageId, type, pending) {
+  if (!runtime.settings?.autoGeneration || ['first_message', 'command'].includes(type)) return;
+  const message = getContext().chat?.[messageId];
+  if (!message || message.is_user || message.is_system) return;
+  const stopped = runtime.stoppedGeneration && Date.now() - runtime.stoppedGeneration.at < 10 * 60 * 1000 ? runtime.stoppedGeneration : null;
+  runtime.stoppedGeneration = null;
+  const why = stopped
+    ? '这次生成是手动停下的，停下的回复不自动翻译，需要的话点翻译'
+    : pending
+      ? `酒馆报的生成类型对不上（开始时是 ${pending.type}，渲染时是 ${type ?? '空'}），没有自动翻译`
+      : '没有看到这次回复的生成开始（可能是别的扩展或脚本写进来的），没有自动翻译';
+  recordDiagnostic('info', 'translation.auto-skip', `第 ${messageId} 楼渲染完成，${why}。`, {
+    floor: messageId, renderType: type ?? null, startedType: pending?.type ?? null, stopped: Boolean(stopped),
+  });
+}
+
+// What a skipped automatic translation says in the log, by the reason the run gave.
+const AUTO_SKIP_REASONS = Object.freeze({
+  'already-translated': '这一楼已经翻译过了',
+  'not-translatable': '不是可以翻译的 AI 回复',
+  cancelled: '翻译被取消了（换了聊天、停用了扩展，或者同一楼开始了新的翻译）',
+});
+
 function scheduleAuto(messageId, reason) {
   const timer = globalThis.setTimeout(async () => {
     runtime.autoTimers.delete(timer);
@@ -12572,11 +12603,14 @@ function scheduleAuto(messageId, reason) {
       if (reason === 'swipe' && !settings.autoSwipe) return;
       if (reason === 'edit' && !settings.autoEdit) return;
       recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼${reason === 'generation' ? '生成结束' : reason === 'swipe' ? '划动了' : '编辑过'}，自动翻译开始。`, { floor: Number(messageId), reason });
-      await startTranslation(Number(messageId), { force: reason === 'edit', quiet: true });
+      const result = await startTranslation(Number(messageId), { force: reason === 'edit', quiet: true });
+      if (result?.skipped) {
+        recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼自动翻译没有进行：${AUTO_SKIP_REASONS[result.reason] ?? result.reason}。`, { floor: Number(messageId), reason, skipped: result.reason });
+      }
     } catch (error) {
       if (isAbortError(error)) return;
       const message = safeError(error);
-      const routine = /没有找到|正文标签|已经翻译|不是普通 AI 回复/.test(message);
+      const routine = /没有找到|正文标签|已经翻译|不是普通 AI 回复|没有可翻译的正文段落/.test(message);
       recordDiagnostic(routine ? 'info' : 'error', 'translation.auto', `第 ${messageId} 楼自动翻译${routine ? '没有进行' : '失败'}：${message}`, { floor: Number(messageId), reason });
       if (!routine) toast('error', message);
     }
@@ -12679,13 +12713,24 @@ function registerRuntimeEvents() {
     runtime.generationGate.begin(getCurrentChatId(), type, dryRun);
   });
   bindEvent(eventTypes.CHARACTER_MESSAGE_RENDERED, (messageId, type) => {
+    const pending = runtime.generationGate.peek();
     if (runtime.generationGate.consume(getCurrentChatId(), type)) {
       runtime.mainGenerationActive = false;
+      runtime.stoppedGeneration = null;
       verifyGenerationInterceptor();
       scheduleAuto(messageId, 'generation');
+      return;
     }
+    noteUntranslatedRender(Number(messageId), type, pending);
   });
-  bindEvent(eventTypes.GENERATION_STOPPED, () => { runtime.mainGenerationActive = false; runtime.generationGate.clear(); });
+  bindEvent(eventTypes.GENERATION_STOPPED, () => {
+    runtime.mainGenerationActive = false;
+    // A stopped reply is not translated on its own (the reader may still continue or redo it); the
+    // render that follows says so in the log rather than nowhere.
+    const pending = runtime.generationGate.peek();
+    if (pending) runtime.stoppedGeneration = { ...pending, at: Date.now() };
+    runtime.generationGate.clear();
+  });
   bindEvent(eventTypes.MESSAGE_SWIPED, messageId => scheduleAuto(messageId, 'swipe'));
   bindEvent(eventTypes.MESSAGE_EDITED, messageId => scheduleAuto(messageId, 'edit'));
   // Floor buttons follow every redraw the host announces; the observer in bindTtsDom catches the rest.
@@ -12729,6 +12774,7 @@ function registerRuntimeEvents() {
   }
   bindEvent(eventTypes.CHAT_CHANGED, () => {
     runtime.mainGenerationActive = false;
+    runtime.stoppedGeneration = null;
     cancelPendingWork();
     scheduleEntries();
     // The speaker palette is per character card, so a different chat may need a different sheet.
