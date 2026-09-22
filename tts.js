@@ -13,9 +13,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.32.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.32.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.32.1';
+} from './core.js?v=0.32.2';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.32.2';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.32.2';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -2213,6 +2213,42 @@ export function playbackWindow(entries, index, duration = 0) {
     start: round(Math.max(floor, entry.start - 0.08)),
     end: round(Math.max(entry.start, Math.min(ceiling, entry.end + 0.35))),
   };
+}
+
+/**
+ * What of a recording still coming in can be played already.
+ *
+ * Fish sends a request's audio chunk by chunk, with each chunk's word timings, and a chunk's timings
+ * keep growing until the next chunk starts. The timings run in order, so a sentence is whole once a
+ * later word has its timing: nothing more of it can arrive. It must also be inside the audio so far.
+ * The whole ones are a run from the start — the first that is not whole ends it — and the last of them
+ * may ring on only until the next sentence begins, where that is known already, so it never runs into
+ * words the player has not been given. A finished stream is whole throughout.
+ *
+ * With `lineOf` (sentence id → paragraph), only whole paragraphs count: a paragraph whose last sentence
+ * has not come in yet waits for it, so a reading that catches up with Fish pauses where a paragraph
+ * ends, never between a name and the line it introduces.
+ */
+export function settledSpans(spans, alignments, { audioSeconds = Infinity, done = false, lineOf = null } = {}) {
+  const { timeline, duration } = buildGlobalTimeline(alignments);
+  const aligned = alignSpansToTimeline(spans, timeline, { duration });
+  if (done) return { entries: aligned, ceiling: duration };
+  const frontier = Math.min(timeline.at(-1)?.start ?? 0, Number(audioSeconds));
+  const entries = [];
+  for (const entry of aligned) {
+    if (entry.interpolated || entry.coverage < 0.5 || entry.end > frontier) break;
+    entries.push(entry);
+  }
+  const round = value => Number(value.toFixed(3));
+  if (typeof lineOf === 'function' && entries.length < aligned.length) {
+    const waiting = lineOf(aligned[entries.length].id);
+    let cut = entries.length;
+    while (cut > 0 && lineOf(entries[cut - 1].id) === waiting) cut -= 1;
+    if (cut < entries.length) return { entries: entries.slice(0, cut), ceiling: round(Math.max(entries[cut - 1]?.end ?? 0, entries[cut].start)) };
+  }
+  const next = aligned[entries.length];
+  const ceiling = next && !next.interpolated ? Math.min(next.start, Number(audioSeconds)) : frontier;
+  return { entries, ceiling: round(Math.max(entries.at(-1)?.end ?? 0, ceiling)) };
 }
 
 export function fishFingerprint(fish, { emotionCues = true, prosodySplit = true, tamePunctuation = false, mode = '', consoles = '', wholeFloor = false } = {}) {

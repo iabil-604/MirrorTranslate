@@ -49,6 +49,7 @@ import {
   segmentsInRange,
   sentenceFishText,
   sentenceProsody,
+  settledSpans,
   splitByPairs,
   splitNarrationSentences,
   splitUtterances,
@@ -1461,6 +1462,48 @@ test('only a paragraph too long for a request by itself is cut between its sente
   const floor = [sentence(0, 0, 'narration', '雨停了。'), ...long, sentence(6, 2, 'narration', '他没有回头。')];
   const whole = FISH_ADAPTER.parts(floor, { ...tts, requestUnit: 'floor' });
   assert.deepEqual(whole.map(part => part.map(item => item.segment.id)), [[0, 1, 2], [3, 4, 5, 6]]);
+});
+
+test('a recording still coming in can be played a sentence at a time, each once it has come in whole', () => {
+  const spans = [{ id: 1, text: '一二三。' }, { id: 2, text: '四五六。' }, { id: 3, text: '七八九。' }];
+  const words = [...'一二三四五六七八九'];
+  // Fish's timings are per chunk, from the chunk's own start; the second chunk starts where the first ends.
+  const word = (index, offset = 0) => ({ text: words[index], start: index * 0.5 - offset, end: index * 0.5 + 0.4 - offset });
+  const chunk = (from, to, offset) => ({ offset, duration: 3, content: '', segments: words.slice(from, to).map((_, index) => word(from + index, offset)) });
+  // The first chunk has got as far as 五: the first sentence is whole, the second is not, since 六 may
+  // still come. The first may ring on only until the second begins.
+  const early = new Map([[0, chunk(0, 5, 0)]]);
+  const first = settledSpans(spans, early, { audioSeconds: 3 });
+  assert.deepEqual(first.entries.map(entry => entry.id), [1]);
+  assert.equal(first.ceiling, 1.5);
+  // Timings ahead of the sound: nothing plays that is not in the audio yet.
+  assert.deepEqual(settledSpans(spans, early, { audioSeconds: 1 }).entries, []);
+  // The second chunk has begun: the first is final, and the second sentence with it; the third waits.
+  const later = new Map([[0, chunk(0, 6, 0)], [1, chunk(6, 7, 3)]]);
+  const second = settledSpans(spans, later, { audioSeconds: 4 });
+  assert.deepEqual(second.entries.map(entry => entry.id), [1, 2]);
+  assert.equal(second.ceiling, 3);
+  // A finished stream is whole throughout, and reads exactly as the stored recording will.
+  const done = new Map([[0, chunk(0, 6, 0)], [1, chunk(6, 9, 3)]]);
+  const whole = settledSpans(spans, done, { done: true });
+  assert.deepEqual(whole.entries.map(entry => entry.id), [1, 2, 3]);
+  const { timeline, duration } = buildGlobalTimeline(done);
+  assert.deepEqual(whole.entries, alignSpansToTimeline(spans, timeline, { duration }));
+  // Nothing timed yet, nothing to play.
+  assert.deepEqual(settledSpans(spans, new Map(), { audioSeconds: 5 }).entries, []);
+  // A paragraph at a time: the first two sentences are one paragraph, the third another. Until the
+  // second is whole the first waits with it; then both go, and ring on until the third begins.
+  const lineOf = id => (id === 3 ? 2 : 1);
+  assert.deepEqual(settledSpans(spans, early, { audioSeconds: 3, lineOf }).entries, []);
+  const paragraph = settledSpans(spans, later, { audioSeconds: 4, lineOf });
+  assert.deepEqual(paragraph.entries.map(entry => entry.id), [1, 2]);
+  assert.equal(paragraph.ceiling, 3);
+  // The third sentence is its own paragraph, the second waits on nothing: sentences 1 and 2 as before.
+  assert.deepEqual(settledSpans(spans, early, { audioSeconds: 3, lineOf: id => id }).entries.map(entry => entry.id), [1]);
+  // Held back to the paragraph's start, the last sentence played rings on only to where the next begins.
+  const held = settledSpans(spans, later, { audioSeconds: 4, lineOf: id => (id === 1 ? 1 : 2) });
+  assert.deepEqual(held.entries.map(entry => entry.id), [1]);
+  assert.equal(held.ceiling, 1.5);
 });
 
 test('whatever the floor, every request fits the budget as sent and nothing is lost or reordered', () => {

@@ -71,7 +71,7 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.32.1';
+} from './core.js?v=0.32.2';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -127,10 +127,11 @@ import {
   speechTagReading,
   SPEECH_MOODS,
   SPEECH_TONES,
-} from './tts.js?v=0.32.1';
-import { createTtsStore } from './tts-store.js?v=0.32.1';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.32.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.32.1';
+  settledSpans,
+} from './tts.js?v=0.32.2';
+import { createTtsStore } from './tts-store.js?v=0.32.2';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.32.2';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.32.2';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -139,7 +140,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.32.1';
+} from './processing.js?v=0.32.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -156,9 +157,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.32.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.32.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.32.1';
+} from './prompts.js?v=0.32.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.32.2';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.32.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -172,15 +173,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.32.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.32.1';
+} from './palette.js?v=0.32.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.32.2';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.32.1';
+} from './diagnostics.js?v=0.32.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -3517,13 +3518,13 @@ async function fishRequestOnce(path, fish, { method = 'POST', body, signal } = {
  * made 「失败后自动重试次数」 look like it did nothing. Each attempt opens a window of its own. A
  * refusal (bad key, no credit, rate limit) is answered once; asking again would buy the same answer.
  */
-async function streamFishTimestamps(body, fish, signal, { onAttempt = null } = {}) {
+async function streamFishTimestamps(body, fish, signal, { onAttempt = null, onProgress = null } = {}) {
   const attempts = Math.max(0, Number(fish.retries) || 0) + 1;
   let failure = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     onAttempt?.(attempt);
     try {
-      return await streamFishTimestampsOnce(body, fish, signal);
+      return await streamFishTimestampsOnce(body, fish, signal, onProgress);
     } catch (error) {
       // The reader stopped, or this is the last try: the failure is theirs to see.
       if (isAbortError(error) || signal?.aborted || attempt === attempts - 1) throw error;
@@ -3538,15 +3539,19 @@ async function streamFishTimestamps(body, fish, signal, { onAttempt = null } = {
   throw failure;
 }
 
-async function streamFishTimestampsOnce(body, fish, signal) {
+// `onProgress` hears what has come back so far, after every read that brought something: the audio
+// and timings of an answer still arriving, for a player that will not wait for the end.
+async function streamFishTimestampsOnce(body, fish, signal, onProgress = null) {
   return withTtsTimeout(signal, fish.timeoutSec, async (requestSignal, renew) => {
     const response = await fishRequestOnce('/v1/tts/stream/with-timestamp', fish, { body, signal: requestSignal });
     const collector = createTimestampCollector();
     let unreadable = 0;
+    let fresh = false;
     const parser = createSseParser(event => {
       if (!event.data || event.data === '[DONE]') return;
       try {
         collector.accept(JSON.parse(event.data));
+        fresh = true;
       } catch {
         unreadable += 1;
       }
@@ -3559,6 +3564,10 @@ async function streamFishTimestampsOnce(body, fish, signal) {
         if (done) break;
         renew();
         parser.push(decoder.decode(value, { stream: true }));
+        if (fresh && onProgress) {
+          fresh = false;
+          onProgress(collector.result());
+        }
       }
       parser.push(decoder.decode());
     } else {
@@ -3681,8 +3690,11 @@ async function findTtsEntry(floor, item, settings) {
  * in it. One request per part, usually one for the unit. Fish's word timings are merged into sentence
  * ranges right here, and the record keeps both the audio and the ranges, so playing any sentence
  * afterwards is a seek, never another request.
+ *
+ * A floor sent whole is also heard while it arrives: `onLive` is handed what has come back so far
+ * every time more does (see liveTtsEntry), and so is anyone who joins the job later.
  */
-async function ensureTtsRecording(floor, unit, items, settings, onStatus = null, onStep = null) {
+async function ensureTtsRecording(floor, unit, items, settings, onStatus = null, onStep = null, { onLive = null } = {}) {
   const tts = ttsSettings(settings);
   if (!items.length) throw new Error('这一段没有可朗读的句子。');
   const stepId = `record:${unit}`;
@@ -3702,10 +3714,15 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
   // Replaced under the same key: the urls made from the old take must not play in place of the new one.
   if (stale) dropTtsObjectUrls(key);
   requireFishKey(tts);
-  const record = await dedupeTtsJob(key, floor.messageId, async signal => {
+  const record = await dedupeTtsJob(key, floor.messageId, async (signal, notify) => {
     const provider = ttsProviderFor(settings);
     const parts = provider.parts(items, tts);
     const label = unit.startsWith('line:') ? '这一段' : unit.startsWith('sentence:') ? '这一句' : unit.startsWith('chunk:') ? `第 ${unit.slice(6)} 批` : '整楼';
+    // What Fish has sent of each part so far, where a player can reach it. Only for a floor sent whole,
+    // the one wait long enough to matter, and only in mp3, where every stretch from the start plays.
+    const live = unit.startsWith('floor:') && tts.fish.format === 'mp3'
+      ? { key, unit, mime: provider.mime(tts.fish.format), bitrate: Number(tts.fish.mp3Bitrate) || 128, version: 0, view: null, parts: parts.map(part => emptyLiveTtsPart(part)) }
+      : null;
     // Parts go to Fish several at a time when the settings allow; the recording is assembled in part
     // order afterwards, so playback never learns which came back first. The first failure stops the
     // rest, since parts of a recording that will not be kept are not worth paying for.
@@ -3730,9 +3747,25 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
     try {
       made = await runInLanes(parts, lanes, async (part, index) => {
         const { body, spans } = provider.payload(part, tts);
+        const heard = live?.parts[index] ?? null;
+        if (heard) heard.spans = spans;
         let stream;
         try {
-          stream = await streamFishTimestamps(body, tts.fish, group.signal, { onAttempt: () => { ttsFishTally(floor).requests += 1; } });
+          stream = await streamFishTimestamps(body, tts.fish, group.signal, {
+            onAttempt: attempt => {
+              ttsFishTally(floor).requests += 1;
+              // Asked again: what the failed try sent is not this take.
+              if (heard && attempt > 0) {
+                Object.assign(heard, emptyLiveTtsPart(part), { spans, version: heard.version + 1 });
+                live.version += 1;
+                notify(live);
+              }
+            },
+            onProgress: heard ? result => {
+              feedLiveTtsPart(live, heard, result);
+              notify(live);
+            } : null,
+          });
         } catch (error) {
           if (!isAbortError(error)) {
             failure ??= error;
@@ -3744,7 +3777,11 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
           }
           throw error;
         }
-        const blob = new Blob(stream.audio.map(base64ToBytes), { type: provider.mime(tts.fish.format) });
+        if (heard) {
+          feedLiveTtsPart(live, heard, stream, { done: true });
+          notify(live);
+        }
+        const blob = new Blob(heard ? heard.chunks : stream.audio.map(base64ToBytes), { type: provider.mime(tts.fish.format) });
         const { timeline: spoken, duration } = buildGlobalTimeline(stream.alignments);
         const aligned = alignSpansToTimeline(spans, spoken, { duration });
         finished += 1;
@@ -3778,6 +3815,7 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
       });
     } catch (error) {
       if (!isAbortError(failure ?? error)) ttsFishTally(floor).failed += 1;
+      if (live) dropLiveTtsUrls(key);
       // Siblings cancelled by the first failure report as aborted; the failure itself is what is thrown.
       throw failure ?? error;
     } finally {
@@ -3795,11 +3833,81 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
       overrideText: unit.startsWith('sentence:') ? (items[0].override?.text ?? '') : '',
     });
     rememberRecording(floor, stored);
+    if (live) dropLiveTtsUrls(key);
     onStep?.(stepId, { state: 'done', detail: `${items.length} 句 · ${storedParts.reduce((sum, part) => sum + (Number(part.duration) || 0), 0).toFixed(1)} 秒` });
     notifyTtsPanels();
     return stored;
-  });
+  }, { onPrefix: onLive });
   return { record, cached: false };
+}
+
+// One part of a recording still coming in, before anything of it has.
+function emptyLiveTtsPart(items) {
+  return { items, spans: null, source: null, chunks: [], bytes: 0, alignments: new Map(), done: false, version: 0, blob: null, blobVersion: -1 };
+}
+
+// What Fish has sent of one part so far, taken in. Audio already decoded is not decoded again; an
+// answer that is not the one this part was holding (a try asked again) replaces it whole.
+function feedLiveTtsPart(live, part, result, { done = false } = {}) {
+  if (result.audio !== part.source) {
+    part.source = result.audio;
+    part.chunks = [];
+    part.bytes = 0;
+  }
+  while (part.chunks.length < result.audio.length) {
+    const bytes = base64ToBytes(result.audio[part.chunks.length]);
+    part.chunks.push(bytes);
+    part.bytes += bytes.length;
+  }
+  part.alignments = result.alignments;
+  part.done = done;
+  part.version += 1;
+  live.version += 1;
+}
+
+/**
+ * A recording still coming in, in the shape the player knows: the sentences whole so far, each part's
+ * audio so far as its blob. The audio's length is read off its size — Fish's mp3 has a constant bitrate
+ * — so a sentence whose timings came before its sound is not played short.
+ */
+function liveTtsRecord(live) {
+  if (live.view?.version === live.version) return live.view.record;
+  const timeline = [];
+  const parts = live.parts.map((part, index) => {
+    if (!part.chunks.length || !part.spans) return null;
+    const audioSeconds = part.done ? Infinity : (part.bytes * 8) / (live.bitrate * 1000);
+    // A paragraph at a time: one still arriving is not started, so any wait falls between paragraphs.
+    const lines = new Map(part.items.map(item => [item.segment.id, item.segment.lineId]));
+    const { entries, ceiling } = settledSpans(part.spans, part.alignments, { audioSeconds, done: part.done, lineOf: id => lines.get(id) });
+    for (const entry of recordCovers(part.items, entries)) timeline.push({ ...entry, part: index });
+    if (part.blobVersion !== part.version) {
+      part.blob = new Blob(part.chunks, { type: live.mime });
+      part.blobVersion = part.version;
+    }
+    return { blob: part.blob, mime: live.mime, duration: ceiling };
+  });
+  const record = { key: `${live.key}#live${live.version}`, unit: live.unit, live: true, timeline, parts };
+  live.view = { version: live.version, record };
+  return record;
+}
+
+// One sentence of a recording still coming in, once it has come in whole; null until then.
+function liveTtsEntry(live, item) {
+  const record = liveTtsRecord(live);
+  const index = record.timeline.findIndex(entry => entry.id === item.segment.id);
+  if (index < 0 || !record.parts[record.timeline[index].part]) return null;
+  return { record, index };
+}
+
+// The urls made for a recording while it was still coming in, let go once it is whole. The one playing
+// is left to finish.
+function dropLiveTtsUrls(recordKey) {
+  const urls = runtime.tts.urls;
+  for (const [key, url] of [...urls]) {
+    if (!key.startsWith(`${recordKey}#live`) || url === runtime.tts.player?.url) continue;
+    URL.revokeObjectURL(url);
+    urls.delete(key);
+  }
 }
 
 /**
@@ -3906,15 +4014,43 @@ function ttsStep(floor, id, patch = {}) {
   notifyTtsPanels();
 }
 
-/** The recording entry for one item, made if need be. `single` says the item was asked for by itself. */
-async function resolveTtsEntry(floor, items, item, settings, onStatus = null, onStep = null, { single = false, unit = null, unitItems = null } = {}) {
+/**
+ * The recording entry for one item, made if need be. `single` says the item was asked for by itself.
+ *
+ * `live`: a floor sent whole need not be waited for. The sentence is handed back as soon as it has come
+ * in whole, from the audio so far, while the rest keeps arriving (`live: true` and the `job` on the
+ * entry). `liveGrace` is how long to give a floor that is nearly done to finish instead, so a short one
+ * is still heard as the one take it is.
+ */
+async function resolveTtsEntry(floor, items, item, settings, onStatus = null, onStep = null, { single = false, unit = null, unitItems = null, live = false, liveGrace = 0 } = {}) {
   const found = await findTtsEntry(floor, item, settings);
   if (found) return { ...found, cached: true };
   const tts = ttsSettings(settings);
   const target = item.override?.text
     ? { unit: `sentence:${item.segment.id}`, items: [item] }
     : unit ? { unit, items: unitItems ?? items } : ttsUnitFor(tts, items, item, { single });
-  const { record } = await ensureTtsRecording(floor, target.unit, target.items, settings, onStatus, onStep);
+  let making;
+  if (live && target.unit.startsWith('floor:') && tts.fish.format === 'mp3') {
+    let latest = null;
+    let wake = null;
+    let finished = false;
+    making = ensureTtsRecording(floor, target.unit, target.items, settings, onStatus, onStep, { onLive: state => { latest = state; wake?.(); } });
+    const settle = () => { finished = true; wake?.(); };
+    making.then(settle, settle);
+    while (!finished) {
+      const entry = latest ? liveTtsEntry(latest, item) : null;
+      if (entry) {
+        if (liveGrace > 0) await Promise.race([making.catch(() => {}), new Promise(resolve => { globalThis.setTimeout(resolve, liveGrace); })]);
+        if (!finished) return { ...entry, cached: false, live: true, job: making };
+        break;
+      }
+      await new Promise(resolve => { wake = resolve; });
+      wake = null;
+    }
+  } else {
+    making = ensureTtsRecording(floor, target.unit, target.items, settings, onStatus, onStep);
+  }
+  const { record } = await making;
   const index = record.timeline.findIndex(entry => entry.id === item.segment.id);
   if (index < 0) throw new Error('这一句不在生成的音频里。');
   return { record, index, cached: false };
@@ -4607,8 +4743,13 @@ async function runTtsTransport(transport) {
   // The batch a sentence came in, when the floor arrived in batches: it is made as a unit of its own.
   // Paragraphs are the unit whatever batch the reading arrived in.
   const unitOf = () => ({});
+  // A floor heard while it arrives: the request it arrives from. Its failure stops the reading at the
+  // next sentence rather than sending the floor to Fish a second time.
+  transport.liveJob = null;
+  transport.liveFailure = null;
   try {
     while (live() && (transport.index < transport.items.length || !transport.prepared)) {
+      if (transport.liveFailure) throw transport.liveFailure;
       if (transport.index >= transport.items.length) {
         // The next batch of the reading is still on its way.
         setTransport(transport, { state: 'loading', message: '等副模型的下一批…' });
@@ -4631,11 +4772,25 @@ async function runTtsTransport(transport) {
       setTtsButtonState(transport.messageId, item.segment.id, 'busy', transport.side, item.segment.lineId);
       let entry;
       try {
-        entry = await resolveTtsEntry(floor, items, item, settings, text => live() && setTransport(transport, { message: text }), (id, patch) => ttsStep(floor, id, patch), { single: transport.single, ...unitOf(item) });
+        entry = await resolveTtsEntry(floor, items, item, settings, text => live() && setTransport(transport, { message: text }), (id, patch) => ttsStep(floor, id, patch), {
+          single: transport.single,
+          ...unitOf(item),
+          // Made-not-played waits for the whole take; played, a floor sent whole starts as it arrives,
+          // with a moment's grace at the very start for one that is nearly done anyway.
+          live: !transport.generateOnly,
+          liveGrace: transport.current ? 0 : 300,
+        });
       } finally {
         setTtsButtonState(transport.messageId, item.segment.id, null, transport.side, item.segment.lineId);
       }
       if (!live()) return;
+      if (entry.live && transport.liveJob !== entry.job) {
+        const job = entry.job;
+        transport.liveJob = job;
+        job.catch(error => {
+          if (transport.liveJob === job && !isAbortError(error)) transport.liveFailure = error;
+        });
+      }
       if (transport.generateOnly && !entry.cached) {
         // Made, not played: the reader asked for it that way. The next click on it plays.
         setTransport(transport, { state: 'idle', message: '已生成，再点一次播放' });
@@ -4667,8 +4822,9 @@ async function runTtsTransport(transport) {
       transport.current = { record, part, url, start: window.start, end: endWindow.end };
       // Prefetch: the recording the next paragraph will need, while this one plays.
       // Read off the transport, not the list this turn started with: a batch that arrived meanwhile is in it.
+      // Not while the floor is still arriving: the request making it is making the next one too.
       const next = transport.items[lastOffset + 1];
-      if (next && !transport.single) void resolveTtsEntry(floor, transport.items, next, settings, null, null, unitOf(next)).catch(() => {});
+      if (next && !transport.single && !entry.live) void resolveTtsEntry(floor, transport.items, next, settings, null, null, unitOf(next)).catch(() => {});
       setTransport(transport, { state: 'playing', message: '' });
       highlightTtsUtterance(transport.messageId, item.segment.id, transport.side);
       const outcome = await playTtsAudio(url, {
@@ -8132,7 +8288,7 @@ function updateTtsUnitHelp(root, settings = runtime.settings) {
   if (unit === 'floor') {
     help.textContent = [
       '整楼一次：这一楼要读的句子按顺序排好，所有角色连同旁白放进同一个请求，各用各的音色，Fish 当成一场对话连着读，人和人之间的衔接更自然。',
-      '代价是整楼做完才开始出声；点单句、单段播放也要先等整楼做好。',
+      '音频是 mp3 时不用等整楼做完：Fish 送回来的段落一段收全就先播这一段，后面边收边接上；opus、wav 还是整楼做完才出声。点单句、单段播放，要等那一段收到。',
       '整楼只有一个语速音量：分析给某句的快慢轻重、调音台的语速倾向在这种方式下不单独生效，情绪、语气、停顿、重读这些标签照旧。',
       model === 's1' ? 's1 不能在一个请求里用多个音色，整楼会按说话人拆开，想要一次就换 S2 系列模型。' : '',
       `超过「一次请求最多字数」（声音参数里，现在是 ${tts.fish.maxChars}）才拆。字数按发给 Fish 的原样算：情绪、停顿这些标签，每次换人的说话人标记（一个 13 字），都算；对白来回多的楼，发出去的字能到正文的两倍多。`,

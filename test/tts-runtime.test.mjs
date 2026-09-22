@@ -2200,3 +2200,135 @@ test('the whole floor can go to Fish as one request with every voice in it, or o
   assert.equal(sentences.length, 5, 'five sentences, five requests');
   assert.ok(sentences.every(call => !/\n/.test(call.body.text)), 'each carries one sentence');
 });
+
+// A Fish stand-in that answers the way the real one does over a long floor: the first half's sound and
+// timings at once, the rest a while later — or, with `fail`, a broken connection instead of the rest.
+// The sound is sized as 128 kbps mp3 is, 16000 bytes a second, since the player reads length off size.
+function mockStreamingFish({ later = 700, fail = false, onLater = null, first = null } = {}) {
+  const calls = [];
+  const toSubModel = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('chat-completions/generate') && toSubModel) return toSubModel(url, init);
+    const sent = JSON.parse(init.body);
+    calls.push(sent);
+    const spoken = String(sent.text).replace(/<\|speaker:\d+\|>/g, '').replace(/\[[^\]]*\]/g, '');
+    const characters = [...spoken].filter(character => /[\p{L}\p{N}]/u.test(character));
+    // How many characters the first chunk carries; half by default.
+    const half = first ?? Math.ceil(characters.length / 2);
+    const chunk = (list, seq, offset) => `event: message\ndata: ${JSON.stringify({
+      audio_base64: Buffer.alloc(Math.round(list.length * 0.25 * 16000)).toString('base64'),
+      content: list.join(''),
+      alignment: { audio_duration: list.length * 0.25, segments: list.map((text, index) => ({ text, start: index * 0.25, end: index * 0.25 + 0.2 })) },
+      chunk_seq: seq,
+      chunk_audio_offset_sec: offset,
+    })}\n\n`;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(chunk(characters.slice(0, half), 0, 0)));
+        setTimeout(() => {
+          onLater?.();
+          if (fail) {
+            controller.error(new TypeError('network error'));
+            return;
+          }
+          controller.enqueue(encoder.encode(chunk(characters.slice(half), 1, half * 0.25)));
+          controller.close();
+        }, later);
+      },
+    });
+    return new Response(body, { status: 200 });
+  };
+  return calls;
+}
+
+test('a floor sent whole is heard as it arrives: the first sentences play before Fish has sent the rest', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-live');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', requestUnit: 'floor', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('一。\n\n二。\n\n三。\n\n四。', [[1, '第一句话。'], [2, '第二句话。'], [3, '第三句话。'], [4, '第四句话。']], settings));
+  const audio = mockAudio();
+  t.after(audio.restore);
+  const createUrl = URL.createObjectURL;
+  let urls = 0;
+  URL.createObjectURL = () => `blob:live-${urls += 1}`;
+  t.after(() => { URL.createObjectURL = createUrl; });
+  let playedBeforeTheRest = null;
+  const calls = mockStreamingFish({ onLater: () => { playedBeforeTheRest = audio.plays.length; } });
+
+  const transport = await __testing.createTtsTransport(0, { single: false });
+  await __testing.runTtsTransport(transport);
+  assert.equal(calls.length, 1, 'still one request for the whole floor');
+  assert.ok(playedBeforeTheRest >= 1, 'the first sentence was playing before the rest had come');
+  // The first half holds 第一句话第二句话: the first sentence is whole, the second waits for the rest.
+  // Once the rest is in, what is whole of it plays from the audio so far; the last sentence is only
+  // whole when the stream has ended, so it comes from the finished take.
+  assert.ok(audio.plays.length >= 2);
+  assert.equal(audio.plays[0].start, 0);
+  assert.equal(audio.plays[1].start, 0.95, 'the rest picks up where the first sentence ended');
+  assert.ok(audio.plays.every((play, index) => !index || play.start > audio.plays[index - 1].start), 'in order, nothing heard twice');
+  assert.notEqual(audio.plays.at(-1).src, audio.plays[0].src, 'the start from the audio so far, the end from the finished take');
+  assert.equal(transport.state, 'idle');
+  assert.equal(transport.index, 3);
+  // Kept as the one recording it is, for every later play.
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  const stored = await __testing.findTtsEntry(floor, items[0], settings);
+  assert.equal(stored.record.unit, 'floor:all');
+  assert.equal(stored.record.timeline.length, 4);
+  assert.ok(!stored.record.live);
+});
+
+test('the reader\'s own example: two paragraphs by one speaker, the first heard whole before the second has come', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-live-paragraphs');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', requestUnit: 'floor', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('一。\n\n二。', [[1, '常夜灯：「今天的天气不赖」'], [2, '常夜灯：「确实不赖啊」']], settings));
+  const audio = mockAudio();
+  t.after(audio.restore);
+  const createUrl = URL.createObjectURL;
+  let urls = 0;
+  URL.createObjectURL = () => `blob:paragraphs-${urls += 1}`;
+  t.after(() => { URL.createObjectURL = createUrl; });
+  // The first chunk carries the first paragraph whole — 常夜灯今天的天气不赖 — and the first word of the
+  // second, so the first is known to be over; the rest of the second comes later.
+  let atTheRest = null;
+  const calls = mockStreamingFish({
+    first: 11,
+    onLater: () => {
+      const playing = __testing.ttsTransport();
+      atTheRest = { plays: audio.plays.length, line: playing?.items[playing.index]?.segment.lineId };
+    },
+  });
+  const transport = await __testing.createTtsTransport(0, { single: false });
+  await __testing.runTtsTransport(transport);
+  assert.equal(calls.length, 1, 'both paragraphs in the one request');
+  assert.deepEqual(transport.items.map(item => [item.segment.lineId, item.segment.text]), [[1, '常夜灯：'], [1, '今天的天气不赖'], [2, '常夜灯：'], [2, '确实不赖啊']]);
+  assert.equal(atTheRest.plays, 1, 'the first paragraph had been played');
+  assert.equal(atTheRest.line, 2, 'and the reading was waiting at the second');
+  assert.equal(audio.plays[0].start, 0);
+  assert.equal(audio.plays.length, 2, 'one stretch per paragraph');
+  assert.equal(transport.state, 'idle');
+});
+
+test('a floor heard as it arrives that breaks off half way stops at the next sentence, and is not asked for again', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-live-broken');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', requestUnit: 'floor', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: { ...FISH, retries: 0 } } },
+  });
+  context.chat.push(await translatedFloor('一。\n\n二。\n\n三。\n\n四。', [[1, '第一句话。'], [2, '第二句话。'], [3, '第三句话。'], [4, '第四句话。']], settings));
+  const audio = mockAudio();
+  t.after(audio.restore);
+  const calls = mockStreamingFish({ later: 500, fail: true });
+  const transport = await __testing.createTtsTransport(0, { single: false });
+  await __testing.runTtsTransport(transport);
+  assert.equal(audio.plays.length, 1, 'the sentence that had come in whole was heard');
+  assert.equal(transport.state, 'error');
+  assert.equal(calls.length, 1, 'the broken floor was not sent to Fish a second time');
+});
