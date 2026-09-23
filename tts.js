@@ -68,7 +68,8 @@ function escapeRegex(value) {
  * visible affixes are; this is the fallback for a preset that types `<jy-translation>` itself.
  */
 export function linesFromTaggedText(text, tags = []) {
-  const source = normalizeNewlines(text);
+  // Comments are not shown, so they are not read; an unclosed one hides the rest.
+  const source = normalizeNewlines(text).replace(/<!--[\s\S]*?(?:-->|$)/g, '');
   const blocks = [];
   for (const tag of Array.isArray(tags) ? tags : []) {
     if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(String(tag))) continue;

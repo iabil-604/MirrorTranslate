@@ -1894,8 +1894,24 @@ export function rebuildTaggedRegions(extraction, replacements) {
   return output;
 }
 
-function outermostExcludedRanges(source, tagNames) {
+/**
+ * The HTML comments in a body. A page never shows them, and presets use them for what the story is not:
+ * a plan for the scene, notes to itself. One that is not closed hides the rest, as it does in a browser.
+ */
+function commentRanges(source) {
   const ranges = [];
+  let start = source.indexOf('<!--');
+  while (start >= 0) {
+    const close = source.indexOf('-->', start + 4);
+    const end = close < 0 ? source.length : close + 3;
+    ranges.push({ start, end, tagName: '!--', comment: true });
+    start = source.indexOf('<!--', end);
+  }
+  return ranges;
+}
+
+function outermostExcludedRanges(source, tagNames) {
+  const ranges = commentRanges(source);
   for (const tag of parseTagNames(tagNames)) {
     for (const group of scanTagGroups(source, tag, { includeSelfClosing: true })) {
       ranges.push({ start: group.openStart, end: group.closeEnd, tagName: tag });
@@ -1907,9 +1923,15 @@ function outermostExcludedRanges(source, tagNames) {
     const previous = outermost.at(-1);
     if (previous && range.start >= previous.start && range.end <= previous.end) continue;
     if (previous && range.start < previous.end) {
+      // A comment across a tag's edge hides what it covers: the two are left out as one.
+      if (previous.comment || range.comment) {
+        previous.end = Math.max(previous.end, range.end);
+        previous.comment = true;
+        continue;
+      }
       throw new Error(`排除标签交叉重叠：<${previous.tagName}> 与 <${range.tagName}>。`);
     }
-    outermost.push(range);
+    outermost.push({ ...range });
   }
   return outermost;
 }
