@@ -71,7 +71,8 @@ import {
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
-} from './core.js?v=0.32.4';
+  withoutSpeechMarks,
+} from './core.js?v=0.33.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -128,10 +129,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.32.4';
-import { createTtsStore } from './tts-store.js?v=0.32.4';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.32.4';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.32.4';
+} from './tts.js?v=0.33.0';
+import { createTtsStore } from './tts-store.js?v=0.33.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.33.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.33.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -140,7 +141,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.32.4';
+} from './processing.js?v=0.33.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -157,9 +158,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.32.4';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.32.4';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.32.4';
+} from './prompts.js?v=0.33.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.33.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.33.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -173,15 +174,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.32.4';
-import { sampleThemeBackground } from './theme-probe.js?v=0.32.4';
+} from './palette.js?v=0.33.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.33.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.32.4';
+} from './diagnostics.js?v=0.33.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -443,9 +444,10 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-tts-lang-block" data-jy-tts-multilang><div class="jy-row-between"><div><h3>多国语言</h3><p class="jy-muted">同一个人读中文、英语、日语可以各用一个音色，英语还分美式和英式（伦敦腔）。这里给旁白加；每个角色行里各有一个「＋ 多国语言音色」按钮。句子的语言由副模型判断，没判断按文字本身。</p></div><button type="button" class="jy-button" data-jy-action="tts-add-narrator-lang">＋ 旁白加一门语言</button></div><div class="jy-tts-lang-list" data-jy-tts-narrator-langs></div></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">角色表保存范围</span><select data-jy-tts-field="voiceScope"><option value="character">跟着角色卡（这张卡的所有聊天共用一张表）</option><option value="chat">每个聊天单独一份（不同周目各配各的）</option></select></label></div>
 <p class="jy-muted" data-jy-tts-scope-note></p>
-<div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button><button type="button" class="jy-button" data-jy-action="tts-install-speech-entry">写入说话人标记世界书</button><button type="button" class="jy-button" data-jy-action="tts-add-voice">添加角色</button><button type="button" class="jy-button" data-jy-action="tts-import-speakers">导入已知说话人</button><button type="button" class="jy-button" data-jy-action="tts-lookup-voices">查询音色名</button><button type="button" class="jy-text-button" data-jy-action="tts-prune-voices">删掉没绑音色的行</button><button type="button" class="jy-text-button" data-jy-action="tts-clear-voices">清空角色表</button></div>
+<div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button><button type="button" class="jy-button" data-jy-action="tts-add-voice">添加角色</button><button type="button" class="jy-button" data-jy-action="tts-import-speakers">导入已知说话人</button><button type="button" class="jy-button" data-jy-action="tts-lookup-voices">查询音色名</button><button type="button" class="jy-text-button" data-jy-action="tts-prune-voices">删掉没绑音色的行</button><button type="button" class="jy-text-button" data-jy-action="tts-clear-voices">清空角色表</button></div>
 <div class="jy-tts-voice-list" data-jy-tts-voice-list></div>
-<p class="jy-muted">「写入说话人标记世界书」往世界书里写一条常驻条目，让主模型把每句台词写成 <code>&lt;say who="名字" mood="情绪"&gt;「……」&lt;/say&gt;</code>。之后不用任何副模型，朗读就知道每句是谁说的、什么情绪：不分析模式也能分角色、带情绪读，简单分析模式碰到整楼都标好的楼也不再请求。标记在楼层里自动隐藏，翻译时自动去掉，主模型自己看得到、会接着写。条目写进角色卡绑定的世界书，没有就写进这个聊天的世界书，都没有就新建一本挂到这个聊天上；名单用的是下面角色表里的名字，加了角色再点一次就会更新。</p>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="speechMarks">让主模型给台词标上说话人和情绪</label></div>
+<p class="jy-muted">打开后，主模型每写一次回复，请求的最末尾（深度 0，系统消息）都会带上一段格式要求，让它把每句台词写成 <code>&lt;say who="名字" mood="情绪"&gt;「……」&lt;/say&gt;</code>。不分析模式靠这个分角色、带情绪读，不请求任何副模型；简单分析碰到整楼都标好的楼也不再请求。标记在楼层里自动隐藏，翻译时自动去掉；台词的引号没配对（比如「……"）时，显示和朗读都会补成一对。名单用下面角色表里的名字，引号用这个故事最近在用的那种，每次生成时现取。只在朗读功能打开时发送，总结、代写这类旁路生成不带；关掉就不再发送。以前点按钮写进世界书的「镜译 · 说话人与情绪标记」条目请自己删掉或关掉——它还在的话，关掉这里主模型也会照样写标记。</p>
 <p class="jy-muted">角色表跟着当前角色卡保存。「从角色卡和世界书识别角色」让副模型读一遍角色卡和世界书条目（连同最近几楼正文，好按故事里的写法给名字），把人物名单列出来，你勾选后再导进来（需要副模型能连上，模型没回应就什么都不加）；世界书里没有、只是模型编的名字，群体和身份称呼，还有你自己扮演的角色，都会被程序挡掉，关掉的世界书条目也不读；导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「＋ 多国语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色。</p>
 </div></details>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-library"><summary class="jy-section-title"><span>04</span><h2>音色库</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
@@ -725,6 +727,7 @@ function initializeSettings() {
   runtime.nativeRegexInstalled = true;
   context.extensionSettings[MODULE_ID] = runtime.settings;
   context.saveSettingsDebounced?.();
+  syncSpeechPrompt();
   return runtime.settings;
 }
 
@@ -771,6 +774,7 @@ function saveSettings(next) {
     }
     notifyTtsPanels();
   }
+  syncSpeechPrompt();
   if (visualChanged) {
     const revision = ++runtime.processingRevision;
     const settings = runtime.settings;
@@ -8315,7 +8319,7 @@ function updateTtsModeHelp(root) {
   const askField = root.querySelector('[data-jy-tts-ask-field]');
   if (askField) askField.hidden = mode !== 'off';
   if (mode === 'off') {
-    help.textContent = '不分析：不额外请求副模型。翻译过的楼直接用翻译时标好的说话人和情绪——翻译那一次请求本身带了分析；正文里带 <say> 说话人标记的楼，按标记分角色、带情绪读（「03 音色」里能一键写入让主模型加标记的世界书）；其余的楼由程序按上下文认谁在说，认不出的用对白默认音色。想让副模型认一次，点朗读页的「分析这一楼」，或者在右边选按播放时怎么办。';
+    help.textContent = '不分析：不额外请求副模型。翻译过的楼直接用翻译时标好的说话人和情绪——翻译那一次请求本身带了分析；正文里带 <say> 说话人标记的楼，按标记分角色、带情绪读（「03 音色」里打开「让主模型给台词标上说话人和情绪」，主模型写的台词就会带标记）；其余的楼由程序按上下文认谁在说，认不出的用对白默认音色。想让副模型认一次，点朗读页的「分析这一楼」，或者在右边选按播放时怎么办。';
     return;
   }
   if (mode === 'simple') {
@@ -8584,14 +8588,19 @@ async function importCastFromWorldbook(settings = runtime.settings, { signal } =
 }
 
 // ---------------------------------------------------------------------------------------------
-// The speaker-mark worldbook entry. One click writes an entry asking the main model to wrap every
-// line of dialogue as <say who="名字" mood="情绪">「……」</say>. The reading then knows who says each
-// line, and how, from the text itself: several voices with no request to anybody. The marks are
-// hidden where the floor is drawn, stripped from what the translator is sent, and kept in the main
-// model's own context so it goes on writing them.
+// The request for speaker marks. With the switch on, every reply the main model writes goes out with
+// a system message at depth 0 — after the last message, the last thing it reads before it writes —
+// asking it to wrap each line of dialogue as <say who="名字" mood="情绪">「……」</say>. The reading then
+// knows who says each line, and how, from the text itself: several voices with no request to anybody.
+// The marks are hidden where the floor is drawn, stripped from what the translator is sent, and kept
+// in the main model's own context so it goes on writing them.
 // ---------------------------------------------------------------------------------------------
 
-const SPEECH_ENTRY_TITLE = '镜译 · 说话人与情绪标记';
+// The host's own numbers for 「in the chat, at a depth」 and 「as the system」: extension_prompt_types.IN_CHAT
+// and extension_prompt_roles.SYSTEM, which the context does not hand to extensions.
+const SPEECH_PROMPT_KEY = `${MODULE_ID}-speech-marks`;
+const SPEECH_PROMPT_IN_CHAT = 1;
+const SPEECH_PROMPT_SYSTEM = 0;
 
 /** The names the entry asks the story to mark its dialogue with: the voice table, the palette, the cards. */
 function speechRoster(settings = runtime.settings) {
@@ -8607,15 +8616,21 @@ function speechRoster(settings = runtime.settings) {
   return names.slice(0, 40);
 }
 
-/** The quotation marks the story has been writing its dialogue in, so the example does not change them. */
+/**
+ * The quotation marks the story has been writing its dialogue in, so the request does not change them.
+ * Counted in the prose only: every mark carries four " of its own in who="" and mood="", and so does
+ * any styled HTML, and counted with them a floor full of marks would vote for "" every time.
+ */
 function storyQuotePair(context, settings = runtime.settings) {
   const pairs = parsePairList(ttsSettings(settings).quotePairs);
   const recent = (Array.isArray(context.chat) ? context.chat : []).filter(message => message && !message.is_user && !message.is_system).slice(-4)
-    .map(message => String(message.mes ?? '')).join('\n');
+    .map(message => withoutSpeechMarks(String(message.mes ?? '')).replace(/<[^<>]*>/g, '')).join('\n');
   let best = null;
   let most = 0;
   for (const pair of pairs) {
-    const count = recent.split(pair.open).length - 1;
+    // A pair whose two marks are the same character is seen twice per quotation.
+    const seen = recent.split(pair.open).length - 1;
+    const count = pair.open === pair.close ? Math.floor(seen / 2) : seen;
     if (count > most) {
       best = pair;
       most = count;
@@ -8624,93 +8639,66 @@ function storyQuotePair(context, settings = runtime.settings) {
   return best ?? pairs[0] ?? { open: '「', close: '」' };
 }
 
-/** The entry's words, with this cast's names and the moods the reading understands. */
-function speechEntryContent(settings = runtime.settings, context = getContext()) {
+/** The request's words: this cast's names, the story's own quotation marks, the moods the reading understands. */
+function speechPromptContent(settings = runtime.settings, context = getContext()) {
   const names = speechRoster(settings);
   const quote = storyQuotePair(context, settings);
   const moods = [...new Set(SPEECH_MOODS.map(([word]) => word))].join('、');
   const tones = SPEECH_TONES.map(([word]) => word).join('、');
+  // The " of who="" and mood="" is what a closing quotation mark most often turns into. Said outright,
+  // unless the story itself quotes with " and the warning would forbid its own quotation marks.
+  const attributeQuotes = quote.open === '"' || quote.close === '"'
+    ? ''
+    : 'who="" 和 mood="" 里的英文双引号 " 只属于标签，绝不能拿来给台词收尾。';
   return [
     SPEECH_ENTRY_HEAD,
-    `正文里角色说出口的每一句台词，都用 <say> 标签连同引号一起包起来，标明是谁说的、带什么情绪：`,
+    '这是输出格式要求，写这一轮回复时必须遵守。',
+    '正文里角色说出口的每一句台词，都连同它的引号一起放进 <say> 标签，标明是谁说的、带什么情绪。格式固定为：',
     `<say who="说话人" mood="情绪">${quote.open}台词${quote.close}</say>`,
-    `1. who 写说话人的名字。${names.length ? `这些人照抄这个写法：${names.join('、')}。` : ''}名单外的人写正文里对他的称呼。`,
-    `2. mood 从这些词里选一个最贴切的：${moods}。要表现音量或语速，可以再加一个：${tones}，用顿号隔开，比如 mood="生气、大喊"。拿不准就写「平静」。`,
-    `3. 只包台词本身，连同引号。旁白、动作、心理描写不包；一段里几个人轮流说话，每一句各包各的。`,
-    `4. 这个标签只是记号：不要在正文里提到它，不要因为它改变文风、引号的写法或者台词的多少。`,
+    `1. 引号必须成对：这个故事的台词用 ${quote.open}${quote.close}。标签里以 ${quote.open} 开头、以 ${quote.close} 结尾，${quote.close} 后面紧跟 </say>。${attributeQuotes}`,
+    `2. who 写说话人的名字。${names.length ? `这些人照抄这个写法：${names.join('、')}。` : ''}名单外的人写正文里对他的称呼。`,
+    `3. mood 从这些词里选一个最贴切的：${moods}。要表现音量或语速，可以再加一个：${tones}，用顿号隔开，比如 mood="生气、大喊"。拿不准就写「平静」。`,
+    '4. 只包说出口的台词。旁白、动作、心理描写不包；几个人轮流说话，每一句各包各的；同一个人的话被旁白隔开，前后两截各包各的。',
+    '5. 标签只是给朗读程序的记号：不要在正文里提到它，不要因为它改变文风、引号的写法或者台词的多少。',
+    `6. 写完逐句核对：每个 <say …> 都有自己的 </say>，每个 </say> 前面紧挨着的都是 ${quote.close}。`,
     `例：{{char}}放下茶杯。<say who="{{char}}" mood="温柔">${quote.open}回来啦？${quote.close}</say>`,
   ].join('\n');
 }
 
 /**
- * Where the entry goes: this card's own book, else this chat's, else a new book of its own that is
- * hung on this chat — the one change to a chat's setup that touches no card and no other chat.
+ * Puts the request for marks into the main model's next prompt, or takes it out. Called whenever what
+ * it says could change — the switch, the voice table, another chat — and once more as each reply
+ * starts, with that reply's kind: a summary or an impersonation is not the story and gets no marks.
+ * True when the request is in.
  */
-function speechEntryTarget(context) {
-  const known = typeof context.getWorldInfoNames === 'function' ? context.getWorldInfoNames() : [];
-  const exists = name => Boolean(name) && (!known.length || known.includes(name));
-  const character = context.groupId === null || context.groupId === undefined ? context.characters?.[Number(context.characterId)] : null;
-  const own = character?.data?.extensions?.world;
-  if (exists(own)) return { name: own, where: 'character' };
-  const chatBook = context.chatMetadata?.world_info;
-  if (exists(chatBook)) return { name: chatBook, where: 'chat' };
-  const base = `镜译说话人标记-${String(character?.name ?? context.name2 ?? '聊天').replace(/[\\/:*?"<>|]/g, '').trim() || '聊天'}`;
-  let name = base;
-  for (let copy = 2; known.includes(name); copy += 1) name = `${base} (${copy})`;
-  return { name, where: 'new' };
-}
-
-/** A constant entry near the end of the prompt, where a format rule is kept to best. */
-function speechEntryTemplate(uid) {
-  return {
-    uid, key: [], keysecondary: [], comment: SPEECH_ENTRY_TITLE, content: '', constant: true, vectorized: false, selective: false,
-    selectiveLogic: 0, addMemo: true, order: 999, position: 4, disable: false, ignoreBudget: true, excludeRecursion: true,
-    preventRecursion: true, matchPersonaDescription: false, matchCharacterDescription: false, matchCharacterPersonality: false,
-    matchCharacterDepthPrompt: false, matchScenario: false, matchCreatorNotes: false, delayUntilRecursion: 0, probability: 100,
-    useProbability: true, depth: 1, outletName: '', group: '', groupOverride: false, groupWeight: 100, scanDepth: null,
-    caseSensitive: null, matchWholeWords: null, useGroupScoring: null, automationId: '', role: 0, sticky: null, cooldown: null,
-    delay: null, triggers: [], displayIndex: uid,
-  };
-}
-
-/**
- * Writes the entry, or rewrites it with the cast as it is now when it is already there: pressing the
- * button again after adding characters is how their names reach the main model.
- */
-async function installSpeechEntry(settings = runtime.settings) {
+function syncSpeechPrompt(type = null) {
   const context = getContext();
-  if (typeof context.loadWorldInfo !== 'function' || typeof context.saveWorldInfo !== 'function') {
-    throw new Error('这个酒馆版本没有给扩展写世界书的接口，没法一键写入。');
-  }
-  const target = speechEntryTarget(context);
-  let data = target.where === 'new' ? null : await context.loadWorldInfo(target.name);
-  if (!data || typeof data !== 'object') data = { entries: {} };
-  if (!data.entries || typeof data.entries !== 'object') data.entries = {};
-  const content = speechEntryContent(settings, context);
-  let entry = Object.values(data.entries).find(item => item?.comment === SPEECH_ENTRY_TITLE);
-  const updated = Boolean(entry);
-  if (!entry) {
-    let uid = 0;
-    while (Object.hasOwn(data.entries, String(uid))) uid += 1;
-    entry = speechEntryTemplate(uid);
-    data.entries[uid] = entry;
-  }
-  Object.assign(entry, { content, comment: SPEECH_ENTRY_TITLE, constant: true, disable: false });
-  await context.saveWorldInfo(target.name, data, true);
-  if (target.where === 'new') {
-    await context.updateWorldInfoList?.();
-    if (context.chatMetadata && typeof context.chatMetadata === 'object') {
-      context.chatMetadata.world_info = target.name;
-      await context.saveMetadata?.();
+  const tts = ttsSettings(runtime.settings);
+  const wanted = tts.enabled && tts.speechMarks;
+  if (typeof context?.setExtensionPrompt !== 'function') {
+    if (wanted && !runtime.speechPromptMissing) {
+      runtime.speechPromptMissing = true;
+      recordDiagnostic('warn', 'tts.speech-prompt', '这个酒馆版本没有给扩展往提示词里加内容的接口，说话人标记要求发不出去。');
     }
+    return false;
   }
-  try { context.reloadWorldInfoEditor?.(target.name); } catch { /* the editor may not be open */ }
-  // A dry scan, so the lore the extension sees includes the entry at once.
-  try { await context.getWorldInfoPrompt?.([''], 8, true); } catch { /* best-effort */ }
-  recordDiagnostic('info', 'tts.speech-entry', `${updated ? '更新' : '写入'}了世界书「${target.name}」里的「${SPEECH_ENTRY_TITLE}」条目。`, {
-    book: target.name, where: target.where, updated, names: speechRoster(settings),
-  }, content);
-  return { ...target, updated, content };
+  const side = typeof type === 'string' && ['quiet', 'impersonate'].includes(type);
+  const content = wanted && !side ? speechPromptContent(runtime.settings, context) : '';
+  context.setExtensionPrompt(SPEECH_PROMPT_KEY, content, SPEECH_PROMPT_IN_CHAT, 0, false, SPEECH_PROMPT_SYSTEM);
+  // Written down when what goes out changes — switched on, a name added, other quotation marks — and
+  // not on every reply.
+  if (content && content !== runtime.speechPromptSent) {
+    recordDiagnostic('info', 'tts.speech-prompt', '说话人标记要求已放进主模型的请求（深度 0，系统消息）。', { names: speechRoster(runtime.settings) }, content);
+  }
+  if (!side) runtime.speechPromptSent = content;
+  return Boolean(content);
+}
+
+function clearSpeechPrompt() {
+  try {
+    getContext()?.setExtensionPrompt?.(SPEECH_PROMPT_KEY, '', SPEECH_PROMPT_IN_CHAT, 0, false, SPEECH_PROMPT_SYSTEM);
+  } catch { /* the host is going away */ }
+  runtime.speechPromptSent = '';
 }
 
 /**
@@ -9641,16 +9629,6 @@ function createControlCenter(rootDocument = document) {
         saveSettings(next);
         renderTtsVoiceList(root, runtime.settings);
         toast('success', `加入 ${added.length} 个角色。它们先跟随对白默认音色，绑定专属音色后就会锁定。`);
-      } else if (action === 'tts-install-speech-entry') {
-        saveSettings(collectSettings(root));
-        const written = await installSpeechEntry(runtime.settings);
-        const where = written.where === 'character'
-          ? `角色卡绑定的世界书「${written.name}」`
-          : written.where === 'chat'
-            ? `这个聊天的世界书「${written.name}」`
-            : `新建的世界书「${written.name}」（已挂到这个聊天上）`;
-        setText(root, '[data-jy-tts-save-note]', `说话人标记条目${written.updated ? '已更新' : '已写入'}：${written.name}`);
-        toast('success', `${written.updated ? '已更新' : '已写入'}${where}里的「${SPEECH_ENTRY_TITLE}」。从下一楼起，主模型写的对白会带上说话人和情绪，不分析也能分角色、带情绪读。角色表加了人再点一次，名单会跟着更新。`);
       } else if (action === 'tts-clear-voices') {
         const next = collectSettings(root);
         const characterKey = ttsVoicesKey(next);
@@ -9974,7 +9952,7 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
       // The feature switch lives on two pages; the one just clicked decides, the other follows.
       if (event.target.matches('[data-jy-tts-field="enabled"]')) {
         for (const twin of root.querySelectorAll('[data-jy-tts-field="enabled"]')) twin.checked = event.target.checked;
@@ -12779,6 +12757,8 @@ function registerRuntimeEvents() {
     scheduleEntries();
     // The speaker palette is per character card, so a different chat may need a different sheet.
     syncSpeakerStylesheet(runtime.settings);
+    // So may the names the request for marks lists, and the quotation marks it asks for.
+    syncSpeechPrompt();
     if (runtime.panel?.controller?.root) {
       refreshCurrentCard(runtime.panel.controller.root);
       // The voice table may be per chat; the page shows the one that belongs to the chat just opened.
@@ -12815,6 +12795,7 @@ function cleanupRuntime() {
   closeControlCenter();
   closeMiniWindow();
   cleanupTts();
+  clearSpeechPrompt();
   if (typeof document !== 'undefined') document.getElementById(SPEAKER_STYLE_ID)?.remove();
   runtime.subscribers.clear();
   runtime.diagnosticSubscribers.clear();
@@ -12823,6 +12804,11 @@ function cleanupRuntime() {
 
 export function interceptGeneration(chat, _contextSize, _abort, type) {
   runtime.interceptorSeen = true;
+  try {
+    syncSpeechPrompt(type);
+  } catch (error) {
+    recordDiagnostic('warn', 'tts.speech-prompt', `说话人标记要求没能放进这次生成：${safeError(error)}`);
+  }
   // The host scans worldinfo AFTER interceptors, using the stripped text, so translated names can
   // never fire entries on their own. Force-activate the entries our translations DO match so the
   // main prompt keeps reacting to translated terms; the one-shot list clears after each scan.
@@ -13299,8 +13285,8 @@ export const __testing = Object.freeze({
   applyTranslationChoice,
   channelUsers,
   editingChannelId,
-  installSpeechEntry,
-  speechEntryContent,
+  syncSpeechPrompt,
+  speechPromptContent,
   ttsTransport: () => runtime.tts.transport,
   // A page reload as the reading sees it: everything held for the session gone, the store kept.
   forgetTtsSession: () => {

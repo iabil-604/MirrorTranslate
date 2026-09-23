@@ -130,11 +130,24 @@ test('native registration is isolated, stable across saves and switches, and rea
   const unrelated = { id: 'user-rule', scriptName: 'User rule', findRegex: 'x', replaceString: 'y', placement: [2] };
   const first = syncNativeRegex([unrelated], cute);
   assert.deepEqual(syncNativeRegex(first, cute), first);
-  // Internal rules sit ahead of everything else: three display rules (boundary cleanup, hidden
-  // replace originals, the story's own speaker marks) and four prompt guards.
+  // Internal rules sit ahead of everything else: display rules (boundary cleanup, hidden replace
+  // originals, the quotation marks inside the story's own speaker marks, the marks themselves) and
+  // four prompt guards.
   const internal = first.filter(rule => rule.jingyi_managed?.internal);
-  assert.equal(internal.length, 7);
+  assert.equal(internal.length, 10);
   const marks = internal.find(rule => rule.id.endsWith(':speech-marks'));
+  const quoteRules = internal.filter(rule => rule.id.includes(':speech-quote-'));
+  assert.equal(quoteRules.length, 3);
+  assert.ok(quoteRules.every(rule => rule.markdownOnly && rule.promptOnly), 'mended where the floor is drawn and where the main model reads it, never in the saved floor');
+  assert.ok(internal.indexOf(quoteRules.at(-1)) < internal.indexOf(marks), 'mended while the marks still say where the line ends');
+  const mend = text => quoteRules.reduce((value, rule) => value.replace(compileNativeRegex(rule.findRegex), rule.replaceString), text);
+  assert.equal(mend('<say who="樱井" mood="开心">「好。"</say>'), '<say who="樱井" mood="开心">「好。」</say>');
+  assert.equal(mend('<say who="樱井">「好。</say>'), '<say who="樱井">「好。」</say>', 'never closed');
+  assert.equal(mend('<say who="樱井">“好。"</say>'), '<say who="樱井">“好。”</say>');
+  assert.equal(mend('<say who="樱井">『好。”</say>'), '<say who="樱井">『好。』</say>');
+  assert.equal(mend('<say who="樱井">「好。」</say>他说。'), '<say who="樱井">「好。」</say>他说。', 'a pair already right is left as it is');
+  assert.equal(mend('<say who="樱井">「他说“好”</say>'), '<say who="樱井">「他说“好”</say>', 'a quotation inside it is not guessed at');
+  assert.equal(mend('「好。"他说。'), '「好。"他说。', 'nothing outside a mark is touched');
   assert.equal(marks.markdownOnly, true, 'the marks are hidden where the floor is drawn');
   assert.equal(marks.promptOnly, false, 'and kept in what the main model reads, so it keeps writing them');
   assert.equal('樱井笑了。<say who="樱井" mood="开心">「好。」</say><saying>留着</saying>'.replace(compileNativeRegex(marks.findRegex), ''), '樱井笑了。「好。」<saying>留着</saying>');
@@ -160,7 +173,9 @@ test('built-in styles preserve extraction settings and use display-only native r
     let display = assembleBilingual(segmentSource('Original.').layout, new Map([[1, '译文。']]), settings);
     assert.equal(stripGeneratedTranslationLines(display), 'Original.');
     for (const rule of syncNativeRegex([], profile)) {
-      // Prompt guards never touch the rendered floor; display rules never touch the prompt.
+      // Prompt guards never touch the rendered floor; display rules never touch the prompt. The one
+      // exception is mending the quotation marks inside a speaker mark, which is done in both.
+      if (rule.id.includes(':speech-quote-')) { assert.equal(rule.markdownOnly && rule.promptOnly, true); continue; }
       if (rule.promptOnly) { assert.equal(rule.markdownOnly, false); continue; }
       assert.equal(rule.markdownOnly, true); assert.equal(rule.promptOnly, false);
       display = display.replace(compileNativeRegex(rule.findRegex), rule.replaceString);

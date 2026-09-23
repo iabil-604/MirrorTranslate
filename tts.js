@@ -13,9 +13,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.32.4';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.32.4';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.32.4';
+} from './core.js?v=0.33.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.33.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.33.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -370,12 +370,12 @@ export function labelsFromAnnotations(utterances, annotations) {
 // ---------------------------------------------------------------------------------------------
 // Speaker marks the story wrote itself — <say who="樱井" mood="开心">「……」</say> — read on this side.
 //
-// The main model is asked, through a worldbook entry, to wrap each line of dialogue that way. The
+// The main model is asked, with each reply it writes, to wrap each line of dialogue that way. The
 // author of the floor knows who says what better than anyone reading it afterwards, so a mark is
 // taken as the text saying so outright: no request, no guess.
 // ---------------------------------------------------------------------------------------------
 
-// The moods the worldbook entry offers, in the words the main model writes, each with Fish's word.
+// The moods the request for marks offers, in the words the main model writes, each with Fish's word.
 export const SPEECH_MOODS = Object.freeze([
   ['平静', 'calm'], ['开心', 'happy'], ['兴奋', 'excited'], ['温柔', 'tender'], ['害羞', 'shy'], ['撒娇', 'playful'],
   ['得意', 'proud'], ['调侃', 'playful'], ['好奇', 'curious'], ['感动', 'moved'], ['难过', 'sad'], ['委屈', 'upset'],
@@ -421,10 +421,51 @@ export function speechMood(value) {
   return { emotion, tone };
 }
 
+// What a model closes a quotation with when it has lost track of the one it opened, and the pairs
+// those marks belong to, for telling a wrong closer from one that ends a quotation inside the line.
+const STRAY_QUOTE_TAILS = Object.freeze(['"', '”', '“', '」', '』']);
+const KNOWN_QUOTE_PAIRS = Object.freeze([
+  { open: '「', close: '」' }, { open: '『', close: '』' }, { open: '“', close: '”' }, { open: '"', close: '"' },
+]);
+
+/**
+ * A mark encloses one line of dialogue, so the quotation marks inside it belong together. When the
+ * model opened with one mark and closed with another — 「……" — or never closed at all, the line gets
+ * its own closer back; left alone, the opener finds no partner and the line is read as narration, in
+ * the narrator's voice and without its mark. Where to cut and what to put there, or null.
+ */
+function mendSpeechQuote(inner, pairs) {
+  const lead = inner.length - inner.trimStart().length;
+  const body = inner.trim();
+  const head = [...pairs].sort((left, right) => right.open.length - left.open.length).find(pair => body.startsWith(pair.open));
+  if (!head || body.length <= head.open.length) return null;
+  const middle = body.slice(head.open.length);
+  if (middle.endsWith(head.close)) return null;
+  const end = lead + body.length;
+  const tails = [...new Set([...pairs.map(pair => pair.close), ...STRAY_QUOTE_TAILS])]
+    .filter(mark => mark && mark !== head.close)
+    .sort((left, right) => right.length - left.length);
+  const tail = tails.find(mark => middle.endsWith(mark));
+  if (tail) {
+    const inside = middle.slice(0, -tail.length);
+    // Unless it closes a quotation opened inside the line — 「他说“好”— which leaves the line itself open.
+    const nested = [...pairs, ...KNOWN_QUOTE_PAIRS].some(pair => pair.open !== head.open && pair.close === tail && (pair.open === pair.close
+      ? (inside.split(pair.open).length - 1) % 2 === 1
+      : inside.includes(pair.open)));
+    if (!nested) return { at: end - tail.length, removed: tail.length, added: head.close };
+  }
+  // Its own closer somewhere inside: the mark holds more than one quotation, and nothing is guessed.
+  if (middle.includes(head.close)) return null;
+  return { at: end, removed: 0, added: head.close };
+}
+
 /**
  * One marked line as the reading takes it: the words, cleaned the way every line is, and where each
  * mark's run starts and ends in them. `marked` is what core's speechMarkedLine left: the text with
  * markers where the tags stood, and what each tag said.
+ *
+ * A mark whose quotation was closed with the wrong mark, or not at all, is closed with its own; see
+ * mendSpeechQuote.
  *
  * A mark that encloses words with no quotation marks round them — the model wrapped the dialogue but
  * left the quotes off — gets the first configured pair put round those words, so the run is dialogue
@@ -466,6 +507,18 @@ export function readSpeechLine(marked, { quotePairs = DEFAULT_QUOTE_PAIRS } = {}
     if (span.end !== null) span.end = Math.min(span.end, text.length);
   }
   const pairs = pairsOf(quotePairs, DEFAULT_QUOTE_PAIRS);
+  for (const span of [...spans].sort((left, right) => right.start - left.start)) {
+    if (span.end === null || span.end <= span.start) continue;
+    const mend = mendSpeechQuote(text.slice(span.start, span.end), pairs);
+    if (!mend) continue;
+    const cut = span.start + mend.at;
+    const delta = mend.added.length - mend.removed;
+    text = `${text.slice(0, cut)}${mend.added}${text.slice(cut + mend.removed)}`;
+    for (const other of spans) {
+      if (other !== span && other.start >= cut + mend.removed) other.start += delta;
+      if (other.end !== null && other.end >= cut + mend.removed) other.end += delta;
+    }
+  }
   const first = pairs[0];
   if (first) {
     for (const span of [...spans].sort((left, right) => right.start - left.start)) {

@@ -145,6 +145,23 @@ test('the translator is never handed the request for marks, nor the marks: it co
   assert.deepEqual(chunks, ['樱井是女仆长。'], 'the entry sits at a depth of its own and drops out of the worldbook sent along');
 });
 
+test('a quotation closed with the wrong mark, or never closed, is closed with its own and read as the line it is', () => {
+  const wrong = readLine('<say who="樱井" mood="开心">「回来啦？"</say>她笑着问。');
+  assert.equal(wrong.read.text, '「回来啦？」她笑着问。');
+  assert.deepEqual(wrong.utterances.map(item => item.kind), ['quoted', 'narration'], 'dialogue, not narration in the narrator\'s voice');
+  assert.deepEqual(wrong.reading.labels.get(1), { type: 'dialogue', speaker: '樱井', emotion: 'happy', speakerSource: 'tag' });
+
+  const open = readLine('<say who="泰罗">「等一下</say>他喊。<say who="樱井">「不等。」</say>');
+  assert.equal(open.read.text, '「等一下」他喊。「不等。」');
+  assert.deepEqual([...open.reading.labels.values()].map(label => label.speaker), ['泰罗', '樱井'], 'the mark after it still lands on its own line');
+
+  assert.equal(readLine('<say who="樱井">“好的"</say>').read.text, '“好的”');
+  assert.equal(readLine('<say who="樱井">「他说“好”</say>').read.text, '「他说“好”」', 'the quotation inside is its own; the line is what was left open');
+  assert.equal(readLine('<say who="樱井">「他说"好"</say>').read.text, '「他说"好"」');
+  assert.equal(readLine('<say who="樱井">「好。」</say>').read.text, '「好。」', 'a pair already right is left as it is');
+  assert.equal(readLine('<say who="樱井">「一。」他说。「二。</say>').read.text, '「一。」他说。「二。', 'a mark holding more than one quotation is not guessed at');
+});
+
 test('marks read onto the right runs even when a line holds narration between them', () => {
   const lines = [{ lineId: 7, text: '「一。」他说。「二。」', speech: [{ start: 0, end: 4, speaker: '甲', mood: '' }, { start: 7, end: null, speaker: '乙', mood: '' }] }];
   const utterances = splitUtterances(lines);

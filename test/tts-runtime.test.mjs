@@ -9,8 +9,9 @@ import {
   mergeSettings,
   normalizeChannel,
   segmentSource,
+  withoutSpeechMarks,
 } from '../core.js';
-import { __testing } from '../index.js';
+import { __testing, interceptGeneration } from '../index.js';
 
 // One answer in one SSE frame: how the host's generate endpoint replies to a streamed request.
 function sseAnswer(text) {
@@ -2105,55 +2106,52 @@ test('reading the translation of a marked floor: the original\'s marks carry ove
   assert.deepEqual([segments[0].text, segments[0].speaker, segments[0].speakerSource, segments[0].emotion], ['……谢谢你。', '樱井', 'tag', 'shy']);
 });
 
-test('the speaker-mark entry goes into the card\'s own book, is rewritten in place, and a chat with no book gets one of its own', async t => {
+test('with the switch on, every reply asks for speaker marks at depth 0 as the system, in the story\'s own quotation marks', async t => {
   restoreGlobals(t);
-  const { context } = mockHost('tts-say-entry');
-  const books = new Map([['泰罗的书', { entries: { 0: { uid: 0, comment: '泰罗', content: '怕热。', key: ['泰罗'] } } }]]);
-  let metadataSaves = 0;
-  Object.assign(context, {
-    getWorldInfoNames: () => [...books.keys()],
-    loadWorldInfo: async name => (books.has(name) ? structuredClone(books.get(name)) : null),
-    saveWorldInfo: async (name, data) => { books.set(name, structuredClone(data)); },
-    updateWorldInfoList: async () => {},
-    chatMetadata: {},
-    saveMetadata: async () => { metadataSaves += 1; },
+  const { context } = mockHost('tts-say-prompt');
+  const prompts = new Map();
+  context.setExtensionPrompt = (key, value, position, depth, scan, role) => prompts.set(key, { value, position, depth, scan, role });
+  const sent = () => [...prompts.values()].find(item => item.value) ?? null;
+  __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', speechMarks: true, fish: FISH }, ttsVoices: { 'taro.png': [{ name: '泰罗' }, { name: '樱井' }] } },
   });
-  context.characters[0].data = { extensions: { world: '泰罗的书' } };
-  const settings = __testing.configureForTest({
-    settings: { tts: { enabled: true, mode: 'off', fish: FISH }, ttsVoices: { 'taro.png': [{ name: '泰罗' }, { name: '樱井' }] } },
-  });
-  const first = await __testing.installSpeechEntry(settings);
-  assert.deepEqual([first.where, first.name, first.updated], ['character', '泰罗的书', false]);
-  const entries = () => Object.values(books.get('泰罗的书').entries);
-  assert.equal(entries().length, 2, 'the entry sits beside what the book already had');
-  const entry = entries().find(item => item.comment === '镜译 · 说话人与情绪标记');
-  assert.equal(entry.constant, true);
-  assert.equal(entry.disable, false);
-  assert.equal(entry.uid, 1);
-  assert.match(entry.content, /<say who="说话人" mood="情绪">「台词」<\/say>/);
-  assert.match(entry.content, /泰罗、樱井/, 'the names the voices are registered under');
-  assert.doesNotMatch(entry.content, /玩家/, 'the reader is not on the list');
-  // Whatever the entry offers as a mood is a mood the reading understands.
-  const offered = entry.content.match(/mood 从这些词里选一个最贴切的：([^。]+)。/)[1].split('、');
+  assert.equal(__testing.syncSpeechPrompt(), true);
+  const request = sent();
+  assert.deepEqual([request.position, request.depth, request.scan, request.role], [1, 0, false, 0], 'in the chat, after the last message, as the system');
+  assert.match(request.value, /<say who="说话人" mood="情绪">「台词」<\/say>/);
+  assert.match(request.value, /以 「 开头、以 」 结尾，」 后面紧跟 <\/say>/, 'the quotation marks are a pair, and the closer is named');
+  assert.match(request.value, /英文双引号 " 只属于标签/, 'the " of the attributes is not a closing quotation mark');
+  assert.match(request.value, /每个 <\/say> 前面紧挨着的都是 」/);
+  assert.match(request.value, /泰罗、樱井/, 'the names the voices are registered under');
+  assert.doesNotMatch(request.value, /玩家/, 'the reader is not on the list');
+  // Whatever the request offers as a mood is a mood the reading understands.
+  const offered = request.value.match(/mood 从这些词里选一个最贴切的：([^。]+)。/)[1].split('、');
   assert.ok(offered.length > 10);
+  assert.equal(withoutSpeechMarks(`甲\n${request.value}\n乙`), '甲\n乙', 'quoted back anywhere, the request drops out whole');
 
-  // Pressed again after a character was added: the same entry, with the new name.
-  __testing.configureForTest({ settings: { ttsVoices: { 'taro.png': [{ name: '泰罗' }, { name: '樱井' }, { name: '小林' }] } } });
-  const again = await __testing.installSpeechEntry(runtime());
-  assert.equal(again.updated, true);
-  assert.equal(entries().filter(item => item.comment === '镜译 · 说话人与情绪标记').length, 1, 'rewritten, not added twice');
-  assert.match(entries().find(item => item.comment === '镜译 · 说话人与情绪标记').content, /小林/);
+  // A summary or an impersonation is not the story; the next real reply asks again.
+  interceptGeneration([], 0, () => {}, 'quiet');
+  assert.equal(sent(), null);
+  interceptGeneration([], 0, () => {}, 'normal');
+  assert.ok(sent());
 
-  // A card with no book in a chat with none: a book of its own, hung on this chat and nothing else.
-  delete context.characters[0].data;
-  const fresh = await __testing.installSpeechEntry(runtime());
-  assert.equal(fresh.where, 'new');
-  assert.ok(books.has(fresh.name));
-  assert.equal(context.chatMetadata.world_info, fresh.name);
-  assert.equal(metadataSaves, 1);
-  // The example quotes the way the story does.
-  context.chat.push({ mes: '<story_scene>“早。”她说。“今天也很热。”</story_scene>', swipe_id: 0, extra: {} });
-  assert.match(__testing.speechEntryContent(runtime(), context), /<say who="说话人" mood="情绪">“台词”<\/say>/);
+  // The story quotes with “”. The marks' own " and a styled span do not count as the story's quotation marks.
+  context.chat.push({ mes: '<story_scene><say who="泰罗" mood="开心">“早。”</say>她说。<say who="泰罗" mood="平静">“今天也很热。”</say><span style="color:red">热</span></story_scene>', swipe_id: 0, extra: {} });
+  __testing.syncSpeechPrompt();
+  assert.match(sent().value, /<say who="说话人" mood="情绪">“台词”<\/say>/);
+  // A story that quotes with " itself is not told that " is not a quotation mark.
+  context.chat.push({ mes: '"Morning." "Hot again." "Yes."', swipe_id: 0, extra: {} });
+  __testing.syncSpeechPrompt();
+  assert.match(sent().value, /<say who="说话人" mood="情绪">"台词"<\/say>/);
+  assert.doesNotMatch(sent().value, /只属于标签/);
+
+  // Off, or reading aloud off: nothing goes out.
+  __testing.configureForTest({ settings: { tts: { enabled: true, mode: 'off', speechMarks: false, fish: FISH } } });
+  assert.equal(__testing.syncSpeechPrompt(), false);
+  assert.equal(sent(), null);
+  __testing.configureForTest({ settings: { tts: { enabled: false, mode: 'off', speechMarks: true, fish: FISH } } });
+  assert.equal(__testing.syncSpeechPrompt(), false);
+  assert.equal(sent(), null);
 });
 
 

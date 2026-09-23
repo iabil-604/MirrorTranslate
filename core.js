@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.32.4';
+} from './prompts.js?v=0.33.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.32.4';
+export const APP_VERSION = '0.33.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -577,6 +577,9 @@ export const DEFAULT_TTS = Object.freeze({
   dialogueVoice: '',
   dialogueTitle: '',
   dialogueFallback: 'default',
+  // Every reply the main model writes goes out asking it to mark each line of dialogue with who says
+  // it and how; the plain reading then tells the voices apart from the text alone.
+  speechMarks: false,
   fish: DEFAULT_FISH,
 });
 
@@ -1154,6 +1157,7 @@ export function normalizeTts(value) {
     narratorVoices: normalizeLanguageVoices(source.narratorVoices),
     dialogueVoice: normalizeVoiceId(source.dialogueVoice),
     dialogueFallback: TTS_DIALOGUE_FALLBACKS.includes(source.dialogueFallback) ? source.dialogueFallback : DEFAULT_TTS.dialogueFallback,
+    speechMarks: source.speechMarks === true,
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     fish: normalizeFishSettings(source.fish),
   };
@@ -1927,15 +1931,16 @@ function stripStructuralTags(value, structuralTags) {
 // ---------------------------------------------------------------------------------------------
 // Speaker marks written into the story itself: <say who="樱井" mood="开心">「……」</say>.
 //
-// The main model is asked, through a worldbook entry, to wrap each line of dialogue this way. Like any
+// The main model is asked, with each reply it writes, to wrap each line of dialogue this way. Like any
 // other tag it is stripped from what the translator is sent and hidden when the floor is shown; unlike
 // the others, what it says is kept for the reading. The tag is swapped for private-use markers that
 // survive every clean-up a line goes through on its way to the voice, and the reading turns them back
 // into who said which run and how. The translation's text is never touched by any of this.
 // ---------------------------------------------------------------------------------------------
 
-// The first line of the worldbook entry that asks for the marks, so the requests that quote the
-// worldbook back — the translator's, the deep reading's — can leave that request out.
+// The first line of the request for marks. The request goes out with the main model's replies; an
+// older setup kept it in a worldbook entry, and the requests that quote the worldbook back — the
+// translator's, the deep reading's — leave such an entry out by this line.
 export const SPEECH_ENTRY_HEAD = '[对白标记：给朗读程序看的，读者看不到]';
 export const SPEECH_OPEN = '\uE0A1';
 export const SPEECH_SEP = '\uE0A2';

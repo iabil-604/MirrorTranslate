@@ -1,7 +1,7 @@
 import {
   DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END,
   deepClone, mergeSettings, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors,
-} from './core.js?v=0.32.4';
+} from './core.js?v=0.33.0';
 
 export const PROCESSING_FIELDS = Object.freeze([
   'bodyTags', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
@@ -169,8 +169,27 @@ export function syncNativeRegex(existing, profile) {
     replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
     runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
     [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
-  }, speechMarkRule(), ...PROMPT_GUARD_RULES);
+  }, ...speechQuoteRules(), speechMarkRule(), ...PROMPT_GUARD_RULES);
   return kept;
+}
+
+// A mark encloses one line of dialogue, so the quotation marks inside it belong together. A model that
+// opens with 「 and closes with the " it has just been writing in who="" and mood="" leaves 「台词" on
+// the floor. Mended where the floor is drawn and where the main model reads its own past replies, so
+// it is neither shown nor copied; the floor as saved is not touched. Only the plain case, a quotation
+// with nothing else quoted inside it, on one line. These run before the marks are hidden, while the
+// marks still say where the line ends. The reading mends its own copy (tts.js mendSpeechQuote).
+const SPEECH_QUOTE_PAIRS = Object.freeze([['「', '」'], ['『', '』'], ['“', '”']]);
+function speechQuoteRules() {
+  return SPEECH_QUOTE_PAIRS.map(([open, close]) => ({
+    id: `${MODULE_ID}:speech-quote-${close.codePointAt(0).toString(16)}`,
+    scriptName: `镜译 · 说话人标记引号配对 ${open}${close}`,
+    findRegex: `/(<say(?=[\\s/>])[^<>]*>\\s*${open})([^「」『』“”"<\\n]*?)[${[...'」』”"“'].filter(mark => mark !== close).join('')}]?(\\s*<\\/say>)/g`,
+    replaceString: `$1$2${close}$3`,
+    trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: true,
+    runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
+    [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
+  }));
 }
 
 // The story's own speaker marks, <say who="…" mood="…">…</say>: the reading reads them, the reader never
