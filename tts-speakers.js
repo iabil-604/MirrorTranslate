@@ -1,4 +1,4 @@
-import { isPlaceholderSpeaker, unifySpeakerNames } from './core.js?v=0.35.0-beta.4';
+import { isPlaceholderSpeaker, unifySpeakerNames } from './core.js?v=0.35.0-beta.5';
 
 // ---------------------------------------------------------------------------------------------
 // Who is speaking, read off the text itself.
