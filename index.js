@@ -160,6 +160,7 @@ import {
   promptOptionLabel,
 } from './prompts.js?v=0.34.0';
 import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.34.0';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.34.0';
 import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.34.0';
 import {
   DEFAULT_MIN_CONTRAST,
@@ -288,6 +289,13 @@ const runtime = {
     // read that way, so the passes after a translation lands do not read them again.
     fresh: new Set(),
     autoRead: new Set(),
+    // 边写边读: the reading of text still being written, the floors read that way, and the generation
+    // they belong to (when it started, so the log can say how long the first word took).
+    stream: null,
+    streamed: new Set(),
+    generationId: 0,
+    generationStartedAt: null,
+    streamRefused: -1,
     // messageId → the mes last decorated, so a redraw with the same text costs one string compare.
     mesSeen: new Map(),
     viewer: null,
@@ -426,8 +434,8 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-form-grid jy-form-grid-tight"><label title="简单分析、「分析这一楼」、按意见改、从角色卡和世界书识别角色，都走这条。和翻译用哪条互不相干。"><span class="jy-label">朗读分析用的连接</span><select data-jy-tts-field="analysisChannelId"><option value="follow">跟随酒馆（酒馆当前的连接和模型）</option></select></label></div>
 <p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译在「翻译台」选，朗读在这里选，深度分析还能在「05 深度分析」里再单挑一条。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）存在「模型连接」页——那一页只是个架子，在那里点开哪条都不改变这里的选择。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label></div>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoRead">新回复自动朗读（只读最新一楼，写完才读；正在读别的楼时只提醒、不打断）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">点播放后，做完直接播（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
-<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读」时才请求，整楼一次，走上面选的朗读分析连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoRead">新回复自动朗读（只读最新一楼，写完才读；正在读别的楼时只提醒、不打断）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="readWhileWriting">边写边读（主模型一边写，一边一句一句读出来；读模型写出的原文，不等翻译）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">点播放后，做完直接播（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
+<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读」时才请求，整楼一次，走上面选的朗读分析连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。勾了「边写边读」，主模型一边写，镜译一边按句请求 Fish、按顺序读出来：读的是模型写出的原文，不等翻译，需要酒馆开着流式输出；运行记录里每一楼会记下首字、首句、出声各用了多久。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
 <label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label>
@@ -467,6 +475,14 @@ const CONTROL_CENTER_MARKUP = `
 <p class="jy-muted">「单次分析最长等待」是硬上限：到点就停，这一楼先按现有标注读，不会一直等下去。思考型模型嫌慢的话，把那条连接的「推理强度」调低比调大这个数更有用。</p>
 <p class="jy-muted">简单分析用的连接在「01 读什么」里选；这里只管深度分析，可以换一个更会读人的模型，不选就和简单分析同一条。</p>
 <div class="jy-behaviors"><span class="jy-label">深度分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
+</div></details>
+<details class="jy-form-section jy-fold" data-jy-fold="tts-call"><summary class="jy-section-title"><span>06</span><h2>实时通话（测试版）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
+<p class="jy-muted">给小手机这类插件打电话用的接口：边写边读（tts.stream）、语音输入（stt）、流式请求模型（llm.stream），都挂在 <code>window.__JINGYI__</code> 上。镜译自己不做通话界面，插件接上这三个就能边说边听。这一栏只在测试版里有。</p>
+<div class="jy-form-grid jy-form-grid-tight"><label title="插件用 llm.stream 请求模型时走这条。选「模型连接」页里存的连接才能一边写一边读；跟随酒馆时要等整段回复写完。"><span class="jy-label">通话用的连接</span><select data-jy-tts-field="callChannelId"><option value="">和朗读分析用同一条</option></select></label><label><span class="jy-label">语音输入</span><select data-jy-tts-field="sttProvider"><option value="cloud">按住说话，云端转写</option><option value="browser">浏览器自带识别</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight" data-jy-stt-cloud><label><span class="jy-label">转写服务</span><select data-jy-tts-field="sttPreset"><option value="siliconflow">SiliconFlow · SenseVoiceSmall（免费）</option><option value="groq">Groq · whisper-large-v3-turbo</option><option value="openai">OpenAI · gpt-4o-mini-transcribe</option><option value="custom">自定义（OpenAI 兼容）</option></select></label><label><span class="jy-label">转写地址</span><input type="text" data-jy-tts-field="sttUrl" spellcheck="false"></label><label><span class="jy-label">转写 Key</span><input type="password" data-jy-tts-field="sttApiKey" spellcheck="false" autocomplete="off"></label><label><span class="jy-label">转写模型</span><input type="text" data-jy-tts-field="sttModel" spellcheck="false"></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">识别语言</span><input type="text" data-jy-tts-field="sttLang" placeholder="zh / ja / en" spellcheck="false"></label></div>
+<div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="stt-test">试一下语音输入</button><span class="jy-muted" data-jy-stt-test-note></span></div>
+<p class="jy-muted">麦克风只能在 https 或本机地址（localhost、127.0.0.1）下打开：手机用 Termux 在本机开酒馆没问题，用局域网地址 http://192.168… 打开时浏览器不给麦克风。浏览器自带识别不用 Key，但只在电脑版 Chrome / Edge 上稳定，声音会交给浏览器厂商的服务转写。</p>
 </div></details>
 <details class="jy-advanced" open><summary>默认调音台（没单独调过的角色和旁白都用这套）</summary>
 <p class="jy-muted">每一项五档，停在哪一档就把哪一句话交给副模型。中间那档是「AI 判断」——这一项不写任何规则，由分析模型按剧情自己定，也是默认值。往两边走才会变成硬性要求，比如「呼吸感明显」「声音克制」。数字本身不发给任何模型。每个角色还能在音色那栏单独调；最下面的自定义规则永远原样交给副模型，那才是最细的一层。</p>
@@ -4616,6 +4632,8 @@ async function createTtsTransport(messageId, { single = false, paragraph = false
   const settings = runtime.settings;
   const tts = ttsSettings(settings);
   requireClosedFloor(messageId);
+  // One thing sounds at a time: a reading of text still being written gives way to this one.
+  if (runtime.tts.stream && !runtime.tts.stream.done) runtime.tts.stream.cancel();
   // A floor the simple reading has not seen asks first; a cancelled question is no reading at all.
   const asked = await collectTtsFloor(messageId, settings, side ?? primaryTtsSide(settings));
   if (asked && (await askTtsAnalysis(asked, settings)) === 'cancel') return null;
@@ -5008,6 +5026,9 @@ function stopTtsTransport(transport, clearStatus = true) {
 }
 
 function stopTts(messageId = null) {
+  // A reading of text still being written, on this floor or anywhere when no floor is named.
+  const stream = runtime.tts.stream;
+  if (stream && !stream.done && (messageId === null || stream.messageId === Number(messageId))) stream.cancel();
   // Whatever was about to be read for this floor is called off with it.
   for (const [id, timer] of runtime.tts.closing) {
     if (messageId !== null && id !== Number(messageId)) continue;
@@ -5395,11 +5416,13 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
     // text is final. The reading makes its own audio as it goes, so that side is not made beforehand.
     const primary = reads[0];
     const primaryReady = primary === 'source' || translated || carries || !translating;
-    const autoRead = current.autoRead && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy);
+    // Read while it was written: the original has been heard, and is not analysed, made or read again.
+    const streamed = runtime.tts.streamed.has(id);
+    const autoRead = current.autoRead && !streamed && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy);
     if (autoRead || !current.autoRead) runtime.tts.fresh.delete(id);
     try {
       // The side read aloud is analysed by the reading itself, as it prepares.
-      if (readable && !(autoRead && side === primary) && (current.mode === 'deep' || (current.mode === 'simple' && !translating))) await analyseTtsFloorNow(id, side, current.mode);
+      if (readable && !(autoRead && side === primary) && !(streamed && side === 'source') && (current.mode === 'deep' || (current.mode === 'simple' && !translating))) await analyseTtsFloorNow(id, side, current.mode);
       if (autoRead) void autoReadTtsFloor(id, primary);
       if (current.autoGenerate) {
         let made = 0;
@@ -5407,6 +5430,7 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
           // The translation's own side is made once the translation is there to read.
           if (each === 'translation' && (translating || busy)) continue;
           if (autoRead && each === primary) continue;
+          if (streamed && each === 'source') continue;
           made += (await pregenerateTtsFloor(id, { quiet: true, side: each, once: true })) ?? 0;
         }
         // Made in the background with nobody listening: say so, the way a floor made on request does.
@@ -6684,6 +6708,13 @@ function bindTtsDom() {
       const side = target.dataset.jyTtsSide || null;
       if (action === 'stop') stopTts(messageId);
       else if (action === 'pause') toggleTtsPause();
+      else if (action === 'play-floor' && runtime.tts.stream && !runtime.tts.stream.done && runtime.tts.stream.messageId === messageId) {
+        // Read while it is written: pause, carry on, or stop it while it is still getting ready.
+        const stream = runtime.tts.stream;
+        if (stream.state === 'paused') stream.resume();
+        else if (stream.state === 'speaking') stream.pause();
+        else stream.cancel();
+      }
       else if (action === 'play-floor') {
         const transport = runtime.tts.transport;
         const here = transport?.messageId === messageId && (!side || transport.side === side);
@@ -8436,6 +8467,10 @@ function syncTtsFields(root, settings = runtime.settings) {
   if (analysisSelect) fillChannelPicker(analysisSelect, settings, analysisChoice);
   const deepSelect = root.querySelector('[data-jy-tts-field="deepChannelId"]');
   if (deepSelect) fillChannelPicker(deepSelect, settings, tts.deepChannelId || '', { lead: { value: '', text: `和朗读分析用同一条：${channelLabel(settings, analysisChoice, { short: true })}` } });
+  const callSelect = root.querySelector('[data-jy-tts-field="callChannelId"]');
+  if (callSelect) fillChannelPicker(callSelect, settings, tts.callChannelId || '', { lead: { value: '', text: `和朗读分析用同一条：${channelLabel(settings, analysisChoice, { short: true })}` } });
+  const cloud = root.querySelector('[data-jy-stt-cloud]');
+  if (cloud) cloud.hidden = tts.sttProvider !== 'cloud';
   setText(root, '[data-jy-tts-title="narrator"]', tts.narratorTitle ? `· ${tts.narratorTitle}` : '');
   setText(root, '[data-jy-tts-title="dialogue"]', tts.dialogueTitle ? `· ${tts.dialogueTitle}` : '');
   syncTtsPickers(root, settings);
@@ -9799,6 +9834,23 @@ function createControlCenter(rootDocument = document) {
         saveSettings(next);
         renderTtsVoiceList(root, runtime.settings);
         toast('success', `加入 ${added.length} 个角色。它们先跟随对白默认音色，绑定专属音色后就会锁定。`);
+      } else if (action === 'stt-test') {
+        saveSettings(collectSettings(root));
+        const note = root.querySelector('[data-jy-stt-test-note]');
+        if (runtime.sttTest) {
+          const listening = runtime.sttTest;
+          runtime.sttTest = null;
+          button.textContent = '试一下语音输入';
+          if (note) note.textContent = '正在转写…';
+          const started = Date.now();
+          const heard = await listening.stop();
+          if (note) note.textContent = heard ? `听到：「${heard}」（${((Date.now() - started) / 1000).toFixed(1)} 秒）` : '没听清，再试一次。';
+        } else {
+          if (note) note.textContent = '正在打开麦克风…';
+          runtime.sttTest = await startSpeechInput({ onPartial: text => { if (note) note.textContent = `正在听：${text}`; } });
+          button.textContent = '说完了，点这里结束';
+          if (note) note.textContent = '正在听，说完点一下按钮。';
+        }
       } else if (action === 'tts-clear-voices') {
         const next = collectSettings(root);
         const characterKey = ttsVoicesKey(next);
@@ -10122,7 +10174,16 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="readWhileWriting"], [data-jy-tts-field="callChannelId"], [data-jy-tts-field="sttProvider"], [data-jy-tts-field="sttPreset"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+      if (event.target.matches('[data-jy-tts-field="sttPreset"]')) {
+        const preset = STT_PRESETS[event.target.value];
+        if (preset) {
+          const url = root.querySelector('[data-jy-tts-field="sttUrl"]');
+          const model = root.querySelector('[data-jy-tts-field="sttModel"]');
+          if (url) url.value = preset.url;
+          if (model) model.value = preset.model;
+        }
+      }
       // The feature switch lives on two pages; the one just clicked decides, the other follows.
       if (event.target.matches('[data-jy-tts-field="enabled"]')) {
         for (const twin of root.querySelectorAll('[data-jy-tts-field="enabled"]')) twin.checked = event.target.checked;
@@ -11214,7 +11275,8 @@ async function openMiniWindow() {
     const brief = win.querySelector('[data-jy-mini-brief]');
     if (!brief) return;
     const reading = ttsTransportDescription(runtime.tts.transport);
-    const live = Boolean(reading && ['loading', 'playing', 'paused'].includes(reading.state));
+    const streaming = Boolean(runtime.tts.stream && !runtime.tts.stream.done);
+    const live = streaming || Boolean(reading && ['loading', 'playing', 'paused'].includes(reading.state));
     const toggle = brief.querySelector('[data-jy-action="tts-toggle"]');
     if (toggle) toggle.hidden = !live;
     const stop = brief.querySelector('[data-jy-brief-stop]');
@@ -11830,6 +11892,20 @@ async function openMiniWindow() {
     const message = win.querySelector('[data-jy-tts-message]');
     const toggles = [...win.querySelectorAll('[data-jy-action="tts-toggle"]')];
     const stepButtons = [win.querySelector('[data-jy-action="tts-prev"]'), win.querySelector('[data-jy-action="tts-next"]')];
+    const stream = runtime.tts.stream && !runtime.tts.stream.done ? runtime.tts.stream : null;
+    if (!info && stream) {
+      // Read while it is written: no transport, but something is sounding and can be paused or stopped.
+      if (title) putText(title, '边写边读');
+      if (floorLabel) putText(floorLabel, Number.isInteger(stream.messageId) ? `第 ${stream.messageId} 楼` : '外部接口');
+      if (message) putText(message, stream.state === 'buffering' ? '等第一句写完…' : stream.state === 'paused' ? '已暂停' : '一句写完读一句');
+      for (const toggle of toggles) {
+        putText(toggle, stream.state === 'speaking' ? '❚❚' : '▶');
+        if (toggle.dataset.state !== stream.state) toggle.dataset.state = stream.state;
+      }
+      for (const button of stepButtons) if (button) button.disabled = true;
+      renderBriefActions();
+      return;
+    }
     if (!info) {
       if (title) putText(title, '没有在读');
       if (floorLabel) putText(floorLabel, Number.isInteger(viewFloor) ? `第 ${viewFloor} 楼` : '—');
@@ -12505,7 +12581,12 @@ async function openMiniWindow() {
     if (action === 'tts-toggle') {
       // ▶ acts on what the player shows: the reading of this floor if there is one, else this floor.
       const target = readingTarget();
+      const stream = runtime.tts.stream && !runtime.tts.stream.done ? runtime.tts.stream : null;
       if (target.transport) toggleTtsPause();
+      else if (stream) {
+        if (stream.state === 'paused') stream.resume();
+        else stream.pause();
+      }
       else if (inspecting?.pinned) void playTtsUtterance(inspecting.messageId, inspecting.utteranceId, inspecting.side);
       else {
         const messageId = target.messageId ?? latestAssistantMessageId(getContext());
@@ -12979,6 +13060,8 @@ function registerRuntimeEvents() {
     noteUntranslatedRender(Number(messageId), type, pending);
   });
   bindEvent(eventTypes.GENERATION_STOPPED, () => {
+    // Stopped by hand: the reader wants quiet, not the rest of the reading.
+    if (runtime.tts.stream?.kind === 'reply' && !runtime.tts.stream.done) runtime.tts.stream.cancel();
     runtime.mainGenerationActive = false;
     // The floor being written was left without buttons while it streamed; a stopped reply may not be
     // rendered again, so it gets them now.
@@ -12990,7 +13073,19 @@ function registerRuntimeEvents() {
     if (pending) runtime.stoppedGeneration = { ...pending, at: Date.now() };
     runtime.generationGate.clear();
   });
+  bindEvent(eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
+    if (dryRun || ['quiet', 'impersonate'].includes(type)) return;
+    runtime.tts.generationId += 1;
+    runtime.tts.generationStartedAt = globalThis.performance?.now?.() ?? Date.now();
+    // A new reply is being written: a reading of the one before it reads what it had and ends.
+    if (runtime.tts.stream?.kind === 'reply' && !runtime.tts.stream.done) runtime.tts.stream.end();
+  });
+  // 边写边读: every streamed chunk is stored, and read a stretch at a time from a timer — the host
+  // awaits this listener inside its stream loop, so nothing here may take time.
+  if (eventTypes.STREAM_TOKEN_RECEIVED) bindEvent(eventTypes.STREAM_TOKEN_RECEIVED, text => onReplyStreaming(text));
   bindEvent(eventTypes.GENERATION_ENDED, () => {
+    // However the reply ended, what was written of it is read to its end.
+    if (runtime.tts.stream?.kind === 'reply' && !runtime.tts.stream.done) runtime.tts.stream.end();
     if (!runtime.mainGenerationActive) return;
     runtime.mainGenerationActive = false;
     const latest = latestAssistantMessageId(getContext());
@@ -13024,6 +13119,7 @@ function registerRuntimeEvents() {
     forgetTtsItems(Number(messageId));
     // Another alternative is not a new reply; a swipe that generates one is announced as rendered.
     runtime.tts.fresh.delete(Number(messageId));
+    runtime.tts.streamed.delete(Number(messageId));
     scheduleTtsDecorate(Number(messageId), { force: true, delay: 300 });
     ttsFloorClosed(Number(messageId), { reason: 'swipe' });
   });
@@ -13068,6 +13164,7 @@ function registerRuntimeEvents() {
     runtime.tts.inspect = null;
     runtime.tts.mesSeen.clear();
     runtime.tts.fresh.clear();
+    runtime.tts.streamed.clear();
     scheduleTtsDecorateAll();
   });
 }
@@ -13182,6 +13279,544 @@ function forceActivateWorldInfoFromText(text) {
 // the key, never touches the chat, and pays nothing of its own. Audio is cached by content, so the
 // same greeting said twice is asked for once.
 // ---------------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------------------------
+// Reading while it is written (边写边读). A session takes text as it grows — the main model's reply as it
+// streams, or text a caller hands over — cuts off each stretch the moment it is safe to read
+// (tts-stream.js), asks Fish for it at once, a few stretches ahead, and plays them in order. Who speaks
+// is read the plain way: the story's own speaker marks first, then the text itself; nobody is asked.
+// Nothing is stored with the floor: this is the live reading, not the floor's recording.
+// ---------------------------------------------------------------------------------------------
+
+// How many stretches before the new one the speaker reading sees: enough to know who was talking.
+const STREAM_CONTEXT_LINES = 6;
+
+/** A reply's lines as far as it is written: the body the translator is sent, speaker marks as markers. */
+function streamReplyLines(raw, settings = runtime.settings) {
+  const readable = readableStreamText(raw, { bodyTags: settings.bodyTags, excludedTags: settings.excludedTags });
+  const extraction = extractAllRegions(readable, settings);
+  const options = {
+    segmentPrefix: settings.segmentPrefix,
+    segmentSuffix: settings.segmentSuffix,
+    translationPrefix: settings.translationPrefix,
+    translationSuffix: settings.translationSuffix,
+    paragraphPerLine: settings.paragraphPerLine,
+    excludedTags: settings.excludedTags,
+    preserveLineRules: settings.preserveLineRules,
+  };
+  const lines = [];
+  let nextId = 1;
+  for (const region of extraction.regions) {
+    const segmented = segmentSource(region.inner, { ...options, startId: nextId });
+    for (const segment of segmented.segments) {
+      const marked = segmented.speech?.get(segment.id);
+      lines.push(marked ? { lineId: segment.id, text: marked.text, marks: marked.marks } : { lineId: segment.id, text: segment.text });
+    }
+    nextId += segmented.segments.length;
+  }
+  // A reply that has just started a new paragraph has finished the one before it.
+  if (/\n\s*$/.test(String(raw ?? ''))) lines.push({ lineId: nextId, text: '' });
+  return lines;
+}
+
+/** Text a caller hands over: a line per line, nothing extracted. */
+function streamPlainLines(raw) {
+  return String(raw ?? '').split('\n').map((text, index) => ({ lineId: index + 1, text }));
+}
+
+/** The plain reading of text being streamed: the story's marks, then who speaks by the text itself. */
+function streamSegments(floor, utterances, settings) {
+  const tts = ttsSettings(settings);
+  const tagged = ttsTagReading(floor, utterances, tts);
+  const labels = new Map();
+  for (const [id, label] of tagged.labels) if (label.emotion) labels.set(id, { emotion: label.emotion });
+  const host = getContext();
+  const resolved = resolveSpeakers(utterances, {
+    cast: ttsCast(settings), hints: new Map(), manual: new Map(), tagged: speakerHints(tagged.labels),
+    protagonists: { character: host.name2 ?? '', user: host.name1 ?? '' },
+  });
+  return buildSegments(utterances, pinSpeakers(labels, resolved, { fallback: 'hint' }), {
+    knownNames: ttsKnownNames(settings), voices: tagged.voices.size ? new Map(tagged.voices) : null,
+  });
+}
+
+/** How long each first thing took, for the log line a session leaves. */
+function streamTimingText(times) {
+  const names = [['firstText', '首字'], ['firstPiece', '首句切出'], ['firstRequest', '请求发出'], ['firstAudio', '首段音频到齐'], ['firstSound', '出声']];
+  return names.filter(([key]) => times[key] !== undefined).map(([key, label]) => `${label} ${(times[key] / 1000).toFixed(2)} 秒`).join('，') || '没有读出任何一段';
+}
+
+/**
+ * One reading of text still being written. `toLines` turns the text so far into lines; `speaker`, when
+ * a caller names one, speaks all of it in that character's voice. The session object: `set` (the whole
+ * text so far), `push` (the whole so far, or what came next), `end`, `cancel`, `pause`, `resume`,
+ * `on('state')`, `state`, `done`, and `finished` (a promise).
+ */
+function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang = '', startedAt = null }) {
+  const settings = runtime.settings;
+  const tts = ttsSettings(settings);
+  requireFishKey(tts);
+  const provider = ttsProviderFor(settings);
+  const controller = new AbortController();
+  const lanes = Math.max(1, Math.min(3, Number(tts.fish.concurrency) || 1));
+  const now = () => globalThis.performance?.now?.() ?? Date.now();
+  const origin = startedAt ?? now();
+  const times = {};
+  const mark = name => {
+    if (times[name] === undefined) times[name] = Math.round(now() - origin);
+  };
+  const context = getContext();
+  const message = Number.isInteger(messageId) ? context.chat?.[messageId] : null;
+  const chatId = Number.isInteger(messageId) ? getCurrentChatId(context) : API_FLOOR_PREFIX;
+  const swipeId = Number(message?.swipe_id ?? 0);
+  const floorId = Number.isInteger(messageId) ? `${chatId}|${messageId}|${swipeId}|stream` : `${API_FLOOR_PREFIX}|stream`;
+  const cut = {};
+  const seen = [];
+  const queue = [];
+  const waiting = [];
+  const listeners = new Set();
+  let raw = '';
+  let final = false;
+  let timer = null;
+  let running = 0;
+  let playing = false;
+  let paused = false;
+  let audioPaused = false;
+  let blocked = false;
+  let done = false;
+  let pieces = 0;
+  let requests = 0;
+  let played = 0;
+  let failures = 0;
+  let settle = null;
+  const finished = new Promise(resolve => { settle = resolve; });
+  const state = () => (done ? 'idle' : paused ? 'paused' : playing ? 'speaking' : 'buffering');
+  const announce = () => {
+    const detail = { state: state(), pieces, played, at: Math.round(now() - origin) };
+    for (const listener of listeners) {
+      try { listener(detail); } catch { /* a caller's own bug is not ours */ }
+    }
+    if (Number.isInteger(messageId)) {
+      const current = state();
+      setTtsStatus(messageId, current === 'idle' ? '' : current === 'paused' ? '边写边读 · 已暂停' : current === 'speaking' ? '边写边读' : '边写边读 · 等第一句', current === 'idle' ? 'idle' : current === 'paused' ? 'paused' : current === 'speaking' ? 'playing' : 'busy');
+    } else {
+      notifyTtsPanels();
+    }
+  };
+  // A few stretches are asked for ahead of the one being heard, never more than the lanes allow.
+  const lane = task => new Promise((resolve, reject) => {
+    const run = () => {
+      running += 1;
+      task().then(resolve, reject).finally(() => {
+        running -= 1;
+        waiting.shift()?.();
+      });
+    };
+    if (running < lanes) run();
+    else waiting.push(run);
+  });
+  const audioFor = async (floor, lineId) => {
+    const utterances = ttsUtterances(floor, settings);
+    const own = utterances.filter(item => item.lineId === lineId);
+    if (!own.length) return [];
+    const segments = speaker
+      ? buildSegments(own, apiLabels(own, { speaker, lang }), { knownNames: ttsKnownNames(settings) })
+      : streamSegments(floor, utterances, settings).filter(segment => segment.lineId === lineId);
+    const { items } = await ttsItemsFor(floor, segments, settings, speaker ? { range: 'all' } : {});
+    if (!items.length) return [];
+    const blobs = [];
+    for (const part of provider.parts(items, tts)) {
+      if (controller.signal.aborted) break;
+      const { body } = provider.payload(part, tts);
+      mark('firstRequest');
+      const heard = await streamFishTimestamps(body, tts.fish, controller.signal, { onAttempt: () => { requests += 1; } });
+      blobs.push(new Blob(heard.audio.map(base64ToBytes), { type: provider.mime(tts.fish.format) }));
+      mark('firstAudio');
+    }
+    return blobs;
+  };
+  const enqueue = piece => {
+    const read = piece.marks?.length
+      ? readSpeechLine({ text: piece.text, marks: piece.marks }, { quotePairs: tts.quotePairs })
+      : { text: plainLineText(piece.text), spans: [] };
+    if (!read.text.trim()) return;
+    const index = pieces;
+    pieces += 1;
+    mark('firstPiece');
+    const line = { lineId: 100000 + index, text: read.text, ...(read.spans.length ? { speech: read.spans } : {}) };
+    const floor = {
+      chatId, messageId: messageId ?? -1, swipeId, side: 'source', floorId, version: String(index),
+      lines: [...seen.slice(-STREAM_CONTEXT_LINES), line],
+      annotations: new Map(), references: null, sources: null, source: 'stream', complete: true,
+    };
+    seen.push(line);
+    const job = { index, at: 0, promise: lane(() => audioFor(floor, line.lineId)) };
+    job.promise.catch(() => {});
+    queue.push(job);
+    void pump();
+  };
+  const finish = (cancelled = false) => {
+    if (done) return;
+    done = true;
+    playing = false;
+    paused = false;
+    if (runtime.tts.stream === session) runtime.tts.stream = null;
+    announce();
+    recordDiagnostic('info', 'tts.stream', `${Number.isInteger(messageId) ? `第 ${messageId} 楼` : '外部接口'}边写边读${cancelled ? '停下了' : '读完了'}：${streamTimingText(times)}；切出 ${pieces} 段，读出 ${played} 段，向 Fish 请求 ${requests} 次${failures ? `，${failures} 段没读出来` : ''}。`, {
+      floor: messageId, kind, times, pieces, played, requests, failures, cancelled, lanes, model: tts.fish.model,
+    }, '', Number.isInteger(messageId) ? { floor: messageId } : {});
+    settle({ cancelled, pieces, played, requests, times: { ...times } });
+  };
+  const pump = async () => {
+    if (playing || paused || done) return;
+    const job = queue[0];
+    if (!job) {
+      if (final && timer === null) finish();
+      return;
+    }
+    playing = true;
+    announce();
+    let blobs = [];
+    try {
+      blobs = await job.promise;
+    } catch (error) {
+      if (!isAbortError(error)) {
+        failures += 1;
+        recordDiagnostic('warn', 'tts.stream', `边写边读有一段没读出来：${safeError(error)}`, { floor: messageId, piece: job.index }, '', Number.isInteger(messageId) ? { floor: messageId } : {});
+      }
+    }
+    for (let at = job.at; at < blobs.length; at += 1) {
+      if (done) return;
+      if (paused) {
+        job.at = at;
+        playing = false;
+        announce();
+        return;
+      }
+      const url = URL.createObjectURL(blobs[at]);
+      mark('firstSound');
+      const outcome = await playTtsAudio(url);
+      URL.revokeObjectURL(url);
+      if (done) return;
+      if (outcome === 'blocked') {
+        // A page nobody has touched may not start sound on its own: the reading waits here for a tap.
+        job.at = at;
+        blocked = true;
+        paused = true;
+        playing = false;
+        announce();
+        toast('info', '浏览器要先点一下才肯出声：点播放键就开始读。');
+        return;
+      }
+      if (outcome === 'stopped') {
+        finish(true);
+        return;
+      }
+      if (outcome === 'error') failures += 1;
+      else played += 1;
+    }
+    queue.shift();
+    playing = false;
+    announce();
+    void pump();
+  };
+  const process = () => {
+    timer = null;
+    if (done) return;
+    let lines;
+    try {
+      lines = toLines(raw);
+    } catch {
+      return;
+    }
+    for (const piece of takeStreamPieces(lines, cut, { final, quotePairs: tts.quotePairs })) enqueue(piece);
+    if (final) void pump();
+  };
+  const schedule = () => {
+    if (timer === null && !done) timer = globalThis.setTimeout(process, 60);
+  };
+  const session = {
+    kind,
+    messageId,
+    finished,
+    get done() { return done; },
+    get state() { return state(); },
+    set(text) {
+      if (done || final) return;
+      raw = String(text ?? '');
+      if (raw) mark('firstText');
+      schedule();
+    },
+    push(text) {
+      if (done || final) return;
+      raw = mergeStreamText(raw, text);
+      if (raw) mark('firstText');
+      schedule();
+    },
+    end() {
+      if (done || final) return;
+      final = true;
+      if (timer !== null) globalThis.clearTimeout(timer);
+      timer = null;
+      process();
+    },
+    cancel() {
+      if (done) return;
+      controller.abort();
+      if (timer !== null) globalThis.clearTimeout(timer);
+      timer = null;
+      queue.length = 0;
+      waiting.length = 0;
+      if (playing || audioPaused) stopTtsPlayback();
+      finish(true);
+    },
+    pause() {
+      if (done || paused) return;
+      paused = true;
+      if (playing) {
+        runtime.tts.player?.audio.pause();
+        audioPaused = true;
+      }
+      announce();
+    },
+    resume() {
+      if (done || !paused) return;
+      paused = false;
+      if (blocked) {
+        blocked = false;
+        announce();
+        void pump();
+        return;
+      }
+      if (audioPaused) {
+        audioPaused = false;
+        Promise.resolve(runtime.tts.player?.audio.play()).catch(() => {});
+        announce();
+        return;
+      }
+      announce();
+      void pump();
+    },
+    on(event, listener) {
+      if (event !== 'state' || typeof listener !== 'function') return () => {};
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  runtime.tts.stream = session;
+  announce();
+  return session;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 语音输入（测试版）. Speech to text for a caller that holds a talk button: the browser's own recogniser,
+// or a recording sent to the OpenAI-compatible transcription endpoint the reader chose. Either way the
+// caller starts it, then stops it and gets the words.
+// ---------------------------------------------------------------------------------------------
+
+const STT_PRESETS = Object.freeze({
+  siliconflow: Object.freeze({ url: 'https://api.siliconflow.cn/v1/audio/transcriptions', model: 'FunAudioLLM/SenseVoiceSmall' }),
+  groq: Object.freeze({ url: 'https://api.groq.com/openai/v1/audio/transcriptions', model: 'whisper-large-v3-turbo' }),
+  openai: Object.freeze({ url: 'https://api.openai.com/v1/audio/transcriptions', model: 'gpt-4o-mini-transcribe' }),
+});
+// What the browser's recogniser expects for the short language names the reader writes.
+const STT_BROWSER_LANGS = Object.freeze({ zh: 'zh-CN', ja: 'ja-JP', en: 'en-US', ko: 'ko-KR', yue: 'zh-HK' });
+
+/** Whether speech can be taken now, and in words the reader can act on when it cannot. */
+function sttAvailability(tts = ttsSettings()) {
+  if (globalThis.isSecureContext === false) return { available: false, reason: '麦克风只能在 https 或本机地址（localhost、127.0.0.1）下打开。' };
+  if (tts.sttProvider === 'browser') {
+    const Recognition = globalThis.SpeechRecognition ?? globalThis.webkitSpeechRecognition;
+    return Recognition ? { available: true, reason: '' } : { available: false, reason: '这个浏览器没有自带语音识别，换成「按住说话，云端转写」。' };
+  }
+  if (!globalThis.navigator?.mediaDevices?.getUserMedia || typeof globalThis.MediaRecorder !== 'function') return { available: false, reason: '这个浏览器不能录音。' };
+  if (!tts.sttUrl) return { available: false, reason: '还没填转写地址（朗读页「06 实时通话」）。' };
+  if (!tts.sttApiKey) return { available: false, reason: '还没填转写 Key（朗读页「06 实时通话」）。' };
+  return { available: true, reason: '' };
+}
+
+/** Starts listening; resolves once the microphone is open, with stop() for the words and cancel(). */
+async function startSpeechInput({ lang = '', onPartial = null, signal = null } = {}) {
+  const tts = ttsSettings();
+  const ready = sttAvailability(tts);
+  if (!ready.available) throw new Error(ready.reason);
+  const language = String(lang || tts.sttLang || '').trim();
+  return tts.sttProvider === 'browser' ? startBrowserSpeech(language, onPartial) : startCloudSpeech(language, tts, signal);
+}
+
+function startBrowserSpeech(lang, onPartial) {
+  const Recognition = globalThis.SpeechRecognition ?? globalThis.webkitSpeechRecognition;
+  const recognition = new Recognition();
+  recognition.lang = STT_BROWSER_LANGS[lang] ?? (lang || 'zh-CN');
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  let heard = '';
+  let failure = null;
+  let finish = null;
+  const over = new Promise(resolve => { finish = resolve; });
+  const began = Date.now();
+  recognition.onresult = event => {
+    let text = '';
+    for (const result of event.results) text += result[0]?.transcript ?? '';
+    heard = text;
+    onPartial?.(heard);
+  };
+  recognition.onend = () => finish();
+  return new Promise((resolve, reject) => {
+    let open = false;
+    recognition.onerror = event => {
+      if (['no-speech', 'aborted'].includes(event.error)) return;
+      failure = new Error(event.error === 'not-allowed' ? '浏览器没有给麦克风权限。' : `浏览器语音识别出错：${event.error}`);
+      if (!open) reject(failure);
+    };
+    recognition.onstart = () => {
+      open = true;
+      resolve({
+        async stop() {
+          recognition.stop();
+          await over;
+          if (failure) throw failure;
+          recordDiagnostic('info', 'stt', `语音输入（浏览器识别）：说了 ${((Date.now() - began) / 1000).toFixed(1)} 秒，${heard.trim().length} 字。`);
+          return heard.trim();
+        },
+        cancel() {
+          recognition.abort();
+        },
+      });
+    };
+    try {
+      recognition.start();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function startCloudSpeech(lang, tts, signal) {
+  let stream;
+  try {
+    stream = await globalThis.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch (error) {
+    throw new Error(error?.name === 'NotAllowedError' ? '浏览器没有给麦克风权限。' : `打不开麦克风：${safeError(error)}`);
+  }
+  // What this browser can record: iPhones write mp4, most others webm.
+  const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find(candidate => globalThis.MediaRecorder.isTypeSupported?.(candidate)) ?? '';
+  const recorder = new globalThis.MediaRecorder(stream, type ? { mimeType: type } : {});
+  const chunks = [];
+  recorder.ondataavailable = event => {
+    if (event.data?.size) chunks.push(event.data);
+  };
+  const stopped = new Promise(resolve => { recorder.onstop = resolve; });
+  const release = () => stream.getTracks().forEach(track => track.stop());
+  const began = Date.now();
+  let cancelled = false;
+  recorder.start();
+  return {
+    async stop() {
+      if (recorder.state !== 'inactive') recorder.stop();
+      await stopped;
+      release();
+      if (cancelled) return '';
+      const spoke = Date.now() - began;
+      const blob = new Blob(chunks, { type: recorder.mimeType || type || 'audio/webm' });
+      if (blob.size < 800) return '';
+      const sent = Date.now();
+      const text = await transcribeSpeech(blob, lang, tts, signal);
+      recordDiagnostic('info', 'stt', `语音输入（${tts.sttModel}）：说了 ${(spoke / 1000).toFixed(1)} 秒，转写用了 ${((Date.now() - sent) / 1000).toFixed(1)} 秒，${text.length} 字。`, { model: tts.sttModel, bytes: blob.size, type: blob.type });
+      return text;
+    },
+    cancel() {
+      cancelled = true;
+      if (recorder.state !== 'inactive') recorder.stop();
+      release();
+    },
+  };
+}
+
+async function transcribeSpeech(blob, lang, tts, signal) {
+  const extension = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+  const form = new FormData();
+  form.append('file', blob, `speech.${extension}`);
+  form.append('model', tts.sttModel);
+  // SenseVoice tells the language itself; the Whisper family is told, so a short line is not guessed wrong.
+  if (lang && tts.sttPreset !== 'siliconflow') form.append('language', lang);
+  const response = await fetch(tts.sttUrl, { method: 'POST', headers: { Authorization: `Bearer ${tts.sttApiKey}` }, body: form, signal });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`转写失败（HTTP ${response.status}）${detail ? `：${detail.slice(0, 160)}` : ''}`);
+  }
+  const data = await response.json().catch(() => null);
+  return String(data?.text ?? '').trim();
+}
+
+// ---------------------------------------------------------------------------------------------
+// 通话请求（测试版）. A caller's own prompt, sent on the connection chosen for calls and streamed back as
+// it is written, so the reading can start before the answer is finished.
+// ---------------------------------------------------------------------------------------------
+
+function callRequestSettings(settings = runtime.settings) {
+  const tts = ttsSettings(settings);
+  return tts.callChannelId ? onChannel(settings, tts.callChannelId) : ttsRequestSettings(settings);
+}
+
+async function apiLlmStream({ messages, signal = null, onText = null } = {}) {
+  if (!Array.isArray(messages) || !messages.length) throw new Error('messages 不能为空。');
+  const clean = messages.map(message => ({
+    role: ['system', 'user', 'assistant'].includes(message?.role) ? message.role : 'user',
+    content: String(message?.content ?? ''),
+  }));
+  const settings = callRequestSettings();
+  const began = globalThis.performance?.now?.() ?? Date.now();
+  let first = null;
+  let last = '';
+  const heard = text => {
+    if (first === null && text) first = (globalThis.performance?.now?.() ?? Date.now()) - began;
+    last = text;
+    try { onText?.(text); } catch { /* a caller's own bug is not ours */ }
+  };
+  let text;
+  if (settings.apiMode === 'independent') {
+    const answer = await streamTranslationBatch(clean, settings, signal, heard);
+    text = typeof answer === 'string' ? answer : last;
+  } else {
+    // The host's own connection answers in one piece: the caller hears it all at once.
+    const raw = await requestSubModelRaw(clean, settings, signal);
+    text = typeof raw === 'string' ? raw : String(raw?.content ?? raw?.choices?.[0]?.message?.content ?? '');
+  }
+  if (text !== last) heard(text);
+  const total = (globalThis.performance?.now?.() ?? Date.now()) - began;
+  recordDiagnostic('info', 'llm.stream', `通话请求（${channelLabel(settings, settings.apiMode === 'independent' ? settings.selectedChannelId : 'follow', { short: true })}）：首字 ${first === null ? '—' : `${(first / 1000).toFixed(2)} 秒`}，写完 ${(total / 1000).toFixed(2)} 秒，${text.length} 字${settings.apiMode === 'independent' ? '' : '（跟随酒馆，整段返回）'}。`, {
+    streamed: settings.apiMode === 'independent', firstMs: first === null ? null : Math.round(first), totalMs: Math.round(total), characters: text.length,
+  });
+  return text;
+}
+
+/** 边写边读 for the main model's reply: the first streamed text of a generation opens a reading of that floor. */
+function onReplyStreaming(text) {
+  if (!runtime.mainGenerationActive) return;
+  const tts = ttsSettings();
+  if (!tts.enabled || !tts.readWhileWriting) return;
+  let session = runtime.tts.stream;
+  if (!session || session.done || session.kind !== 'reply') {
+    // One try per reply: a missing key is said once, not on every chunk.
+    if (runtime.tts.streamRefused === runtime.tts.generationId) return;
+    const context = getContext();
+    const messageId = (context.chat?.length ?? 0) - 1;
+    const message = context.chat?.[messageId];
+    if (!message || message.is_user || message.is_system) return;
+    try {
+      stopTts();
+      session = createTtsStream({ kind: 'reply', messageId, toLines: raw => streamReplyLines(raw), startedAt: runtime.tts.generationStartedAt });
+    } catch (error) {
+      runtime.tts.streamRefused = runtime.tts.generationId;
+      recordDiagnostic('warn', 'tts.stream', `第 ${messageId} 楼没有边写边读：${safeError(error)}`, { floor: messageId });
+      return;
+    }
+    runtime.tts.streamed.add(messageId);
+    runtime.tts.fresh.delete(messageId);
+  }
+  session.set(text);
+}
 
 const PUBLIC_API_NAME = '__JINGYI__';
 const PUBLIC_API_VERSION = 1;
@@ -13394,6 +14029,31 @@ function apiSession(floor, items, settings, { play, signal, speaker = '' }) {
   return { started: play ? started : done.then(() => {}), handle };
 }
 
+/**
+ * Read text that is still being written. Hand it over as it grows — the whole so far or just the new
+ * part (`push`) — say when it is finished (`end`), or call it off (`cancel`). Each stretch is spoken
+ * as soon as it is safe to, in the voice the reader gave the named character, with the reader's own
+ * audio settings, Fish key and quota; nothing is written to the chat. `on('state', fn)` hears
+ * 'buffering' / 'speaking' / 'paused' / 'idle'; `done` settles when the last stretch has been heard.
+ */
+function apiStream({ speaker = '', lang = '', signal = null } = {}) {
+  apiTtsSettings();
+  stopTts();
+  const session = createTtsStream({ kind: 'api', toLines: streamPlainLines, speaker, lang });
+  if (signal?.aborted) session.cancel();
+  else signal?.addEventListener?.('abort', () => session.cancel(), { once: true });
+  return Object.freeze({
+    push: text => session.push(text),
+    end: () => session.end(),
+    cancel: () => session.cancel(),
+    pause: () => session.pause(),
+    resume: () => session.resume(),
+    on: (event, listener) => session.on(event, listener),
+    get state() { return session.state; },
+    done: session.finished,
+  });
+}
+
 function installPublicApi() {
   if (typeof globalThis === 'undefined') return;
   const api = {
@@ -13424,11 +14084,39 @@ function installPublicApi() {
       },
       speak: options => apiSpeak(options ?? {}),
       read: options => apiSpeak(options ?? {}),
+      /** Text still being written, read a stretch at a time as it grows. See apiStream. */
+      stream: options => apiStream(options ?? {}),
       /** Whatever this interface is saying, stopped. A floor being read is left alone. */
       stop() {
+        if (runtime.tts.stream?.kind === 'api' && !runtime.tts.stream.done) runtime.tts.stream.cancel();
         stopTtsPlayback();
       },
     }),
+    // 实时通话（测试版）.
+    stt: Object.freeze({
+      /** Whether speech can be taken now; `reason` says what to fix when it cannot. */
+      status() {
+        const tts = ttsSettings();
+        const ready = sttAvailability(tts);
+        return { provider: tts.sttProvider, available: ready.available, reason: ready.reason, secure: globalThis.isSecureContext !== false };
+      },
+      /** Open the microphone. Resolves to { stop(): Promise<string>, cancel() } once it is listening. */
+      start: options => startSpeechInput(options ?? {}),
+    }),
+    llm: Object.freeze({
+      /** The connection calls are answered on, and whether it streams. */
+      status() {
+        const settings = callRequestSettings();
+        return {
+          connection: channelLabel(settings, settings.apiMode === 'independent' ? settings.selectedChannelId : 'follow', { short: true }),
+          streams: settings.apiMode === 'independent',
+        };
+      },
+      /** { messages, signal, onText(textSoFar) } → the whole answer. */
+      stream: options => apiLlmStream(options ?? {}),
+    }),
+    features: Object.freeze(['tts.speak', 'tts.stream', 'stt', 'llm.stream']),
+    beta: true,
   };
   api.ready = Promise.resolve(api);
   globalThis[PUBLIC_API_NAME] = Object.freeze(api);
@@ -13546,6 +14234,9 @@ export const __testing = Object.freeze({
   resetTtsPlayer: () => { runtime.tts.player = null; runtime.tts.transport = null; },
   playTtsFloor,
   stopTts,
+  streamReplyLines,
+  onReplyStreaming,
+  ttsStream: () => runtime.tts.stream,
   regenerateTtsSentence,
   regenerateTtsParagraph,
   ttsCast,

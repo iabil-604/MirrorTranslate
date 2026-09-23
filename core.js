@@ -582,6 +582,17 @@ export const DEFAULT_TTS = Object.freeze({
   speechMarks: false,
   // A new reply is read aloud by itself once its text is final.
   autoRead: false,
+  // The reply is read while the main model is still writing it, a stretch at a time.
+  readWhileWriting: false,
+  // 实时通话（测试版）: the connection a caller's streamed requests go to ('' = the analysis one), and
+  // how speech becomes text — the browser's recogniser, or a recording sent to a transcription API.
+  callChannelId: '',
+  sttProvider: 'cloud',
+  sttPreset: 'siliconflow',
+  sttUrl: 'https://api.siliconflow.cn/v1/audio/transcriptions',
+  sttApiKey: '',
+  sttModel: 'FunAudioLLM/SenseVoiceSmall',
+  sttLang: 'zh',
   fish: DEFAULT_FISH,
 });
 
@@ -1161,6 +1172,14 @@ export function normalizeTts(value) {
     dialogueFallback: TTS_DIALOGUE_FALLBACKS.includes(source.dialogueFallback) ? source.dialogueFallback : DEFAULT_TTS.dialogueFallback,
     speechMarks: source.speechMarks === true,
     autoRead: source.autoRead === true,
+    readWhileWriting: source.readWhileWriting === true,
+    callChannelId: String(source.callChannelId ?? '').trim().slice(0, 80),
+    sttProvider: ['cloud', 'browser'].includes(source.sttProvider) ? source.sttProvider : DEFAULT_TTS.sttProvider,
+    sttPreset: ['siliconflow', 'groq', 'openai', 'custom'].includes(source.sttPreset) ? source.sttPreset : DEFAULT_TTS.sttPreset,
+    sttUrl: String(source.sttUrl ?? DEFAULT_TTS.sttUrl).trim().slice(0, 400),
+    sttApiKey: String(source.sttApiKey ?? '').trim().slice(0, 400),
+    sttModel: String(source.sttModel ?? DEFAULT_TTS.sttModel).trim().slice(0, 120),
+    sttLang: String(source.sttLang ?? DEFAULT_TTS.sttLang).trim().slice(0, 20),
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     fish: normalizeFishSettings(source.fish),
   };
@@ -1279,6 +1298,9 @@ export function mergeSettings(value = {}) {
   // is read and nothing changes silently after it. A choice that points at a deleted connection is
   // treated the same way.
   merged.tts.analysisChannelId = resolveFeatureChannel(merged.tts.analysisChannelId, merged);
+  if (merged.tts.callChannelId && merged.tts.callChannelId !== 'follow' && !merged.channels.some(channel => channel.id === merged.tts.callChannelId)) {
+    merged.tts.callChannelId = '';
+  }
   if (merged.tts.deepChannelId && merged.tts.deepChannelId !== 'follow' && !merged.channels.some(channel => channel.id === merged.tts.deepChannelId)) {
     merged.tts.deepChannelId = '';
   }
