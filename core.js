@@ -8,12 +8,12 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.35.0-beta.6';
-import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.35.0-beta.6';
+} from './prompts.js?v=0.35.0-beta.7';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.35.0-beta.7';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.35.0-beta.6';
+export const APP_VERSION = '0.35.0-beta.7';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.

@@ -2397,4 +2397,91 @@ test('browser recognition keeps listening through the stops a phone makes by its
   last.onerror({ error: 'network' });
   last.onend();
   await assert.rejects(quiet.stop(), /network/, 'a real error ends it, and is said');
+
+  const called = await __testing.startSpeechInput({});
+  rounds.at(-1).say('不要了');
+  called.cancel();
+  assert.equal(await called.stop(), '', 'called off, nothing is handed back');
+  const aborter = new AbortController();
+  const aborted = await __testing.startSpeechInput({ signal: aborter.signal });
+  rounds.at(-1).say('也不要了');
+  aborter.abort();
+  assert.equal(rounds.at(-1).aborted, true, 'an abort is a cancel');
+  assert.equal(await aborted.stop(), '');
+});
+
+test('cloud speech input sends a recording once, gives the microphone back, and can be called off mid-way', async t => {
+  restoreGlobals(t);
+  const tracks = [];
+  const recorders = [];
+  let failNext = false;
+  class FakeRecorder {
+    static isTypeSupported(type) { return type === 'audio/webm'; }
+    constructor(stream, options) {
+      if (failNext) throw new Error('no recorder');
+      this.mimeType = options.mimeType;
+      this.state = 'inactive';
+      recorders.push(this);
+    }
+    start() { this.state = 'recording'; }
+    stop() {
+      this.state = 'inactive';
+      setTimeout(() => {
+        this.ondataavailable?.({ data: new Blob([new Uint8Array(2000)], { type: 'audio/webm' }) });
+        this.onstop?.();
+      }, 0);
+    }
+  }
+  const before = { secure: Object.getOwnPropertyDescriptor(globalThis, 'isSecureContext'), recorder: globalThis.MediaRecorder, navigator: Object.getOwnPropertyDescriptor(globalThis, 'navigator'), fetch: globalThis.fetch };
+  t.after(() => {
+    if (before.secure) Object.defineProperty(globalThis, 'isSecureContext', before.secure);
+    else delete globalThis.isSecureContext;
+    globalThis.MediaRecorder = before.recorder;
+    if (before.navigator) Object.defineProperty(globalThis, 'navigator', before.navigator);
+    globalThis.fetch = before.fetch;
+  });
+  Object.defineProperty(globalThis, 'isSecureContext', { value: true, configurable: true, writable: true });
+  globalThis.MediaRecorder = FakeRecorder;
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { mediaDevices: { getUserMedia: async () => {
+      const track = { stopped: false, stop() { this.stopped = true; } };
+      tracks.push(track);
+      return { getTracks: () => [track] };
+    } } },
+    configurable: true,
+    writable: true,
+  });
+  mockHost('stt-cloud');
+  const sent = [];
+  let hold = null;
+  globalThis.fetch = async (url, init) => {
+    sent.push(String(url));
+    if (hold) {
+      await new Promise((resolve, reject) => {
+        hold = resolve;
+        init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+      });
+    }
+    return new Response(JSON.stringify({ text: '你好' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  __testing.configureForTest({ settings: { tts: { enabled: true, sttProvider: 'cloud', sttUrl: 'https://stt.example/v1/audio/transcriptions', sttApiKey: 'k', fish: FISH } } });
+
+  const mic = await __testing.startSpeechInput({});
+  const [first, second] = [mic.stop(), mic.stop()];
+  assert.equal(await first, '你好');
+  assert.equal(await second, '你好');
+  assert.equal(sent.length, 1, 'asked twice, sent once');
+  assert.equal(tracks.at(-1).stopped, true, 'the microphone is given back');
+
+  hold = true;
+  const slow = await __testing.startSpeechInput({});
+  const heard = slow.stop();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  slow.cancel();
+  assert.equal(await heard, '', 'called off while the transcription was out: nothing is handed back');
+  hold = null;
+
+  failNext = true;
+  await assert.rejects(__testing.startSpeechInput({}), /录不了音/);
+  assert.equal(tracks.at(-1).stopped, true, 'a recorder that cannot start gives the microphone back');
 });
