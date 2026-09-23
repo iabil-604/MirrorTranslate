@@ -83,6 +83,32 @@ test('follow mode falls back to the whole-request path instead of throwing on an
   assert.equal(result.reason, 'already-translated');
 });
 
+test('a re-roll on the same floor is translated, not swallowed by the old text\'s run that never answered', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    // The first request never answers, the way a stuck relay behaves; the next one does.
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return asked.length === 1 ? new Promise(() => {}) : Promise.resolve(JSON.stringify([{ id: 1, text: '晴天了。' }]));
+    },
+  });
+  __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 0 }, initialized: true });
+  context.chat.push({ mes: '<story_scene>\n雨が降っている。\n</story_scene>', swipe_id: 0, swipes: [''], extra: {} });
+  const first = __testing.startTranslation(0, { quiet: true });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  // Regenerated: another reply in the same place, the same swipe.
+  context.chat[0] = { mes: '<story_scene>\n晴れている。\n</story_scene>', swipe_id: 0, swipes: [''], extra: {} };
+  const second = await __testing.startTranslation(0, { quiet: true });
+  assert.equal(asked.length, 2, 'the new text was asked for, not folded into the stuck request');
+  assert.match(asked[1], /晴れている/);
+  assert.equal(second.skipped, false);
+  assert.match(context.chat[0].mes, /晴天了/);
+  const old = await first;
+  assert.equal(old.reason, 'cancelled', 'the stuck run was called off and says so');
+});
+
 test('streaming and whole-request paths agree on the already-translated gate', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });
