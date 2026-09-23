@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check index.js && node --check core.js && node --check palette.js && node --check theme-probe.js && node --check processing.js && node --check jailbreak-default.js && node --check prompts.js && node --check workflow.js && node --check diagnostics.js && node --check tts.js && node --check tts-store.js && node --check scripts/preview-server.mjs",
+    "check": "node --check index.js && node --check core.js && node --check palette.js && node --check theme-probe.js && node --check processing.js && node --check jailbreak-default.js && node --check prompts.js && node --check workflow.js && node --check diagnostics.js && node --check tts.js && node --check tts-store.js && node --check tts-stream.js && node --check call.js && node --check scripts/preview-server.mjs",
     "preview": "node scripts/preview-server.mjs",
     "test": "node --test",
     "validate": "npm run check && npm test"

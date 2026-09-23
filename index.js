@@ -161,6 +161,7 @@ import {
 } from './prompts.js?v=0.35.0-beta.1';
 import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.0-beta.1';
 import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.35.0-beta.1';
+import { createCall, createCallHistory } from './call.js?v=0.35.0-beta.1';
 import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.0-beta.1';
 import {
   DEFAULT_MIN_CONTRAST,
@@ -479,7 +480,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-behaviors"><span class="jy-label">深度分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
 </div></details>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-call"><summary class="jy-section-title"><span>06</span><h2>实时通话（测试版）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<p class="jy-muted">给小手机这类插件打电话用的接口：边写边读（tts.stream）、语音输入（stt）、流式请求模型（llm.stream），都挂在 <code>window.__JINGYI__</code> 上。镜译自己不做通话界面，插件接上这三个就能边说边听。这一栏只在测试版里有。</p>
+<p class="jy-muted">给小手机这类插件打电话用的接口：边写边读（tts.stream）、语音输入（stt）、流式请求模型（llm.stream），都挂在 <code>window.__JINGYI__</code> 上，插件接上这三个就能边说边听。悬浮窗的「通话测试」页用的也是这三个，可以直接打给当前角色试效果。这一栏和通话测试页只在测试版里有。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label title="插件用 llm.stream 请求模型时走这条。选「模型连接」页里存的连接才能一边写一边读；跟随酒馆时要等整段回复写完。"><span class="jy-label">通话用的连接</span><select data-jy-tts-field="callChannelId"><option value="">和朗读分析用同一条</option></select></label><label><span class="jy-label">语音输入</span><select data-jy-tts-field="sttProvider"><option value="cloud">按住说话，云端转写</option><option value="browser">浏览器自带识别</option></select></label></div>
 <div class="jy-form-grid jy-form-grid-tight" data-jy-stt-cloud><label><span class="jy-label">转写服务</span><select data-jy-tts-field="sttPreset"><option value="siliconflow">SiliconFlow · SenseVoiceSmall（免费）</option><option value="groq">Groq · whisper-large-v3-turbo</option><option value="openai">OpenAI · gpt-4o-mini-transcribe</option><option value="custom">自定义（OpenAI 兼容）</option></select></label><label><span class="jy-label">转写地址</span><input type="text" data-jy-tts-field="sttUrl" spellcheck="false"></label><label><span class="jy-label">转写 Key</span><input type="password" data-jy-tts-field="sttApiKey" spellcheck="false" autocomplete="off"></label><label><span class="jy-label">转写模型</span><input type="text" data-jy-tts-field="sttModel" spellcheck="false"></label></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">识别语言</span><input type="text" data-jy-tts-field="sttLang" placeholder="zh / ja / en" spellcheck="false"></label></div>
@@ -779,6 +780,7 @@ function saveSettings(next) {
   if (runtime.mini?.host) {
     runtime.mini.host.dataset.theme = runtime.settings.theme || 'day';
     runtime.mini.syncQuickPickers?.();
+    runtime.mini.refreshCall?.();
   }
   const floating = typeof document === 'undefined' ? null : document.getElementById(FLOATING_ID);
   if (floating) floating.dataset.theme = runtime.settings.theme || 'day';
@@ -5450,8 +5452,12 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
     const primaryReady = primary === 'source' || translated || carries || !translating;
     // Read while it was written: the original has been heard, and is not analysed, made or read again.
     const streamed = runtime.tts.streamed.has(id);
-    const autoRead = current.autoRead && !streamed && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy);
-    if (autoRead || !current.autoRead) runtime.tts.fresh.delete(id);
+    const due = current.autoRead && !streamed && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy);
+    // A call has the voice: the reply is prepared like any floor not read by itself, and said once.
+    const calling = callActive();
+    const autoRead = due && !calling;
+    if (autoRead || !current.autoRead || (calling && due)) runtime.tts.fresh.delete(id);
+    if (calling && due) toast('info', `第 ${id} 楼有新回复：挂断以后点楼层开头的「朗读」就能听。`);
     try {
       // The side read aloud is analysed by the reading itself, as it prepares.
       if (readable && !(autoRead && side === primary) && !(streamed && side === 'source') && (current.mode === 'deep' || (current.mode === 'simple' && !translating))) await analyseTtsFloorNow(id, side, current.mode);
@@ -5851,6 +5857,7 @@ async function ttsReadingStands() {
  */
 async function autoReadTtsFloor(messageId, side) {
   const settings = runtime.settings;
+  if (callActive()) return;
   const floor = await collectTtsFloor(messageId, settings, side).catch(() => null);
   if (!floor) return;
   const key = ttsLabelKey(floor);
@@ -10883,6 +10890,7 @@ async function openMiniWindow() {
   <button type="button" role="tab" aria-selected="true" data-jy-mini-tab="translate">翻译</button>
   <button type="button" role="tab" aria-selected="false" data-jy-mini-tab="reading">朗读</button>
   <button type="button" role="tab" aria-selected="false" data-jy-mini-tab="log">日志</button>
+  <button type="button" role="tab" aria-selected="false" data-jy-mini-tab="call">通话测试</button>
 </div>
 <div class="jy-mini-body jy-mini-translate" data-jy-mini-page="translate">
   <div class="jy-mini-scroll">
@@ -11009,6 +11017,37 @@ async function openMiniWindow() {
   <p class="jy-muted jy-mini-log-empty" data-jy-mini-log-empty hidden>这里还没有记录。</p>
   <div class="jy-mini-log-detail" data-jy-mini-log-detail hidden></div>
   </div>
+</div>
+<div class="jy-mini-body jy-mini-call" data-jy-mini-page="call" hidden>
+  <div class="jy-mini-scroll" data-jy-call-scroll>
+  <div class="jy-mini-status">
+    <div class="jy-mini-status-top"><strong data-jy-call-peer>通话测试</strong><span data-jy-call-clock>—</span></div>
+    <p class="jy-muted jy-mini-taskline"><span data-jy-call-state></span><span class="jy-mini-eta" data-jy-call-wait></span></p>
+    <p class="jy-muted" data-jy-call-note hidden></p>
+  </div>
+  <ol class="jy-mini-sentences" data-jy-call-lines hidden></ol>
+  </div>
+  <div class="jy-mini-more" data-jy-mini-more hidden>
+    <div class="jy-mini-more-head"><strong>往期通话</strong><button type="button" class="jy-mini-inspect-close" data-jy-action="mini-more-close" aria-label="收起" title="收起">×</button></div>
+    <ol class="jy-mini-log" data-jy-call-history></ol>
+    <p class="jy-muted jy-mini-log-empty" data-jy-call-history-empty hidden>和这个角色还没有通话记录。</p>
+    <div class="jy-mini-log-detail" data-jy-call-detail hidden></div>
+    <div class="jy-mini-links">
+      <button type="button" class="jy-text-button" data-jy-action="call-clear" hidden>清空这个角色的通话记录</button>
+      <button type="button" class="jy-text-button" data-jy-action="call-settings" title="语音输入、通话用哪条连接">通话设置</button>
+    </div>
+  </div>
+  <div class="jy-mini-foot">
+    <div class="jy-mini-inspect-custom" data-jy-call-typing hidden><input type="text" data-jy-call-input maxlength="500" placeholder="语音输入没开，打字说"><button type="button" class="jy-button jy-button-primary" data-jy-action="call-send">发送</button></div>
+    <div class="jy-mini-actions">
+      <button type="button" class="jy-button jy-button-primary" data-jy-action="call-dial">拨打</button>
+      <button type="button" class="jy-button jy-button-primary jy-mini-call-talk" data-jy-call-talk aria-pressed="false" title="按住说话，说完松开；对方在说时按下会打断" hidden>按住说话</button>
+      <button type="button" class="jy-button jy-button-primary" data-jy-action="call-resume" hidden>继续</button>
+      <button type="button" class="jy-button jy-mini-danger" data-jy-action="call-interrupt" title="让对方停下，电话不挂" hidden>打断</button>
+      <button type="button" class="jy-button jy-mini-danger" data-jy-action="call-hang" hidden>挂断</button>
+      <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false" title="往期通话、清空记录、通话设置">更多</button>
+    </div>
+  </div>
 </div>`;
   shadow.append(style, win);
   document.body.appendChild(host);
@@ -11027,6 +11066,7 @@ async function openMiniWindow() {
     translate: win.querySelector('[data-jy-mini-page="translate"]'),
     reading: win.querySelector('[data-jy-mini-page="reading"]'),
     log: win.querySelector('[data-jy-mini-page="log"]'),
+    call: win.querySelector('[data-jy-mini-page="call"]'),
   };
   const inspectBox = win.querySelector('[data-jy-tts-inspect]');
   const sentenceList = win.querySelector('[data-jy-tts-list]');
@@ -11082,7 +11122,7 @@ async function openMiniWindow() {
   const onResizeEnd = event => {
     if (event.target === win && event.propertyName === 'height') settleResize();
   };
-  const PAGE_ORDER = ['translate', 'reading', 'log'];
+  const PAGE_ORDER = ['translate', 'reading', 'log', 'call'];
   const selectMiniTab = (name, { animate = true } = {}) => {
     if (!pages[name]) return;
     const from = pages[miniTab];
@@ -11119,6 +11159,10 @@ async function openMiniWindow() {
       renderLog();
     }
     if (name === 'reading') void renderSentences();
+    if (name === 'call') {
+      renderCall();
+      renderCallHistory();
+    }
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
   };
   const syncMiniTabs = () => {
@@ -12378,6 +12422,255 @@ async function openMiniWindow() {
   // Closing, keys, and the buttons.
   // -------------------------------------------------------------------------------------------
   let closed = false;
+  // -------------------------------------------------------------------------------------------
+  // 通话测试（测试版）: the call page. What it shows is the call's own snapshot; the talk button is
+  // held, not clicked.
+  // -------------------------------------------------------------------------------------------
+  const callPage = pages.call;
+  const callScroll = callPage.querySelector('[data-jy-call-scroll]');
+  const callLines = callPage.querySelector('[data-jy-call-lines]');
+  const callTalk = callPage.querySelector('[data-jy-call-talk]');
+  const callTyping = callPage.querySelector('[data-jy-call-typing]');
+  const callInput = callPage.querySelector('[data-jy-call-input]');
+  const callHistoryList = callPage.querySelector('[data-jy-call-history]');
+  const callDetail = callPage.querySelector('[data-jy-call-detail]');
+  let callView = callController().snapshot;
+  let callFrame = null;
+  let callTicker = null;
+  const callClock = ms => {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  };
+  const callPeerName = () => {
+    try {
+      const context = getContext();
+      return context.groupId ? '' : String(context.name2 || '').trim();
+    } catch {
+      return '';
+    }
+  };
+  // The clock and the seconds waited: the only part redrawn while nothing else changes.
+  const renderCallClock = () => {
+    const view = callView;
+    const inCall = view.phase !== 'idle';
+    putText(callPage.querySelector('[data-jy-call-clock]'), inCall ? callClock(Date.now() - view.startedAt) : view.ended ? `通话 ${callClock(view.ended.at - view.startedAt)}` : '—');
+    const since = view.phase === 'thinking' ? view.askedAt : view.phase === 'listening' ? view.listenedAt : 0;
+    putText(callPage.querySelector('[data-jy-call-wait]'), since ? `${Math.floor((Date.now() - since) / 1000)} 秒` : '');
+  };
+  const renderCallLines = view => {
+    const turns = view.turns;
+    callLines.hidden = !turns.length;
+    const atBottom = callScroll.scrollHeight - callScroll.scrollTop - callScroll.clientHeight < 48;
+    while (callLines.children.length > turns.length) callLines.lastElementChild.remove();
+    while (callLines.children.length < turns.length) {
+      const row = document.createElement('li');
+      row.className = 'jy-mini-sentence';
+      const mark = document.createElement('span');
+      mark.className = 'jy-mini-sentence-mark';
+      const body = document.createElement('div');
+      body.className = 'jy-mini-sentence-body';
+      const who = document.createElement('div');
+      who.className = 'jy-mini-sentence-echo';
+      const text = document.createElement('div');
+      text.className = 'jy-mini-sentence-text';
+      body.append(who, text);
+      row.append(mark, body);
+      callLines.appendChild(row);
+    }
+    turns.forEach((turn, index) => {
+      const row = callLines.children[index];
+      const current = turn.live ? 'true' : 'false';
+      if (row.dataset.current !== current) row.dataset.current = current;
+      putText(row.firstElementChild, turn.live ? (view.phase === 'speaking' ? '♪' : '…') : '·');
+      putText(row.querySelector('.jy-mini-sentence-echo'), turn.from === 'user' ? (view.user || '我') : (view.peer || '对方'));
+      putText(row.querySelector('.jy-mini-sentence-text'), turn.text ? `${turn.text}${turn.cut ? '……' : ''}` : '…');
+    });
+    if (atBottom) callScroll.scrollTop = callScroll.scrollHeight;
+  };
+  const renderCall = () => {
+    callFrame = null;
+    if (!win.isConnected) return;
+    const view = callView;
+    const inCall = view.phase !== 'idle';
+    const peer = view.peer || callPeerName();
+    const stt = sttAvailability();
+    putText(callPage.querySelector('[data-jy-call-peer]'), peer ? (inCall ? `和${peer}通话中` : `打给${peer}`) : '通话测试');
+    const other = view.peer || '对方';
+    const says = {
+      thinking: `${other}在想`,
+      speaking: `${other}在说`,
+      ready: stt.available ? '该你说了：按住下面的按钮说话' : '该你说了：打字发过去',
+      listening: view.partial ? `在听：${view.partial}` : '在听，说完松开',
+      transcribing: '在转写',
+      idle: view.ended ? `通话结束${view.ended.reason ? `（${view.ended.reason}）` : ''}` : '按「拨打」，对方会先开口',
+    };
+    putText(callPage.querySelector('[data-jy-call-state]'), view.blocked ? '浏览器要先点一下才出声：点「继续」' : view.paused ? '暂停了：点「继续」接着听' : says[view.phase] ?? '');
+    const notes = [];
+    if (view.error) notes.push(`出错：${view.error}`);
+    else if (view.note) notes.push(view.note);
+    if (!inCall) {
+      try {
+        apiTtsSettings();
+      } catch (error) {
+        if (!view.error) notes.push(`${safeError(error)}（控制中心 → 朗读）`);
+      }
+    }
+    if (inCall && !stt.available) notes.push(`语音输入没开：${stt.reason}`);
+    if (callRequestSettings().apiMode !== 'independent') notes.push('通话连接跟随酒馆，要等整段写完才开始读。在「更多 → 通话设置」里给通话选一条自己的连接，就能边写边读。');
+    const note = callPage.querySelector('[data-jy-call-note]');
+    putText(note, notes.join('\n'));
+    note.hidden = !notes.length;
+    renderCallLines(view);
+    const talking = ['thinking', 'speaking'].includes(view.phase);
+    const show = (selector, visible) => {
+      const button = callPage.querySelector(selector);
+      if (button && button.hidden === visible) button.hidden = !visible;
+    };
+    show('[data-jy-action="call-dial"]', !inCall);
+    show('[data-jy-action="call-hang"]', inCall);
+    const held = view.blocked || view.paused;
+    show('[data-jy-action="call-interrupt"]', inCall && talking && !held);
+    show('[data-jy-action="call-resume"]', inCall && held);
+    show('[data-jy-call-talk]', inCall && stt.available);
+    if (callTyping.hidden === (inCall && !stt.available)) callTyping.hidden = !(inCall && !stt.available);
+    putText(callTalk, view.phase === 'listening' ? '松开发送' : view.phase === 'transcribing' ? '在转写…' : '按住说话');
+    callTalk.disabled = view.phase === 'transcribing';
+    callTalk.setAttribute('aria-pressed', String(view.phase === 'listening'));
+    if (inCall && callTicker === null) callTicker = globalThis.setInterval(renderCallClock, 250);
+    if (!inCall && callTicker !== null) {
+      globalThis.clearInterval(callTicker);
+      callTicker = null;
+    }
+    renderCallClock();
+  };
+  const scheduleCall = view => {
+    callView = view;
+    if (callFrame !== null) return;
+    callFrame = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(renderCall) : globalThis.setTimeout(renderCall, 16);
+  };
+  const unsubscribeCall = callController().on(view => {
+    scheduleCall(view);
+    // A call that ended or a turn that was kept shows up in the list of calls.
+    if (view.phase === 'idle' || view.phase === 'ready') renderCallHistory();
+  });
+  const callWhen = at => new Date(at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  function renderCallHistory() {
+    let key = '';
+    try {
+      key = worldInfoCharacterKey();
+    } catch {
+      // No chat open.
+    }
+    const calls = key ? callHistory().list(key) : [];
+    callHistoryList.replaceChildren(...calls.map(call => {
+      const item = document.createElement('li');
+      item.className = 'jy-mini-log-item';
+      item.dataset.callId = call.id;
+      const meta = document.createElement('span');
+      meta.className = 'jy-mini-log-meta';
+      meta.textContent = `${callWhen(call.startedAt)} · ${call.endedAt ? callClock(call.endedAt - call.startedAt) : '—'} · ${call.turns.length} 句`;
+      const text = document.createElement('span');
+      text.className = 'jy-mini-log-text';
+      const last = [...call.turns].reverse().find(turn => turn.from === 'char') ?? call.turns[call.turns.length - 1];
+      text.textContent = last?.text ?? '';
+      item.append(meta, text);
+      return item;
+    }));
+    callPage.querySelector('[data-jy-call-history-empty]').hidden = calls.length > 0;
+    callPage.querySelector('[data-jy-action="call-clear"]').hidden = !calls.length;
+    if (!callDetail.hidden && !calls.some(call => call.id === callDetail.dataset.callId)) {
+      callDetail.hidden = true;
+      callHistoryList.hidden = false;
+    }
+  }
+  const showCallDetail = id => {
+    let key = '';
+    try {
+      key = worldInfoCharacterKey();
+    } catch {
+      return;
+    }
+    const call = callHistory().list(key).find(item => item.id === id);
+    if (!call) return;
+    const head = document.createElement('div');
+    head.className = 'jy-mini-log-detail-head';
+    const title = document.createElement('strong');
+    title.textContent = `${call.peer || '通话'} · ${callWhen(call.startedAt)}`;
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'jy-mini-inspect-close';
+    back.dataset.jyAction = 'call-detail-close';
+    back.setAttribute('aria-label', '回到往期通话');
+    back.title = '回到往期通话';
+    back.textContent = '×';
+    head.append(title, back);
+    const lines = call.turns.map(turn => {
+      const line = document.createElement('p');
+      line.className = 'jy-mini-log-detail-message';
+      line.textContent = `${turn.from === 'user' ? '我' : (call.peer || '对方')}：${turn.text}${turn.cut ? '……' : ''}`;
+      return line;
+    });
+    callDetail.replaceChildren(head, ...lines);
+    callDetail.dataset.callId = call.id;
+    callDetail.hidden = false;
+    callHistoryList.hidden = true;
+  };
+  const onTalkDown = event => {
+    if (event.button !== undefined && event.button !== 0) return;
+    event.preventDefault();
+    try {
+      callTalk.setPointerCapture?.(event.pointerId);
+    } catch {
+      // The press still counts; only the capture is lost.
+    }
+    void callController().press();
+  };
+  const onTalkUp = () => callController().release();
+  const onTalkKey = event => {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+    if (event.type === 'keyup') callController().release();
+    else if (!event.repeat) void callController().press();
+  };
+  // A long press on a phone would otherwise open the text menu over the button.
+  const onTalkMenu = event => event.preventDefault();
+  const onCallInputKey = event => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    if (callController().send(callInput.value)) callInput.value = '';
+  };
+  callTalk.addEventListener('pointerdown', onTalkDown);
+  callTalk.addEventListener('pointerup', onTalkUp);
+  callTalk.addEventListener('pointercancel', onTalkUp);
+  callTalk.addEventListener('lostpointercapture', onTalkUp);
+  callTalk.addEventListener('keydown', onTalkKey);
+  callTalk.addEventListener('keyup', onTalkKey);
+  callTalk.addEventListener('contextmenu', onTalkMenu);
+  callInput.addEventListener('keydown', onCallInputKey);
+  const dropCallPage = () => {
+    unsubscribeCall();
+    callTalk.removeEventListener('pointerdown', onTalkDown);
+    callTalk.removeEventListener('pointerup', onTalkUp);
+    callTalk.removeEventListener('pointercancel', onTalkUp);
+    callTalk.removeEventListener('lostpointercapture', onTalkUp);
+    callTalk.removeEventListener('keydown', onTalkKey);
+    callTalk.removeEventListener('keyup', onTalkKey);
+    callTalk.removeEventListener('contextmenu', onTalkMenu);
+    callInput.removeEventListener('keydown', onCallInputKey);
+    if (callTicker !== null) globalThis.clearInterval(callTicker);
+    callTicker = null;
+    if (callFrame !== null) {
+      if (globalThis.cancelAnimationFrame) globalThis.cancelAnimationFrame(callFrame);
+      globalThis.clearTimeout(callFrame);
+    }
+    callFrame = null;
+    // The page is the only way to hang up: without it the call ends.
+    callController().hangUp('关了悬浮窗');
+  };
+
+  renderCall();
+  renderCallHistory();
+
   const close = () => {
     if (closed) return;
     closed = true;
@@ -12411,6 +12704,7 @@ async function openMiniWindow() {
     unsubscribeTts();
     unsubscribeProgress();
     unsubscribeLog();
+    dropCallPage();
     seekBar.removeEventListener('pointerdown', onSeekDown);
     seekBar.removeEventListener('pointermove', onSeekMove);
     seekBar.removeEventListener('pointerup', onSeekUp);
@@ -12532,6 +12826,12 @@ async function openMiniWindow() {
   const onClick = async event => {
     const button = event.target.closest('[data-jy-action]');
     if (!button) {
+      const callItem = event.target.closest('[data-call-id]');
+      if (callItem) {
+        showCallDetail(callItem.dataset.callId);
+        return;
+      }
+      if (event.target.closest('[data-jy-mini-page="call"]')) return;
       const row = event.target.closest('.jy-mini-row');
       if (row && !event.target.closest('textarea, button')) toggleRow(Number(row.dataset.id));
       const sentence = event.target.closest('.jy-mini-sentence');
@@ -12555,6 +12855,40 @@ async function openMiniWindow() {
       if (!sheet) return;
       sheet.hidden = action === 'mini-more-close' ? true : !sheet.hidden;
       for (const toggle of page.querySelectorAll('[data-jy-action="mini-more"]')) toggle.setAttribute('aria-expanded', String(!sheet.hidden));
+      return;
+    }
+    if (action && action.startsWith('call-')) {
+      const call = callController();
+      try {
+        if (action === 'call-dial') {
+          callDetail.hidden = true;
+          callHistoryList.hidden = false;
+          await call.dial();
+        } else if (action === 'call-hang') {
+          call.hangUp();
+        } else if (action === 'call-interrupt') {
+          call.interrupt();
+        } else if (action === 'call-resume') {
+          call.resume();
+        } else if (action === 'call-send') {
+          if (call.send(callInput.value)) callInput.value = '';
+        } else if (action === 'call-settings') {
+          await openCallSettings();
+        } else if (action === 'call-detail-close') {
+          callDetail.hidden = true;
+          callHistoryList.hidden = false;
+        } else if (action === 'call-clear') {
+          const key = worldInfoCharacterKey();
+          const count = callHistory().list(key).length;
+          if (!count) return;
+          if (typeof globalThis.confirm === 'function' && !globalThis.confirm(`清空和这个角色的 ${count} 通通话记录？清掉就找不回来了。`)) return;
+          callHistory().clear(key);
+          renderCallHistory();
+          toast('success', `已清空 ${count} 通通话记录。`);
+        }
+      } catch (error) {
+        toast('error', safeError(error));
+      }
       return;
     }
     if (action === 'tts-stop') { stopTts(); return; }
@@ -12867,6 +13201,7 @@ async function openMiniWindow() {
       void renderFloor();
     },
     refresh: () => { void renderFloor(); },
+    refreshCall: () => scheduleCall(callController().snapshot),
     // A new reply: the window moves onto it, unless something is being read or the reader chose a floor.
     followLatest: messageId => {
       if (!Number.isInteger(messageId) || messageId === viewFloor) return;
@@ -13200,6 +13535,7 @@ function registerRuntimeEvents() {
   }
   bindEvent(eventTypes.CHAT_CHANGED, () => {
     runtime.mainGenerationActive = false;
+    runtime.call?.hangUp('换了聊天');
     runtime.stoppedGeneration = null;
     cancelPendingWork();
     scheduleEntries();
@@ -13230,6 +13566,7 @@ function registerRuntimeEvents() {
 
 function cleanupRuntime() {
   runtime.processingRevision += 1;
+  runtime.call?.hangUp('镜译停用了');
   runtime.epoch += 1;
   cancelPendingWork();
   for (const binding of runtime.eventBindings.splice(0)) {
@@ -13451,7 +13788,7 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
   const finished = new Promise(resolve => { settle = resolve; });
   const state = () => (done ? 'idle' : paused ? 'paused' : playing ? 'speaking' : 'buffering');
   const announce = () => {
-    const detail = { state: state(), pieces, played, at: Math.round(now() - origin) };
+    const detail = { state: state(), blocked, pieces, played, at: Math.round(now() - origin) };
     for (const listener of listeners) {
       try { listener(detail); } catch { /* a caller's own bug is not ours */ }
     }
@@ -13564,7 +13901,7 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
         paused = true;
         playing = false;
         announce();
-        toast('info', '浏览器要先点一下才肯出声：点播放键就开始读。');
+        toast('info', callActive() ? '浏览器要先点一下才肯出声：点通话页的「继续」。' : '浏览器要先点一下才肯出声：点播放键就开始读。');
         return;
       }
       if (outcome === 'stopped') {
@@ -13850,9 +14187,103 @@ async function apiLlmStream({ messages, signal = null, onText = null } = {}) {
   return text;
 }
 
+// ---------------------------------------------------------------------------------------------
+// 通话测试（测试版）. The floating window's call page: the current character on the phone, through the
+// same interfaces a phone plugin gets (llm.stream, tts.stream, stt). The call itself is call.js.
+// ---------------------------------------------------------------------------------------------
+
+const CALL_RECENT_FLOORS = 6;
+const CALL_CONTEXT_CAPS = Object.freeze({ character: 2500, persona: 1200, recent: 3000 });
+
+function callHistory() {
+  if (!runtime.callHistory) {
+    let storage = null;
+    try {
+      storage = globalThis.localStorage ?? null;
+    } catch {
+      // Storage refused: the calls live in memory for this session.
+    }
+    runtime.callHistory = createCallHistory(storage);
+  }
+  return runtime.callHistory;
+}
+
+/** Who is on the line and what they know, read when the reader dials. */
+async function describeCall() {
+  apiTtsSettings();
+  const context = getContext();
+  if (context.groupId) throw new Error('群聊里还不能打，切到单人聊天再试。');
+  const character = context.characters?.[Number(context.characterId)];
+  if (!character) throw new Error('先打开一个角色的聊天，再拨打。');
+  const settings = runtime.settings;
+  const char = String(context.name2 || character.name || '').trim() || '对方';
+  const user = String(context.name1 || '').trim() || '我';
+  // The card and the last floors, cleaned the way the translation's context is, on the call's own
+  // connection so that connection's token saving is the one that applies.
+  const scoped = { ...callRequestSettings(settings), includeCharacterCard: true, includeWorldbook: false, includeRecentContext: true, contextMessages: CALL_RECENT_FLOORS };
+  let gathered = { character: '', recent: '' };
+  try {
+    gathered = await collectTranslationContext({ context, messageId: context.chat?.length ?? 0 }, scoped);
+  } catch (error) {
+    recordDiagnostic('warn', 'call', `读取角色卡和最近剧情失败，这通电话只带名字：${safeError(error)}`);
+  }
+  let persona = String(context.powerUserSettings?.persona_description ?? '').trim();
+  try {
+    if (persona && typeof context.substituteParams === 'function') persona = String(context.substituteParams(persona)).trim();
+  } catch {
+    // Macros left as written.
+  }
+  const head = (text, limit) => (text.length > limit ? `${text.slice(0, limit)}\n…（已截断）` : text);
+  // The latest floors matter most: a long stretch loses its beginning.
+  const tail = (text, limit) => (text.length > limit ? `…（前面略）\n${text.slice(-limit)}` : text);
+  return {
+    char,
+    user,
+    characterKey: worldInfoCharacterKey(),
+    chatId: getCurrentChatId(context),
+    character: head(String(gathered.character ?? ''), CALL_CONTEXT_CAPS.character),
+    persona: head(persona, CALL_CONTEXT_CAPS.persona),
+    recent: tail(String(gathered.recent ?? ''), CALL_CONTEXT_CAPS.recent),
+  };
+}
+
+function callController() {
+  if (!runtime.call) {
+    runtime.call = createCall({
+      describe: describeCall,
+      ask: options => apiLlmStream(options),
+      speak: ({ speaker }) => apiStream({ speaker }),
+      listen: options => startSpeechInput(options),
+      history: callHistory(),
+      log: (level, message) => recordDiagnostic(level, 'call', message),
+    });
+  }
+  return runtime.call;
+}
+
+/** A call is on: the main chat's own readings keep out of its way. */
+function callActive() {
+  return Boolean(runtime.call && runtime.call.phase !== 'idle');
+}
+
+/** The control centre's reading page, open on the call settings. */
+async function openCallSettings() {
+  writeTtsFold('tts-call', true);
+  const panel = await openControlCenter();
+  const root = panel?.shadow;
+  root?.querySelector('[data-jy-tab="tts"]')?.click();
+  const fold = root?.querySelector('[data-jy-fold="tts-call"]');
+  if (fold) {
+    fold.open = true;
+    globalThis.requestAnimationFrame?.(() => fold.scrollIntoView({ block: 'start' }));
+  }
+}
+
 /** 边写边读 for the main model's reply: the first streamed text of a generation opens a reading of that floor. */
 function onReplyStreaming(text) {
   if (!runtime.mainGenerationActive) return;
+  // A call has the voice; the chat's reply is read the usual way once it is written.
+  if (callActive()) return;
   const tts = ttsSettings();
   if (!tts.enabled || !tts.readWhileWriting) return;
   let session = runtime.tts.stream;
@@ -14257,6 +14688,8 @@ function configureForTest({ settings, worldInfoEntries, initialized } = {}) {
 
 export const __testing = Object.freeze({
   withAbortTimeout,
+  callController,
+  describeCall,
   runInLanes,
   buildTranslationMessages,
   latestAssistantMessageId,
