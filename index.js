@@ -72,7 +72,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.33.1';
+} from './core.js?v=0.34.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -129,10 +129,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.33.1';
-import { createTtsStore } from './tts-store.js?v=0.33.1';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.33.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.33.1';
+} from './tts.js?v=0.34.0';
+import { createTtsStore } from './tts-store.js?v=0.34.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.34.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.34.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -141,7 +141,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.33.1';
+} from './processing.js?v=0.34.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -158,9 +158,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.33.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.33.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.33.1';
+} from './prompts.js?v=0.34.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.34.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.34.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -174,15 +174,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.33.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.33.1';
+} from './palette.js?v=0.34.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.34.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.33.1';
+} from './diagnostics.js?v=0.34.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -284,6 +284,10 @@ const runtime = {
     progress: new Map(),
     // floorId|version already made in the background, so a redraw never starts the same run twice.
     pregenerated: new Set(),
+    // Floors a generation just wrote, waiting to be read aloud by themselves; and the texts already
+    // read that way, so the passes after a translation lands do not read them again.
+    fresh: new Set(),
+    autoRead: new Set(),
     // messageId → the mes last decorated, so a redraw with the same text costs one string compare.
     mesSeen: new Map(),
     viewer: null,
@@ -415,15 +419,15 @@ const CONTROL_CENTER_MARKUP = `
 
 <section class="jy-page" data-jy-page="tts" role="tabpanel" hidden>
 <header class="jy-page-heading"><div><h1>朗读</h1><span class="jy-page-context">旁白和每个角色各用各的声音，多国语言各配各的音色，点哪句读哪句</span></div><button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button></header>
-<div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每个自然段后面会出现「播放」和「重新生成」两个按钮，底部有「朗读本楼」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
+<div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每个自然段后面会出现「播放」和「重新生成」两个按钮，楼层开头有一个小的「朗读」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep">深度分析：在骨架上再看一遍，定情绪浓度和表演</option></select></label><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-form-grid jy-form-grid-tight"><label title="简单分析、「分析这一楼」、按意见改、从角色卡和世界书识别角色，都走这条。和翻译用哪条互不相干。"><span class="jy-label">朗读分析用的连接</span><select data-jy-tts-field="analysisChannelId"><option value="follow">跟随酒馆（酒馆当前的连接和模型）</option></select></label></div>
 <p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译在「翻译台」选，朗读在这里选，深度分析还能在「05 深度分析」里再单挑一条。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）存在「模型连接」页——那一页只是个架子，在那里点开哪条都不改变这里的选择。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label></div>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">生成完自动播放（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
-<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读本楼」时才请求，整楼一次，走上面选的朗读分析连接；勾了「自动生成音频」才会翻完就做。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoRead">新回复自动朗读（只读最新一楼，写完才读；正在读别的楼时只提醒、不打断）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">点播放后，做完直接播（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
+<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读」时才请求，整楼一次，走上面选的朗读分析连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
 <label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label>
@@ -4148,7 +4152,8 @@ function playTtsAudio(url, { start = 0, end = null, onTime = null } = {}) {
         .then(() => {
           if (!settled) interval = globalThis.setInterval(watch, 30);
         })
-        .catch(() => finish('error'));
+        // A page nobody has touched may not start sound on its own; that is a wait, not a failure.
+        .catch(error => finish(error?.name === 'NotAllowedError' ? 'blocked' : 'error'));
     };
     player.cancel = finish;
     audio.addEventListener('ended', onEnded);
@@ -4231,14 +4236,14 @@ function setTtsStatus(messageId, text = '', state = 'idle') {
   const bar = typeof document === 'undefined' ? null : document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-bar`);
   if (bar) {
     bar.dataset.state = state;
-    const label = bar.querySelector('[data-jy-tts-status]');
-    if (label) label.textContent = text;
-    const stop = bar.querySelector('[data-jy-tts-action="stop"]');
-    if (stop) stop.hidden = !['busy', 'playing', 'paused'].includes(state);
-    const pause = bar.querySelector('[data-jy-tts-action="pause"]');
-    if (pause) {
-      pause.hidden = !['playing', 'paused'].includes(state);
-      pause.innerHTML = state === 'paused' ? `${TTS_ICON_PLAY}<span>继续</span>` : `${TTS_ICON_PAUSE}<span>暂停</span>`;
+    bar.title = text;
+    const plays = [...bar.querySelectorAll('[data-jy-tts-action="play-floor"]')];
+    const reading = runtime.tts.transport?.messageId === Number(messageId) ? runtime.tts.transport.side : null;
+    for (const button of plays) {
+      const mine = plays.length === 1 || button.dataset.jyTtsSide === reading;
+      const html = ttsBarLabel(mine ? state : 'idle', plays.length > 1 ? button.dataset.jyTtsSide : null);
+      if (button.innerHTML !== html) button.innerHTML = html;
+      button.dataset.state = mine ? state : 'idle';
     }
   }
   notifyTtsPanels();
@@ -4876,6 +4881,13 @@ async function runTtsTransport(transport) {
         },
       });
       if (!live()) return;
+      if (outcome === 'blocked') {
+        // The reading waits where it is; the next tap on a play key runs it from here.
+        transport.blocked = true;
+        setTransport(transport, { state: 'paused', message: '' });
+        toast('info', '浏览器要先点一下才肯出声：点播放键就从这里开始读。');
+        return;
+      }
       if (outcome === 'error') throw new Error('浏览器播放这段音频失败。换成 mp3 格式通常能解决。');
       if (outcome === 'stopped') return;
       transport.index = lastOffset + 1;
@@ -5025,7 +5037,9 @@ function pauseTts() {
 function resumeTts() {
   const transport = runtime.tts.transport;
   if (!transport) return;
-  if (transport.state === 'paused') {
+  // Paused because the browser refused to start: nothing is playing to be resumed, the run starts again.
+  if (transport.blocked) transport.blocked = false;
+  else if (transport.state === 'paused') {
     const audio = runtime.tts.player?.audio;
     if (audio && audio.src) {
       Promise.resolve(audio.play()).then(() => setTransport(transport, { state: 'playing' })).catch(error => {
@@ -5209,7 +5223,7 @@ async function playTtsFloor(messageId, side = null) {
       // Generate-only: the floor is made first; a floor that is already made plays.
       const made = await pregenerateTtsFloor(messageId, { quiet: true, side: wantedSide });
       if (made) {
-        setTtsStatus(messageId, `已生成 ${made} 段音频，再点一次「朗读本楼」播放`, 'idle');
+        setTtsStatus(messageId, `已生成 ${made} 段音频，再点一次「朗读」播放`, 'idle');
         return;
       }
     }
@@ -5330,7 +5344,7 @@ function requireClosedFloor(messageId) {
  * for. Nothing here waits for the translation, and nothing here runs while the floor is still being
  * written: a floor read halfway is a floor read wrong and paid for twice.
  */
-function ttsFloorClosed(messageId, { translated = false } = {}) {
+function ttsFloorClosed(messageId, { translated = false, reason = 'generation' } = {}) {
   const tts = ttsSettings();
   const id = Number(messageId);
   if (!tts.enabled || !Number.isInteger(id) || runtime.mainGenerationActive) return;
@@ -5355,38 +5369,55 @@ function ttsFloorClosed(messageId, { translated = false } = {}) {
     // text that does not exist yet, and the appointment is simply moved.
     const busy = ttsFloorTranslating(id);
     if (busy && !reads.includes('source')) {
-      ttsFloorClosed(id, { translated });
+      ttsFloorClosed(id, { translated, reason });
       return;
     }
     // Throwing the prepared floor away under a running analysis would abort it; that tidy-up belongs
     // to the pass that happens once the writing has stopped.
     if (translated && !busy) {
-      forgetTtsItems(id);
+      await forgetChangedTtsItems(id);
       scheduleTtsDecorate(id, { force: true });
     }
     // A translation on its way brings the simple reading's marks with it; its side is read once it lands.
-    const translating = settings.enabled !== false && settings.autoGeneration === true && !translated;
+    // Whether one is on its way follows the switch for what happened to the floor, and an alternative
+    // that already carries its translation is waiting for nothing.
+    const meta = message.extra?.[MESSAGE_META_KEY];
+    const carries = meta?.complete === true && Number(meta.swipe_id ?? 0) === Number(message.swipe_id ?? 0);
+    const automatic = reason === 'swipe' ? settings.autoSwipe === true : reason === 'edit' ? settings.autoEdit === true : settings.autoGeneration === true;
+    const translating = settings.enabled !== false && automatic && !translated && !carries;
     // The original is read: it is there whatever the translation is doing, so every announcement of
     // this floor is a chance to read it. Asking twice costs nothing — the analysis is kept per text
     // version, and the second call finds it. Only the translation is read: it has to exist first, so
     // that one waits until it lands.
     const side = reads.includes('source') ? 'source' : 'translation';
     const readable = side === 'source' || translated || !translating;
+    // Read aloud by itself: a floor a generation just wrote, on the side heard first, once that side's
+    // text is final. The reading makes its own audio as it goes, so that side is not made beforehand.
+    const primary = reads[0];
+    const primaryReady = primary === 'source' || translated || carries || !translating;
+    const autoRead = current.autoRead && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy);
+    if (autoRead || !current.autoRead) runtime.tts.fresh.delete(id);
     try {
-      if (readable && (current.mode === 'deep' || (current.mode === 'simple' && !translating))) await analyseTtsFloorNow(id, side, current.mode);
+      // The side read aloud is analysed by the reading itself, as it prepares.
+      if (readable && !(autoRead && side === primary) && (current.mode === 'deep' || (current.mode === 'simple' && !translating))) await analyseTtsFloorNow(id, side, current.mode);
+      if (autoRead) void autoReadTtsFloor(id, primary);
       if (current.autoGenerate) {
+        let made = 0;
         for (const each of reads) {
           // The translation's own side is made once the translation is there to read.
           if (each === 'translation' && (translating || busy)) continue;
-          await pregenerateTtsFloor(id, { quiet: true, side: each, once: true });
+          if (autoRead && each === primary) continue;
+          made += (await pregenerateTtsFloor(id, { quiet: true, side: each, once: true })) ?? 0;
         }
+        // Made in the background with nobody listening: say so, the way a floor made on request does.
+        if (made && !autoRead && !current.autoRead) notifyTtsReady(id);
       }
     } catch (error) {
       if (!isAbortError(error)) recordDiagnostic('warn', 'tts.auto', `第 ${id} 楼正文闭合后的自动处理失败：${safeError(error)}`, { floor: id });
     }
     // The original was read while the translation was still coming; the translation's own side, and
     // the tidy-up that goes with it, are what this floor is asked about again once it lands.
-    if (busy && reads.includes('translation')) ttsFloorClosed(id, { translated });
+    if (busy && reads.includes('translation')) ttsFloorClosed(id, { translated, reason });
   }, translated ? 800 : 1200);
   runtime.tts.closing.set(id, timer);
   runtime.timers.add(timer);
@@ -5725,6 +5756,67 @@ function forgetTtsItems(messageId) {
   if (transport?.messageId === messageId) {
     stopTtsTransport(transport);
     runtime.tts.transport = null;
+  }
+}
+
+/**
+ * forgetTtsItems, except for a reading of the original whose text did not change: a translation written
+ * into the floor beside it changes nothing that reading says, and stopping it lost the reader's place.
+ */
+async function forgetChangedTtsItems(messageId) {
+  const transport = runtime.tts.transport;
+  if (transport?.messageId === messageId && transport.side === 'source' && transport.floor) {
+    const floor = await collectTtsFloor(messageId, runtime.settings, 'source').catch(() => null);
+    if (floor && floor.version === transport.floor.version && runtime.tts.transport === transport) {
+      for (const [key, prepared] of [...runtime.tts.floors]) {
+        if (!key.startsWith(`${messageId}|`) || prepared.floor.side === 'source') continue;
+        runtime.tts.overrides.delete(ttsLabelKey(prepared.floor));
+        runtime.tts.floors.delete(key);
+      }
+      return false;
+    }
+  }
+  forgetTtsItems(messageId);
+  return true;
+}
+
+/** Whether the floor being read still reads the same at the place it was read from. */
+async function ttsReadingStands() {
+  const transport = runtime.tts.transport;
+  if (!transport?.floor) return true;
+  const floor = await collectTtsFloor(transport.messageId, runtime.settings, transport.side).catch(() => null);
+  return Boolean(floor) && floor.floorId === transport.floor.floorId && floor.version === transport.floor.version;
+}
+
+/**
+ * A new reply read aloud by itself. Once per text: the passes that follow a translation landing find
+ * it read. Never over a reading already going (the reader is told instead), never on a page in the
+ * background, where a browser would refuse to start sound anyway.
+ */
+async function autoReadTtsFloor(messageId, side) {
+  const settings = runtime.settings;
+  const floor = await collectTtsFloor(messageId, settings, side).catch(() => null);
+  if (!floor) return;
+  const key = ttsLabelKey(floor);
+  if (runtime.tts.autoRead.has(key)) return;
+  runtime.tts.autoRead.add(key);
+  const current = runtime.tts.transport;
+  if (current && ['loading', 'playing', 'paused'].includes(current.state)) {
+    toast('info', `第 ${messageId} 楼的新回复可以听了：正在读的这一楼读完后，点「朗读」或者悬浮窗的播放键。`);
+    return;
+  }
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+    recordDiagnostic('info', 'tts.auto-read', `第 ${messageId} 楼写完时页面在后台，没有自动朗读。`, { floor: messageId, side });
+    return;
+  }
+  recordDiagnostic('info', 'tts.auto-read', `第 ${messageId} 楼自动朗读${side === 'source' ? '原文' : '译文'}。`, { floor: messageId, side });
+  try {
+    const transport = await createTtsTransport(messageId, { single: false, side });
+    if (transport) await runTtsTransport(transport);
+  } catch (error) {
+    if (isAbortError(error)) return;
+    setTtsStatus(messageId, safeError(error), 'error');
+    toast('error', safeError(error));
   }
 }
 
@@ -6303,21 +6395,13 @@ function makeTtsBar(messageId, tts, count, readingStyle = '', sides = [tts.side]
     return button;
   };
   const both = sides.length > 1;
-  const play = control('play-floor', 'jy-tts-bar-play', `${TTS_ICON_PLAY}<span>${both ? '朗读译文' : '朗读本楼'}</span>`, false, sides[0]);
-  const playOther = both ? control('play-floor', 'jy-tts-bar-play', `${TTS_ICON_PLAY}<span>朗读原文</span>`, false, sides[1]) : null;
-  const meta = document.createElement('span');
-  meta.className = 'jy-tts-bar-meta';
-  const sideLabel = both ? '读译文 + 原文' : tts.side === 'source' ? '读原文' : '读译文';
-  const unitLabel = `${TTS_MODE_LABELS[tts.mode]}模式`;
-  meta.textContent = `${sideLabel} · ${unitLabel} · ${TTS_RANGE_LABELS[tts.range]} · ${count} 句`;
-  const status = document.createElement('span');
-  status.className = 'jy-tts-bar-status';
-  status.dataset.jyTtsStatus = '';
-  status.setAttribute('aria-live', 'polite');
-  const pause = control('pause', 'jy-tts-bar-stop', `${TTS_ICON_PAUSE}<span>暂停</span>`, true);
-  const stop = control('stop', 'jy-tts-bar-stop', `${TTS_ICON_STOP}<span>停止</span>`, true);
-  const panel = control('panel', 'jy-tts-bar-panel', '<span>朗读面板</span>');
-  panel.title = '打开悬浮窗的朗读面板：进度、上一段、下一段、暂停、缓存到本地';
+  // One small button per side read; its label follows the reading (see ttsBarLabel). Progress, the
+  // other paragraph, stop and saving live in the floating window.
+  const plays = sides.map(side => {
+    const button = control('play-floor', 'jy-tts-bar-play', ttsBarLabel('idle', both ? side : null), false, side);
+    button.title = `${side === 'source' ? '读原文' : '读译文'} · ${TTS_MODE_LABELS[tts.mode]}模式 · ${TTS_RANGE_LABELS[tts.range]} · ${count} 句`;
+    return button;
+  });
   // Choosing happens here rather than in the floating window: reading the original, the window's list
   // is in the original's language, and the translation the reader can actually read is in the chat.
   const pick = control('pick', 'jy-tts-bar-pick', '<span>缓存</span>', false, sides[0]);
@@ -6329,8 +6413,17 @@ function makeTtsBar(messageId, tts, count, readingStyle = '', sides = [tts.side]
   const save = control('pick-save', 'jy-tts-bar-pick-save', '<span>缓存所选</span>', true, sides[0]);
   const all = control('pick-all', 'jy-tts-bar-pick-all', '<span>全选</span>', true, sides[0]);
   const exit = control('pick-exit', 'jy-tts-bar-pick-exit', '<span>退出选择</span>', true);
-  bar.append(play, ...(playOther ? [playOther] : []), meta, status, pause, stop, pick, picked, save, all, exit, panel);
+  bar.append(...plays, pick, picked, save, all, exit);
   return bar;
+}
+
+/** What a floor's play button says: the state of the reading on it, and which side when both are read. */
+function ttsBarLabel(state, side = null) {
+  const which = side === 'source' ? '原文' : side === 'translation' ? '译文' : '';
+  if (state === 'playing') return `${TTS_ICON_PAUSE}<span>暂停</span>`;
+  if (state === 'paused') return `${TTS_ICON_PLAY}<span>继续</span>`;
+  if (state === 'busy') return `${TTS_ICON_STOP}<span>准备中</span>`;
+  return `${TTS_ICON_PLAY}<span>朗读${which}</span>`;
 }
 
 /**
@@ -6459,7 +6552,10 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
       play.after(makeTtsEditButton(messageId, placement.segment, placement.side));
     }
   }
-  root.appendChild(makeTtsBar(messageId, tts, visibleTotal, readingStyleOf(root), floors.map(floor => floor.side)));
+  const bar = makeTtsBar(messageId, tts, visibleTotal, readingStyleOf(root), floors.map(floor => floor.side));
+  // No buttons in the floor: the row is still there, hidden, so a redraw of this floor is still noticed.
+  if (floorButtonMode(settings) === 'off') bar.hidden = true;
+  root.insertBefore(bar, root.firstChild);
   root.dataset.jyTts = signature;
   runtime.tts.mesSeen.set(messageId, { mes: message?.mes ?? '', key: cheapKey });
   runtime.tts.ranges.set(messageId, ranges);
@@ -6477,7 +6573,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   const warnKey = `${floors.map(floor => floor.floorId).join('+')}|${signature}`;
   if (missing && buttonMode !== 'off' && !runtime.tts.anchorWarned.has(warnKey)) {
     runtime.tts.anchorWarned.add(warnKey);
-    recordDiagnostic('warn', 'tts.anchors', `第 ${messageId} 楼有 ${missing} ${buttonMode === 'sentence' ? '句' : '段'}没在渲染后的楼层里找到位置，这几${buttonMode === 'sentence' ? '句' : '段'}后面没有按钮，「朗读本楼」照常能读到。`, {
+    recordDiagnostic('warn', 'tts.anchors', `第 ${messageId} 楼有 ${missing} ${buttonMode === 'sentence' ? '句' : '段'}没在渲染后的楼层里找到位置，这几${buttonMode === 'sentence' ? '句' : '段'}后面没有按钮，「朗读」照常能读到。`, {
       floor: floors.map(floor => floor.floorId),
       readable: visibleTotal,
       placed: buttonMode === 'sentence' ? buttons.length : lineButtons.length,
@@ -6588,7 +6684,14 @@ function bindTtsDom() {
       const side = target.dataset.jyTtsSide || null;
       if (action === 'stop') stopTts(messageId);
       else if (action === 'pause') toggleTtsPause();
-      else if (action === 'play-floor') void playTtsFloor(messageId, side);
+      else if (action === 'play-floor') {
+        const transport = runtime.tts.transport;
+        const here = transport?.messageId === messageId && (!side || transport.side === side);
+        if (target.dataset.state === 'busy' || (here && transport.state === 'loading')) stopTts(messageId);
+        else if (here && transport.state === 'playing') pauseTts();
+        else if (here && transport.state === 'paused') resumeTts();
+        else void playTtsFloor(messageId, side);
+      }
       else if (action === 'panel') void openTtsPanel(messageId, null, side);
       else if (action === 'pick' || action === 'pick-exit') setTtsPicking(messageId, action === 'pick' ? (side ?? primaryTtsSide()) : null);
       else if (action === 'pick-all') {
@@ -10019,7 +10122,7 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
       // The feature switch lives on two pages; the one just clicked decides, the other follows.
       if (event.target.matches('[data-jy-tts-field="enabled"]')) {
         for (const twin of root.querySelectorAll('[data-jy-tts-field="enabled"]')) twin.checked = event.target.checked;
@@ -10668,7 +10771,14 @@ async function openMiniWindow() {
     <span class="jy-progress" aria-hidden="true"><span data-jy-mini-playbar-fill></span></span>
     <span class="jy-mini-playbar-text" data-jy-mini-playbar-text></span>
   </button>
-  <div class="jy-mini-brief-actions"><button type="button" class="jy-button" data-jy-action="mini-brief-read">读这一楼</button><button type="button" class="jy-button jy-button-primary" data-jy-action="mini-max">展开</button></div>
+  <div class="jy-mini-brief-actions">
+    <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-translate" hidden>翻译本楼</button>
+    <button type="button" class="jy-button jy-mini-danger" data-jy-action="mini-stop" hidden>停止翻译</button>
+    <button type="button" class="jy-mini-play jy-mini-play-brief" data-jy-action="tts-toggle" aria-label="播放或暂停" title="播放 / 暂停" hidden>▶</button>
+    <button type="button" class="jy-button jy-mini-danger" data-jy-action="tts-stop" data-jy-brief-stop hidden>停止朗读</button>
+    <button type="button" class="jy-button" data-jy-action="mini-brief-read">读这一楼</button>
+    <button type="button" class="jy-button" data-jy-action="mini-max">展开</button>
+  </div>
 </div>
 <div class="jy-mini-tabs" role="tablist" data-jy-mini-tabs>
   <button type="button" role="tab" aria-selected="true" data-jy-mini-tab="translate">翻译</button>
@@ -10676,6 +10786,7 @@ async function openMiniWindow() {
   <button type="button" role="tab" aria-selected="false" data-jy-mini-tab="log">日志</button>
 </div>
 <div class="jy-mini-body jy-mini-translate" data-jy-mini-page="translate">
+  <div class="jy-mini-scroll">
   <div class="jy-mini-status">
     <div class="jy-mini-status-top">
       <div class="jy-mini-floor-nav">
@@ -10691,63 +10802,57 @@ async function openMiniWindow() {
     <pre class="jy-mini-thinking-full" data-jy-mini-thinking-full hidden></pre>
   </div>
   <ol class="jy-mini-rows" data-jy-mini-rows></ol>
-  <div class="jy-mini-actions" data-jy-mini-actions>
-    <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-translate">翻译本楼</button>
-    <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-stop" hidden>停止</button>
-    <button type="button" class="jy-button" data-jy-action="mini-repair" hidden>补译</button>
-    <button type="button" class="jy-button" data-jy-action="mini-retranslate" hidden>重翻</button>
-    <button type="button" class="jy-button jy-mini-auto" data-jy-action="mini-auto" aria-pressed="true" title="新楼生成完自动翻译">自动 开</button>
   </div>
-  <div class="jy-mini-quick">
-    <label title="只管翻译走哪条连接，和控制中心「翻译台」里那个是同一个选择。朗读分析在「朗读 → 01 读什么」里另选，互不影响。"><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
-    <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
-    <button type="button" class="jy-text-button" data-jy-action="mini-translate-all" data-jy-mini-untranslated hidden></button>
-  </div>
-  <details class="jy-mini-scratch" data-jy-mini-scratch data-expanded="false">
-    <summary class="jy-mini-scratch-top"><strong>随手翻</strong><span data-jy-mini-target>简体中文</span></summary>
-    <div class="jy-mini-scratch-drawer">
-      <div class="jy-mini-scratch-body">
-        <textarea data-jy-mini-input rows="3" spellcheck="false" placeholder="粘一段原文进来，不写回楼层。"></textarea>
-        <div class="jy-mini-run">
-          <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-scratch">翻译这段</button>
-          <p class="jy-muted" data-jy-mini-note>Ctrl + Enter 直接翻</p>
-        </div>
-        <div class="jy-mini-result" data-jy-mini-result hidden>
-          <p data-jy-mini-output></p>
-          <div class="jy-mini-result-foot">
-            <p class="jy-muted" data-jy-mini-meta></p>
-            <button type="button" data-jy-action="mini-copy">复制</button>
+  <div class="jy-mini-more" data-jy-mini-more hidden>
+    <div class="jy-mini-more-head"><strong>更多</strong><button type="button" class="jy-mini-inspect-close" data-jy-action="mini-more-close" aria-label="收起" title="收起">×</button></div>
+    <div class="jy-mini-quick">
+      <label title="只管翻译走哪条连接，和控制中心「翻译台」里那个是同一个选择。朗读分析在「朗读 → 01 读什么」里另选，互不影响。"><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
+      <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
+      <button type="button" class="jy-text-button" data-jy-action="mini-translate-all" data-jy-mini-untranslated hidden></button>
+    </div>
+    <details class="jy-mini-scratch" data-jy-mini-scratch data-expanded="false">
+      <summary class="jy-mini-scratch-top"><strong>随手翻</strong><span data-jy-mini-target>简体中文</span></summary>
+      <div class="jy-mini-scratch-drawer">
+        <div class="jy-mini-scratch-body">
+          <textarea data-jy-mini-input rows="3" spellcheck="false" placeholder="粘一段原文进来，不写回楼层。"></textarea>
+          <div class="jy-mini-run">
+            <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-scratch">翻译这段</button>
+            <p class="jy-muted" data-jy-mini-note>Ctrl + Enter 直接翻</p>
+          </div>
+          <div class="jy-mini-result" data-jy-mini-result hidden>
+            <p data-jy-mini-output></p>
+            <div class="jy-mini-result-foot">
+              <p class="jy-muted" data-jy-mini-meta></p>
+              <button type="button" data-jy-action="mini-copy">复制</button>
+            </div>
           </div>
         </div>
       </div>
+    </details>
+  </div>
+  <div class="jy-mini-foot">
+    <button type="button" class="jy-mini-playbar" data-jy-action="mini-goto-reading" data-jy-mini-playbar hidden>
+      <span class="jy-mini-playbar-glyph" data-jy-mini-playbar-glyph aria-hidden="true">▶</span>
+      <span class="jy-progress" aria-hidden="true"><span data-jy-mini-playbar-fill></span></span>
+      <span class="jy-mini-playbar-text" data-jy-mini-playbar-text></span>
+      <span class="jy-mini-playbar-more" aria-hidden="true">︿</span>
+    </button>
+    <div class="jy-mini-actions" data-jy-mini-actions>
+      <button type="button" class="jy-button jy-button-primary" data-jy-action="mini-translate">翻译本楼</button>
+      <button type="button" class="jy-button jy-mini-danger" data-jy-action="mini-stop" hidden>停止</button>
+      <button type="button" class="jy-button" data-jy-action="mini-repair" hidden>补译</button>
+      <button type="button" class="jy-button" data-jy-action="mini-retranslate" hidden>重翻</button>
+      <button type="button" class="jy-button jy-mini-auto" data-jy-action="mini-auto" aria-pressed="true" title="新楼生成完自动翻译">自动 开</button>
+      <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false" title="翻译模型、方案、全翻、随手翻">更多</button>
     </div>
-  </details>
-  <button type="button" class="jy-mini-playbar" data-jy-action="mini-goto-reading" data-jy-mini-playbar hidden>
-    <span class="jy-mini-playbar-glyph" data-jy-mini-playbar-glyph aria-hidden="true">▶</span>
-    <span class="jy-progress" aria-hidden="true"><span data-jy-mini-playbar-fill></span></span>
-    <span class="jy-mini-playbar-text" data-jy-mini-playbar-text></span>
-    <span class="jy-mini-playbar-more" aria-hidden="true">︿</span>
-  </button>
+  </div>
 </div>
 <div class="jy-mini-body jy-mini-reading" data-jy-mini-page="reading" hidden>
-  <div class="jy-mini-player">
+  <div class="jy-mini-scroll">
+  <div class="jy-mini-player-head">
     <div class="jy-mini-status-top"><strong data-jy-tts-title>没有在读</strong><span data-jy-tts-floor>—</span></div>
-    <div class="jy-progress jy-progress-seek" data-jy-tts-seek role="slider" aria-label="播放进度，拖动或点击跳转" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><span data-jy-tts-progress></span><i data-jy-tts-knob></i></div>
-    <div class="jy-mini-clock"><span data-jy-tts-clock-now>0:00</span><span class="jy-muted" data-jy-tts-message>点楼层里的「朗读本楼」，或者下面的播放键。</span><span data-jy-tts-clock-total>0:00</span></div>
-    <div class="jy-mini-transport">
-      <button type="button" class="jy-button" data-jy-action="tts-prev" title="回到上一段">上一段</button>
-      <button type="button" class="jy-mini-play" data-jy-action="tts-toggle" aria-label="播放或暂停" title="播放 / 暂停">▶</button>
-      <button type="button" class="jy-button" data-jy-action="tts-next" title="快进到下一段">下一段</button>
-    </div>
     <div class="jy-mini-pills" data-jy-tts-pills hidden></div>
     <ul class="jy-mini-steps" data-jy-tts-steps hidden></ul>
-    <div class="jy-mini-links">
-      <button type="button" class="jy-text-button" data-jy-action="tts-read-floor" title="从头朗读这一楼">从头读</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="按你的意见改这一楼的分析，或者丢掉重来">重新分析</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-download" title="把这段音频保存到本地">保存到本地</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-locate" title="把聊天滚到正在读的句子">定位到正文</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-copy-analysis" title="把这一楼的分析结果复制成 JSON">复制分析</button>
-    </div>
   </div>
   <ol class="jy-mini-sentences" data-jy-tts-list hidden></ol>
   <p class="jy-muted jy-mini-sentences-note" data-jy-tts-list-note hidden></p>
@@ -10769,9 +10874,30 @@ async function openMiniWindow() {
     </div>
     <p class="jy-muted" data-jy-tts-note></p>
   </div>
+  </div>
+  <div class="jy-mini-more" data-jy-mini-more hidden>
+    <div class="jy-mini-more-head"><strong>更多</strong><button type="button" class="jy-mini-inspect-close" data-jy-action="mini-more-close" aria-label="收起" title="收起">×</button></div>
+    <div class="jy-mini-links">
+      <button type="button" class="jy-text-button" data-jy-action="tts-read-floor" title="从头朗读这一楼">从头读</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="按你的意见改这一楼的分析，或者丢掉重来">重新分析</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-download" title="把这段音频保存到本地">保存到本地</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-locate" title="把聊天滚到正在读的句子">定位到正文</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-copy-analysis" title="把这一楼的分析结果复制成 JSON">复制分析</button>
+    </div>
+  </div>
+  <div class="jy-mini-foot jy-mini-player">
+    <div class="jy-progress jy-progress-seek" data-jy-tts-seek role="slider" aria-label="播放进度，拖动或点击跳转" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><span data-jy-tts-progress></span><i data-jy-tts-knob></i></div>
+    <div class="jy-mini-clock"><span data-jy-tts-clock-now>0:00</span><span class="jy-muted" data-jy-tts-message>点播放键读这一楼，或者点上面的某一句。</span><span data-jy-tts-clock-total>0:00</span></div>
+    <div class="jy-mini-transport">
+      <button type="button" class="jy-button jy-mini-danger" data-jy-action="tts-stop" title="停止朗读" disabled>停止</button>
+      <button type="button" class="jy-button" data-jy-action="tts-prev" title="回到上一段">上一段</button>
+      <button type="button" class="jy-mini-play" data-jy-action="tts-toggle" aria-label="播放或暂停" title="播放 / 暂停">▶</button>
+      <button type="button" class="jy-button" data-jy-action="tts-next" title="快进到下一段">下一段</button>
+      <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false" title="从头读、重新分析、保存到本地、定位到正文、复制分析">更多</button>
+    </div>
+  </div>
 </div>
-<div class="jy-mini-body jy-mini-logpage" data-jy-mini-page="log" hidden>
-  <div class="jy-mini-log-filters" data-jy-mini-log-filters>
+<div class="jy-mini-body jy-mini-logpage" data-jy-mini-page="log" hidden>  <div class="jy-mini-log-filters" data-jy-mini-log-filters>
     <button type="button" class="jy-mini-chip" data-jy-action="log-filter" data-filter="floor" aria-pressed="true">本楼</button>
     <button type="button" class="jy-mini-chip" data-jy-action="log-filter" data-filter="all" aria-pressed="false">全部</button>
     <button type="button" class="jy-mini-chip" data-jy-action="log-filter" data-filter="translation" aria-pressed="false">翻译</button>
@@ -10779,9 +10905,11 @@ async function openMiniWindow() {
     <button type="button" class="jy-mini-chip jy-mini-chip-error" data-jy-action="log-filter" data-filter="errors" aria-pressed="false">只看出错</button>
     <button type="button" class="jy-text-button" data-jy-action="log-copy">复制全部</button>
   </div>
+  <div class="jy-mini-scroll">
   <ol class="jy-mini-log" data-jy-mini-log></ol>
   <p class="jy-muted jy-mini-log-empty" data-jy-mini-log-empty hidden>这里还没有记录。</p>
   <div class="jy-mini-log-detail" data-jy-mini-log-detail hidden></div>
+  </div>
 </div>`;
   shadow.append(style, win);
   document.body.appendChild(host);
@@ -11051,11 +11179,11 @@ async function openMiniWindow() {
   const renderFloorActions = () => {
     const running = viewRunning;
     const show = (action, visible) => {
-      const button = win.querySelector(`[data-jy-action="${action}"]`);
-      if (button) button.hidden = !visible;
+      for (const button of win.querySelectorAll(`[data-jy-action="${action}"]`)) button.hidden = !visible;
     };
     show('mini-stop', running);
     show('mini-translate', !running && viewState.key === 'pending');
+    renderBriefActions();
     show('mini-retranslate', !running && ['done', 'missing'].includes(viewState.key));
     show('mini-repair', !running && viewState.key === 'missing');
     const untranslated = untranslatedFloors(getContext().chat, { limit: 50 }).filter(id => id !== viewFloor);
@@ -11072,14 +11200,29 @@ async function openMiniWindow() {
     setText(win, '[data-jy-mini-title]', Number.isInteger(viewFloor) ? `${title} · ${viewState.label}` : '镜译');
     setText(win, '[data-jy-mini-brief-title]', Number.isInteger(viewFloor) ? title : '镜译');
     setText(win, '[data-jy-mini-brief-state]', Number.isInteger(viewFloor) ? viewState.label : '');
-    const briefRead = win.querySelector('[data-jy-action="mini-brief-read"]');
-    if (briefRead) briefRead.hidden = !(ttsSettings().enabled && Number.isInteger(viewFloor));
+    renderBriefActions();
     const ids = assistantFloorIds();
     const at = ids.indexOf(viewFloor);
     const prev = win.querySelector('[data-jy-action="mini-floor-prev"]');
     const next = win.querySelector('[data-jy-action="mini-floor-next"]');
     if (prev) prev.disabled = at <= 0;
     if (next) next.disabled = at < 0 || at >= ids.length - 1;
+  };
+  // The first layer carries the one button the moment calls for: translate this floor, stop the
+  // translation, or play / pause and stop the reading — so stopping never needs the window opened.
+  const renderBriefActions = () => {
+    const brief = win.querySelector('[data-jy-mini-brief]');
+    if (!brief) return;
+    const reading = ttsTransportDescription(runtime.tts.transport);
+    const live = Boolean(reading && ['loading', 'playing', 'paused'].includes(reading.state));
+    const toggle = brief.querySelector('[data-jy-action="tts-toggle"]');
+    if (toggle) toggle.hidden = !live;
+    const stop = brief.querySelector('[data-jy-brief-stop]');
+    if (stop) stop.hidden = !live;
+    const read = brief.querySelector('[data-jy-action="mini-brief-read"]');
+    if (read) read.hidden = live || !(ttsSettings().enabled && Number.isInteger(viewFloor));
+    const reel = win.querySelector('.jy-mini-transport [data-jy-action="tts-stop"]');
+    if (reel) reel.disabled = !live;
   };
   // The reading page, redrawn when the floor on screen changes. Bound once that page's pieces exist.
   let refreshReading = () => {};
@@ -11116,12 +11259,15 @@ async function openMiniWindow() {
     }, delay);
     runtime.timers.add(rowsTimer);
   };
+  // A floor the reader walked to stays on screen when a new reply comes; the newest one does not.
+  let chosenIn = null;
   const moveFloor = delta => {
     const ids = assistantFloorIds();
     if (!ids.length) return;
     const at = ids.indexOf(viewFloor);
     const next = ids[Math.min(ids.length - 1, Math.max(0, (at < 0 ? ids.length - 1 : at) + delta))];
     if (next === viewFloor) return;
+    chosenIn = next !== ids.at(-1) ? getCurrentChatId() : null;
     viewFloor = next;
     editingRow = null;
     void renderFloor();
@@ -11564,8 +11710,8 @@ async function openMiniWindow() {
       note.hidden = listed.length > 0 && !unread && prepared.depth !== 'pending';
       note.textContent = !listed.length ? '这一楼在当前范围里没有可读的句子。'
         : !prepared.items.length ? '这一楼的对白全部被屏蔽了，没有会朗读的句子。'
-        : prepared.depth === 'pending' ? '这一楼还没分析。按播放或「朗读本楼」时才请求副模型，不会自己开始。'
-          : unread ? '这一楼还没深度分析，列表里是翻译时的骨架。按播放或「朗读本楼」时才请求副模型，不会自己开始。' : '';
+        : prepared.depth === 'pending' ? '这一楼还没分析。按播放或「朗读」时才请求副模型，不会自己开始。'
+          : unread ? '这一楼还没深度分析，列表里是翻译时的骨架。按播放或「朗读」时才请求副模型，不会自己开始。' : '';
     }
     markCurrentSentence();
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
@@ -11682,7 +11828,7 @@ async function openMiniWindow() {
     const floorLabel = win.querySelector('[data-jy-tts-floor]');
     const progress = win.querySelector('[data-jy-tts-progress]');
     const message = win.querySelector('[data-jy-tts-message]');
-    const toggle = win.querySelector('[data-jy-action="tts-toggle"]');
+    const toggles = [...win.querySelectorAll('[data-jy-action="tts-toggle"]')];
     const stepButtons = [win.querySelector('[data-jy-action="tts-prev"]'), win.querySelector('[data-jy-action="tts-next"]')];
     if (!info) {
       if (title) putText(title, '没有在读');
@@ -11695,11 +11841,12 @@ async function openMiniWindow() {
       setText(win, '[data-jy-tts-clock-now]', '0:00');
       setText(win, '[data-jy-tts-clock-total]', '0:00');
       if (message) putText(message, '点播放键读这一楼，或者点下面的某一句。');
-      if (toggle) {
+      for (const toggle of toggles) {
         putText(toggle, '▶');
         if (toggle.dataset.state !== 'idle') toggle.dataset.state = 'idle';
       }
       for (const button of stepButtons) if (button) button.disabled = true;
+      renderBriefActions();
       renderPills();
       return;
     }
@@ -11730,11 +11877,12 @@ async function openMiniWindow() {
           ? `已暂停 · 第 ${info.index + 1}/${info.count} 句`
           : `第 ${info.index + 1}/${info.count} 句`);
     }
-    if (toggle) {
+    for (const toggle of toggles) {
       putText(toggle, info.state === 'playing' ? '❚❚' : '▶');
       if (toggle.dataset.state !== info.state) toggle.dataset.state = info.state;
     }
     for (const button of stepButtons) if (button) button.disabled = false;
+    renderBriefActions();
     renderPills();
     // The panel follows the sentence being read unless someone pinned one, or is mid-edit.
     const side = runtime.tts.transport?.side ?? null;
@@ -12273,7 +12421,11 @@ async function openMiniWindow() {
       const row = event.target.closest('.jy-mini-row');
       if (row && !event.target.closest('textarea, button')) toggleRow(Number(row.dataset.id));
       const sentence = event.target.closest('.jy-mini-sentence');
-      if (sentence && !event.target.closest('button')) void playTtsUtterance(Number(sentence.dataset.messageId), Number(sentence.dataset.id), sentence.dataset.side);
+      if (sentence && !event.target.closest('button')) {
+        for (const other of sentenceList.querySelectorAll('.jy-mini-sentence[data-open="true"]')) if (other !== sentence) delete other.dataset.open;
+        sentence.dataset.open = 'true';
+        void playTtsUtterance(Number(sentence.dataset.messageId), Number(sentence.dataset.id), sentence.dataset.side);
+      }
       return;
     }
     const action = button.dataset.jyAction;
@@ -12283,6 +12435,15 @@ async function openMiniWindow() {
     if (action === 'mini-goto-reading' && win.dataset.size === 'compact') setSize('card');
     if (action === 'mini-goto-reading') { selectMiniTab('reading'); return; }
     if (action === 'mini-thinking') { thinkingOpen = !thinkingOpen; renderThinkingLine(); globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); }); return; }
+    if (action === 'mini-more' || action === 'mini-more-close') {
+      const page = button.closest('[data-jy-mini-page]');
+      const sheet = page?.querySelector('[data-jy-mini-more]');
+      if (!sheet) return;
+      sheet.hidden = action === 'mini-more-close' ? true : !sheet.hidden;
+      for (const toggle of page.querySelectorAll('[data-jy-action="mini-more"]')) toggle.setAttribute('aria-expanded', String(!sheet.hidden));
+      return;
+    }
+    if (action === 'tts-stop') { stopTts(); return; }
     if (action === 'mini-floor-prev') { moveFloor(-1); return; }
     if (action === 'mini-floor-next') { moveFloor(1); return; }
     if (action === 'mini-auto') {
@@ -12587,6 +12748,16 @@ async function openMiniWindow() {
       void renderFloor();
     },
     refresh: () => { void renderFloor(); },
+    // A new reply: the window moves onto it, unless something is being read or the reader chose a floor.
+    followLatest: messageId => {
+      if (!Number.isInteger(messageId) || messageId === viewFloor) return;
+      if (chosenIn !== null && chosenIn === getCurrentChatId()) return;
+      const transport = runtime.tts.transport;
+      if (transport && ['loading', 'playing', 'paused'].includes(transport.state)) return;
+      viewFloor = messageId;
+      editingRow = null;
+      void renderFloor();
+    },
   };
   return runtime.mini;
 }
@@ -12798,6 +12969,9 @@ function registerRuntimeEvents() {
     if (runtime.generationGate.consume(getCurrentChatId(), type)) {
       runtime.mainGenerationActive = false;
       runtime.stoppedGeneration = null;
+      // A reply just written, and a whole one: a continue adds to a floor already heard.
+      if (!['continue', 'appendFinal'].includes(type)) runtime.tts.fresh.add(Number(messageId));
+      runtime.mini?.followLatest?.(Number(messageId));
       verifyGenerationInterceptor();
       scheduleAuto(messageId, 'generation');
       return;
@@ -12839,21 +13013,27 @@ function registerRuntimeEvents() {
       ttsFloorClosed(id, { translated: true });
       return;
     }
-    // The text changed under whatever was prepared or playing on this floor.
-    forgetTtsItems(id);
+    // The text changed under whatever was prepared or playing on this floor — unless it is the
+    // original being read, and only a translation was written in beside it.
+    void forgetChangedTtsItems(id);
     scheduleTtsDecorate(id, { force: true });
     ttsFloorClosed(id, { translated: true });
   });
   bindEvent(eventTypes.MESSAGE_SWIPED, messageId => {
     if (runtime.tts.transport?.messageId === Number(messageId)) stopTts(Number(messageId));
     forgetTtsItems(Number(messageId));
+    // Another alternative is not a new reply; a swipe that generates one is announced as rendered.
+    runtime.tts.fresh.delete(Number(messageId));
     scheduleTtsDecorate(Number(messageId), { force: true, delay: 300 });
-    ttsFloorClosed(Number(messageId));
+    ttsFloorClosed(Number(messageId), { reason: 'swipe' });
   });
-  bindEvent(eventTypes.MESSAGE_EDITED, messageId => ttsFloorClosed(Number(messageId)));
+  bindEvent(eventTypes.MESSAGE_EDITED, messageId => ttsFloorClosed(Number(messageId), { reason: 'edit' }));
   bindEvent(eventTypes.MESSAGE_DELETED, () => {
-    stopTts();
-    scheduleTtsDecorateAll({ force: true, delay: 300 });
+    // The host says how long the chat is now, not which floor went: a reading goes on when its floor
+    // still reads the same where it was.
+    void ttsReadingStands().then(stands => {
+      if (!stands) stopTts();
+    }).finally(() => scheduleTtsDecorateAll({ force: true, delay: 300 }));
   });
   bindEvent(eventTypes.MORE_MESSAGES_LOADED, () => scheduleTtsDecorateAll());
   // The readable-entry cache for the token-saving whitelist and the force-activation matcher.
@@ -12887,6 +13067,7 @@ function registerRuntimeEvents() {
     runtime.tts.preview = null;
     runtime.tts.inspect = null;
     runtime.tts.mesSeen.clear();
+    runtime.tts.fresh.clear();
     scheduleTtsDecorateAll();
   });
 }
@@ -13142,6 +13323,7 @@ function apiSession(floor, items, settings, { play, signal, speaker = '' }) {
             announce();
           },
         });
+        if (outcome === 'blocked') throw new Error('浏览器要先点一下页面才肯出声。');
         if (outcome === 'error') throw new Error('浏览器播放这段音频失败。换成 mp3 格式通常能解决。');
         if (outcome === 'stopped' || state.stopped) break;
         index = ahead + 1;
@@ -13363,6 +13545,7 @@ export const __testing = Object.freeze({
   playTtsParagraph,
   resetTtsPlayer: () => { runtime.tts.player = null; runtime.tts.transport = null; },
   playTtsFloor,
+  stopTts,
   regenerateTtsSentence,
   regenerateTtsParagraph,
   ttsCast,

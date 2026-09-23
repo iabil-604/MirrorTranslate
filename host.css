@@ -344,27 +344,32 @@
   transform: scale(1.08);
 }
 
+/* A small row at the floor's start: read this floor, and choose paragraphs to save. Progress, stop and
+   the rest are in the floating window. */
 #chat .jy-tts-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.35em 0.8em;
-  margin: 0.9em 0 0.1em;
-  padding-top: 0.55em;
-  border-top: 1px dashed color-mix(in srgb, currentColor 22%, transparent);
-  font-size: 0.84em;
-  line-height: 1.6;
+  gap: 0.35em 0.5em;
+  margin: 0 0 0.55em;
+  font-size: 0.8em;
+  line-height: 1.5;
   user-select: none;
   -webkit-user-select: none;
 }
 
 #chat .jy-tts-bar-play,
-#chat .jy-tts-bar-stop {
+#chat .jy-tts-bar-stop,
+#chat .jy-tts-bar-pick,
+#chat .jy-tts-bar-pick-save,
+#chat .jy-tts-bar-pick-all,
+#chat .jy-tts-bar-pick-exit {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 0.45em;
+  gap: 0.4em;
   margin: 0;
-  padding: 0.2em 0.75em;
+  padding: 0.15em 0.7em;
   border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, currentColor 8%, transparent);
@@ -375,8 +380,25 @@
 }
 
 #chat .jy-tts-bar-play:hover,
-#chat .jy-tts-bar-stop:hover {
+#chat .jy-tts-bar-stop:hover,
+#chat .jy-tts-bar-pick:hover,
+#chat .jy-tts-bar-pick-all:hover,
+#chat .jy-tts-bar-pick-exit:hover {
   background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+#chat .jy-tts-bar-pick,
+#chat .jy-tts-bar-pick-all,
+#chat .jy-tts-bar-pick-exit {
+  border-color: color-mix(in srgb, currentColor 20%, transparent);
+  background: transparent;
+  opacity: 0.8;
+}
+
+#chat .jy-tts-bar-play[data-state="busy"] { opacity: 0.75; }
+
+#chat .jy-tts-bar [hidden] {
+  display: none;
 }
 
 #chat .jy-tts-bar-meta {
@@ -484,10 +506,19 @@
   }
   #chat .jy-tts-play { margin-right: 0.2em; }
   #chat .jy-tts-bar-play,
-  #chat .jy-tts-bar-stop {
-    padding: 0.35em 0.9em;
+  #chat .jy-tts-bar-stop,
+  #chat .jy-tts-bar-pick,
+  #chat .jy-tts-bar-pick-save,
+  #chat .jy-tts-bar-pick-all,
+  #chat .jy-tts-bar-pick-exit {
+    padding: 0.3em 0.85em;
   }
-  #chat .jy-tts-bar-panel { padding: 0.35em 0; }
+  /* Small to the eye, a thumb's size to the touch. */
+  #chat .jy-tts-bar button::before {
+    content: "";
+    position: absolute;
+    inset: -8px -3px;
+  }
 }
 
 /* 自然段末尾的两个按钮：播放和重新生成。一段一对，手机上也留着——一个自然段大小的目标，

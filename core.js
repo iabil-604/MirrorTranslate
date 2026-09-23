@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.33.1';
+} from './prompts.js?v=0.34.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.33.1';
+export const APP_VERSION = '0.34.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -580,6 +580,8 @@ export const DEFAULT_TTS = Object.freeze({
   // Every reply the main model writes goes out asking it to mark each line of dialogue with who says
   // it and how; the plain reading then tells the voices apart from the text alone.
   speechMarks: false,
+  // A new reply is read aloud by itself once its text is final.
+  autoRead: false,
   fish: DEFAULT_FISH,
 });
 
@@ -1158,6 +1160,7 @@ export function normalizeTts(value) {
     dialogueVoice: normalizeVoiceId(source.dialogueVoice),
     dialogueFallback: TTS_DIALOGUE_FALLBACKS.includes(source.dialogueFallback) ? source.dialogueFallback : DEFAULT_TTS.dialogueFallback,
     speechMarks: source.speechMarks === true,
+    autoRead: source.autoRead === true,
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     fish: normalizeFishSettings(source.fish),
   };

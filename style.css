@@ -523,14 +523,16 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-bar .jy-dot { width: 6px; height: 6px; }
 .jy-mini-bar button { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 auto; border: 0; border-radius: 5px; background: transparent; color: #a9c0b2; font-size: 15px; line-height: 1; transition: background var(--jy-hover), color var(--jy-hover); }
 .jy-mini-bar button:hover { background: #ffffff1a; color: #f2f7f0; }
-.jy-mini-body { display: flex; flex-direction: column; gap: 12px; padding: 13px 14px 14px; }
+.jy-mini-body { display: flex; flex-direction: column; }
 .jy-mini-status { display: flex; flex-direction: column; gap: 7px; }
 .jy-mini-status-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .jy-mini-status-top strong { font-size: 14px; font-weight: 650; }
 .jy-mini-status-top span { color: var(--jy-muted); font-size: 11px; flex: 0 0 auto; }
 .jy-mini-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .jy-mini-actions .jy-button { min-height: 32px; padding: 0 6px; font-size: 12px; }
-.jy-mini-actions .jy-button[data-jy-action="mini-stop"] { color: var(--jy-error); }
+.jy-mini-danger { background: var(--jy-surface); border-color: var(--jy-error); color: var(--jy-error); }
+.jy-mini-danger:hover { background: var(--jy-error-soft); }
+.jy-mini-danger:disabled { opacity: .45; }
 .jy-mini-quick { display: flex; flex-direction: column; gap: 7px; padding-top: 12px; border-top: 1px solid var(--jy-line-soft); }
 .jy-mini-quick label { display: flex; align-items: center; gap: 8px; }
 .jy-mini-quick .jy-label { width: 34px; flex: 0 0 auto; margin: 0; font-size: 11px; }
@@ -643,7 +645,22 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 /* The reading page can be taller than a phone; the window caps itself and the body scrolls. */
 .jy-mini { display: flex; flex-direction: column; max-height: calc(100dvh - 16px); }
 .jy-mini-bar, .jy-mini-tabs { flex: 0 0 auto; }
-.jy-mini-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.jy-mini-body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+/* Every page: one scrolling area, the page's own actions fixed at its foot, the rarely used controls
+   in a sheet between the two. When the window is short the middle scrolls; nothing is ever cut off. */
+.jy-mini-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; display: flex; flex-direction: column; gap: 12px; padding: 13px 14px 14px; }
+.jy-mini-foot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--jy-line-soft); background: var(--jy-surface); }
+.jy-mini-more { flex: 0 0 auto; max-height: 55%; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px 12px; border-top: 1px solid var(--jy-line-soft); background: var(--jy-band); }
+.jy-mini-more[hidden] { display: none; }
+.jy-mini-more-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.jy-mini-more-head strong { font-size: 12.5px; font-weight: 650; }
+.jy-mini-more .jy-mini-quick, .jy-mini-more .jy-mini-scratch { padding-top: 0; border-top: 0; }
+.jy-mini-more .jy-mini-quick .jy-label { width: auto; white-space: nowrap; }
+.jy-mini-player-head { display: flex; flex-direction: column; gap: 8px; }
+.jy-mini-logpage > .jy-mini-log-filters { flex: 0 0 auto; padding: 12px 14px 8px; }
+.jy-mini-thinking-full, .jy-mini-steps, .jy-mini-log-section pre { overscroll-behavior: contain; }
+/* The card keeps one height whatever the page, so switching pages never moves the window. */
+.jy-mini[data-size="card"] { height: min(640px, calc(100dvh - 16px)); }
 /* Page switch: the height eases, the incoming page slides in from its side, the underline slides. */
 .jy-mini.is-resizing { transition: height 260ms cubic-bezier(0.22, 0.72, 0.2, 1); }
 .jy-mini-tabs { position: relative; }
@@ -820,18 +837,18 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-playbar-text { flex: 0 0 auto; color: var(--jy-muted); white-space: nowrap; }
 .jy-mini-playbar-more { flex: 0 0 auto; color: var(--jy-muted); }
 .jy-mini-player { display: flex; flex-direction: column; gap: 8px; }
-.jy-mini-player .jy-mini-status-top strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.jy-mini-player-head .jy-mini-status-top strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .jy-mini-clock { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--jy-muted); }
 .jy-mini-clock .jy-muted { margin: 0; flex: 1 1 auto; min-width: 0; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jy-mini-transport { display: flex; align-items: center; justify-content: center; gap: 10px; }
-.jy-mini-transport .jy-button { flex: 0 1 96px; min-height: 36px; padding: 0 10px; font-size: 12.5px; }
+.jy-mini-transport { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.jy-mini-transport .jy-button { flex: 1 1 0; min-width: 0; min-height: 36px; padding: 0 6px; font-size: 12.5px; white-space: nowrap; }
 .jy-mini-play { width: 52px; height: 52px; flex: 0 0 auto; border: 0; border-radius: 50%; background: var(--jy-accent); color: var(--jy-on-accent); font-size: 20px; line-height: 1; cursor: pointer; box-shadow: 0 6px 16px rgba(4, 14, 11, .22); transition: transform var(--jy-hover), opacity var(--jy-hover); }
 .jy-mini-play:hover { transform: scale(1.04); }
 .jy-mini-play[data-state="loading"] { opacity: .5; }
 .jy-mini-pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }
 .jy-mini-pills[hidden] { display: none; }
-.jy-mini-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; }
-.jy-mini-links .jy-text-button { font-size: 11.5px; }
+.jy-mini-links { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
+.jy-mini-links .jy-text-button { font-size: 12.5px; text-align: left; padding: 7px 2px; }
 .jy-mini-sentences { padding-top: 6px; border-top: 1px solid var(--jy-line-soft); }
 .jy-mini-sentence-edit { flex: 0 0 auto; font-size: 11.5px; white-space: nowrap; }
 .jy-mini-sentences-note { margin: 0; font-size: 11.5px; }
@@ -873,7 +890,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini[data-touch="true"] .jy-mini-tabs button { padding: 11px 0 12px; font-size: 13px; }
 .jy-mini[data-touch="true"] .jy-mini-body { order: 2; }
 .jy-mini[data-touch="true"] .jy-mini-bar { order: 1; padding: 12px 12px; }
-.jy-mini[data-touch="true"] .jy-mini-bar button { width: 34px; height: 34px; font-size: 17px; }
+.jy-mini[data-touch="true"] .jy-mini-bar button { width: 44px; height: 44px; font-size: 17px; }
 .jy-mini[data-touch="true"] .jy-mini-row, .jy-mini[data-touch="true"] .jy-mini-sentence { min-height: 52px; padding: 10px 6px; }
 .jy-mini[data-touch="true"] .jy-mini-row-src { white-space: normal; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
 .jy-mini[data-touch="true"] .jy-mini-row-dst, .jy-mini[data-touch="true"] .jy-mini-sentence-text { font-size: 14px; -webkit-line-clamp: 4; }
@@ -882,32 +899,29 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini[data-touch="true"] .jy-mini-transport .jy-button { flex: 1 1 0; min-height: 46px; font-size: 14px; border-radius: 12px; }
 .jy-mini[data-touch="true"] .jy-mini-transport { justify-content: stretch; }
 .jy-mini[data-touch="true"] .jy-mini-play { width: 56px; height: 56px; font-size: 22px; }
-/* On a phone the list sits above the player, and inside the player the transport comes last, its play key at the thumb's end. */
-.jy-mini[data-touch="true"] .jy-mini-player { order: 2; }
-.jy-mini[data-touch="true"] .jy-mini-sentences, .jy-mini[data-touch="true"] .jy-mini-sentences-note, .jy-mini[data-touch="true"] .jy-mini-inspect { order: 1; }
-.jy-mini[data-touch="true"] .jy-mini-player .jy-mini-links { order: 0; }
-.jy-mini[data-touch="true"] .jy-mini-player .jy-mini-pills, .jy-mini[data-touch="true"] .jy-mini-player .jy-mini-steps { order: 1; }
-.jy-mini[data-touch="true"] .jy-mini-player .jy-mini-status-top { order: 2; }
-.jy-mini[data-touch="true"] .jy-mini-player .jy-progress-seek { order: 3; }
-.jy-mini[data-touch="true"] .jy-mini-player .jy-mini-clock { order: 4; }
-.jy-mini[data-touch="true"] .jy-mini-player .jy-mini-transport { order: 5; }
-.jy-mini[data-touch="true"] .jy-mini-play { order: 3; }
-/* On a phone the page itself does not scroll: the list in the middle does, so the buttons at the foot stay under the thumb. */
-.jy-mini[data-touch="true"] .jy-mini-body { overflow: hidden; }
-.jy-mini[data-touch="true"] .jy-mini-rows, .jy-mini[data-touch="true"] .jy-mini-sentences, .jy-mini[data-touch="true"] .jy-mini-inspect, .jy-mini[data-touch="true"] .jy-mini-log, .jy-mini[data-touch="true"] .jy-mini-log-detail { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
-.jy-mini[data-touch="true"] .jy-mini-status, .jy-mini[data-touch="true"] .jy-mini-actions, .jy-mini[data-touch="true"] .jy-mini-quick, .jy-mini[data-touch="true"] .jy-mini-scratch, .jy-mini[data-touch="true"] .jy-mini-playbar, .jy-mini[data-touch="true"] .jy-mini-player, .jy-mini[data-touch="true"] .jy-mini-log-filters { flex: 0 0 auto; }
+/* Phones: the card is one height, and every control a thumb taps is at least 44px. */
+.jy-mini[data-touch="true"][data-size="card"] { height: 70dvh; }
+.jy-mini[data-touch="true"] .jy-mini-brief { order: 2; }
+.jy-mini[data-touch="true"] .jy-mini-quick select { min-height: 44px; }
+.jy-mini[data-touch="true"] .jy-mini-scratch-top { min-height: 44px; }
+.jy-mini[data-touch="true"] .jy-mini-links .jy-text-button { min-height: 44px; font-size: 14px; }
+.jy-mini[data-touch="true"] .jy-mini-inspect-close { width: 44px; height: 44px; }
+.jy-mini[data-touch="true"] .jy-progress-seek::before { content: ""; position: absolute; left: 0; right: 0; top: -17px; bottom: -17px; }
+.jy-mini[data-touch="true"] .jy-mini-transport { gap: 6px; }
+/* While audio is being made the step list is a detail; the pills above say how far it is. */
+.jy-mini[data-touch="true"] .jy-mini-steps { max-height: 88px; }
 .jy-mini[data-touch="true"] .jy-mini-pill { font-size: 12px; padding: 2px 9px; }
 .jy-mini[data-touch="true"] .jy-mini-links .jy-text-button, .jy-mini[data-touch="true"] .jy-mini-sentence-edit { font-size: 13px; padding: 6px 4px; }
-.jy-mini[data-touch="true"] .jy-mini-floor-nav button { width: 34px; height: 34px; }
+.jy-mini[data-touch="true"] .jy-mini-floor-nav button { width: 44px; height: 44px; }
 .jy-mini[data-touch="true"] .jy-mini-log-item { padding: 10px 6px; }
 .jy-mini[data-touch="true"] .jy-mini-log-text { font-size: 13px; }
-.jy-mini[data-touch="true"] .jy-mini-chip { padding: 8px 12px; font-size: 13px; }
+.jy-mini[data-touch="true"] .jy-mini-chip { min-height: 44px; padding: 8px 12px; font-size: 13px; }
 .jy-mini[data-touch="true"] .jy-mini-row-field, .jy-mini[data-touch="true"] .jy-mini-inspect-field textarea { font-size: 14px; min-height: 84px; }
 /* The full-size form: the whole screen, still a window with its own close. */
 .jy-mini[data-size="max"] { left: 0 !important; top: 0 !important; width: 100vw; max-width: none; height: 100dvh; max-height: none; border-radius: 0; border: 0; animation: none; }
 .jy-mini[data-size="max"] .jy-mini-bar { padding-top: max(12px, env(safe-area-inset-top)); }
 .jy-mini[data-size="max"] .jy-mini-tabs { padding-bottom: max(2px, env(safe-area-inset-bottom)); }
-.jy-mini[data-size="max"] .jy-mini-body { padding: 14px 16px; }
+.jy-mini[data-size="max"] .jy-mini-scroll { padding: 14px 16px; }
 @media (prefers-reduced-motion: reduce) {
   .jy-mini-batches i[data-state="active"], .jy-mini-row[data-state="running"] .jy-mini-row-mark { animation: none; }
 }
@@ -958,16 +972,20 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-brief-floor .jy-muted { font-weight: 400; font-size: 12px; }
 .jy-mini-brief-task { margin: 0; font-size: 12px; color: var(--jy-muted); line-height: 1.5; }
 .jy-mini-brief-task[hidden] { display: none; }
-.jy-mini-brief-actions { display: flex; gap: 8px; }
+.jy-mini-brief-actions { display: flex; align-items: center; gap: 8px; }
 .jy-mini-brief-actions .jy-button { flex: 1 1 0; }
+.jy-mini-brief-actions [hidden] { display: none; }
+.jy-mini-play-brief { width: 40px; height: 40px; font-size: 15px; box-shadow: none; }
+.jy-mini[data-touch="true"] .jy-mini-play-brief { width: 44px; height: 44px; }
 .jy-mini[data-touch="true"] .jy-mini-brief-actions .jy-button { min-height: 44px; font-size: 14px; border-radius: 12px; }
 
 /* 句子行尾的三个按钮：播放、重新生成、详细 */
-.jy-mini-sentence-tools { display: flex; gap: 2px 6px; flex-wrap: wrap; justify-content: flex-end; align-self: start; }
+.jy-mini-sentence-tools { display: none; gap: 2px 6px; flex-wrap: wrap; justify-content: flex-end; align-self: start; }
+.jy-mini-sentence[data-open="true"] .jy-mini-sentence-tools, .jy-mini-sentence[data-current="true"] .jy-mini-sentence-tools { display: flex; }
 .jy-mini-sentence-tools .jy-text-button { font-size: 11.5px; white-space: nowrap; padding: 2px 4px; }
 .jy-mini[data-touch="true"] .jy-mini-sentence { grid-template-columns: 16px minmax(0, 1fr); }
 .jy-mini[data-touch="true"] .jy-mini-sentence-tools { grid-column: 2 / -1; justify-content: flex-start; gap: 4px 14px; }
-.jy-mini[data-touch="true"] .jy-mini-sentence-tools .jy-text-button { font-size: 13px; padding: 6px 2px; }
+.jy-mini[data-touch="true"] .jy-mini-sentence-tools .jy-text-button { min-height: 44px; font-size: 13px; padding: 0 8px; }
 
 /* 详情页：原文在最上面，自定义指令一行，手机键盘弹出时窗口跟着缩 */
 .jy-mini-inspect-source { margin: 0; font-size: 12px; line-height: 1.5; color: var(--jy-muted); overflow-wrap: anywhere; }
