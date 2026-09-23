@@ -22,6 +22,7 @@ import {
   MAX_CHANNEL_CONCURRENCY,
   createGenerationGate,
   createIndependentRequest,
+  thinkingOffFor,
   clampInteger,
   estimateRequestTokens,
   extractGeneratedTranslations,
@@ -72,7 +73,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.35.0-beta.3';
+} from './core.js?v=0.35.0-beta.4';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -129,10 +130,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.35.0-beta.3';
-import { createTtsStore } from './tts-store.js?v=0.35.0-beta.3';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.0-beta.3';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.0-beta.3';
+} from './tts.js?v=0.35.0-beta.4';
+import { createTtsStore } from './tts-store.js?v=0.35.0-beta.4';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.0-beta.4';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.0-beta.4';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -141,7 +142,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.35.0-beta.3';
+} from './processing.js?v=0.35.0-beta.4';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -158,11 +159,11 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.35.0-beta.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.0-beta.3';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.35.0-beta.3';
-import { createCall, createCallHistory } from './call.js?v=0.35.0-beta.3';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.0-beta.3';
+} from './prompts.js?v=0.35.0-beta.4';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.0-beta.4';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.35.0-beta.4';
+import { createCall, createCallHistory } from './call.js?v=0.35.0-beta.4';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.0-beta.4';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -176,15 +177,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.35.0-beta.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.35.0-beta.3';
+} from './palette.js?v=0.35.0-beta.4';
+import { sampleThemeBackground } from './theme-probe.js?v=0.35.0-beta.4';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.35.0-beta.3';
+} from './diagnostics.js?v=0.35.0-beta.4';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -2155,9 +2156,9 @@ async function translateMessage(messageId = null, { force = false, quiet = false
 // Streaming beta: same request content as the one-shot path, but the SSE deltas are folded into
 // the floor as completed JSON items arrive. The final pass reuses the ordinary write pipeline, so
 // the finished floor is byte-identical to a non-streaming run.
-async function streamTranslationBatch(messages, settings, signal, onDelta = null, onThinking = null, { limitSec = 0 } = {}) {
+async function streamTranslationBatch(messages, settings, signal, onDelta = null, onThinking = null, { limitSec = 0, thinkingOff = false } = {}) {
   const channel = getActiveChannel(settings);
-  const payload = { ...createIndependentRequest(settings, messages), stream: true };
+  const payload = { ...createIndependentRequest(settings, messages, { thinkingOff }), stream: true };
   // The whole-request path has always honoured the channel timeout. Without the same wrapper a
   // stalled upstream kept the task "running" forever once the response headers had arrived.
   return withAbortTimeout(signal, { seconds: channel.timeoutSec, limitSec }, async (streamSignal, renew) => {
@@ -14212,8 +14213,33 @@ async function apiLlmStream({ messages, signal = null, onText = null } = {}) {
     try { onText?.(text); } catch { /* a caller's own bug is not ours */ }
   };
   let text;
+  let off = null;
+  let thought = 0;
+  let thinkingFrom = null;
+  const thinking = reasoning => {
+    if (thinkingFrom === null) thinkingFrom = (globalThis.performance?.now?.() ?? Date.now()) - began;
+    thought = reasoning.length;
+  };
   if (settings.apiMode === 'independent') {
-    const answer = await streamTranslationBatch(clean, settings, signal, heard);
+    const model = String(getActiveChannel(settings).model ?? '').trim();
+    // A call cannot wait for the model to think: turned off wherever the model is known to allow it.
+    off = (runtime.callThinkingRefused ??= new Set()).has(model) ? null : thinkingOffFor(model);
+    const sent = off?.noThink ? withNoThink(clean) : clean;
+    let answer;
+    try {
+      answer = await streamTranslationBatch(sent, settings, signal, heard, thinking, { thinkingOff: Boolean(off) });
+    } catch (error) {
+      // A provider that refuses the field refuses the whole request: asked again without it, and this
+      // model is not sent it again this session.
+      if (!off || isAbortError(error) || !/HTTP (400|422)/.test(String(error?.message ?? error))) throw error;
+      const refused = off;
+      off = null;
+      // A wrong key or an overlong conversation comes back as 400 too: asked again without the field, and
+      // only a request that then works shows the field was what the provider refused.
+      answer = await streamTranslationBatch(clean, settings, signal, heard, thinking);
+      runtime.callThinkingRefused.add(model);
+      recordDiagnostic('warn', 'llm.stream', `${model} 不接受关掉思考的参数（${refused.label}），这次会话不再发：${safeError(error)}`);
+    }
     text = typeof answer === 'string' ? answer : last;
   } else {
     // The host's own connection answers in one piece: the caller hears it all at once.
@@ -14222,10 +14248,27 @@ async function apiLlmStream({ messages, signal = null, onText = null } = {}) {
   }
   if (text !== last) heard(text);
   const total = (globalThis.performance?.now?.() ?? Date.now()) - began;
-  recordDiagnostic('info', 'llm.stream', `通话请求（${channelLabel(settings, settings.apiMode === 'independent' ? settings.selectedChannelId : 'follow', { short: true })}）：首字 ${first === null ? '—' : `${(first / 1000).toFixed(2)} 秒`}，写完 ${(total / 1000).toFixed(2)} 秒，${text.length} 字${settings.apiMode === 'independent' ? '' : '（跟随酒馆，整段返回）'}。`, {
-    streamed: settings.apiMode === 'independent', firstMs: first === null ? null : Math.round(first), totalMs: Math.round(total), characters: text.length,
+  const independent = settings.apiMode === 'independent';
+  // Thinking some backends write into the reply itself rather than a field of its own. An empty block — a
+  // model told /no_think still writes one — is no thinking.
+  const inline = /^\s*(?:<think(?:ing)?\b[^>]*>)?([\s\S]*?)<\/think(?:ing)?>/i.exec(text)?.[1].trim() ?? '';
+  if (!thought && inline) thought = inline.length;
+  const thinkingNote = !independent
+    ? '跟随酒馆，整段返回，想不想由酒馆预设的推理设置决定'
+    : thought
+      ? `模型先想了 ${thought} 字（${thinkingFrom === null ? '—' : `${(thinkingFrom / 1000).toFixed(2)} 秒开始`}）${off ? `，关思考的参数（${off.label}）没关住` : '，这个模型镜译不知道怎么关思考'}`
+      : off ? `已关思考（${off.label}）` : '没有思考';
+  recordDiagnostic(thought ? 'warn' : 'info', 'llm.stream', `通话请求（${channelLabel(settings, independent ? settings.selectedChannelId : 'follow', { short: true })}）：首字 ${first === null ? '—' : `${(first / 1000).toFixed(2)} 秒`}，写完 ${(total / 1000).toFixed(2)} 秒，${text.length} 字；${thinkingNote}。`, {
+    streamed: independent, firstMs: first === null ? null : Math.round(first), totalMs: Math.round(total), characters: text.length, thinkingOff: off?.label ?? null, thought,
   });
   return text;
+}
+
+/** Qwen3's own switch, written after the last thing the caller said. */
+function withNoThink(messages) {
+  const at = messages.map(message => message.role).lastIndexOf('user');
+  if (at < 0) return [...messages, { role: 'user', content: '/no_think' }];
+  return messages.map((message, index) => (index === at ? { ...message, content: `${message.content}\n/no_think` } : message));
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -1,7 +1,7 @@
-import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, MESSAGE_META_KEY } from './core.js?v=0.35.0-beta.3';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.35.0-beta.3';
-import { EMOTION_KEYS } from './palette.js?v=0.35.0-beta.3';
-import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.35.0-beta.3';
+import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, MESSAGE_META_KEY } from './core.js?v=0.35.0-beta.4';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.35.0-beta.4';
+import { EMOTION_KEYS } from './palette.js?v=0.35.0-beta.4';
+import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.35.0-beta.4';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 

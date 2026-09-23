@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.35.0-beta.3';
+} from './prompts.js?v=0.35.0-beta.4';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.35.0-beta.3';
+export const APP_VERSION = '0.35.0-beta.4';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -1384,7 +1384,25 @@ export function normalizeOpenAiBaseUrl(value) {
   return url.toString().replace(/\/$/, '');
 }
 
-export function createIndependentRequest(settings, messages) {
+/**
+ * What turns a model's own thinking off, by its name: the fields SillyTavern itself sends DeepSeek, Zhipu
+ * and Moonshot for it, Qwen3's switch, the lowest effort OpenAI and Gemini Flash take. A name not
+ * recognised gets nothing — a field a provider does not know can make it refuse the whole request.
+ * `noThink` asks for Qwen3's /no_think written into the conversation as well.
+ */
+export function thinkingOffFor(model) {
+  const name = String(model ?? '').toLowerCase();
+  if (!name) return null;
+  if (/deepseek/.test(name)) return { label: 'DeepSeek', body: { thinking: { type: 'disabled' } } };
+  if (/glm-?[45z]|zai-org\//.test(name)) return { label: 'GLM', body: { thinking: { type: 'disabled' } } };
+  if (/kimi|moonshot/.test(name)) return { label: 'Kimi', body: { thinking: { type: 'disabled' } } };
+  if (/qwen-?3|qwq/.test(name)) return { label: 'Qwen', body: { enable_thinking: false }, noThink: true };
+  if (/gemini-[\d.]+-flash|gemini-flash/.test(name) && !/thinking/.test(name)) return { label: 'Gemini Flash', body: { reasoning_effort: 'none' } };
+  if (/(^|\/)gpt-5/.test(name) && !/chat/.test(name)) return { label: 'GPT-5', body: { reasoning_effort: 'minimal' } };
+  return null;
+}
+
+export function createIndependentRequest(settings, messages, { thinkingOff = false } = {}) {
   const channel = Array.isArray(settings?.channels)
     ? getActiveChannel(settings)
     : normalizeChannel(settings);
@@ -1408,9 +1426,22 @@ export function createIndependentRequest(settings, messages) {
   };
   // Sent only when the channel picks one; stays excludable like the numeric knobs above.
   if (channel.reasoningEffort) payload.reasoning_effort = channel.reasoningEffort;
-  const protectedFields = new Set(['stream', 'messages', 'model', 'chat_completion_source', 'reverse_proxy', 'proxy_password']);
+  const protectedFields = new Set(['stream', 'messages', 'model', 'chat_completion_source', 'reverse_proxy', 'proxy_password', 'custom_url', 'custom_include_body', 'custom_include_headers']);
   for (const parameter of channel.excludeParams) {
     if (!protectedFields.has(parameter)) delete payload[parameter];
+  }
+  const off = thinkingOff ? thinkingOffFor(model) : null;
+  if (off) {
+    // The custom source is the one that passes extra fields on. Its key would be the host's own stored
+    // one; the connection's key (or none) is written over it, so no other secret goes to this address.
+    payload.chat_completion_source = 'custom';
+    payload.custom_url = payload.reverse_proxy;
+    payload.custom_include_headers = JSON.stringify({ Authorization: payload.proxy_password ? `Bearer ${payload.proxy_password}` : '' });
+    payload.custom_include_body = JSON.stringify(off.body);
+    delete payload.reverse_proxy;
+    delete payload.proxy_password;
+    delete payload.reasoning_effort;
+    Object.defineProperty(payload, 'thinkingOff', { value: off, enumerable: false });
   }
   return payload;
 }

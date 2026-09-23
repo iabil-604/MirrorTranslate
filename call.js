@@ -100,6 +100,7 @@ export function callSystemPrompt({ char, user, character = '', persona = '', rec
     '- 只说出口的话：不写动作、神态、心理和旁白，不用括号、星号和引号，句首也不写名字。',
     `- 口语，短句，一次说一到三句，说完就停，等${user}开口。`,
     `- 只说${char}自己的话，不替${user}说。`,
+    '- 直接开口：不写思考过程、分析或计划，想到什么就说什么。',
   ].join('\n'));
   return parts.join('\n\n');
 }
