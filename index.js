@@ -9869,19 +9869,25 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'stt-test') {
         saveSettings(collectSettings(root));
         const note = root.querySelector('[data-jy-stt-test-note]');
-        if (runtime.sttTest) {
-          const listening = runtime.sttTest;
-          runtime.sttTest = null;
-          button.textContent = '试一下语音输入';
-          if (note) note.textContent = '正在转写…';
-          const started = Date.now();
-          const heard = await listening.stop();
-          if (note) note.textContent = heard ? `听到：「${heard}」（${((Date.now() - started) / 1000).toFixed(1)} 秒）` : '没听清，再试一次。';
-        } else {
-          if (note) note.textContent = '正在打开麦克风…';
-          runtime.sttTest = await startSpeechInput({ onPartial: text => { if (note) note.textContent = `正在听：${text}`; } });
-          button.textContent = '说完了，点这里结束';
-          if (note) note.textContent = '正在听，说完点一下按钮。';
+        const say = text => { if (note) note.textContent = text; };
+        try {
+          if (runtime.sttTest) {
+            const listening = runtime.sttTest;
+            runtime.sttTest = null;
+            button.textContent = '试一下语音输入';
+            say('正在转写…');
+            const started = Date.now();
+            const heard = await listening.stop();
+            say(heard ? `听到：「${heard}」（${((Date.now() - started) / 1000).toFixed(1)} 秒）` : '没听清，再试一次。');
+          } else {
+            say('正在打开麦克风…');
+            runtime.sttTest = await startSpeechInput({ onPartial: text => say(`正在听：${text}`) });
+            button.textContent = '说完了，点这里结束';
+            say('正在听，说完点一下按钮。');
+          }
+        } catch (error) {
+          say(safeError(error));
+          throw error;
         }
       } else if (action === 'tts-clear-voices') {
         const next = collectSettings(root);
