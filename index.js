@@ -72,7 +72,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.35.0-beta.2';
+} from './core.js?v=0.35.0-beta.3';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -129,10 +129,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.35.0-beta.2';
-import { createTtsStore } from './tts-store.js?v=0.35.0-beta.2';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.0-beta.2';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.0-beta.2';
+} from './tts.js?v=0.35.0-beta.3';
+import { createTtsStore } from './tts-store.js?v=0.35.0-beta.3';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.0-beta.3';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.0-beta.3';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -141,7 +141,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.35.0-beta.2';
+} from './processing.js?v=0.35.0-beta.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -158,11 +158,11 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.35.0-beta.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.0-beta.2';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.35.0-beta.2';
-import { createCall, createCallHistory } from './call.js?v=0.35.0-beta.2';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.0-beta.2';
+} from './prompts.js?v=0.35.0-beta.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.0-beta.3';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.35.0-beta.3';
+import { createCall, createCallHistory } from './call.js?v=0.35.0-beta.3';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.0-beta.3';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -176,15 +176,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.35.0-beta.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.35.0-beta.2';
+} from './palette.js?v=0.35.0-beta.3';
+import { sampleThemeBackground } from './theme-probe.js?v=0.35.0-beta.3';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.35.0-beta.2';
+} from './diagnostics.js?v=0.35.0-beta.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -14040,47 +14040,88 @@ async function startSpeechInput({ lang = '', onPartial = null, signal = null } =
   return tts.sttProvider === 'browser' ? startBrowserSpeech(language, onPartial) : startCloudSpeech(language, tts, signal);
 }
 
+// Phones stop a recognition by themselves after a pause, the button still held: it is started again, and
+// what each round heard is kept, until the reader lets go.
+const BROWSER_SPEECH_ROUNDS = 30;
+
+function joinHeard(before, after) {
+  if (!before || !after) return before || after;
+  // Words of a language written with spaces keep one between rounds; Chinese and Japanese do not.
+  return /\s$/.test(before) || /^[\s　-鿿＀-￯]/.test(after) || /[　-鿿＀-￯]$/.test(before) ? `${before}${after}` : `${before} ${after}`;
+}
+
 function startBrowserSpeech(lang, onPartial) {
   const Recognition = globalThis.SpeechRecognition ?? globalThis.webkitSpeechRecognition;
-  const recognition = new Recognition();
-  recognition.lang = STT_BROWSER_LANGS[lang] ?? (lang || 'zh-CN');
-  recognition.continuous = true;
-  recognition.interimResults = true;
   let heard = '';
+  let kept = '';
   let failure = null;
   let finish = null;
+  let stopping = false;
+  let rounds = 0;
+  let recognition = null;
   const over = new Promise(resolve => { finish = resolve; });
   const began = Date.now();
-  recognition.onresult = event => {
-    let text = '';
-    for (const result of event.results) text += result[0]?.transcript ?? '';
-    heard = text;
-    onPartial?.(heard);
-  };
-  recognition.onend = () => finish();
   return new Promise((resolve, reject) => {
     let open = false;
-    recognition.onerror = event => {
-      if (['no-speech', 'aborted'].includes(event.error)) return;
-      failure = new Error(event.error === 'not-allowed' ? '浏览器没有给麦克风权限。' : `浏览器语音识别出错：${event.error}`);
-      if (!open) reject(failure);
-    };
-    recognition.onstart = () => {
-      open = true;
-      resolve({
-        async stop() {
-          recognition.stop();
-          await over;
-          if (failure) throw failure;
-          recordDiagnostic('info', 'stt', `语音输入（浏览器识别）：说了 ${((Date.now() - began) / 1000).toFixed(1)} 秒，${heard.trim().length} 字。`);
-          return heard.trim();
-        },
-        cancel() {
-          recognition.abort();
-        },
-      });
+    const listen = () => {
+      const round = new Recognition();
+      round.lang = STT_BROWSER_LANGS[lang] ?? (lang || 'zh-CN');
+      round.continuous = true;
+      round.interimResults = true;
+      round.onresult = event => {
+        let text = '';
+        for (const result of event.results) text += result[0]?.transcript ?? '';
+        heard = joinHeard(kept, text);
+        onPartial?.(heard);
+      };
+      round.onerror = event => {
+        if (['no-speech', 'aborted'].includes(event.error)) return;
+        failure = new Error(event.error === 'not-allowed' ? '浏览器没有给麦克风权限。' : `浏览器语音识别出错：${event.error}`);
+        if (!open) reject(failure);
+      };
+      round.onend = () => {
+        if (round !== recognition) return;
+        if (!open) {
+          // Ended before it ever listened, and said nothing about why.
+          reject(failure ?? new Error('浏览器的语音识别没有开始，再按一次试试。'));
+          finish();
+          return;
+        }
+        if (!stopping && !failure && rounds < BROWSER_SPEECH_ROUNDS) {
+          kept = heard;
+          rounds += 1;
+          try {
+            recognition = listen();
+            recognition.start();
+            return;
+          } catch {
+            // Not startable again: what was heard is what there is.
+          }
+        }
+        finish();
+      };
+      round.onstart = () => {
+        if (open) return;
+        open = true;
+        resolve({
+          async stop() {
+            stopping = true;
+            recognition.stop();
+            await over;
+            if (failure) throw failure;
+            recordDiagnostic('info', 'stt', `语音输入（浏览器识别）：说了 ${((Date.now() - began) / 1000).toFixed(1)} 秒，${heard.trim().length} 字${rounds ? `，浏览器中途自己停了 ${rounds} 次，都接着听了` : ''}。`);
+            return heard.trim();
+          },
+          cancel() {
+            stopping = true;
+            recognition.abort();
+          },
+        });
+      };
+      return round;
     };
     try {
+      recognition = listen();
       recognition.start();
     } catch (error) {
       reject(error);
@@ -14729,6 +14770,7 @@ export const __testing = Object.freeze({
   streamReplyLines,
   onReplyStreaming,
   sttAvailability,
+  startSpeechInput,
   apiLlmStream,
   ttsStream: () => runtime.tts.stream,
   regenerateTtsSentence,

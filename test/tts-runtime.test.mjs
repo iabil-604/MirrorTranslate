@@ -2360,3 +2360,41 @@ test('speech input says what is missing before it opens anything', t => {
   assert.equal(browser.available, false);
   assert.match(browser.reason, /自带语音识别/, 'a browser without its own recogniser is told to use the cloud');
 });
+
+test('browser recognition keeps listening through the stops a phone makes by itself', async t => {
+  restoreGlobals(t);
+  const rounds = [];
+  class FakeRecognition {
+    constructor() { rounds.push(this); }
+    start() { this.started = true; setTimeout(() => this.onstart?.(), 0); }
+    stop() { this.stopped = true; setTimeout(() => this.onend?.(), 0); }
+    abort() { this.aborted = true; setTimeout(() => this.onend?.(), 0); }
+    say(text) { this.onresult?.({ results: [[{ transcript: text }]] }); }
+  }
+  const before = { secure: Object.getOwnPropertyDescriptor(globalThis, 'isSecureContext'), recognition: globalThis.webkitSpeechRecognition };
+  t.after(() => {
+    if (before.secure) Object.defineProperty(globalThis, 'isSecureContext', before.secure);
+    else delete globalThis.isSecureContext;
+    globalThis.webkitSpeechRecognition = before.recognition;
+  });
+  Object.defineProperty(globalThis, 'isSecureContext', { value: true, configurable: true, writable: true });
+  globalThis.webkitSpeechRecognition = FakeRecognition;
+  mockHost('stt-browser-rounds');
+  __testing.configureForTest({ settings: { tts: { enabled: true, sttProvider: 'browser', fish: FISH } } });
+  const partials = [];
+  const mic = await __testing.startSpeechInput({ onPartial: text => partials.push(text) });
+  rounds[0].say('你好');
+  rounds[0].onend();
+  assert.equal(rounds.length, 2, 'the phone stopped listening by itself; it is started again');
+  assert.equal(rounds[1].started, true);
+  rounds[1].say('世界');
+  assert.equal(partials.at(-1), '你好世界', 'what each round heard is kept');
+  assert.equal(await mic.stop(), '你好世界');
+  assert.equal(rounds.length, 2, 'let go: not started again');
+
+  const quiet = await __testing.startSpeechInput({});
+  const last = rounds.at(-1);
+  last.onerror({ error: 'network' });
+  last.onend();
+  await assert.rejects(quiet.stop(), /network/, 'a real error ends it, and is said');
+});

@@ -10,7 +10,7 @@
 // Pure functions only: index.js feeds them the reply as it stands and turns what they hand back into
 // requests and sound.
 
-import { DEFAULT_QUOTE_PAIRS, SPEECH_CLOSE, SPEECH_OPEN, SPEECH_SEP, parsePairList } from './core.js?v=0.35.0-beta.2';
+import { DEFAULT_QUOTE_PAIRS, SPEECH_CLOSE, SPEECH_OPEN, SPEECH_SEP, parsePairList } from './core.js?v=0.35.0-beta.3';
 
 // The characters a sentence ends on, and the ones the first stretch may also stop at.
 const SENTENCE_END = new Set(['。', '！', '？', '!', '?', '…', '．', '.']);
