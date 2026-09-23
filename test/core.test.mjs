@@ -656,8 +656,8 @@ test('manifest and entry describe a native extension without TavernHelper calls'
   assert.equal(manifest.version, APP_VERSION);
   assert.equal(manifest.generate_interceptor, 'JingyiTranslator_interceptGeneration');
   assert.equal(manifest.hooks.activate, 'onActivate');
-  assert.match(manifest.js, /^index\.js\?v=\d+\.\d+\.\d+$/);
-  assert.match(manifest.css, /^host\.css\?v=\d+\.\d+\.\d+$/);
+  assert.match(manifest.js, /^index\.js\?v=\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/);
+  assert.match(manifest.css, /^host\.css\?v=\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/);
   assert.doesNotMatch(entry, /TavernHelper|getVariables|setChatMessages|script_id/);
   assert.doesNotMatch(entry, /ConnectionManagerRequestService/);
   assert.match(entry, /ChatCompletionService/);

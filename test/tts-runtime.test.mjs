@@ -2332,3 +2332,31 @@ test('a floor heard as it arrives that breaks off half way stops at the next sen
   assert.equal(transport.state, 'error');
   assert.equal(calls.length, 1, 'the broken floor was not sent to Fish a second time');
 });
+
+test('a call is answered on the connection chosen for calls, heard as it is written', async t => {
+  restoreGlobals(t);
+  const asked = [];
+  mockHost('tts-call-stream', { processRequest: async payload => { asked.push(payload); return { content: '喂？是我。' }; } });
+  __testing.configureForTest({ settings: { channels: [CHANNEL], selectedChannelId: 'c1', apiMode: 'follow', tts: { enabled: true, callChannelId: 'c1', fish: FISH } } });
+  const heard = [];
+  const text = await __testing.apiLlmStream({ messages: [{ role: 'system', content: '你在打电话。' }, { role: 'user', content: '在吗？' }], onText: soFar => heard.push(soFar) });
+  assert.equal(text, '喂？是我。');
+  assert.equal(heard.at(-1), '喂？是我。', 'what was written reaches the caller');
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].model, 'labeler', 'on the connection chosen for calls, not the host\'s own');
+  await assert.rejects(__testing.apiLlmStream({ messages: [] }), /messages/);
+});
+
+test('speech input says what is missing before it opens anything', t => {
+  const before = Object.getOwnPropertyDescriptor(globalThis, 'isSecureContext');
+  t.after(() => {
+    if (before) Object.defineProperty(globalThis, 'isSecureContext', before);
+    else delete globalThis.isSecureContext;
+  });
+  Object.defineProperty(globalThis, 'isSecureContext', { value: false, configurable: true, writable: true });
+  assert.match(__testing.sttAvailability({ sttProvider: 'cloud', sttUrl: 'https://example.test', sttApiKey: 'k' }).reason, /https/, 'no microphone outside a secure page');
+  globalThis.isSecureContext = true;
+  const browser = __testing.sttAvailability({ sttProvider: 'browser' });
+  assert.equal(browser.available, false);
+  assert.match(browser.reason, /自带语音识别/, 'a browser without its own recogniser is told to use the cloud');
+});
