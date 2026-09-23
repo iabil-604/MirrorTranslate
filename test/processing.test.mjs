@@ -186,3 +186,15 @@ test('built-in styles preserve extraction settings and use display-only native r
     if (id === 'fold') { assert.match(display, /<details class=/); assert.doesNotMatch(display, /<details[^>]*\bopen\b/); }
   }
 });
+
+test('a comment in the body is neither translated nor read, and is written back as it was', () => {
+  const body = '\n<!-- plotThink:\n[当前张力]: 7/10\n[本轮节奏倾向]: 清晨\n-->\n\n翌朝の空気は澄み切っていた。\n\n「行ってくる」<!-- 小注 -->彼女は頷いた。\n';
+  const segmented = segmentSource(body, { paragraphPerLine: true });
+  assert.deepEqual(segmented.segments.map(segment => segment.text), ['翌朝の空気は澄み切っていた。', '「行ってくる」彼女は頷いた。']);
+  const rendered = assembleBilingual(segmented.layout, new Map([[1, '第二天早上的空气清澈。'], [2, '「我走了。」她点点头。']]), { paragraphPerLine: true });
+  assert.ok(rendered.includes('<!-- plotThink:\n[当前张力]: 7/10\n[本轮节奏倾向]: 清晨\n-->'), 'the comment stays whole');
+  assert.ok(rendered.includes('<!-- 小注 -->'));
+  assert.ok(rendered.includes('第二天早上的空气清澈。'));
+  assert.deepEqual(segmentSource('开头的话。<!-- 没写完的注释\n后面都被它盖住', {}).segments.map(segment => segment.text), ['开头的话。'], 'an unclosed comment hides the rest, as on the page');
+  assert.doesNotThrow(() => segmentSource('<!-- <think> -->正文。</think>', { excludedTags: ['think'] }), 'a comment across a tag\'s edge is not an error');
+});
