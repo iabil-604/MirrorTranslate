@@ -72,7 +72,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.34.0';
+} from './core.js?v=0.34.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -129,10 +129,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.34.0';
-import { createTtsStore } from './tts-store.js?v=0.34.0';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.34.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.34.0';
+} from './tts.js?v=0.34.1';
+import { createTtsStore } from './tts-store.js?v=0.34.1';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.34.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.34.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -141,7 +141,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.34.0';
+} from './processing.js?v=0.34.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -158,9 +158,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.34.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.34.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.34.0';
+} from './prompts.js?v=0.34.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.34.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.34.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -174,15 +174,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.34.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.34.0';
+} from './palette.js?v=0.34.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.34.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.34.0';
+} from './diagnostics.js?v=0.34.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -206,6 +206,8 @@ const runtime = {
   processingRevision: 0,
   nativeRegexInstalled: false,
   mainGenerationActive: false,
+  // Bumped by every generation the gate takes, so a late look at the gate can tell a new one apart.
+  generationSerial: 0,
   // The generation last stopped by hand, so the render that follows it can say why it is not translated.
   stoppedGeneration: null,
   activeFloor: null,
@@ -960,10 +962,10 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
 
 // A reasoning model can spend minutes on one batch, so the plain “超时了” line left the reader with no
 // next step. Name the usual cause and the two ways out instead.
-function describeTimeout(timeoutSec, idle) {
+function describeTimeout(timeoutSec, idle, who = '独立副 API') {
   return idle
     ? `副 API 已建立流式连接，但超过 ${timeoutSec} 秒没有新内容。`
-    : `独立副 API 请求超时（>${timeoutSec} 秒）。思考型模型整包返回常常更久：可在副 API 预设里调大「超时」，或打开流式写回让译文边收边写。`;
+    : `${who}请求超时（>${timeoutSec} 秒）。思考型模型整包返回常常更久：可在副 API 预设里调大「超时」，或打开流式写回让译文边收边写。`;
 }
 
 // The window used to cover the whole call. That is right for a one-shot request and wrong for a
@@ -1006,7 +1008,7 @@ async function withAbortTimeout(externalSignal, timeout, task) {
     return await task(controller.signal, renew);
   } catch (error) {
     if (hitLimit) throw new Error(`这次分析写了 ${ceiling} 秒还没写完，已经停下，这一楼先按现有标注读。可以在「05 深度分析」里调大「单次分析最长等待」，或者把那条连接的推理强度调低。`);
-    if (timedOut) throw new Error(describeTimeout(timeoutSec, renewed));
+    if (timedOut) throw new Error(describeTimeout(timeoutSec, renewed, typeof timeout === 'object' && timeout?.who ? timeout.who : undefined));
     throw error;
   } finally {
     if (wall !== null) globalThis.clearTimeout(wall);
@@ -1057,6 +1059,8 @@ function describeRequestFailure(error) {
 
 // A bare token such as "<none>" tells the user nothing and hides that a full trace was captured.
 function enrichRequestError(error) {
+  // A request called off is a cancellation, whatever it said; wrapping it made it read as a failure.
+  if (isAbortError(error)) return error;
   const raw = safeError(error);
   const opaque = !raw || raw.length <= 24 || /^[<\[(（【][^\s]{0,20}[>\])）】]$/.test(raw.trim());
   if (!opaque) return error;
@@ -1580,11 +1584,32 @@ async function requestSubModelRaw(messages, settings, signal, { limitSec = 0 } =
     ));
   }
   if (typeof context.generateRaw !== 'function') throw new Error('当前 SillyTavern 不提供静默生成接口。');
-  return context.generateRaw({
+  // The host's quiet generation takes no signal and has no timeout of its own. A request that never
+  // answered held this floor's translation lock for good, and every re-roll of the floor after it was
+  // swallowed without a word. It now races the same window the independent requests have.
+  const ask = () => context.generateRaw({
     prompt: messages,
     responseLength: channel.maxTokens,
     trimNames: false,
   });
+  return withAbortTimeout(signal, { seconds: channel.timeoutSec, limitSec, who: '跟随酒馆的副模型' }, requestSignal => new Promise((resolve, reject) => {
+    const onAbort = () => reject(Object.assign(new Error('请求已取消。'), { name: 'AbortError' }));
+    if (requestSignal.aborted) {
+      onAbort();
+      return;
+    }
+    requestSignal.addEventListener('abort', onAbort, { once: true });
+    const attempt = again => ask().then(resolve, error => {
+      // The host calls off every quiet request when the reader stops the main generation. That is not
+      // this request failing, and it is asked once more.
+      if (!again && !requestSignal.aborted && /Cancelled by (?:stop event|extension)/i.test(String(error?.message ?? error))) {
+        attempt(true);
+        return;
+      }
+      reject(error);
+    });
+    attempt(false);
+  }));
 }
 
 async function invokeTranslationBatch(segments, settings, signal, packet = {}, phase = 'primary', requestMeta = {}) {
@@ -1982,7 +2007,10 @@ async function translateMessage(messageId = null, { force = false, quiet = false
 
   const lockKey = `${snapshot.chatId}|${snapshot.messageId}|${snapshot.swipeId}`;
   const existing = runtime.inflight.get(lockKey);
-  if (existing && !supersede) {
+  // A re-roll lands on the same floor and swipe: other text there is not the run in flight, which is
+  // called off below, and this text translated.
+  const moved = Boolean(existing?.sourceHash && existing.sourceHash !== snapshot.sourceHash);
+  if (existing && !supersede && !moved) {
     if (!quiet) toast('info', '该楼层翻译正在进行，已沿用本次任务。');
     return existing.promise;
   }
@@ -2083,7 +2111,8 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     return { skipped: false, messageId: snapshot.messageId, segments: snapshot.segments.length };
   })().catch(error => {
     if (isAbortError(error)) {
-      updateTask({ status: 'idle', title: '翻译已取消', message: '聊天已切换或任务已停止。', progress: 0 });
+      const current = runtime.inflight.get(lockKey);
+      if (!current || current.promise === work) updateTask({ status: 'idle', title: '翻译已取消', message: '聊天已切换或任务已停止。', progress: 0 });
       return { skipped: true, reason: 'cancelled' };
     }
     const message = safeError(error);
@@ -2101,7 +2130,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     if (runtime.inflight.get(lockKey)?.promise === work) runtime.inflight.delete(lockKey);
   });
 
-  runtime.inflight.set(lockKey, { promise: work, controller });
+  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash });
   return work;
 }
 
@@ -2227,7 +2256,9 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
 
   const lockKey = `${snapshot.chatId}|${snapshot.messageId}|${snapshot.swipeId}`;
   const existing = runtime.inflight.get(lockKey);
-  if (existing && !force) {
+  // A re-roll lands on the same floor and swipe: other text there is not the run in flight.
+  const moved = Boolean(existing?.sourceHash && existing.sourceHash !== snapshot.sourceHash);
+  if (existing && !force && !moved) {
     if (!quiet) toast('info', '该楼层翻译正在进行，已沿用本次任务。');
     return existing.promise;
   }
@@ -2445,7 +2476,8 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     return { skipped: false, messageId: snapshot.messageId, segments: translations.size };
   })().catch(error => {
     if (isAbortError(error)) {
-      updateTask({ status: 'idle', title: '翻译已取消', message: '聊天已切换或任务已停止。', progress: 0 });
+      const current = runtime.inflight.get(lockKey);
+      if (!current || current.promise === work) updateTask({ status: 'idle', title: '翻译已取消', message: '聊天已切换或任务已停止。', progress: 0 });
       return { skipped: true, reason: 'cancelled' };
     }
     const message = safeError(error);
@@ -2457,7 +2489,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     if (runtime.inflight.get(lockKey)?.promise === work) runtime.inflight.delete(lockKey);
   });
 
-  runtime.inflight.set(lockKey, { promise: work, controller });
+  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash });
   return work;
 }
 
@@ -12962,7 +12994,7 @@ function registerRuntimeEvents() {
   registerPromptFallback(eventTypes);
   bindEvent(eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
     if (!dryRun && !['quiet', 'impersonate'].includes(type)) runtime.mainGenerationActive = true;
-    runtime.generationGate.begin(getCurrentChatId(), type, dryRun);
+    if (runtime.generationGate.begin(getCurrentChatId(), type, dryRun)) runtime.generationSerial += 1;
   });
   bindEvent(eventTypes.CHARACTER_MESSAGE_RENDERED, (messageId, type) => {
     const pending = runtime.generationGate.peek();
@@ -12991,12 +13023,33 @@ function registerRuntimeEvents() {
     runtime.generationGate.clear();
   });
   bindEvent(eventTypes.GENERATION_ENDED, () => {
+    // A reply that is rendered takes the gate within a moment of this. One that is still waiting a few
+    // seconds later never came — an error, an empty answer — and says so in the log instead of nowhere.
+    const serial = runtime.generationSerial;
+    const waiting = runtime.generationGate.peek();
+    if (waiting) {
+      const timer = globalThis.setTimeout(() => {
+        runtime.timers.delete(timer);
+        const still = runtime.generationGate.peek();
+        if (!still || runtime.generationSerial !== serial || still.chatId !== waiting.chatId || still.type !== waiting.type) return;
+        runtime.generationGate.clear();
+        recordDiagnostic('info', 'translation.auto-skip', `这次生成（${waiting.type}）没有产出回复，可能报错了或被过滤，没有可自动翻译的内容。`, { startedType: waiting.type });
+      }, 3000);
+      runtime.timers.add(timer);
+    }
     if (!runtime.mainGenerationActive) return;
     runtime.mainGenerationActive = false;
     const latest = latestAssistantMessageId(getContext());
     if (Number.isInteger(latest)) scheduleTtsDecorate(latest, { delay: 400 });
   });
-  bindEvent(eventTypes.MESSAGE_SWIPED, messageId => scheduleAuto(messageId, 'swipe'));
+  bindEvent(eventTypes.MESSAGE_SWIPED, messageId => {
+    // A swipe past the last alternative is a reply about to be generated: the text on the floor is still
+    // the old one. The reply is translated when it is rendered; if generating fails, the host puts the
+    // floor back on an alternative that was translated already.
+    const message = getContext().chat?.[Number(messageId)];
+    if (message && Number(message.swipe_id ?? 0) >= (Array.isArray(message.swipes) ? message.swipes.length : 0)) return;
+    scheduleAuto(messageId, 'swipe');
+  });
   bindEvent(eventTypes.MESSAGE_EDITED, messageId => scheduleAuto(messageId, 'edit'));
   // Floor buttons follow every redraw the host announces; the observer in bindTtsDom catches the rest.
   // The generation finished: the floor is whole, and the analyses may read it.
