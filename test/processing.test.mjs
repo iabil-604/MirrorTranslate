@@ -198,3 +198,20 @@ test('a comment in the body is neither translated nor read, and is written back 
   assert.deepEqual(segmentSource('开头的话。<!-- 没写完的注释\n后面都被它盖住', {}).segments.map(segment => segment.text), ['开头的话。'], 'an unclosed comment hides the rest, as on the page');
   assert.doesNotThrow(() => segmentSource('<!-- <think> -->正文。</think>', { excludedTags: ['think'] }), 'a comment across a tag\'s edge is not an error');
 });
+
+test('a picture on a line of its own is left as it is, shown once, and the text around it is still translated', () => {
+  const picture = '![正文插图](/user/images/unified-statusbar/story-image_2026-09-23@21h59m33s919ms.png)';
+  const rebuilt = out => out.layout.map(item => (item.type === 'segment' ? item.sourceText : item.text)).join('');
+  for (const text of [`她推开门。\n\n${picture}\n\n他笑了。`, `她推开门。\n${picture}\n他笑了。`, `她推开门。\n${picture}`, `${picture}\n她推开门。`]) {
+    const out = segmentSource(text, {});
+    assert.equal(out.segments.some(segment => segment.text.includes('![')), false, text);
+    assert.equal(rebuilt(out), text, 'written back exactly as it was');
+    const written = assembleBilingual(out.layout, new Map(out.segments.map(segment => [segment.id, `译：${segment.text}`])), {});
+    assert.equal(written.split(picture).length - 1, 1, 'the picture shows once');
+  }
+  assert.deepEqual(segmentSource(`<center>${picture}</center>`, {}).segments, [], 'wrapped in a tag');
+  assert.deepEqual(segmentSource('[![a](/b.png)](/c.html)', {}).segments, [], 'a linked picture');
+  assert.equal(segmentSource(`${picture}她推开门。`, {}).segments.length, 1, 'a picture beside words is still translated');
+  assert.equal(segmentSource('[点这里](/a.html)', {}).segments.length, 1, 'a plain link is words');
+  assert.equal(segmentSource(String.raw`\![x](y)`, {}).segments.length, 1, 'an escaped picture is words');
+});

@@ -276,6 +276,11 @@ const SPEAKER_OPEN_RE = new RegExp(`<span class="(?:custom-)?${SPEAKER_CLASS}(?:
 const VALID_TAG_RE = /^[A-Za-z][A-Za-z0-9_:-]*$/;
 const STRUCTURAL_TAG_RE = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
 const HTML_ENTITY_RE = /&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi;
+// A Markdown picture as the host's showdown renders it — ![alt](src "title"), sizes and one level of
+// brackets in the address included — and the empty link a linked picture [![a](b)](c) leaves once the
+// picture is gone. A picture is not prose.
+const MARKDOWN_IMAGE_RE = /(?<!\\)!\[[^\]\n]*\][ \t]*\((?:[^()\n]|\([^()\n]*\))*\)/g;
+const EMPTY_MARKDOWN_LINK_RE = /(?<!\\)\[\s*\][ \t]*\((?:[^()\n]|\([^()\n]*\))*\)/g;
 const LEGACY_BUNDLED_PRELUDE_FINGERPRINT = '2921:75ac807f';
 // A guard against typos and NaN, not a real output-policy ceiling; providers reject what they reject.
 const MAX_OUTPUT_TOKENS_LIMIT = 1000000;
@@ -2173,11 +2178,23 @@ function isClosingTagOnlyLine(value) {
 }
 
 function isBuiltinPreservedLine(value) {
-  const visible = stripStructuralTags(value)
+  const visibleOf = text => text
     .replace(HTML_ENTITY_RE, '')
     .replace(/\\(?=[\\`*_{}\[\]()#+\-.!|<>])/g, '')
     .trim();
-  return Boolean(visible) && !/[\p{L}\p{N}]/u.test(visible);
+  const stripped = stripStructuralTags(value);
+  if (!visibleOf(stripped)) return false;
+  // What is left once the pictures are gone: a line of pictures alone has no words in it.
+  const words = visibleOf(stripped.replace(MARKDOWN_IMAGE_RE, '').replace(EMPTY_MARKDOWN_LINK_RE, ''));
+  return !/[\p{L}\p{N}]/u.test(words);
+}
+
+/** A line that is only pictures (Markdown or <img>), with nothing to translate or read beside them. */
+function isPictureLine(value) {
+  const text = String(value ?? '');
+  if (!text.includes('![') && !/<img\b/i.test(text)) return false;
+  const stripped = stripStructuralTags(text).trim();
+  return !stripped || isBuiltinPreservedLine(text);
 }
 
 export function segmentSource(text, options = {}) {
@@ -2207,6 +2224,28 @@ export function segmentSource(text, options = {}) {
 
   const appendParagraph = maskedParagraph => {
     if (!maskedParagraph) return;
+    // A picture on a line of its own splits its paragraph there: it stays where it stands, shown once
+    // in either mode, and the text on each side is translated as the paragraph it is. Left inside the
+    // paragraph it would travel with the source block, which the replace mode hides.
+    if (options.paragraphPerLine !== true && options.legacyWrappers !== true) {
+      const physical = splitPhysicalLines(maskedParagraph);
+      const at = physical.length > 1 ? physical.findIndex(line => isPictureLine(replaceMaskedBlocks(line.text, blocks, 'remove'))) : -1;
+      if (at >= 0) {
+        const before = physical.slice(0, at).map(line => line.text).join('\n');
+        const after = physical.slice(at + 1).map(line => line.text).join('\n');
+        if (at > 0) {
+          appendParagraph(before);
+          layout.push({ type: 'raw', text: '\n' });
+        }
+        builtinPreservedLines += 1;
+        layout.push({ type: 'raw', text: replaceMaskedBlocks(physical[at].text, blocks, 'restore') });
+        if (at < physical.length - 1) {
+          layout.push({ type: 'raw', text: '\n' });
+          appendParagraph(after);
+        }
+        return;
+      }
+    }
     const restoredParagraph = replaceMaskedBlocks(maskedParagraph, blocks, 'restore');
     const unwrapped = options.legacyWrappers === true
       ? stripSegmentWrappers(maskedParagraph, prefix, suffix)

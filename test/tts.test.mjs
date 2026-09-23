@@ -685,6 +685,7 @@ test('tag fallback reads literal jy-translation blocks and sheds markup and boun
   ]);
   assert.deepEqual(linesFromTaggedText(text, ['nope', 'bad tag']), []);
   assert.deepEqual(linesFromTaggedText('<jy-translation>\n<!-- 计划：\n[张力]: 7\n-->\n她笑了。\n</jy-translation>', ['jy-translation']).map(line => line.text), ['她笑了。'], 'a comment is not read');
+  assert.deepEqual(linesFromTaggedText('<jy-translation>\n![正文插图](/user/images/a.png)\n![插图](/b.png)她笑了。\n</jy-translation>', ['jy-translation']).map(line => line.text), ['她笑了。'], 'a picture is seen, not read');
 });
 
 test('read-aloud settings normalise, clamp, migrate and follow the character card', () => {
