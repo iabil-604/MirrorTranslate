@@ -10,11 +10,17 @@
 // Pure functions only: index.js feeds them the reply as it stands and turns what they hand back into
 // requests and sound.
 
-import { DEFAULT_QUOTE_PAIRS, SPEECH_CLOSE, SPEECH_OPEN, SPEECH_SEP, parsePairList } from './core.js?v=0.35.0-beta.5';
+import { DEFAULT_QUOTE_PAIRS, SPEECH_CLOSE, SPEECH_OPEN, SPEECH_SEP, parsePairList } from './core.js?v=0.35.0-beta.6';
 
 // The characters a sentence ends on, and the ones the first stretch may also stop at.
 const SENTENCE_END = new Set(['。', '！', '？', '!', '?', '…', '．', '.']);
 const PAUSE = new Set(['，', '、', '；', '：', ',', ';', ':']);
+// Marks that are often the first of several: an eager cut does not stop right after one.
+const RUNS_ON = new Set(['…', '.', '．']);
+// A dot ends abbreviations as often as sentences (Mr. / U.S.): the first stretch ends on one only once it
+// is long enough, like at a comma.
+const LOOSE_END = new Set(['.', '．']);
+const WORDLIKE = /[\p{L}\p{N}]/u;
 
 /**
  * Where the next stretch of one line may end, reading from `from`: an index just past the stretch, or
@@ -22,8 +28,12 @@ const PAUSE = new Set(['，', '、', '；', '：', ',', ';', ':']);
  *
  * `marks` are the line's speaker marks (as core's speechMarkedLine leaves them): a mark that encloses
  * its dialogue is a bracket like a quotation, one that does not (self-closing) is not.
+ *
+ * `eager` is for the first stretch of a reply, the one everybody waits for: it is cut the moment its
+ * sentence ends, without waiting to see what follows — except after a dot or an ellipsis, which so often
+ * run on (……, ...).
  */
-export function nextStreamCut(text, from, { quotePairs = DEFAULT_QUOTE_PAIRS, marks = [], first = false, firstMin = 6, minChars = 14, final = false } = {}) {
+export function nextStreamCut(text, from, { quotePairs = DEFAULT_QUOTE_PAIRS, marks = [], first = false, eager = false, firstMin = 6, minChars = 14, final = false } = {}) {
   const line = String(text ?? '');
   const pairs = parsePairList(quotePairs);
   const depth = new Map();
@@ -54,6 +64,8 @@ export function nextStreamCut(text, from, { quotePairs = DEFAULT_QUOTE_PAIRS, ma
       continue;
     }
     if (quoted()) continue;
+    // A dot between digits is a decimal point (3.5), not an end.
+    if (LOOSE_END.has(character) && /\d/.test(line[index - 1] ?? '') && /\d/.test(line[index + 1] ?? '')) continue;
     const length = index + 1 - from;
     const ends = SENTENCE_END.has(character);
     const pauses = first && PAUSE.has(character);
@@ -61,9 +73,13 @@ export function nextStreamCut(text, from, { quotePairs = DEFAULT_QUOTE_PAIRS, ma
     // A run of end marks (「……」「？！」) ends where the run does, and only once something follows it.
     let stop = index + 1;
     while (stop < line.length && (SENTENCE_END.has(line[stop]) || (pauses && PAUSE.has(line[stop])))) stop += 1;
-    if (stop >= line.length && !final) break;
+    const runsOn = RUNS_ON.has(line[stop - 1]);
+    if (stop >= line.length && !final && !(eager && first && !runsOn)) break;
     index = stop - 1;
-    if (length >= (first ? firstMin : minChars)) {
+    // An eager first stretch may be a single short sentence (喂？ 嗯。); at a pause or a dot it still
+    // wants firstMin, and it has to hold a word.
+    const short = eager && first && ends && !LOOSE_END.has(line[stop - 1]) && WORDLIKE.test(line.slice(from, stop));
+    if (length >= (first ? firstMin : minChars) || short) {
       candidate = stop;
       break;
     }
@@ -78,7 +94,7 @@ export function nextStreamCut(text, from, { quotePairs = DEFAULT_QUOTE_PAIRS, ma
  * stand ({ lineId, text, marks }); `state` remembers how far each line has been handed out and is
  * updated in place. Every line but the last is finished; with `final`, so is the last.
  */
-export function takeStreamPieces(lines, state, { final = false, quotePairs = DEFAULT_QUOTE_PAIRS, firstMin = 6, minChars = 14 } = {}) {
+export function takeStreamPieces(lines, state, { final = false, quotePairs = DEFAULT_QUOTE_PAIRS, firstMin = 6, minChars = 14, eager = false } = {}) {
   const pieces = [];
   const list = Array.isArray(lines) ? lines : [];
   state.done ??= new Map();
@@ -89,7 +105,7 @@ export function takeStreamPieces(lines, state, { final = false, quotePairs = DEF
     const finished = final || index < list.length - 1;
     for (;;) {
       const end = nextStreamCut(text, offset, {
-        quotePairs, marks: line.marks ?? [], first: state.count === 0, firstMin, minChars, final: finished,
+        quotePairs, marks: line.marks ?? [], first: state.count === 0, eager, firstMin, minChars, final: finished,
       });
       if (end < 0 || end <= offset) break;
       const piece = text.slice(offset, end);

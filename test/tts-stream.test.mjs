@@ -12,6 +12,27 @@ test('the first stretch of a reply may stop at a comma, once something follows i
   assert.equal(nextStreamCut('窗外下着雨，她说', 0, { first: false }), -1, 'after the first stretch a comma is not an end');
 });
 
+test('an eager first stretch is cut the moment its sentence ends', () => {
+  const eager = { first: true, eager: true };
+  assert.equal(nextStreamCut('喂？', 0, eager), 2, 'a short sentence is not held back for firstMin');
+  assert.equal(nextStreamCut('喂？！', 0, eager), 3, 'a run of end marks is taken whole');
+  assert.equal(nextStreamCut('嗯。你来', 0, eager), 2);
+  assert.equal(nextStreamCut('喂…', 0, eager), -1, 'an ellipsis so often runs on');
+  assert.equal(nextStreamCut('喂……是我', 0, eager), 3, 'and once something follows it, it ends there');
+  assert.equal(nextStreamCut('Wait.', 0, eager), -1, 'a dot too');
+  assert.equal(nextStreamCut('喂，小林，', 0, eager), -1, 'a pause still wants firstMin');
+  assert.equal(nextStreamCut('喂，是我啊，', 0, eager), 6, 'and then does not wait for what follows');
+  assert.equal(nextStreamCut('今天天气不错。', 0, { eager: true }), -1, 'later stretches keep the careful rule');
+  assert.equal(nextStreamCut('Mr. Smith is here.', 0, eager), -1, 'a dot is no short end: Mr. is not a sentence');
+  assert.equal(nextStreamCut('It is 3.5 km. We', 0, eager), 13, 'a decimal point is not an end');
+  assert.equal(nextStreamCut('It is 3.5 km away. We', 0, { minChars: 4 }), 18, 'not for later stretches either');
+  assert.equal(nextStreamCut('？？？你', 0, eager), -1, 'end marks alone are not worth a request');
+  const state = {};
+  const pieces = takeStreamPieces([{ lineId: 1, text: '喂？' }], state, { eager: true });
+  assert.deepEqual(pieces.map(piece => piece.text), ['喂？'], 'the first piece goes out at once');
+  assert.deepEqual(takeStreamPieces([{ lineId: 1, text: '喂？是我。' }], state, { eager: true }), [], 'the next waits as before');
+});
+
 test('a sentence ends only outside quotations and speaker marks, and only once something follows it', () => {
   const text = '樱井推开门，笑着说：「你回来啦？今天好早。」她放下包。';
   assert.equal(nextStreamCut(text.slice(0, 16), 0, { minChars: 4 }), -1, 'inside the quotation');

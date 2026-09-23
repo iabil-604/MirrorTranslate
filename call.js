@@ -388,6 +388,7 @@ export function createCall({ describe, ask, speak, listen, history, now = () => 
     }
     state.phase = 'ready';
     state.blocked = false;
+    state.paused = false;
     save();
     emit();
   };

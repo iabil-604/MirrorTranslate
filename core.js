@@ -8,11 +8,12 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.35.0-beta.5';
+} from './prompts.js?v=0.35.0-beta.6';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.35.0-beta.6';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.35.0-beta.5';
+export const APP_VERSION = '0.35.0-beta.6';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -523,6 +524,34 @@ export const DEFAULT_FISH = Object.freeze({
   concurrency: 2,
 });
 
+// 豆包语音 (Volcengine) for what is read while written. The key is the new console's API Key; an App ID
+// makes it the old console's Access Token instead. Its key headers are refused across origins, so it
+// goes through the host's proxy like Fish.
+export const DEFAULT_DOUBAO = Object.freeze({
+  key: '',
+  appId: '',
+  resourceId: 'seed-tts-2.0',
+  voice: 'zh_female_vv_uranus_bigtts',
+  // 「名字=音色ID」 per line; 旁白 for narration.
+  voiceMap: '',
+  baseUrl: 'https://openspeech.bytedance.com',
+  viaProxy: true,
+  speed: 0,
+  volume: 0,
+});
+
+// MiniMax for what is read while written; it answers the browser directly.
+export const DEFAULT_MINIMAX = Object.freeze({
+  key: '',
+  baseUrl: 'https://api.minimax.cn',
+  model: 'speech-2.8-turbo',
+  voice: 'female-shaonv',
+  voiceMap: '',
+  speed: 1,
+});
+
+export const STREAM_VOICES = Object.freeze(['fish', 'doubao', 'minimax']);
+
 export const DEFAULT_TTS = Object.freeze({
   // The whole feature. Off is the ordinary translate-only mode: no 朗读 page, no floor buttons, nothing
   // listening in the background and no audio store opened.
@@ -589,6 +618,11 @@ export const DEFAULT_TTS = Object.freeze({
   autoRead: false,
   // The reply is read while the main model is still writing it, a stretch at a time.
   readWhileWriting: false,
+  // 边收边放: what is read while written (a reply, a call) is played as Fish sends it, not once a whole
+  // sentence has come back.
+  liveAudio: true,
+  // Whose voice reads what is read while written: Fish (as the floors are read), 豆包 or MiniMax.
+  streamVoice: 'fish',
   // 实时通话（测试版）: the connection a caller's streamed requests go to ('' = the analysis one), and
   // how speech becomes text — the browser's recogniser, or a recording sent to a transcription API.
   callChannelId: '',
@@ -599,6 +633,8 @@ export const DEFAULT_TTS = Object.freeze({
   sttModel: 'FunAudioLLM/SenseVoiceSmall',
   sttLang: 'zh',
   fish: DEFAULT_FISH,
+  doubao: DEFAULT_DOUBAO,
+  minimax: DEFAULT_MINIMAX,
 });
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -1031,6 +1067,42 @@ export function normalizeFishSettings(value) {
   };
 }
 
+function httpUrlOr(value, fallback) {
+  const text = String(value ?? fallback).trim().replace(/\/+$/, '');
+  try {
+    return ['http:', 'https:'].includes(new URL(text).protocol) ? text : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function normalizeDoubaoSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    key: String(source.key ?? '').trim().slice(0, 400),
+    appId: String(source.appId ?? '').trim().slice(0, 80),
+    resourceId: DOUBAO_RESOURCES.includes(source.resourceId) ? source.resourceId : DEFAULT_DOUBAO.resourceId,
+    voice: String(source.voice ?? '').trim().slice(0, 200) || DEFAULT_DOUBAO.voice,
+    voiceMap: String(source.voiceMap ?? '').slice(0, 4000),
+    baseUrl: httpUrlOr(source.baseUrl, DEFAULT_DOUBAO.baseUrl),
+    viaProxy: source.viaProxy === undefined ? DEFAULT_DOUBAO.viaProxy : source.viaProxy !== false,
+    speed: clampInteger(source.speed, -50, 100, DEFAULT_DOUBAO.speed),
+    volume: clampInteger(source.volume, -50, 100, DEFAULT_DOUBAO.volume),
+  };
+}
+
+export function normalizeMinimaxSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    key: String(source.key ?? '').trim().slice(0, 1000),
+    baseUrl: MINIMAX_HOSTS.includes(source.baseUrl) ? source.baseUrl : DEFAULT_MINIMAX.baseUrl,
+    model: MINIMAX_MODELS.includes(source.model) ? source.model : DEFAULT_MINIMAX.model,
+    voice: String(source.voice ?? '').trim().slice(0, 200) || DEFAULT_MINIMAX.voice,
+    voiceMap: String(source.voiceMap ?? '').slice(0, 4000),
+    speed: clampNumber(source.speed, 0.5, 2, DEFAULT_MINIMAX.speed),
+  };
+}
+
 // Voices saved by name, independent of any character card. `id` is a local handle for the rows on the
 // settings page; `voiceId` is what the provider knows.
 /** Consoles saved by name. The console itself is normalised the same way as any other. */
@@ -1178,6 +1250,8 @@ export function normalizeTts(value) {
     speechMarks: source.speechMarks === true,
     autoRead: source.autoRead === true,
     readWhileWriting: source.readWhileWriting === true,
+    liveAudio: source.liveAudio !== false,
+    streamVoice: STREAM_VOICES.includes(source.streamVoice) ? source.streamVoice : DEFAULT_TTS.streamVoice,
     callChannelId: String(source.callChannelId ?? '').trim().slice(0, 80),
     sttProvider: ['cloud', 'browser'].includes(source.sttProvider) ? source.sttProvider : DEFAULT_TTS.sttProvider,
     sttPreset: ['siliconflow', 'groq', 'openai', 'custom'].includes(source.sttPreset) ? source.sttPreset : DEFAULT_TTS.sttPreset,
@@ -1187,6 +1261,8 @@ export function normalizeTts(value) {
     sttLang: String(source.sttLang ?? DEFAULT_TTS.sttLang).trim().slice(0, 20),
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     fish: normalizeFishSettings(source.fish),
+    doubao: normalizeDoubaoSettings(source.doubao),
+    minimax: normalizeMinimaxSettings(source.minimax),
   };
 }
 

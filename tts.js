@@ -13,9 +13,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.35.0-beta.5';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.35.0-beta.5';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.35.0-beta.5';
+} from './core.js?v=0.35.0-beta.6';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.35.0-beta.6';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.35.0-beta.6';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -1901,6 +1901,16 @@ export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit
 }
 
 export const FISH_MIME = Object.freeze({ mp3: 'audio/mpeg', opus: 'audio/ogg', wav: 'audio/wav', pcm: 'audio/L16' });
+
+/**
+ * A request body turned into one whose sound can be played as it arrives: raw 16-bit PCM at
+ * `sampleRate`, and a latency mode that sends the first chunk early. In 'normal' Fish makes the whole
+ * sentence before it sends a byte, which leaves nothing to play early; 'balanced' and 'low' stream.
+ */
+export function fishLivePayload(body, sampleRate = 24000) {
+  const { mp3_bitrate: _bitrate, ...rest } = body ?? {};
+  return { ...rest, format: 'pcm', sample_rate: sampleRate, latency: rest.latency === 'normal' || !rest.latency ? 'balanced' : rest.latency };
+}
 
 // ---------------------------------------------------------------------------------------------
 // The provider boundary.
