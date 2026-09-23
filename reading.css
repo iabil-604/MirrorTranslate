@@ -191,6 +191,9 @@
 
    Both class spellings are listed because SillyTavern prefixes message classes with custom-. */
 :is(.jy-spk, .custom-jy-spk) { transition: color 120ms ease; }
+/* The host wraps quoted dialogue in <q> and gives it the theme's quote colour, some themes as a text fill
+   or behind a longer selector. A line with a speaker's colour keeps that colour inside its quotes. */
+#chat .mes .mes_text [class*="jy-spk-"] q { color: inherit !important; -webkit-text-fill-color: inherit !important; }
 :is(.jy-spk, .custom-jy-spk)[title] { cursor: help; }
 
 :is(.jy-emo-happy, .custom-jy-emo-happy) { font-weight: 560; }

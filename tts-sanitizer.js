@@ -17,6 +17,10 @@ const BREAK_RE = /<(?:br|hr)\b[^<>]*\/?>|<\/(?:p|div|li|ul|ol|h[1-6]|blockquote|
 // Any other tag, attributes and all.
 const TAG_RE = /<\/?[a-zA-Z][^<>]*>/g;
 const INVISIBLE_RE = /[\u200b-\u200f\u2060-\u2064\ufeff]/g;
+// A Markdown picture, and the empty link a linked picture leaves behind: seen, never read aloud. The
+// same patterns as core's, kept here because this module imports nothing.
+const MARKDOWN_IMAGE_RE = /(?<!\\)!\[[^\]\n]*\][ \t]*\((?:[^()\n]|\([^()\n]*\))*\)/g;
+const EMPTY_MARKDOWN_LINK_RE = /(?<!\\)\[\s*\][ \t]*\((?:[^()\n]|\([^()\n]*\))*\)/g;
 
 export function decodeHtmlEntities(text) {
   return String(text ?? '').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+\d*);/gi, (whole, body) => {
@@ -40,7 +44,9 @@ export function looksLikeMarkup(text) {
  * lines are kept to one, so a paragraph split by <br><br> stays a split.
  */
 export function sanitizeForTts(text) {
-  let value = String(text ?? '').replace(INVISIBLE_RE, '');
+  let value = String(text ?? '').replace(INVISIBLE_RE, '')
+    .replace(MARKDOWN_IMAGE_RE, '')
+    .replace(EMPTY_MARKDOWN_LINK_RE, '');
   if (looksLikeMarkup(value)) {
     value = value
       .replace(COMMENT_RE, '')
