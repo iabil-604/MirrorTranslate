@@ -59,7 +59,7 @@ import {
   voiceSummary,
 } from '../tts.js';
 import { createMemoryBackend, createTtsStore, planEviction } from '../tts-store.js';
-import { addDiagnostic, clearDiagnostics, readDiagnostics } from '../diagnostics.js';
+import { addDiagnostic, clearDiagnostics, flushDiagnostics, readDiagnostics } from '../diagnostics.js';
 
 // Captured from api.fish.audio /v1/tts/stream/with-timestamp (model s2.1-pro-free) for the request text
 // 「蓝蓝的天空上有红红的太阳。[happy] 我操好热啊！然后泰罗喝了口水。」. Chinese is aligned per character with
@@ -790,6 +790,36 @@ test('saved wav parts become one file with one header', () => {
   assert.equal(merged.length, 44 + 6);
   assert.deepEqual([...merged.slice(44)], [1, 2, 3, 4, 5, 6]);
   assert.equal(merged[40], 6, 'the data length is the total');
+});
+
+test('the run log is read back at once and written to storage in one go, not once per line', () => {
+  const values = new Map();
+  let writes = 0;
+  const adapter = { getItem: key => values.get(key) ?? null, setItem: (key, value) => { writes += 1; values.set(key, value); }, removeItem: key => values.delete(key) };
+  clearDiagnostics(adapter);
+  for (let index = 0; index < 20; index += 1) addDiagnostic({ level: 'info', scope: 'test.burst', message: `第 ${index} 行` }, adapter);
+  assert.equal(readDiagnostics(adapter).length, 20, 'every line can be read the moment it is written');
+  assert.equal(writes, 0, 'a burst of lines does not rewrite storage line by line');
+  flushDiagnostics();
+  assert.equal(writes, 1);
+  assert.equal(JSON.parse(values.get('jingyi-translator.diagnostics.v1')).length, 20, 'what is saved is the whole burst');
+  clearDiagnostics(adapter);
+});
+
+test('two tabs saving the same log keep each other\'s lines', () => {
+  const key = 'jingyi-translator.diagnostics.v1';
+  const values = new Map();
+  const adapter = { getItem: name => values.get(name) ?? null, setItem: (name, value) => values.set(name, value), removeItem: name => values.delete(name) };
+  clearDiagnostics(adapter);
+  addDiagnostic({ level: 'info', scope: 'test.tab', message: '这一页的第一行' }, adapter);
+  flushDiagnostics();
+  // Another tab adds a line of its own straight to storage in between.
+  const stored = JSON.parse(values.get(key));
+  values.set(key, JSON.stringify([...stored, { time: new Date().toISOString(), level: 'info', scope: 'test.tab', message: '另一页的一行', details: {} }]));
+  addDiagnostic({ level: 'info', scope: 'test.tab', message: '这一页的第二行' }, adapter);
+  flushDiagnostics();
+  assert.deepEqual(JSON.parse(values.get(key)).map(entry => entry.message), ['这一页的第一行', '另一页的一行', '这一页的第二行']);
+  clearDiagnostics(adapter);
 });
 
 test('a provider key quoted back in an error never reaches the log, safe summary included', () => {

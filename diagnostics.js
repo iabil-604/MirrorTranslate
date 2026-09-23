@@ -10,8 +10,15 @@ function isSecretKey(key) {
   return !TOKEN_STAT_KEY_RE.test(String(key ?? '')) && SECRET_KEY_RE.test(String(key ?? ''));
 }
 
-let memoryEntries = [];
-let memoryFallbackActive = false;
+// The log as it stands. Storage is read once, the first time, and written back in one go a moment
+// after the last entry: reading, re-serialising and rewriting the whole log for every line was the
+// cost of logging, and a busy floor logs dozens of lines.
+// Shared through globalThis: a second copy of this module (one imported under another URL) must see
+// the same log, or a line written through one copy would be missing from the other until it is saved.
+const state = (globalThis[Symbol.for('jingyi-translator.diagnostics')] ??= {
+  entries: [], pending: [], fallback: false, mirrored: null, timer: null, target: null,
+});
+const PERSIST_DELAY = 800;
 
 function storageOrNull(storage) {
   if (storage) return storage;
@@ -85,24 +92,89 @@ export function sanitizeFullResponse(value, key = '', seen = new WeakSet()) {
 
 function fitEntriesForStorage(entries) {
   const fitted = entries.slice(-MAX_ENTRIES);
-  let serialized = JSON.stringify(fitted);
-  while (serialized.length > MAX_STORAGE_CHARACTERS && fitted.length > 1) {
-    fitted.shift();
-    serialized = JSON.stringify(fitted);
+  // Each entry is measured once; the oldest go until the rest fit.
+  const sizes = fitted.map(entry => JSON.stringify(entry).length + 1);
+  let total = sizes.reduce((sum, size) => sum + size, 1);
+  let start = 0;
+  while (total > MAX_STORAGE_CHARACTERS && fitted.length - start > 1) {
+    total -= sizes[start];
+    start += 1;
   }
-  return { entries: fitted, serialized };
+  const kept = fitted.slice(start);
+  return { entries: kept, serialized: JSON.stringify(kept) };
 }
 
-export function readDiagnostics(storage) {
-  const target = storageOrNull(storage);
-  if (!target) return [...memoryEntries];
-  if (memoryFallbackActive) return [...memoryEntries];
+/** What this storage holds right now. */
+function storedEntries(target) {
   try {
     const parsed = JSON.parse(target.getItem(STORAGE_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.slice(-MAX_ENTRIES) : [];
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
+}
+
+/** The entries in memory, loaded from this storage the first time it is asked about. */
+function entriesFor(target) {
+  if (!target || state.fallback) return state.entries;
+  if (state.mirrored !== target) {
+    // Lines waiting for another storage go there first: they are not this one's.
+    if (state.pending.length && state.target && state.target !== target) flushDiagnostics();
+    // Lines this tab has not saved yet stay on top of what is stored.
+    state.entries = [...storedEntries(target), ...state.pending].slice(-MAX_ENTRIES);
+    state.mirrored = target;
+  }
+  return state.entries;
+}
+
+function persistNow() {
+  const target = state.target;
+  state.target = null;
+  if (!target || !state.pending.length) return;
+  // Another tab may have written since this one last read: its lines stay, and this tab's go after them.
+  const fitted = fitEntriesForStorage([...storedEntries(target), ...state.pending]);
+  try {
+    target.setItem(STORAGE_KEY, fitted.serialized);
+    state.entries = fitted.entries;
+    state.mirrored = target;
+  } catch {
+    // Keep the in-memory copy when browser storage is unavailable or full.
+    state.fallback = true;
+  }
+  state.pending = [];
+}
+
+function schedulePersist(target) {
+  state.target = target;
+  if (state.timer !== null) return;
+  state.timer = globalThis.setTimeout(() => {
+    state.timer = null;
+    // Written when the page has a moment, not in the middle of whatever logged the line.
+    if (typeof globalThis.requestIdleCallback === 'function') globalThis.requestIdleCallback(persistNow, { timeout: 2000 });
+    else persistNow();
+  }, PERSIST_DELAY);
+  state.timer?.unref?.();
+}
+
+/** Writes what is waiting now: the page is going away, or someone is about to read storage directly. */
+export function flushDiagnostics() {
+  if (state.timer !== null) {
+    globalThis.clearTimeout(state.timer);
+    state.timer = null;
+  }
+  persistNow();
+}
+
+if (typeof globalThis.addEventListener === 'function') {
+  globalThis.addEventListener('pagehide', flushDiagnostics);
+  // Another tab wrote or cleared the log: read it again next time.
+  globalThis.addEventListener('storage', event => {
+    if (event.key === STORAGE_KEY || event.key === null) state.mirrored = null;
+  });
+}
+
+export function readDiagnostics(storage) {
+  return [...entriesFor(storageOrNull(storage))];
 }
 
 export function addDiagnostic(entry, storage) {
@@ -128,21 +200,24 @@ export function addDiagnostic(entry, storage) {
     normalized.reasoning = sanitizeFullResponse(entry.reasoning);
   }
   if (Number.isInteger(entry?.floor)) normalized.floor = entry.floor;
-  const fitted = fitEntriesForStorage([...readDiagnostics(target), normalized]);
-  memoryEntries = fitted.entries;
-  try {
-    target?.setItem(STORAGE_KEY, fitted.serialized);
-    memoryFallbackActive = !target;
-  } catch {
-    // Keep the in-memory copy when browser storage is unavailable or full.
-    memoryFallbackActive = true;
+  state.entries = [...entriesFor(target), normalized].slice(-MAX_ENTRIES);
+  if (target && !state.fallback) {
+    state.pending.push(normalized);
+    schedulePersist(target);
   }
   return normalized;
 }
 
 export function clearDiagnostics(storage) {
-  memoryEntries = [];
-  memoryFallbackActive = false;
+  if (state.timer !== null) {
+    globalThis.clearTimeout(state.timer);
+    state.timer = null;
+  }
+  state.target = null;
+  state.pending = [];
+  state.entries = [];
+  state.fallback = false;
+  state.mirrored = null;
   try {
     storageOrNull(storage)?.removeItem(STORAGE_KEY);
   } catch {

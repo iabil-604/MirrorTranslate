@@ -335,7 +335,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-log-empty { padding: 50px 20px; text-align: center; color: var(--jy-muted); }
 @media (prefers-reduced-motion: reduce) {
   .jy-dialog, .jy-overlay, .jy-page:not([hidden]) { animation-duration: 1ms; }
-  .jy-progress span, .jy-switch span::after { transition-duration: 1ms; }
+  .jy-progress span, .jy-progress-seek i, .jy-switch span::after { transition-duration: 1ms; }
   .jy-thinking-pulse, .jy-thinking[data-live="yes"] .jy-thinking-pulse { animation: none; }
 }
 .jy-sr-only { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip-path: inset(50%) !important; white-space: nowrap !important; }
@@ -723,7 +723,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-step-mark { position: relative; width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid var(--jy-line-strong); }
 .jy-mini-steps li[data-state="done"] .jy-mini-step-mark { border-color: var(--jy-ok); background: var(--jy-ok); }
 .jy-mini-steps li[data-state="done"] .jy-mini-step-mark::after { content: ""; position: absolute; left: 3px; top: 1px; width: 3px; height: 6px; border-right: 1.5px solid #fff; border-bottom: 1.5px solid #fff; transform: rotate(45deg); }
-.jy-mini-steps li[data-state="active"] .jy-mini-step-mark { border-color: var(--jy-accent-soft); border-top-color: var(--jy-accent); animation: jy-spin .9s linear infinite; }
+.jy-mini-steps li[data-state="active"] .jy-mini-step-mark { border-color: var(--jy-accent-soft); border-top-color: var(--jy-accent); animation: jy-spin .9s linear infinite; will-change: transform; }
 .jy-mini-steps li[data-state="error"] .jy-mini-step-mark { border-color: var(--jy-error); background: var(--jy-error-soft); }
 .jy-mini-steps li[data-state="pending"] { color: var(--jy-muted); }
 .jy-mini-step-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -733,13 +733,17 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-steps { flex: 0 0 auto; }
 /* The reading page's progress bar is a slider: thicker, with a knob at the end of the fill. */
 .jy-progress-seek { height: 8px; cursor: pointer; touch-action: none; position: relative; border-radius: 4px; overflow: visible; }
-.jy-progress-seek span { position: relative; width: 0; transform: none !important; transition: width 120ms linear; border-radius: 4px; }
-.jy-progress-seek span::after { content: ""; position: absolute; right: -7px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; background: var(--jy-accent); box-shadow: 0 0 0 2px var(--jy-surface); opacity: 0; transition: opacity 120ms ease; }
-.jy-progress-seek[data-live="true"] span::after, .jy-progress-seek:hover span::after, .jy-progress-seek:focus-visible span::after { opacity: 1; }
+/* The fill and the knob move by transform, read from --jy-seek (0–1) on the bar: a width that
+   animates would lay the window out again on every frame. The knob rides a full-width track of its
+   own, since a scaled fill would squash it. */
+.jy-progress-seek span { position: relative; transform: scaleX(var(--jy-seek, 0)) !important; transition: transform 120ms linear; border-radius: 4px; }
+.jy-progress-seek i { position: absolute; inset: 0; pointer-events: none; transform: translateX(calc((var(--jy-seek, 0) - 1) * 100%)); transition: transform 120ms linear; }
+.jy-progress-seek i::after { content: ""; position: absolute; right: -7px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; background: var(--jy-accent); box-shadow: 0 0 0 2px var(--jy-surface); opacity: 0; transition: opacity 120ms ease; }
+.jy-progress-seek[data-live="true"] i::after, .jy-progress-seek:hover i::after, .jy-progress-seek:focus-visible i::after { opacity: 1; }
 .jy-progress-seek[data-live="true"] { cursor: grab; }
 .jy-progress-seek[data-live="true"]:active { cursor: grabbing; }
 .jy-progress-seek:focus-visible { outline: 2px solid var(--jy-focus); outline-offset: 3px; }
-@media (hover: none) { .jy-progress-seek { height: 10px; } .jy-progress-seek span::after { opacity: 1; width: 18px; height: 18px; margin-top: -9px; right: -9px; } }
+@media (hover: none) { .jy-progress-seek { height: 10px; } .jy-progress-seek i::after { opacity: 1; width: 18px; height: 18px; margin-top: -9px; right: -9px; } }
 
 /* --- 悬浮窗 v0.21：翻译页对照台、朗读页播放器与句子列表、日志页；手机卡片与放大态 --- */
 .jy-mini { width: 360px; }
@@ -760,7 +764,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-batches { display: flex; gap: 3px; }
 .jy-mini-batches i { flex: 1 1 0; height: 6px; border-radius: 3px; background: var(--jy-line-soft); }
 .jy-mini-batches i[data-state="done"] { background: var(--jy-ok); }
-.jy-mini-batches i[data-state="active"] { background: var(--jy-focus); animation: jy-mini-pulse 1.2s ease-in-out infinite; }
+.jy-mini-batches i[data-state="active"] { background: var(--jy-focus); animation: jy-mini-pulse 1.2s ease-in-out infinite; will-change: opacity; }
 @keyframes jy-mini-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 .jy-mini-batches[hidden] { display: none; }
 .jy-mini-taskline { display: flex; justify-content: space-between; gap: 10px; margin: 0; font-size: 11px; }
@@ -782,7 +786,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-row-mark, .jy-mini-sentence-mark { font-size: 12px; line-height: 1.6; color: var(--jy-muted); text-align: center; }
 .jy-mini-row[data-state="done"] .jy-mini-row-mark, .jy-mini-sentence[data-ready="true"] .jy-mini-sentence-mark { color: var(--jy-ok); }
 .jy-mini-row[data-state="missing"] .jy-mini-row-mark { color: var(--jy-error); font-weight: 700; }
-.jy-mini-row[data-state="running"] .jy-mini-row-mark { color: var(--jy-focus); animation: jy-mini-pulse 1.2s ease-in-out infinite; }
+.jy-mini-row[data-state="running"] .jy-mini-row-mark { color: var(--jy-focus); animation: jy-mini-pulse 1.2s ease-in-out infinite; will-change: opacity; }
 .jy-mini-sentence[data-current="true"] .jy-mini-sentence-mark { color: var(--jy-accent); }
 .jy-mini-row-body, .jy-mini-sentence-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .jy-mini-row-src { color: var(--jy-muted); font-size: 11px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

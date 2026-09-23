@@ -72,7 +72,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.33.0';
+} from './core.js?v=0.33.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -129,10 +129,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.33.0';
-import { createTtsStore } from './tts-store.js?v=0.33.0';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.33.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.33.0';
+} from './tts.js?v=0.33.1';
+import { createTtsStore } from './tts-store.js?v=0.33.1';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.33.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.33.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -141,7 +141,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.33.0';
+} from './processing.js?v=0.33.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -158,9 +158,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.33.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.33.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.33.0';
+} from './prompts.js?v=0.33.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.33.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.33.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -174,15 +174,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.33.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.33.0';
+} from './palette.js?v=0.33.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.33.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.33.0';
+} from './diagnostics.js?v=0.33.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -271,6 +271,8 @@ const runtime = {
     // The one thing being read: floor, items, position, state. Panels subscribe to it.
     transport: null,
     subscribers: new Set(),
+    // Where the reading is inside a sentence, a few times a second: the clock and the bar only.
+    progressSubscribers: new Set(),
     // messageId → { floor, segments, items } from the last preparation, for the inspector.
     floors: new Map(),
     // floorId|version → recordings of that text, and the reader's own sentence versions.
@@ -4257,6 +4259,24 @@ function notifyTtsPanels() {
   }
 }
 
+// Where the reading is inside a sentence. Kept apart from notifyTtsPanels, which redraws what the
+// reading is — another sentence, another state — so playing does not rebuild the window on every tick.
+function notifyTtsProgress() {
+  if (typeof document !== 'undefined' && document.hidden) return;
+  for (const subscriber of runtime.tts.progressSubscribers) {
+    try {
+      subscriber(runtime.tts.transport);
+    } catch (error) {
+      console.warn(`[${APP_NAME}] 朗读进度刷新失败。`, error);
+    }
+  }
+}
+
+function subscribeTtsProgress(subscriber) {
+  runtime.tts.progressSubscribers.add(subscriber);
+  return () => runtime.tts.progressSubscribers.delete(subscriber);
+}
+
 function subscribeTts(subscriber) {
   runtime.tts.subscribers.add(subscriber);
   subscriber(runtime.tts.transport);
@@ -4387,7 +4407,8 @@ async function askTtsChoice(floor) {
     document.getElementById(`${MODULE_ID}-ask`)?.remove();
     const host = document.createElement('div');
     host.id = `${MODULE_ID}-ask`;
-    host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;';
+    host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147483000;`;
+    keepTypingInside(host);
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
@@ -4436,7 +4457,8 @@ async function ttsAskBox(body, { label = '选择' } = {}) {
     document.getElementById(`${MODULE_ID}-save`)?.remove();
     const host = document.createElement('div');
     host.id = `${MODULE_ID}-save`;
-    host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;';
+    host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147483000;`;
+    keepTypingInside(host);
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
@@ -4833,6 +4855,7 @@ async function runTtsTransport(transport) {
       if (next && !transport.single && !entry.live) void resolveTtsEntry(floor, transport.items, next, settings, null, null, unitOf(next)).catch(() => {});
       setTransport(transport, { state: 'playing', message: '' });
       highlightTtsUtterance(transport.messageId, item.segment.id, transport.side);
+      let beat = -1;
       const outcome = await playTtsAudio(url, {
         start: window.start,
         end: endWindow.end,
@@ -4845,8 +4868,10 @@ async function runTtsTransport(transport) {
             transport.index = active;
             highlightTtsUtterance(transport.messageId, items[active].segment.id, transport.side);
             setTransport(transport, {});
-          } else {
-            notifyTtsPanels();
+          } else if (Math.floor(time * 4) !== beat) {
+            // Four beats a second is all a clock and a bar need; the audio itself is watched far more often.
+            beat = Math.floor(time * 4);
+            notifyTtsProgress();
           }
         },
       });
@@ -5974,7 +5999,8 @@ async function askTtsRefine({ messageId, sentence = null }) {
     document.getElementById(`${MODULE_ID}-refine`)?.remove();
     const host = document.createElement('div');
     host.id = `${MODULE_ID}-refine`;
-    host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;';
+    host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147483000;`;
+    keepTypingInside(host);
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
@@ -6486,20 +6512,26 @@ function scheduleTtsDecorate(messageId, { force = false, delay = 150 } = {}) {
 function scheduleTtsDecorateAll(options = {}) {
   if (typeof document === 'undefined') return;
   const floors = [...document.querySelectorAll('#chat .mes[mesid]')];
+  floors.forEach((element, index) => routeTtsDecorate(element, options, index >= floors.length - 3));
+}
+
+/**
+ * One floor: now when it is on screen, near it, or among the last few, otherwise when it scrolls into
+ * view. A pass that must redo the floor (force) is not downgraded by a plain one queued after it.
+ */
+function routeTtsDecorate(element, options = {}, last = false) {
+  const id = Number(element.getAttribute('mesid'));
   const viewer = ttsViewer();
   const height = globalThis.innerHeight || 0;
-  floors.forEach((element, index) => {
-    const id = Number(element.getAttribute('mesid'));
-    const rect = element.getBoundingClientRect?.();
-    const near = !viewer || index >= floors.length - 3 || (rect && rect.bottom > -height && rect.top < height * 2);
-    if (near) {
-      scheduleTtsDecorate(id, options);
-      return;
-    }
-    // Out of view: the observer calls when it comes in; a forced pass must still reach it then.
-    element.dataset.jyTtsPending = options.force ? 'force' : 'plain';
-    viewer.observe(element);
-  });
+  const rect = element.getBoundingClientRect?.();
+  const near = !viewer || last || (rect && rect.bottom > -height && rect.top < height * 2);
+  if (near) {
+    scheduleTtsDecorate(id, options);
+    return;
+  }
+  // Out of view: the observer calls when it comes in; a forced pass must still reach it then.
+  if (element.dataset.jyTtsPending !== 'force') element.dataset.jyTtsPending = options.force ? 'force' : 'plain';
+  viewer.observe(element);
 }
 
 function ttsViewer() {
@@ -6607,9 +6639,17 @@ function bindTtsDom() {
           if (node instanceof Element && node.matches('.mes[mesid]')) ids.add(node.getAttribute('mesid'));
         }
       }
+      const context = getContext();
+      const count = Array.isArray(context.chat) ? context.chat.length : 0;
+      const writing = runtime.mainGenerationActive ? latestAssistantMessageId(context) : null;
       for (const id of ids) {
+        // The floor being written is redrawn by the host on every streamed chunk; it gets its buttons
+        // once the reply is rendered whole.
+        if (writing !== null && Number(id) === writing) continue;
         const text = ttsMessageText(id);
-        if (text && !text.querySelector(':scope > .jy-tts-bar')) scheduleTtsDecorate(Number(id), { delay: 400 });
+        const element = text?.closest('.mes[mesid]');
+        // A chat opening inserts every floor at once: only the ones near the screen are done now.
+        if (element && !text.querySelector(':scope > .jy-tts-bar')) routeTtsDecorate(element, { delay: 400 }, Number(id) >= count - 3);
       }
     });
     observer.observe(chat, { childList: true, subtree: true });
@@ -6671,9 +6711,36 @@ async function lookupFishVoiceTitle(voiceId, settings = runtime.settings) {
   return String(data?.title ?? '').trim();
 }
 
+// Where a shadow host of ours sits: the whole viewport, sized by the viewport, and the box its fixed
+// children are placed in. On a phone the host gives <html> a transform and makes <body> fixed, which
+// leaves <html> with no height; a host that took its size from inset:0 took that — nothing — and every
+// fixed child measured from the bottom landed off screen. The vh line is for browsers without dvh.
+const SHADOW_HOST_BOX = 'position:fixed;left:0;top:0;width:100vw;height:100vh;height:100dvh;contain:strict;';
+
+/**
+ * A key typed into one of our fields stays ours. The host listens on the document for ←/→ (swipe a
+ * reply) and Ctrl+Enter (send, regenerate), and tells a field from the page by document.activeElement
+ * — which is our host element whenever the field sits in a shadow root. Escape still goes through.
+ */
+function keepTypingInside(host) {
+  host.addEventListener('keydown', event => {
+    if (event.key === 'Escape') return;
+    const target = event.composedPath?.()[0];
+    if (target instanceof Element && (target.matches('input, textarea, select') || target.isContentEditable)) event.stopPropagation();
+  });
+}
+
+/** Writes text into an element only when it differs from what is there. */
+function putText(element, value) {
+  const text = String(value);
+  if (element && element.textContent !== text) element.textContent = text;
+}
+
 function setText(root, selector, value) {
   const element = root.querySelector(selector);
-  if (element) element.textContent = String(value);
+  const text = String(value);
+  // The same text is not written again: panels redraw often, and every write is a mutation.
+  if (element && element.textContent !== text) element.textContent = text;
 }
 
 function fieldElements(root, name) {
@@ -10071,7 +10138,8 @@ async function openControlCenter() {
   host.id = PANEL_HOST_ID;
   host.dataset.jingyiVersion = APP_VERSION;
   host.dataset.theme = runtime.settings.theme || 'day';
-  host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;pointer-events:none;';
+  host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147483000;pointer-events:none;`;
+  keepTypingInside(host);
   const shadow = host.attachShadow({ mode: 'open' });
   const style = document.createElement('style');
   style.textContent = await loadPanelCss();
@@ -10569,7 +10637,8 @@ async function openMiniWindow() {
   host.id = MINI_HOST_ID;
   host.dataset.jingyiVersion = APP_VERSION;
   host.dataset.theme = settings.theme || 'day';
-  host.style.cssText = 'position:fixed;inset:0;z-index:2147482950;pointer-events:none;';
+  host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147482950;pointer-events:none;`;
+  keepTypingInside(host);
   const shadow = host.attachShadow({ mode: 'open' });
   const style = document.createElement('style');
   style.textContent = await loadPanelCss();
@@ -10663,7 +10732,7 @@ async function openMiniWindow() {
 <div class="jy-mini-body jy-mini-reading" data-jy-mini-page="reading" hidden>
   <div class="jy-mini-player">
     <div class="jy-mini-status-top"><strong data-jy-tts-title>没有在读</strong><span data-jy-tts-floor>—</span></div>
-    <div class="jy-progress jy-progress-seek" data-jy-tts-seek role="slider" aria-label="播放进度，拖动或点击跳转" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><span data-jy-tts-progress></span></div>
+    <div class="jy-progress jy-progress-seek" data-jy-tts-seek role="slider" aria-label="播放进度，拖动或点击跳转" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><span data-jy-tts-progress></span><i data-jy-tts-knob></i></div>
     <div class="jy-mini-clock"><span data-jy-tts-clock-now>0:00</span><span class="jy-muted" data-jy-tts-message>点楼层里的「朗读本楼」，或者下面的播放键。</span><span data-jy-tts-clock-total>0:00</span></div>
     <div class="jy-mini-transport">
       <button type="button" class="jy-button" data-jy-action="tts-prev" title="回到上一段">上一段</button>
@@ -11503,13 +11572,14 @@ async function openMiniWindow() {
   };
   const markCurrentSentence = () => {
     const transport = runtime.tts.transport;
-    const current = transport?.items[transport.index]?.segment.id;
+    const playing = transport?.items[transport.index]?.segment.id;
     for (const row of sentenceList.querySelectorAll('.jy-mini-sentence')) {
-      const on = transport && String(transport.messageId) === row.dataset.messageId && transport.side === row.dataset.side && String(current) === row.dataset.id && ['playing', 'paused', 'loading'].includes(transport.state);
-      row.dataset.current = on ? 'true' : 'false';
-      if (on) row.querySelector('.jy-mini-sentence-mark').textContent = '♪';
-      else if (row.dataset.ready === 'true') row.querySelector('.jy-mini-sentence-mark').textContent = '✓';
-      else row.querySelector('.jy-mini-sentence-mark').textContent = '·';
+      const on = transport && String(transport.messageId) === row.dataset.messageId && transport.side === row.dataset.side && String(playing) === row.dataset.id && ['playing', 'paused', 'loading'].includes(transport.state);
+      const current = on ? 'true' : 'false';
+      if (row.dataset.current !== current) row.dataset.current = current;
+      const mark = row.querySelector('.jy-mini-sentence-mark');
+      const glyph = on ? '♪' : row.dataset.ready === 'true' ? '✓' : '·';
+      if (mark && mark.textContent !== glyph) mark.textContent = glyph;
     }
   };
   // One preparation at a time: a run that fires steps while the list is being built asks for one more
@@ -11556,34 +11626,37 @@ async function openMiniWindow() {
       link.textContent = plain ? '分析这一楼' : '重新分析';
       link.title = plain ? '让副模型把这一楼的说话人和情绪分析一次，只做这一楼，模式不变' : '按你的意见改这一楼的分析，或者丢掉重来';
     }
-    box.replaceChildren();
-    if (!record?.steps.length) {
-      box.hidden = true;
-      return;
+    const pills = [];
+    const pill = (label, state) => pills.push([label, state]);
+    if (record?.steps.length) {
+      const analysis = record.steps.find(step => step.id === 'analysis');
+      if (analysis) {
+        const seconds = analysis.state === 'active' ? ` · ${Math.max(0, Math.round((Date.now() - (analysis.since ?? Date.now())) / 1000))} 秒` : '';
+        pill(`${analysis.state === 'done' ? '✓ ' : analysis.state === 'active' ? '◌ ' : analysis.state === 'error' ? '! ' : ''}${analysis.label.replace(/（.*）$/, '')}${seconds}`, analysis.state);
+      }
+      const parts = record.steps.filter(step => step.id !== 'analysis');
+      if (parts.length) {
+        const done = parts.filter(step => step.state === 'done').length;
+        const active = parts.find(step => step.state === 'active');
+        const failed = parts.some(step => step.state === 'error');
+        pill(`${failed ? '! ' : active ? '◌ ' : done === parts.length ? '✓ ' : ''}生成 ${done}/${parts.length}${active?.detail ? ` · ${active.detail}` : ''}`, failed ? 'error' : active ? 'active' : done === parts.length ? 'done' : 'pending');
+      }
+      // Named for the reading in force: a deep floor shows the deep connection, not the translation's.
+      const request = ttsRequestSettings(runtime.settings, ttsAnalysisDepth(ttsSettings()));
+      if (request.apiMode === 'independent') pill(getActiveChannel(request).name, 'plain');
     }
-    const pill = (label, state) => {
+    // This runs on every notice of the reading; the same pills as last time are left where they are.
+    const signature = JSON.stringify(pills);
+    if (signature === box.dataset.signature) return;
+    box.dataset.signature = signature;
+    box.replaceChildren(...pills.map(([label, state]) => {
       const span = document.createElement('span');
       span.className = 'jy-mini-pill';
       span.dataset.state = state;
       span.textContent = label;
-      box.appendChild(span);
-    };
-    const analysis = record.steps.find(step => step.id === 'analysis');
-    if (analysis) {
-      const seconds = analysis.state === 'active' ? ` · ${Math.max(0, Math.round((Date.now() - (analysis.since ?? Date.now())) / 1000))} 秒` : '';
-      pill(`${analysis.state === 'done' ? '✓ ' : analysis.state === 'active' ? '◌ ' : analysis.state === 'error' ? '! ' : ''}${analysis.label.replace(/（.*）$/, '')}${seconds}`, analysis.state);
-    }
-    const parts = record.steps.filter(step => step.id !== 'analysis');
-    if (parts.length) {
-      const done = parts.filter(step => step.state === 'done').length;
-      const active = parts.find(step => step.state === 'active');
-      const failed = parts.some(step => step.state === 'error');
-      pill(`${failed ? '! ' : active ? '◌ ' : done === parts.length ? '✓ ' : ''}生成 ${done}/${parts.length}${active?.detail ? ` · ${active.detail}` : ''}`, failed ? 'error' : active ? 'active' : done === parts.length ? 'done' : 'pending');
-    }
-    // Named for the reading in force: a deep floor shows the deep connection, not the translation's.
-    const request = ttsRequestSettings(runtime.settings, ttsAnalysisDepth(ttsSettings()));
-    if (request.apiMode === 'independent') pill(getActiveChannel(request).name, 'plain');
-    box.hidden = false;
+      return span;
+    }));
+    box.hidden = !pills.length;
   };
   // Seconds a preparation still needs, from what earlier runs took.
   const readingEta = record => {
@@ -11612,19 +11685,19 @@ async function openMiniWindow() {
     const toggle = win.querySelector('[data-jy-action="tts-toggle"]');
     const stepButtons = [win.querySelector('[data-jy-action="tts-prev"]'), win.querySelector('[data-jy-action="tts-next"]')];
     if (!info) {
-      if (title) title.textContent = '没有在读';
-      if (floorLabel) floorLabel.textContent = Number.isInteger(viewFloor) ? `第 ${viewFloor} 楼` : '—';
-      if (progress) progress.style.width = '0%';
+      if (title) putText(title, '没有在读');
+      if (floorLabel) putText(floorLabel, Number.isInteger(viewFloor) ? `第 ${viewFloor} 楼` : '—');
+      if (progress) setSeek(0);
       if (seekBar) {
         seekBar.setAttribute('aria-valuenow', '0');
         seekBar.dataset.live = 'false';
       }
       setText(win, '[data-jy-tts-clock-now]', '0:00');
       setText(win, '[data-jy-tts-clock-total]', '0:00');
-      if (message) message.textContent = '点播放键读这一楼，或者点下面的某一句。';
+      if (message) putText(message, '点播放键读这一楼，或者点下面的某一句。');
       if (toggle) {
-        toggle.textContent = '▶';
-        toggle.dataset.state = 'idle';
+        putText(toggle, '▶');
+        if (toggle.dataset.state !== 'idle') toggle.dataset.state = 'idle';
       }
       for (const button of stepButtons) if (button) button.disabled = true;
       renderPills();
@@ -11632,17 +11705,17 @@ async function openMiniWindow() {
     }
     const speaker = info.segment ? (info.segment.type === 'narration' ? '旁白' : (info.segment.speaker || '对白')) : '';
     if (title) {
-      title.textContent = info.state === 'loading'
+      putText(title, info.state === 'loading'
         ? '准备中…'
         : info.state === 'error'
           ? '出错了'
           : info.segment
             ? `${speaker} ·「${miniShort(info.segment.text, 22)}」`
-            : (info.state === 'paused' ? '已暂停' : '待播放');
+            : (info.state === 'paused' ? '已暂停' : '待播放'));
     }
-    if (floorLabel) floorLabel.textContent = `第 ${info.messageId} 楼 · 第 ${info.lineIndex + 1}/${info.lineCount} 段 · ${TTS_MODE_LABELS[info.mode]}`;
+    if (floorLabel) putText(floorLabel, `第 ${info.messageId} 楼 · 第 ${info.lineIndex + 1}/${info.lineCount} 段 · ${TTS_MODE_LABELS[info.mode]}`);
     const fraction = info.duration ? Math.max(0, Math.min(1, info.time / info.duration)) : 0;
-    if (progress && !seekDragging) progress.style.width = `${(fraction * 100).toFixed(2)}%`;
+    if (progress && !seekDragging) setSeek(fraction);
     if (seekBar) {
       seekBar.setAttribute('aria-valuenow', String(Math.round(fraction * 100)));
       seekBar.dataset.live = transport.current ? 'true' : 'false';
@@ -11651,15 +11724,15 @@ async function openMiniWindow() {
     setText(win, '[data-jy-tts-clock-total]', miniClock(info.duration));
     if (message) {
       const eta = info.state === 'loading' ? readingEta(ttsProgressFor(info.messageId, transport.side)) : '';
-      message.textContent = info.state === 'loading' || info.state === 'error'
+      putText(message, info.state === 'loading' || info.state === 'error'
         ? `${info.message || ''}${eta ? ` · ${eta}` : ''}`
         : info.state === 'paused'
           ? `已暂停 · 第 ${info.index + 1}/${info.count} 句`
-          : `第 ${info.index + 1}/${info.count} 句`;
+          : `第 ${info.index + 1}/${info.count} 句`);
     }
     if (toggle) {
-      toggle.textContent = info.state === 'playing' ? '❚❚' : '▶';
-      toggle.dataset.state = info.state;
+      putText(toggle, info.state === 'playing' ? '❚❚' : '▶');
+      if (toggle.dataset.state !== info.state) toggle.dataset.state = info.state;
     }
     for (const button of stepButtons) if (button) button.disabled = false;
     renderPills();
@@ -11679,10 +11752,11 @@ async function openMiniWindow() {
     let record = transport?.floor ? ttsProgressFor(transport.messageId, transport.side) : null;
     if (!record && inspecting) record = ttsProgressFor(inspecting.messageId, inspecting.side);
     if (!record && Number.isInteger(shown)) record = ttsProgressFor(shown, shownSide);
-    list.replaceChildren();
     const active = record?.steps.some(step => step.state === 'active') === true;
     // The detailed list only shows while something is being made; afterwards the pills say it all.
     if (!record?.steps.length || !active) {
+      if (list.childElementCount) list.replaceChildren();
+      list.dataset.signature = '';
       list.hidden = true;
       if (stepTicker !== null) {
         globalThis.clearInterval(stepTicker);
@@ -11692,21 +11766,27 @@ async function openMiniWindow() {
       return;
     }
     list.hidden = false;
-    for (const step of record.steps) {
-      const item = document.createElement('li');
-      item.dataset.state = step.state;
-      const mark = document.createElement('span');
-      mark.className = 'jy-mini-step-mark';
-      const label = document.createElement('span');
-      label.className = 'jy-mini-step-label';
-      label.textContent = step.label;
-      const detail = document.createElement('span');
-      detail.className = 'jy-mini-step-detail';
-      detail.textContent = step.state === 'active'
-        ? `${step.detail ? `${step.detail} · ` : ''}${Math.max(0, Math.round((Date.now() - (step.since ?? Date.now())) / 1000))} 秒`
-        : (step.detail ?? '');
-      item.append(mark, label, detail);
-      list.appendChild(item);
+    const rows = record.steps.map(step => [step.state, step.label, step.state === 'active'
+      ? `${step.detail ? `${step.detail} · ` : ''}${Math.max(0, Math.round((Date.now() - (step.since ?? Date.now())) / 1000))} 秒`
+      : (step.detail ?? '')]);
+    // Rebuilt only when a step moved or its seconds turned over.
+    const signature = JSON.stringify(rows);
+    if (signature !== list.dataset.signature) {
+      list.dataset.signature = signature;
+      list.replaceChildren(...rows.map(([state, labelText, detailText]) => {
+        const item = document.createElement('li');
+        item.dataset.state = state;
+        const mark = document.createElement('span');
+        mark.className = 'jy-mini-step-mark';
+        const label = document.createElement('span');
+        label.className = 'jy-mini-step-label';
+        label.textContent = labelText;
+        const detail = document.createElement('span');
+        detail.className = 'jy-mini-step-detail';
+        detail.textContent = detailText;
+        item.append(mark, label, detail);
+        return item;
+      }));
     }
     renderPills();
     if (stepTicker === null) {
@@ -11739,6 +11819,11 @@ async function openMiniWindow() {
   };
   // The progress bar is a slider: a tap jumps, a drag scrubs, the arrow keys nudge by five percent.
   let seekDragging = false;
+  // Where the bar stands, as one number the fill and the knob both read (see .jy-progress-seek).
+  const setSeek = fraction => {
+    const value = Math.max(0, Math.min(1, Number(fraction) || 0)).toFixed(4);
+    if (seekBar && seekBar.style.getPropertyValue('--jy-seek') !== value) seekBar.style.setProperty('--jy-seek', value);
+  };
   let seekPointer = null;
   const seekFraction = event => {
     const rect = seekBar.getBoundingClientRect();
@@ -11755,15 +11840,13 @@ async function openMiniWindow() {
       // A pointer the browser does not know (a synthetic event) still seeks, it just cannot be captured.
     }
     const fraction = seekFraction(event);
-    const fill = win.querySelector('[data-jy-tts-progress]');
-    if (fill) fill.style.width = `${(fraction * 100).toFixed(2)}%`;
+    setSeek(fraction);
     seekTts(fraction);
   };
   const onSeekMove = event => {
     if (!seekDragging || event.pointerId !== seekPointer) return;
     const fraction = seekFraction(event);
-    const fill = win.querySelector('[data-jy-tts-progress]');
-    if (fill) fill.style.width = `${(fraction * 100).toFixed(2)}%`;
+    setSeek(fraction);
     seekTts(fraction);
   };
   const onSeekUp = event => {
@@ -11785,6 +11868,25 @@ async function openMiniWindow() {
     renderPlaybar(transport);
     if (miniTab === 'reading') scheduleSentences();
   });
+  // Between those notices only the clock and the bars move.
+  const renderProgress = transport => {
+    if (!win.isConnected) return;
+    const shown = readingTarget().transport;
+    const info = shown ? ttsTransportDescription(shown) : null;
+    if (info) {
+      const fraction = info.duration ? Math.max(0, Math.min(1, info.time / info.duration)) : 0;
+      if (!seekDragging) setSeek(fraction);
+      const now = String(Math.round(fraction * 100));
+      if (seekBar && seekBar.getAttribute('aria-valuenow') !== now) seekBar.setAttribute('aria-valuenow', now);
+      setText(win, '[data-jy-tts-clock-now]', miniClock(info.time));
+      setText(win, '[data-jy-tts-clock-total]', miniClock(info.duration));
+    }
+    const live = transport ? ttsTransportDescription(transport) : null;
+    if (!live?.duration) return;
+    const scale = `scaleX(${Math.max(0, Math.min(1, live.time / live.duration)).toFixed(3)})`;
+    for (const fill of win.querySelectorAll('[data-jy-mini-playbar-fill]')) if (fill.style.transform !== scale) fill.style.transform = scale;
+  };
+  const unsubscribeProgress = subscribeTtsProgress(renderProgress);
   refreshReading = () => {
     renderTransport();
     renderSteps();
@@ -12045,6 +12147,7 @@ async function openMiniWindow() {
     volumeInput.removeEventListener('input', onFishInput);
     unsubscribeTask();
     unsubscribeTts();
+    unsubscribeProgress();
     unsubscribeLog();
     seekBar.removeEventListener('pointerdown', onSeekDown);
     seekBar.removeEventListener('pointermove', onSeekMove);
@@ -12703,11 +12806,21 @@ function registerRuntimeEvents() {
   });
   bindEvent(eventTypes.GENERATION_STOPPED, () => {
     runtime.mainGenerationActive = false;
+    // The floor being written was left without buttons while it streamed; a stopped reply may not be
+    // rendered again, so it gets them now.
+    const latest = latestAssistantMessageId(getContext());
+    if (Number.isInteger(latest)) scheduleTtsDecorate(latest, { delay: 400 });
     // A stopped reply is not translated on its own (the reader may still continue or redo it); the
     // render that follows says so in the log rather than nowhere.
     const pending = runtime.generationGate.peek();
     if (pending) runtime.stoppedGeneration = { ...pending, at: Date.now() };
     runtime.generationGate.clear();
+  });
+  bindEvent(eventTypes.GENERATION_ENDED, () => {
+    if (!runtime.mainGenerationActive) return;
+    runtime.mainGenerationActive = false;
+    const latest = latestAssistantMessageId(getContext());
+    if (Number.isInteger(latest)) scheduleTtsDecorate(latest, { delay: 400 });
   });
   bindEvent(eventTypes.MESSAGE_SWIPED, messageId => scheduleAuto(messageId, 'swipe'));
   bindEvent(eventTypes.MESSAGE_EDITED, messageId => scheduleAuto(messageId, 'edit'));
@@ -12773,7 +12886,8 @@ function registerRuntimeEvents() {
     runtime.tts.overrides.clear();
     runtime.tts.preview = null;
     runtime.tts.inspect = null;
-    scheduleTtsDecorateAll({ force: true });
+    runtime.tts.mesSeen.clear();
+    scheduleTtsDecorateAll();
   });
 }
 
