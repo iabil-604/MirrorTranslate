@@ -13,9 +13,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.35.0-beta.7';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.35.0-beta.7';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.35.0-beta.7';
+} from './core.js?v=0.35.0-beta.8';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.35.0-beta.8';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.35.0-beta.8';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -67,9 +67,16 @@ function escapeRegex(value) {
  * A floor written by the translator is read through its own boundaries instead, which work whatever the
  * visible affixes are; this is the fallback for a preset that types `<jy-translation>` itself.
  */
-export function linesFromTaggedText(text, tags = []) {
+export function linesFromTaggedText(text, tags = [], { excludedTags = [] } = {}) {
   // Comments are not shown, so they are not read; an unclosed one hides the rest.
-  const source = normalizeNewlines(text).replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+  let source = normalizeNewlines(text).replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+  // What the excluded tags hold (a picture's prompt, a status panel) is kept as it is and never read,
+  // here as on a translated floor.
+  for (const tag of Array.isArray(excludedTags) ? excludedTags : []) {
+    if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(String(tag))) continue;
+    const name = escapeRegex(tag);
+    source = source.replace(new RegExp(`<${name}(?:\\s[^<>]*)?>[\\s\\S]*?<\\/${name}\\s*>`, 'gi'), '');
+  }
   const blocks = [];
   for (const tag of Array.isArray(tags) ? tags : []) {
     if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(String(tag))) continue;
