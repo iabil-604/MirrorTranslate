@@ -17,11 +17,14 @@ import {
   createTranslationSignature,
   extractReasoningText,
   detectUnmarkedAffixes,
+  hasLegacyTranslation,
   DEFAULT_COLORING,
   normalizeColoring,
   normalizeSpeakerList,
   SPEAKER_CLASS,
-  describeSpeechShape,
+  isPlaceholderSpeaker,
+  placeQuoteMarks,
+  readQuoteMark,
   splitSpeechParts,
   unifySpeakerNames,
   looksUntranslated,
@@ -78,7 +81,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.35.1';
+} from './core.js?v=0.36.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -135,10 +138,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.35.1';
-import { createTtsStore } from './tts-store.js?v=0.35.1';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.1';
+} from './tts.js?v=0.36.0';
+import { createTtsStore } from './tts-store.js?v=0.36.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.36.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.36.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -147,7 +150,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.35.1';
+} from './processing.js?v=0.36.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -164,9 +167,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.35.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.1';
+} from './prompts.js?v=0.36.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.36.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.36.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -174,21 +177,22 @@ import {
   computeSafeBand,
   emphasisContour,
   isNeutralColor,
+  normalizeEmotion,
   oklchToSrgb,
   parseCssColor,
   resolveSegmentStyle,
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.35.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.35.1';
+} from './palette.js?v=0.36.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.36.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.35.1';
+} from './diagnostics.js?v=0.36.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -252,8 +256,9 @@ const runtime = {
   thinkingOpen: null,
   // Who the model reported on the last floor, and whether the palette could paint each of them.
   speakerCoverage: null,
-  // Every auto-coloured name seen this session, so the generated stylesheet covers them too.
-  autoSpeakerNames: new Set(),
+  // Every auto-coloured name seen this session, per character card or group chat, so the generated
+  // stylesheet covers them and the next floor's roster knows them. One cast never reaches another's roster.
+  autoSpeakerNames: new Map(),
   subscribers: new Set(),
   diagnosticSubscribers: new Set(),
   update: { status: 'idle', installType: null, details: null },
@@ -830,8 +835,9 @@ async function restyleCurrentChat(settings) {
   const changes = [];
   const updateExtra = (extra, text) => {
     // Keep the original provenance if an edited legacy block could not be migrated.
-    // New owned blocks can be read without consulting these visible-affix settings.
-    if (text.includes(`{${INVISIBLE_MARKER}`)) return extra;
+    // New owned blocks can be read without consulting these visible-affix settings. Everything else
+    // records the affixes the text now carries: the next restyle keeps each body by them.
+    if (hasLegacyTranslation(text)) return extra;
     return { ...extra, [MESSAGE_META_KEY]: {
       ...extra?.[MESSAGE_META_KEY], schema_version: 4,
       segment_prefix: settings.segmentPrefix, segment_suffix: settings.segmentSuffix,
@@ -857,7 +863,13 @@ async function restyleCurrentChat(settings) {
     // Hidden floors are system messages to the host and still shown, with their affixes.
     if (!message || message.is_user || typeof message.mes !== 'string') continue;
     mirrorsChanged = false;
-    const next = { mes: restyleBilingual(message.mes, settings, message.extra?.[MESSAGE_META_KEY]), extra: message.extra };
+    // A host that keeps no record per swipe leaves the record of the swipe translated last on the floor,
+    // whichever swipe is shown. Its affixes are not this text's, so the body is not kept by them.
+    const shown = Number(message.swipe_id ?? 0);
+    const record = message.extra?.[MESSAGE_META_KEY];
+    const ownRecord = !Array.isArray(message.swipes) || Boolean(message.swipe_info?.[shown])
+      || !(Number(record?.schema_version) >= 4) || Number(record?.swipe_id) === shown;
+    const next = { mes: restyleBilingual(message.mes, settings, ownRecord ? record : undefined), extra: message.extra };
     if (next.mes !== message.mes) next.extra = updateExtra(message.extra, next.mes);
     next.extra = restyleMirror(next.extra);
     if (Array.isArray(message.swipes)) {
@@ -1210,37 +1222,80 @@ function speakerPaletteFor(settings = runtime.settings) {
   return normalizeSpeakerList(settings?.speakerPalette?.[worldInfoCharacterKey()]);
 }
 
-// The roster handed to the model. A closed list turns "who is speaking" from an open-ended naming
-// problem into a multiple-choice question, which is the whole reason this stays reliable.
+// Every name and spelling the palette knows, for the reading's name matching. The translation's
+// roster is annotationRoster, which keeps each person's spellings together.
 function speakerRoster(settings = runtime.settings) {
   const names = speakerPaletteFor(settings).flatMap(speaker => [speaker.name, ...speaker.aliases]);
   return [...new Set(names.filter(Boolean))];
 }
 
-// The names the translation is asked to label speakers with: the colouring's palette, and, with the
-// reading on, the cast the voices are registered under, so a label reaches its voice by name.
 /**
  * The characters' consoles as sentences: the default one first, under the name every reading knows
  * it by, then each row that was set apart. Nothing goes out for a console left at the middle.
  */
-function ttsStyles(settings = runtime.settings) {
+function ttsStyles(settings = runtime.settings, only = {}) {
   const tts = ttsSettings(settings);
   const styles = [];
-  const base = consoleDirections(tts.console);
+  const base = consoleDirections(tts.console, only);
   if (base.length) styles.push({ name: '默认', rules: base });
   for (const row of ttsVoicesFor(settings)) {
-    const own = row.console ? consoleDirections(row.console) : [];
+    const own = row.console ? consoleDirections(row.console, only) : [];
     if (own.length) styles.push({ name: row.name, rules: own });
   }
   return styles;
 }
 
+// The translation is asked for moods, strengths, tones and a sound where the text writes one, so it
+// hears the sliders about those. Pauses and speed are not its to write; of the grain slider it hears
+// only the end that forbids a soft tone, so a reader who turned that off is obeyed there too.
+const TRANSLATION_CONSOLE = Object.freeze({ keys: Object.freeze(['intensity', 'range', 'breath', 'expression']), quiet: Object.freeze(['grain']) });
+
 function translationStyles(settings = runtime.settings) {
-  return ttsSettings(settings).enabled ? ttsStyles(settings) : [];
+  return ttsSettings(settings).enabled ? ttsStyles(settings, TRANSLATION_CONSOLE) : [];
 }
 
+/** The names auto-colouring has given this card's speakers so far this session; a group chat is one cast. */
+function autoSpeakerNames() {
+  const context = getContext();
+  const key = context.groupId !== null && context.groupId !== undefined ? `group:${context.groupId}` : worldInfoCharacterKey();
+  if (!runtime.autoSpeakerNames.has(key)) runtime.autoSpeakerNames.set(key, new Set());
+  return runtime.autoSpeakerNames.get(key);
+}
+
+// A card or a persona named for more than one person: 「卡米拉 & 露娜」, 「Rin & Sakura」, 「A·B」.
+const MANY_NAMES_RE = /[&＆/／、,，+＋·・•･=＝]|\s/u;
+
+/**
+ * The people the translation is asked to name, each once with the other spellings they go by: the
+ * voiced characters when the reading is on, then the palette, the card's character and the reader —
+ * the two who speak most — then whoever this card's floors have already been painted for. Anyone else
+ * is named the way the translation names them, and gets a colour of their own (see
+ * resolvedSpeakerColors). The card's and the reader's names join only as one person's name the roster
+ * does not know yet: a card named for two people offered as one merged them into one colour, and a
+ * name the reading throws away (你, 她) would only be asked for to be lost.
+ */
 function annotationRoster(settings = runtime.settings) {
-  return ttsSettings(settings).enabled ? ttsKnownNames(settings) : speakerRoster(settings);
+  const context = getContext();
+  const entries = new Map();
+  const add = (name, aliases = []) => {
+    const clean = String(name ?? '').trim();
+    if (!clean) return;
+    const entry = entries.get(clean) ?? { name: clean, aliases: [] };
+    for (const alias of aliases ?? []) {
+      const spelling = String(alias ?? '').trim();
+      if (spelling && spelling !== clean && !entry.aliases.includes(spelling)) entry.aliases.push(spelling);
+    }
+    entries.set(clean, entry);
+  };
+  if (ttsSettings(settings).enabled) for (const row of ttsVoicesFor(settings)) add(row.name, row.aliases);
+  for (const speaker of speakerPaletteFor(settings)) add(speaker.name, speaker.aliases);
+  const known = spelling => entries.has(spelling) || [...entries.values()].some(entry => entry.aliases.includes(spelling));
+  for (const name of [context.name2, context.name1]) {
+    const clean = String(name ?? '').trim();
+    if (clean && !MANY_NAMES_RE.test(clean) && !isPlaceholderSpeaker(clean) && !known(clean)) add(clean);
+  }
+  for (const name of autoSpeakerNames()) add(name);
+  return [...entries.values()];
 }
 
 // Hair colours cluster: two blondes in one cast would otherwise get near-identical speech. Hues are
@@ -1308,8 +1363,17 @@ function canonicalAnnotations(settings, annotations) {
   const quotesOf = mark => (Array.isArray(mark?.quotes) ? mark.quotes : []);
   const reported = [...annotations.values()].flatMap(mark => [mark?.speaker, ...quotesOf(mark).map(quote => quote?.speaker)]).filter(Boolean);
   if (!reported.length) return annotations;
-  const names = unifySpeakerNames(reported, [...speakerRoster(settings), ...runtime.autoSpeakerNames]);
-  const canonical = speaker => (speaker ? names.get(String(speaker).trim()) ?? speaker : speaker);
+  const roster = annotationRoster(settings);
+  const names = unifySpeakerNames(reported, roster.flatMap(entry => [entry.name, ...entry.aliases]));
+  // A spelling the roster keeps under somebody's name is that person. Without this a voice row's alias
+  // took a colour of its own beside the name it belongs to: one person in two colours.
+  const own = new Set(roster.map(entry => entry.name));
+  const owner = new Map(roster.flatMap(entry => entry.aliases.filter(alias => !own.has(alias)).map(alias => [alias, entry.name])));
+  const canonical = speaker => {
+    if (!speaker) return speaker;
+    const unified = names.get(String(speaker).trim()) ?? speaker;
+    return owner.get(unified) ?? unified;
+  };
   const result = new Map();
   for (const [id, mark] of annotations) {
     const speaker = canonical(mark?.speaker);
@@ -1328,89 +1392,138 @@ function canonicalAnnotations(settings, annotations) {
  *
  * Returns null when nothing would be painted, so a floor translated with colouring off is written
  * byte-for-byte the way it always was.
+ *
+ * A unit is one paragraph of the floor, often several lines: a line of narration and the line of
+ * dialogue it leads into, or two people answering each other. Speaker colour goes on the quoted runs,
+ * each by the mark placed on it — placeQuoteMarks, the same placing the reading uses. A unit used to
+ * be painted only when every line carried the same speaker and the same mood, so the narrated line
+ * the request tells the model to leave unnamed, a line it left unmarked, or a second person in the
+ * paragraph cost the whole paragraph its colour. The emotion's typography covers the whole unit, so it
+ * goes on only when the lines that name a mood agree on it.
  */
 function buildSegmentStyler(settings, reportedAnnotations) {
   const coloring = activeColoring(settings);
   const band = coloring.band;
   if (!band || (!coloring.speakers && !coloring.emotions) || !(reportedAnnotations instanceof Map) || !reportedAnnotations.size) return null;
   const annotations = canonicalAnnotations(settings, reportedAnnotations);
-  const named = [...annotations.values()].map(mark => mark?.speaker).filter(Boolean);
+  // Every name the marks carry, the runs' own included: somebody named only on a run of a line that
+  // another person opens still needs a colour. Each name counts once per line.
+  const named = [...annotations.values()].flatMap(mark => [...new Set([
+    mark?.speaker,
+    ...(Array.isArray(mark?.quotes) ? mark.quotes.map(quote => quote?.speaker) : []),
+  ].filter(Boolean))]);
   const speakers = coloring.speakers ? resolvedSpeakerColors(settings, named) : new Map();
   // Say out loud who the model reported and who the palette recognised. A speaker that resolves to
   // nothing costs the line its colour, and with nothing written down that is invisible.
   reportSpeakerCoverage(named, speakers, coloring);
-  return (ids, texts = []) => {
-    // A multi-line unit only gets a colour when the whole unit agrees; mixed speakers in one block
-    // cannot be painted separately without splitting the block, so it stays neutral.
-    const marks = ids.map(id => annotations.get(id)).filter(Boolean);
-    if (marks.length !== ids.length || !marks.length) return null;
-    const first = marks[0];
-    if (marks.some(mark => mark.speaker !== first.speaker || mark.emotion !== first.emotion)) return null;
-    const speaker = coloring.speakers ? speakers.get(String(first.speaker ?? '')) : null;
-    const emotion = coloring.emotions ? first.emotion : '';
-    if (!speaker && !emotion) return null;
+  // Both spellings of the colour, and both marked important.
+  //
+  // `-webkit-text-fill-color` decides the painted glyph in every WebKit and Blink browser and wins
+  // over `color` outright — themes set it for gradient text. When they do, the glyphs take the
+  // theme's colour while getComputedStyle still reports ours, so the colour looks like it is being
+  // applied and simply never appears. Writing both is a harmless duplicate when no theme does it.
+  const toInline = items => items
+    .flatMap(item => (item.startsWith('color:') ? [item, `-webkit-text-fill-${item}`] : [item]))
+    .map(item => `${item} !important`)
+    .join(';');
+  // One person at one mood, the way a quoted run wears it.
+  const runPaint = mark => {
+    const speaker = coloring.speakers && mark?.speaker ? speakers.get(String(mark.speaker)) : null;
+    if (!speaker) return null;
     const style = resolveSegmentStyle({
-      speakerColor: speaker?.source || speaker?.base || '',
-      name: speaker?.name ?? '',
-      emotion,
-      intensity: first.intensity,
+      speakerColor: speaker.source || speaker.base || '',
+      name: speaker.name,
+      emotion: coloring.emotions ? mark.emotion : '',
+      intensity: mark.intensity,
       band,
       vividness: coloring.vividness,
     });
-    // Speaker colour belongs to the words someone actually said. A unit with no quoted span in it
-    // is narration and wears nobody's colour; a unit that mixes narration with a quoted line paints
-    // only the quoted runs. The colour used to cover the whole line, which is how 「あ、そう」と呟き、
-    // 通話を切った ended up with its narration in the speaker's pink.
-    const shape = speaker ? describeSpeechShape(texts) : 'narration';
-    // All-speech units keep the old shape exactly: colour on the wrapper, rhythm inside it.
-    const paintsOutside = Boolean(speaker) && shape === 'spoken';
-    const paintsInside = Boolean(speaker) && shape === 'mixed';
+    return {
+      speaker,
+      className: `${SPEAKER_CLASS}-${speakerSlug(speaker.name)}`,
+      css: toInline(style.declarations.filter(item => item.startsWith('color:'))),
+    };
+  };
+  return (ids, texts = []) => {
+    // Each line with its speech cut out and a paint, or none, for every quoted run in it.
+    const lines = ids.map((id, index) => {
+      const text = String(texts[index] ?? '');
+      const mark = annotations.get(id) ?? null;
+      const parts = splitSpeechParts(text);
+      const placed = placeQuoteMarks(parts.filter(part => part.spoken).map(part => part.text), mark);
+      return { id, text, mark, parts, paints: placed.map(runPaint) };
+    });
+    if (!lines.some(line => line.mark)) return null;
+    const runs = lines.flatMap(line => line.paints);
+    const painted = runs.filter(Boolean);
+    const who = [...new Set(painted.map(paint => paint.speaker.name))];
+    // Speaker colour belongs to the words someone actually said. Narration wears nobody's colour, which
+    // is how 「あ、そう」と呟き、通話を切った stopped carrying the speaker's pink over its narration.
+    const narrated = lines.some(line => line.parts.some(part => !part.spoken && part.text.trim()));
+    // One person says every quoted run and nothing is narrated: the old shape exactly, colour on the
+    // wrapper and rhythm inside it. Anything else paints the runs one by one.
+    const sole = runs.length > 0 && painted.length === runs.length && who.length === 1 && !narrated ? painted[0].speaker : null;
+    const paintsInside = !sole && painted.length > 0;
+    // The unit's mood: the lines that name one must agree on it, read through the palette's fold so
+    // that one person's excited and happy are the same typography. A calm line names no mood, and does
+    // not cancel the angry one beside it. The typography dresses the whole unit, so a line of narration
+    // that nobody marked keeps the unit plain: its words were never said in that mood.
+    const moodOf = line => {
+      const mood = normalizeEmotion(line.mark?.emotion);
+      return mood === 'neutral' ? '' : mood;
+    };
+    const moods = coloring.emotions ? [...new Set(lines.map(moodOf).filter(Boolean))] : [];
+    const bare = lines.some(line => line.text.trim() && !line.parts.some(part => part.spoken) && !moodOf(line));
+    const emotion = moods.length === 1 && !bare ? moods[0] : '';
+    const intensity = emotion ? lines.find(line => moodOf(line) === emotion)?.mark?.intensity : undefined;
+    if (!sole && !paintsInside && !emotion) return null;
+    const style = resolveSegmentStyle({
+      speakerColor: sole?.source || sole?.base || '',
+      name: sole?.name ?? '',
+      emotion,
+      intensity,
+      band,
+      vividness: coloring.vividness,
+    });
     // Emotion-only mode leaves the colour alone and changes weight and shape instead.
-    const declarations = paintsOutside ? style.declarations : style.declarations.filter(item => !item.startsWith('color:'));
+    const declarations = sole ? style.declarations : style.declarations.filter(item => !item.startsWith('color:'));
     if (!declarations.length && !paintsInside) return null;
     // Two carriers on purpose. The inline style holds the fully resolved colour, including whatever
     // the emotion did to it. The classes carry the same information through the host's own
     // stylesheet, so a sanitiser that drops style attributes still leaves speakers distinguishable.
+    // The slug class travels with the colour: on the wrapper for a one-person all-speech unit, on
+    // each quoted run otherwise, nowhere for narration.
     const classes = [SPEAKER_CLASS];
-    // The slug class paints through the host stylesheet, so it travels with the colour: on the
-    // wrapper for an all-speech unit, on the quoted runs for a mixed one, nowhere for narration.
-    const speakerClass = speaker ? `${SPEAKER_CLASS}-${speakerSlug(speaker.name)}` : '';
-    if (paintsOutside) classes.push(speakerClass);
+    if (sole) classes.push(`${SPEAKER_CLASS}-${speakerSlug(sole.name)}`);
     if (style.emotion && style.emotion !== 'neutral' && style.intensity) {
       classes.push(`jy-emo-${style.emotion}`, `jy-emo-l${style.intensity}`);
     }
-    const label = [speaker?.name, style.emotion && EMOTION_STYLES[style.emotion]?.label].filter(Boolean).join(' · ');
-    // Both spellings of the colour, and both marked important.
-    //
-    // `-webkit-text-fill-color` decides the painted glyph in every WebKit and Blink browser and wins
-    // over `color` outright — themes set it for gradient text. When they do, the glyphs take the
-    // theme's colour while getComputedStyle still reports ours, so the colour looks like it is being
-    // applied and simply never appears. Writing both is a harmless duplicate when no theme does it.
-    const toInline = items => items
-      .flatMap(item => (item.startsWith('color:') ? [item, `-webkit-text-fill-${item}`] : [item]))
-      .map(item => `${item} !important`)
-      .join(';');
+    const label = [who.join('、'), style.emotion && EMOTION_STYLES[style.emotion]?.label].filter(Boolean).join(' · ');
     const inline = toInline(declarations);
-    // The same colour the wrapper would have carried, ready to ride on the quoted runs instead.
-    const speechInline = toInline(style.declarations.filter(item => item.startsWith('color:')));
     // The rhythm rides on inner spans so the outer one keeps the colour and the classes: a size step
     // inherits the speaker's colour instead of restating it, and a sanitiser that drops the inner
     // tags leaves the line whole and coloured.
     const rhythm = translation => {
-      const contour = emphasisContour(translation, { emotion, intensity: first.intensity });
+      const contour = emphasisContour(translation, { emotion, intensity });
       return contour?.map(piece => ({
         text: piece.text,
         css: piece.scale === 1 ? '' : `font-size:${piece.scale.toFixed(3)}em !important`,
       })) ?? null;
     };
-    // Mixed lines trade rhythm for getting the colour right: the contour reads a whole line at a
-    // time, and a line cut into speech and narration is no longer one line to it.
-    const paintSpeech = translation => {
-      const parts = splitSpeechParts(translation);
-      if (!parts.some(part => part.spoken)) return null;
-      return parts.map(part => (part.spoken
-        ? { text: part.text, className: speakerClass, css: speechInline }
-        : { text: part.text }));
+    // Painted runs trade rhythm for getting the colour right: the contour reads a whole line at a
+    // time, and a line cut into speech and narration is no longer one line to it. The assembler hands
+    // over each line's id; a caller that does not is matched by the text.
+    const byId = new Map(lines.map(line => [line.id, line]));
+    const paintSpeech = (translation, id) => {
+      const line = byId.get(id) ?? lines.find(item => item.text === translation);
+      if (!line || line.text !== translation || !line.paints.some(Boolean)) return null;
+      let run = 0;
+      return line.parts.map(part => {
+        if (!part.spoken) return { text: part.text };
+        const paint = line.paints[run];
+        run += 1;
+        return paint ? { text: part.text, className: paint.className, css: paint.css } : { text: part.text };
+      });
     };
     const emphasis = paintsInside ? paintSpeech : (coloring.rhythm === false ? null : rhythm);
     return {
@@ -1418,9 +1531,10 @@ function buildSegmentStyler(settings, reportedAnnotations) {
       close: '</span>',
       emphasis,
       // Tells the assembler to drop the colour out of any wrapper carried over from the original
-      // line: two colours on one line would only mean the outer one losing without saying so.
-      // True for the mixed case as well, where the colour lands inside rather than on the wrapper.
-      paintsColor: paintsOutside || paintsInside,
+      // line: two colours on one line would only mean the outer one losing without saying so. Painted
+      // run by run, only the lines with a painted run lose it; a line nobody painted, an alarm the
+      // original wrote in red, keeps its red.
+      paintsColor: sole ? true : paintsInside ? id => Boolean(byId.get(id)?.paints.some(Boolean)) : false,
     };
   };
 }
@@ -1453,8 +1567,8 @@ function reportSpeakerCoverage(named, speakers, coloring) {
   runtime.speakerCoverage = coverage;
   let discovered = false;
   for (const item of coverage.reported) {
-    if (!item.painted || item.registered || runtime.autoSpeakerNames.has(item.name)) continue;
-    runtime.autoSpeakerNames.add(item.name);
+    if (!item.painted || item.registered || autoSpeakerNames().has(item.name)) continue;
+    autoSpeakerNames().add(item.name);
     discovered = true;
   }
   // A name first seen on this floor needs its rule before the floor is painted, or the class-based
@@ -1496,7 +1610,7 @@ function syncSpeakerStylesheet(settings = runtime.settings) {
   const existing = document.getElementById(SPEAKER_STYLE_ID);
   const coloring = activeColoring(settings);
   const resolved = coloring.speakers && coloring.band
-    ? resolvedSpeakerColors(settings, [...runtime.autoSpeakerNames])
+    ? resolvedSpeakerColors(settings, [...autoSpeakerNames()])
     : new Map();
   if (!resolved.size) {
     existing?.remove();
@@ -1532,11 +1646,7 @@ function readStoredAnnotations(metadata) {
     if (!Number.isInteger(key) || !value || typeof value !== 'object') continue;
     const annotation = storedMark(value) ?? {};
     // The reading's own marks, one per quoted run of the line, each with the characters that place it.
-    const quotes = (Array.isArray(value.quotes) ? value.quotes : []).slice(0, 12).map(entry => {
-      const mark = storedMark(entry);
-      const head = mark && entry.head ? String(entry.head).slice(0, 20) : '';
-      return mark ? { ...(head ? { head } : {}), ...mark } : null;
-    }).filter(Boolean);
+    const quotes = (Array.isArray(value.quotes) ? value.quotes : []).slice(0, 12).map(readQuoteMark).filter(Boolean);
     if (quotes.length) annotation.quotes = quotes;
     if (Object.keys(annotation).length) map.set(key, annotation);
   }
@@ -1850,7 +1960,7 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
         recordDiagnostic('warn', 'translation.no-annotations', '副模型没有返回任何说话人或情绪标注，这一批按普通样式显示；朗读这一楼时简单分析会另外问一次。', {
           request: state.requests,
           returned: translations.size,
-          roster: state.roster ?? [],
+          roster: (state.roster ?? []).map(entry => entry.name),
         });
       }
       if (!pending.length) return null;
@@ -2921,7 +3031,7 @@ function ttsVoiceConfig(settings = runtime.settings) {
 // Everyone this cast is known by: voiced characters first, then the colour palette and the names the
 // model has already reported this session.
 function ttsKnownNames(settings = runtime.settings) {
-  return [...new Set([...voiceRosterNames(ttsVoicesFor(settings)), ...speakerRoster(settings), ...runtime.autoSpeakerNames])];
+  return [...new Set([...voiceRosterNames(ttsVoicesFor(settings)), ...speakerRoster(settings), ...autoSpeakerNames()])];
 }
 
 /**
@@ -2947,7 +3057,7 @@ function ttsCast(settings = runtime.settings) {
   for (const speaker of speakerPaletteFor(settings)) add(speaker.name, speaker.aliases);
   add(context.name2);
   add(context.name1);
-  for (const name of runtime.autoSpeakerNames) add(name);
+  for (const name of autoSpeakerNames()) add(name);
   return cast;
 }
 
@@ -3371,6 +3481,23 @@ async function ttsPrimaryFloor(floor, settings) {
 }
 
 /**
+ * The paragraphs of a reading still arriving that can be made now. A line whose voice waits on the
+ * paragraph after it (`undecided`, see buildSegments) is not made until that one is read, and nothing
+ * after it is either, so the floor is still heard in order and every line is made once.
+ */
+function settledPrefix(utterances, partial, undecided) {
+  if (!undecided.length) return { readyIds: partial.readyIds, ready: partial.ready };
+  const lineOf = new Map(utterances.map(item => [item.id, item.lineId]));
+  const order = [...new Set(utterances.map(item => item.lineId))];
+  const stop = Math.min(...undecided.map(id => order.indexOf(lineOf.get(id))));
+  const held = new Set(order.slice(stop));
+  return {
+    readyIds: new Set([...partial.readyIds].filter(id => !held.has(lineOf.get(id)))),
+    ready: Math.min(partial.ready, stop),
+  };
+}
+
+/**
  * Utterances plus labels for one floor.
  *
  * The translation's own annotations are the starting point and cost nothing. When the model is asked,
@@ -3512,13 +3639,11 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           onPrefix: onPartial ? partial => {
             const partialLabels = new Map(reading.labels);
             for (const [id, label] of partial.labels) partialLabels.set(id, label);
-            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `深度分析（${utterances.length} 句）` : `简单分析（${utterances.length} 句）`, detail: `已回 ${partial.ready}/${partial.total} 段，先读这些` });
-            onPartial({
-              segments: buildSegments(utterances, pinSpeakers(partialLabels, resolved, { fallback: 'model' }), { knownNames: ttsKnownNames(settings), voices: mergeVoiceMaps(reading.voices, partial.voices) }),
-              readyIds: partial.readyIds,
-              ready: partial.ready,
-              total: partial.total,
-            });
+            const undecided = [];
+            const segments = buildSegments(utterances, pinSpeakers(partialLabels, resolved, { fallback: 'model' }), { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: mergeVoiceMaps(reading.voices, partial.voices), evidence: ttsEvidence(floor), ready: partial.readyIds, undecided });
+            const { readyIds, ready } = settledPrefix(utterances, partial, undecided);
+            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `深度分析（${utterances.length} 句）` : `简单分析（${utterances.length} 句）`, detail: `已回 ${ready}/${partial.total} 段，先读这些` });
+            onPartial({ segments, readyIds, ready, total: partial.total });
           } : null,
           onRequest: () => {
             requested = true;
@@ -3556,8 +3681,55 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   // The reader's word, and the plain reading's own naming, are written over whatever the labels say;
   // the labels' own speakers stand where nobody else named one.
   const pinned = pinSpeakers(labels, resolved, { fallback });
-  const segments = buildSegments(utterances, pinned, { knownNames: ttsKnownNames(settings), voices });
+  const dropped = [];
+  const segments = buildSegments(utterances, pinned, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices, evidence: ttsEvidence(floor), dropped });
+  noteGroundedTags(floor, dropped, depth);
   return { utterances, labels: pinned, voices, segments, depth, passive };
+}
+
+/**
+ * What else the text says about each line, by line id: the floor's other language, and the moods the
+ * story's own <say> marks named. A sound or a quiet voice may be written there instead — a mark's 耳语
+ * is the text asking for a whisper as surely as 小声 in the narration.
+ */
+function ttsEvidence(floor) {
+  const other = floor?.sources ?? floor?.references ?? null;
+  const marked = [...(floor?.lines ?? []), ...(floor?.speechSource ?? [])].filter(line => Array.isArray(line?.speech) && line.speech.length);
+  if (!marked.length) return other;
+  const evidence = new Map(other ?? []);
+  for (const line of marked) {
+    const moods = line.speech.map(span => span?.mood).filter(Boolean).join(' ');
+    if (moods) evidence.set(line.lineId, `${evidence.get(line.lineId) ?? ''}\n${moods}`);
+  }
+  return evidence;
+}
+
+// What the reading took out before Fish heard it, in the reader's words.
+const GROUND_REASONS = Object.freeze({
+  unknown: 'Fish 不认识或不再使用的词',
+  quiet: '原文没写小声、耳语却标了耳语或轻声',
+  'no-text': '原文没写的声音',
+  said: '台词里已经念出来的声音',
+  count: '一句里多出来的声音',
+  'drawn-out': '贴着省略号、破折号或波浪号的停顿和声音',
+  'bare-end': '后面没有话的停顿',
+  short: '太短的句子里的停顿、重读和句内变化',
+  turn: '没有真正转折的句内变化',
+  interjection: '只有语气词的句子上的标签',
+});
+
+/** Once per floor text: what the reading took out before Fish heard it, and why. */
+function noteGroundedTags(floor, dropped, depth) {
+  if (!dropped.length) return;
+  const key = `${ttsLabelKey(floor)}|grounded`;
+  if (runtime.tts.anchorWarned.has(key)) return;
+  runtime.tts.anchorWarned.add(key);
+  const counts = new Map();
+  for (const item of dropped) counts.set(item.why, (counts.get(item.why) ?? 0) + 1);
+  const parts = [...counts].map(([why, count]) => `${GROUND_REASONS[why] ?? why} ${count} 处`);
+  recordDiagnostic('info', 'tts.analysis', `这一楼朗读前去掉了 ${dropped.length} 处标签：${parts.join('，')}。`, {
+    floor: floor.floorId, depth, dropped: dropped.slice(0, 20),
+  }, '', { floor: floor.messageId });
 }
 
 /** The labels with only who speaks left on them: what the plain reading keeps for its voices. */
@@ -6855,7 +7027,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   floors.forEach((floor, index) => {
     const utterances = ttsUtterances(floor, settings);
     const labels = analyses[index]?.labels ?? annotationReading(utterances, floor.annotations).labels;
-    const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices: analyses[index]?.voices ?? null });
+    const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: analyses[index]?.voices ?? null, evidence: ttsEvidence(floor) });
     const visible = audibleSegments(segments, tts.range, ttsVoiceConfig(settings));
     visibleTotal += visible.length;
     // Nothing of it is on the page to hang a button on; the reading is started from the bar.
@@ -13947,7 +14119,7 @@ async function apiSpeak({ text, speaker = '', lang = '', analyze = false, play =
     for (const [id, label] of analysed.labels) labels.set(id, { ...labels.get(id), ...label });
     voices = analysed.voices;
   }
-  const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices });
+  const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices });
   // The reader's 朗读范围 is about their chat, not about what a caller asked for: all of it is read.
   const { items } = await ttsItemsFor(floor, segments, settings, { range: 'all' });
   if (!items.length) throw new Error('没有可朗读的文字。');

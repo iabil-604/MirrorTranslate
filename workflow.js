@@ -1,7 +1,7 @@
-import { extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, MESSAGE_META_KEY } from './core.js?v=0.35.1';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.35.1';
-import { EMOTION_KEYS } from './palette.js?v=0.35.1';
-import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.35.1';
+import { extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, DEFAULT_QUOTE_PAIRS, MESSAGE_META_KEY } from './core.js?v=0.36.0';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.36.0';
+import { EMOTION_KEYS } from './palette.js?v=0.36.0';
+import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOFT_MOODS, SOUND_CUES, SOUND_PLACE_RULE, SOUND_TAGS, TONE_CUES } from './tts.js?v=0.36.0';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -189,7 +189,7 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
     input.annotate = {
       speaker: annotate.speakers,
       emotion: annotate.emotions,
-      ...(annotate.speakers && annotate.roster.length ? { roster: annotate.roster } : {}),
+      ...(annotate.speakers && annotate.roster.length ? { roster: annotate.roster.map(entry => entry.name) } : {}),
       ...(annotate.emotions ? { emotions: annotate.emotionLabels } : {}),
       ...(annotate.voice ? { quotes: true, ...(annotate.directions ? { direction: true } : {}), tones: annotate.tones, sounds: annotate.sounds } : {}),
     };
@@ -216,9 +216,10 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
 // The style-repair pass rewrites a finished draft; asking for labels again there would only invite
 // the model to change them, so annotation is limited to the passes that actually produce text.
 //
-// The colouring wants a speaker and a palette mood per line. The reading wants more: Fish's own
-// emotion words, the tone when the text names one, and a mark per quoted run, so that a floor is
-// ready to be read the moment it is translated and the stream never has to ask a model again.
+// The colouring wants a speaker and a palette mood per line, and a mark per quoted run where one line
+// holds two people. The reading wants more: Fish's own emotion words, the tone when the text names
+// one, and a mark per quoted run always, so that a floor is ready to be read the moment it is
+// translated and the stream never has to ask a model again.
 function annotationRequest(settings, phase, requestMeta) {
   if (phase === 'style_repair') return null;
   const coloring = settings?.coloring;
@@ -236,15 +237,47 @@ function annotationRequest(settings, phase, requestMeta) {
   return {
     speakers,
     emotions,
-    roster: Array.isArray(requestMeta?.roster) ? requestMeta.roster.filter(Boolean).slice(0, 40) : [],
-    emotionLabels: reading ? FISH_EMOTIONS : EMOTION_KEYS,
+    roster: rosterEntries(requestMeta?.roster),
+    // A name the roster lacks still earns a colour of its own and still reaches the reading; only
+    // with both of those off is there nothing a name outside the roster could be used for.
+    openRoster: reading || coloring?.autoSpeakers !== false,
+    // "Nothing in particular" is asked for by leaving the mood out, so it is not offered as one.
+    emotionLabels: reading ? FISH_EMOTIONS : EMOTION_KEYS.filter(key => key !== 'neutral'),
+    emotionGroups: reading ? FISH_EMOTION_GROUPS : null,
     voice: reading,
     tones: reading ? FISH_TONES : [],
-    sounds: reading ? (directions ? SOUND_TAGS : FISH_SOUNDS) : [],
+    // The words that call for a tone or a sound, the same ones the reading checks a mark against.
+    toneCues: TONE_CUES,
+    sounds: reading ? (directions ? SOUND_TAGS : ANNOTATION_SOUNDS) : [],
+    soundCues: SOUND_CUES,
+    // Where a sound may not go, and the moods a line of nothing but 嗯 and 啊 may not wear: the analyses
+    // are told the same, and the reading drops the rest before Fish hears it.
+    soundPlace: SOUND_PLACE_RULE,
+    softMoods: reading ? SOFT_MOODS : [],
     directions,
-    quoteMarks: reading ? normalizeTts(settings.tts).quotePairs : [],
+    // Colouring stops at the same quotation marks the reading uses by default.
+    quoteMarks: reading ? normalizeTts(settings.tts).quotePairs : DEFAULT_QUOTE_PAIRS,
     styles: reading && Array.isArray(requestMeta?.styles) ? requestMeta.styles : [],
   };
+}
+
+// The roster as people: each once, under the name it is kept by, with its other spellings beside it.
+// A bare name is a person with no other spelling. Forty people is plenty for one floor.
+function rosterEntries(value) {
+  const entries = new Map();
+  for (const item of Array.isArray(value) ? value : []) {
+    const name = String(typeof item === 'string' ? item : item?.name ?? '').trim();
+    if (!name) continue;
+    const entry = entries.get(name) ?? { name, aliases: [] };
+    for (const alias of Array.isArray(item?.aliases) ? item.aliases : []) {
+      const spelling = String(alias ?? '').trim();
+      if (spelling && spelling !== name && !entry.aliases.includes(spelling) && entry.aliases.length < 6) entry.aliases.push(spelling);
+    }
+    entries.set(name, entry);
+  }
+  const names = new Set(entries.keys());
+  // An alias that is somebody else's own name would send that person's lines to the wrong one.
+  return [...entries.values()].slice(0, 40).map(entry => ({ ...entry, aliases: entry.aliases.filter(alias => !names.has(alias)) }));
 }
 
 export const __workflowTesting = Object.freeze({ cleanReferenceText, worldInfoChunks });

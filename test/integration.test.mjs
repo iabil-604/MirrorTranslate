@@ -9,6 +9,7 @@ import {
   hashText,
   interceptGenerationChat,
   mergeSettings,
+  restyleBilingual,
   segmentSource,
   stripGeneratedTranslationLines,
 } from '../core.js';
@@ -384,10 +385,10 @@ test('a coloured run paints the floor, keeps the prompt clean and stores the lab
   const result = await __testing.startTranslation(0, { quiet: true, force: true });
   assert.equal(result.skipped, false);
 
-  // The roster reached the model as a closed list, which is what keeps the labelling reliable.
+  // The roster reached the model as people, each with the other spellings beside the name to write.
   const annotation = sentMessages.find(entry => entry.content.includes('附加标注'));
   assert.ok(annotation);
-  assert.match(annotation.content, /英梨梨、泽村、诗羽/);
+  assert.match(annotation.content, /英梨梨（又名 泽村）、诗羽/);
 
   // Two speakers, two different colours, and the black-haired one still got one of her own.
   const colors = [...message.mes.matchAll(/["';]color:(#[0-9a-f]{6})/g)].map(match => match[1]);
@@ -1135,4 +1136,314 @@ test('世界书开关: only the books switched on bring their ticked entries, an
   // Every book off: nothing at all.
   __testing.configureForTest({ settings: { worldInfoWhitelist: { 'sakurai.png': picks }, worldInfoBooks: { 'sakurai.png': [] } } });
   assert.equal(__testing.whitelistedWorldbookContent(), '');
+});
+
+test('a paragraph whose narrated line names nobody still paints its dialogue', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  // No blank line between them, so the two lines are one unit. The request tells the model to leave
+  // speaker off a narrated line, and a unit used to be painted only when every line named the same
+  // person in the same mood: the dialogue lost its colour exactly when the model did as it was told.
+  const message = { mes: '<story_scene>\n英梨梨は顔を上げた。\n「何を考えてるの！」\n</story_scene>', swipe_id: 0 };
+  mockHost([message]);
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
+  globalThis.fetch = async () => completionResponse([
+    { id: 1, text: '英梨梨抬起头。', emotion: 'neutral' },
+    { id: 2, text: '「你到底在想什么！」', speaker: '英梨梨', emotion: 'angry', intensity: 2 },
+  ]);
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  const painted = [...message.mes.matchAll(/<span[^>]*color:#[0-9a-f]{6}[^>]*>([\s\S]*?)<\/span>/g)]
+    .map(match => match[1].replace(/[\u200b-\u200d\u2063]/g, ''));
+  assert.deepEqual(painted, ['「你到底在想什么！」']);
+  assert.equal(stripGeneratedTranslationLines(message.mes), '<story_scene>\n英梨梨は顔を上げた。\n「何を考えてるの！」\n</story_scene>');
+});
+
+test('two people in one line each wear their own colour', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n「来たの？」と詩羽が言うと、英梨梨は「うん」と頷いた。\n</story_scene>', swipe_id: 0 };
+  mockHost([message]);
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
+  globalThis.fetch = async () => completionResponse([{
+    id: 1, text: '「你来了？」诗羽问道，英梨梨点点头：「嗯。」', speaker: '诗羽', emotion: 'curious',
+    quotes: [{ head: '你来了', speaker: '诗羽' }, { head: '嗯', speaker: '英梨梨' }],
+  }]);
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  const runs = [...message.mes.matchAll(/<span[^>]*color:(#[0-9a-f]{6})[^>]*>([\s\S]*?)<\/span>/g)]
+    .map(match => [match[2].replace(/[\u200b-\u200d\u2063]/g, ''), match[1]]);
+  assert.deepEqual(runs.map(([text]) => text), ['「你来了？」', '「嗯。」']);
+  assert.notEqual(runs[0][1], runs[1][1], 'the second speaker used to come out in the first one\'s colour');
+});
+
+test('a name auto-coloured on one card joins that card\'s roster and never another card\'s', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const sent = [];
+  const reply = items => async (_url, init) => {
+    sent.push(JSON.parse(init.body).messages.find(entry => entry.content.includes('附加标注')).content);
+    return completionResponse(items);
+  };
+  const settings = { ...coloringSettings, streamingWriteback: true, tts: { enabled: true } };
+  // Card one: the model names somebody the palette has never heard of; the floor paints them.
+  const first = { mes: '<story_scene>\n「こんにちは」\n</story_scene>', swipe_id: 0 };
+  mockHost([first]);
+  __testing.configureForTest({ settings, initialized: true });
+  globalThis.fetch = reply([{ id: 1, text: '「你好。」', speaker: '卡米拉', emotion: 'happy' }]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  const again = { mes: '<story_scene>\n「またね」\n</story_scene>', swipe_id: 0 };
+  mockHost([again]);
+  __testing.configureForTest({ settings, initialized: true });
+  globalThis.fetch = reply([{ id: 1, text: '「再见。」', speaker: '卡米拉' }]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.match(sent[1], /已知人物：[^。]*卡米拉/, 'the next floor of the same card knows the name');
+  assert.match(sent[1], /名单外的人：写译文里对这个人的称呼/, 'and is still open to a newcomer');
+  // Card two: a different cast. The first card's name must not close the list on it.
+  const other = { mes: '<story_scene>\n「誰？」\n</story_scene>', swipe_id: 0 };
+  mockHost([other], { characters: [{ name: '别的卡', avatar: 'other.png' }] });
+  __testing.configureForTest({ settings, initialized: true });
+  globalThis.fetch = reply([{ id: 1, text: '「谁？」' }]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.doesNotMatch(sent[2], /卡米拉/);
+});
+
+test('a voice row\'s alias is the same person and wears the same colour', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n「行くよ」\n\n「うん」\n</story_scene>', swipe_id: 0 };
+  mockHost([message]);
+  __testing.configureForTest({
+    settings: {
+      ...coloringSettings,
+      streamingWriteback: true,
+      tts: { enabled: true },
+      ttsVoices: { 'sakurai.png': [{ name: '卡米拉', aliases: ['卡米'] }] },
+    },
+    initialized: true,
+  });
+  let section = '';
+  globalThis.fetch = async (_url, init) => {
+    section = JSON.parse(init.body).messages.find(entry => entry.content.includes('附加标注')).content;
+    return completionResponse([
+      { id: 1, text: '「走了。」', speaker: '卡米拉' },
+      { id: 2, text: '「嗯。」', speaker: '卡米' },
+    ]);
+  };
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.match(section, /卡米拉（又名 卡米）/);
+  const colors = [...message.mes.matchAll(/["';]color:(#[0-9a-f]{6})/g)].map(match => match[1]);
+  assert.equal(colors.length, 2);
+  assert.equal(colors[0], colors[1], 'one person, one colour, whichever spelling the model used');
+});
+
+test('a calm line does not cancel the angry one beside it, and a line of narration nobody marked is never dressed in a mood', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  // Two lines of one person's dialogue, one unit: the calm one names no mood of its own.
+  const spoken = { mes: '<story_scene>\n「そうなんだ」\n「何を考えてるの！」\n</story_scene>', swipe_id: 0 };
+  mockHost([spoken]);
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
+  globalThis.fetch = async () => completionResponse([
+    { id: 1, text: '「这样啊。」', speaker: '英梨梨', emotion: 'neutral' },
+    { id: 2, text: '「你到底在想什么！」', speaker: '英梨梨', emotion: 'angry', intensity: 2 },
+  ]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.match(spoken.mes, /jy-emo-angry/, 'the anger is still shown');
+  // A narrated line and a line of dialogue in one unit: the colour goes on the dialogue, and the
+  // typography of the anger does not spill onto words nobody said.
+  const narrated = { mes: '<story_scene>\n英梨梨は顔を上げた。\n「何を考えてるの！」\n</story_scene>', swipe_id: 0 };
+  mockHost([narrated]);
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
+  globalThis.fetch = async () => completionResponse([
+    { id: 1, text: '英梨梨抬起头。' },
+    { id: 2, text: '「你到底在想什么！」', speaker: '英梨梨', emotion: 'angry', intensity: 2 },
+  ]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.match(narrated.mes, /color:#[0-9a-f]{6}[^>]*>[^<「]*「你到底在想什么！」/);
+  assert.doesNotMatch(narrated.mes, /jy-emo-|font-weight/);
+});
+
+test('the roster names the card\'s character and the reader, and a pronoun is nobody\'s name', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const sent = [];
+  const reply = items => async (_url, init) => {
+    sent.push(JSON.parse(init.body).messages.find(entry => entry.content.includes('附加标注')).content);
+    return completionResponse(items);
+  };
+  const first = { mes: '<story_scene>\n「こんにちは」\n</story_scene>', swipe_id: 0 };
+  mockHost([first], { name1: '玩家', name2: '樱井' });
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
+  globalThis.fetch = reply([{ id: 1, text: '「你好。」', speaker: '你', emotion: 'happy' }]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.match(sent[0], /已知人物：英梨梨（又名 泽村）、诗羽、樱井、玩家[、。]/);
+  assert.doesNotMatch(first.mes, /color:#/, 'a pronoun earns no colour');
+  const again = { mes: '<story_scene>\n「またね」\n</story_scene>', swipe_id: 0 };
+  mockHost([again], { name1: '玩家', name2: '樱井' });
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true }, initialized: true });
+  globalThis.fetch = reply([{ id: 1, text: '「再见。」' }]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.doesNotMatch(sent[1], /已知人物：[^。]*、你[、。]/, 'and never joins the roster as a person');
+});
+
+test('a group chat keeps one cast of its own, apart from every other group', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const sent = [];
+  const reply = items => async (_url, init) => {
+    sent.push(JSON.parse(init.body).messages.find(entry => entry.content.includes('附加标注')).content);
+    return completionResponse(items);
+  };
+  const settings = { ...coloringSettings, streamingWriteback: true };
+  const floor = text => ({ mes: `<story_scene>\n${text}\n</story_scene>`, swipe_id: 0 });
+  const inGroup = (groupId, message) => {
+    mockHost([message], { groupId, characterId: undefined });
+    __testing.configureForTest({ settings, initialized: true });
+  };
+  inGroup('g1', floor('「こんにちは」'));
+  globalThis.fetch = reply([{ id: 1, text: '「你好。」', speaker: '卡米拉', emotion: 'happy' }]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  inGroup('g2', floor('「誰？」'));
+  globalThis.fetch = reply([{ id: 1, text: '「谁？」' }]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.doesNotMatch(sent[1], /卡米拉/, 'another group\'s cast is not this one\'s');
+  inGroup('g1', floor('「またね」'));
+  globalThis.fetch = reply([{ id: 1, text: '「再见。」' }]);
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.match(sent[2], /已知人物：[^。]*卡米拉/);
+});
+
+// One floor translated with colouring on: what went out, and the floor that came back.
+async function colouredFloor(source, items, { settings = { ...coloringSettings, streamingWriteback: true }, host = {} } = {}) {
+  const message = { mes: `<story_scene>\n${source}\n</story_scene>`, swipe_id: 0 };
+  mockHost([message], host);
+  __testing.configureForTest({ settings, initialized: true });
+  let section = '';
+  globalThis.fetch = async (_url, init) => {
+    section = JSON.parse(init.body).messages.find(entry => entry.content.includes('附加标注'))?.content ?? '';
+    return completionResponse(items);
+  };
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  return { message, section };
+}
+
+const paintedRuns = mes => [...mes.matchAll(/<span[^>]*?class="([^"]*)"[^>]*?color:(#[0-9a-f]{6})[^>]*>([\s\S]*?)<\/span>/g)]
+  .map(match => [match[3].replace(/<[^>]+>/g, '').replace(/[\u200b-\u200d\u2063]/g, ''), match[2]]);
+
+test('the host\'s default reader name is a person the roster offers and the floor paints', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const { message, section } = await colouredFloor('「こんにちは」\n\n「やあ」', [
+    { id: 1, text: '「你好。」', speaker: '英梨梨', emotion: 'happy' },
+    { id: 2, text: '「嗨。」', speaker: 'User', emotion: 'happy' },
+  ], { host: { name1: 'User', name2: '樱井' } });
+  assert.match(section, /已知人物：[^。]*、User[、。]/);
+  assert.deepEqual(paintedRuns(message.mes).map(([text]) => text), ['「你好。」', '「嗨。」']);
+  // A persona named with a pronoun is never offered as a person: the answer would be thrown away.
+  const pronoun = await colouredFloor('「こんにちは」', [{ id: 1, text: '「你好。」' }], { host: { name1: '我', name2: '樱井' } });
+  assert.doesNotMatch(pronoun.section, /已知人物：[^。]*、我[、。]/);
+});
+
+test('a card named for two people offers neither as one person and never merges them into one colour', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const { message, section } = await colouredFloor('「行くよ」\n\n「うん」', [
+    { id: 1, text: '「走了。」', speaker: '卡米拉', emotion: 'happy' },
+    { id: 2, text: '「嗯。」', speaker: '露娜', emotion: 'happy' },
+  ], { settings: { ...coloringSettings, streamingWriteback: true, speakerPalette: {} }, host: { name1: '玩家', name2: '卡米拉 & 露娜' } });
+  assert.doesNotMatch(section, /卡米拉 & 露娜/);
+  assert.match(section, /已知人物：玩家[、。]/);
+  const colors = paintedRuns(message.mes).map(([, color]) => color);
+  assert.equal(colors.length, 2);
+  assert.notEqual(colors[0], colors[1]);
+});
+
+test('a line nobody painted keeps the colour its original carried, beside a line painted run by run', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const { message } = await colouredFloor('<span style="color:#ff0000">警報が鳴った。</span>\n「逃げて！」', [
+    { id: 1, text: '警报响了。' },
+    { id: 2, text: '「快逃！」', speaker: '英梨梨', emotion: 'scared' },
+  ]);
+  assert.match(message.mes.replace(/[\u200b-\u200d\u2060-\u2064\ufeff]/g, ''), /<span style="color:#ff0000">警报响了。<\/span>/);
+  assert.deepEqual(paintedRuns(message.mes).map(([text]) => text), ['「快逃！」']);
+});
+
+test('changing the translation\'s affixes keeps every run painted in its own speaker\'s colour', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const { message } = await colouredFloor('「来たの？」と詩羽が言うと、英梨梨は「うん」と頷いた。', [{
+    id: 1, text: '「你来了？」诗羽问道，英梨梨点点头：「嗯。」', speaker: '诗羽',
+    quotes: [{ head: '你来了', speaker: '诗羽' }, { head: '嗯', speaker: '英梨梨' }],
+  }]);
+  const before = paintedRuns(message.mes);
+  assert.equal(before.length, 2);
+  const restyled = restyleBilingual(message.mes, { translationPrefix: '【', translationSuffix: '】' }, message.extra[MESSAGE_META_KEY]);
+  assert.match(restyled, /【/);
+  assert.deepEqual(paintedRuns(restyled), before);
+});
+
+test('a floor restyled again and again keeps each run\'s colour, the carried formatting and a record of its affixes', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const { message } = await colouredFloor('<span style="color:#ff0000">警報が鳴った。</span>\n\n「来たの？」と詩羽が言うと、英梨梨は「うん」と頷いた。', [
+    { id: 1, text: '警报响了。' },
+    { id: 2, text: '「你来了？」诗羽问道，英梨梨点点头：「嗯。」', speaker: '诗羽', quotes: [{ head: '你来了', speaker: '诗羽' }, { head: '嗯', speaker: '英梨梨' }] },
+  ]);
+  const settings = __testing.configureForTest({});
+  const before = paintedRuns(message.mes);
+  assert.equal(before.length, 2);
+  // The default prefix ends in `{`, which is no reason to keep the record of the affixes before it.
+  for (const [prefix, suffix] of [['【', '】'], ['{', '}'], ['<jy-t>', '</jy-t>']]) {
+    await __testing.restyleCurrentChat({ ...settings, translationPrefix: prefix, translationSuffix: suffix });
+    const meta = message.extra[MESSAGE_META_KEY];
+    assert.deepEqual([meta.translation_prefix, meta.translation_suffix], [prefix, suffix]);
+    assert.deepEqual(paintedRuns(message.mes), before, `after ${prefix}${suffix}`);
+    assert.match(message.mes.replace(/[\u200b-\u200d\u2060-\u2064\ufeff]/g, ''), /<span style="color:#ff0000">警报响了。<\/span>/);
+  }
+});
+
+test('a segment prefix ending in `{` does not leave an old translation prefix inside the next restyle', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: { segmentPrefix: '{', segmentSuffix: '}', translationPrefix: '', translationSuffix: '' } });
+  context.chat.push(await translatedFloor('雨が降っている。', [[1, '下雨了。']], settings));
+  const message = context.chat[0];
+  for (const [prefix, suffix] of [['<jy-t>', '</jy-t>'], ['【', '】'], ['<jy-u>', '</jy-u>'], ['<jy-v>', '</jy-v>']]) {
+    await __testing.restyleCurrentChat({ ...settings, translationPrefix: prefix, translationSuffix: suffix });
+    assert.equal(message.extra[MESSAGE_META_KEY].translation_prefix, prefix);
+    const shown = message.mes.replace(/[\u200b-\u200d\u2060-\u2064\ufeff]/g, '');
+    assert.match(shown, new RegExp(`\n${prefix}下雨了。${suffix}\n`), `after ${prefix}${suffix}`);
+  }
+});
+
+test('on a host with no record per swipe, another swipe\'s record never puts its affixes inside this one\'s body', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: { translationPrefix: '<jy-t>', translationSuffix: '</jy-t>' } });
+  const shown = await translatedFloor('雨が降っている。', [[1, '下雨了。']], settings);
+  // The other swipe was translated last, with empty affixes, and the host kept only that record.
+  const other = await translatedFloor('風が強い。', [[1, '风很大。']], { ...settings, translationPrefix: '', translationSuffix: '' });
+  context.chat.push({ mes: shown.mes, swipe_id: 0, swipes: [shown.mes, other.mes], extra: { [MESSAGE_META_KEY]: { ...other.extra[MESSAGE_META_KEY], swipe_id: 1 } } });
+  const message = context.chat[0];
+  for (const [prefix, suffix] of [['【', '】'], ['<jy-u>', '</jy-u>']]) {
+    await __testing.restyleCurrentChat({ ...settings, translationPrefix: prefix, translationSuffix: suffix });
+    const text = message.mes.replace(/[\u200b-\u200d\u2060-\u2064\ufeff]/g, '');
+    assert.match(text, new RegExp(`\n${prefix}下雨了。${suffix}\n`), `after ${prefix}${suffix}`);
+  }
 });

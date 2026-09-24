@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.35.1';
+} from './prompts.js?v=0.36.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.35.1';
+export const APP_VERSION = '0.36.0';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -170,6 +170,84 @@ export function describeSpeechShape(texts) {
   }
   if (!spoken) return 'narration';
   return narrated ? 'mixed' : 'spoken';
+}
+
+// Letters and digits alone, so the few characters a mark quotes find their run whatever the quotes,
+// the spacing or the width of the punctuation around them.
+const QUOTE_KEY_KEEP = /[\p{L}\p{N}\p{M}]/u;
+
+function quoteKey(text) {
+  let key = '';
+  for (const character of String(text ?? '').normalize('NFKC').toLowerCase()) if (QUOTE_KEY_KEEP.test(character)) key += character;
+  return key;
+}
+
+/**
+ * The mark each quoted run of one line stands under, in the order the runs stand.
+ *
+ * A line's mark names who opens it; its `quotes` name each run, with the first few characters of the
+ * run to place it by. A run is placed by those characters first, then by order when the counts agree,
+ * with or without the quotes marked as narration. A run left without a mark, or with one that names
+ * nobody, is the line's speaker's, unless the runs already placed show more than one person, or nothing
+ * was placed and the quotes name more than one: then nobody knows whose it is, and a wrong name costs
+ * more than none. A run left without a mark is said the way the line is, whoever opens it: it takes the
+ * whole mark, and whoever reads a word-anchored field checks it against the run's own words. When no
+ * quote names a mood, a run of the line's own speaker takes the line's mood and strength. The line's
+ * sounds belong to one moment, so a run takes them only when it is the line's only run. A run marked as
+ * narration (a sign, a title) stays nobody's.
+ *
+ * `runs` are the runs' texts; `key` reduces a text to what is compared, and the colouring and the
+ * reading each pass their own. Returns one mark or null per run.
+ */
+export function placeQuoteMarks(runs, mark, key = quoteKey) {
+  const list = Array.isArray(runs) ? runs : [];
+  if (!list.length || !mark || typeof mark !== 'object') return list.map(() => null);
+  const quotes = (Array.isArray(mark.quotes) ? mark.quotes : []).filter(quote => quote && typeof quote === 'object');
+  const keys = list.map(text => key(text));
+  const placed = list.map(() => null);
+  const pending = [];
+  for (const quote of quotes) {
+    const head = key(quote.head ?? '');
+    const found = head ? keys.findIndex((runKey, index) => !placed[index] && runKey.startsWith(head)) : -1;
+    if (found >= 0) placed[found] = quote;
+    else pending.push(quote);
+  }
+  const told = own => own?.type === 'narration';
+  const spoken = quotes.filter(quote => !told(quote));
+  // By order when the counts agree. A sign or a title the translation counted may be one the other
+  // language folded into its narration (看板の「立入禁止」を), so the count without those is tried too.
+  const byOrder = quotes.length === list.length ? pending
+    : spoken.length === list.length ? pending.filter(quote => !told(quote)) : null;
+  if (byOrder) {
+    const rest = placed.map((own, index) => (own ? -1 : index)).filter(index => index >= 0);
+    byOrder.forEach((quote, offset) => {
+      if (rest[offset] !== undefined) placed[rest[offset]] = quote;
+    });
+  }
+  const { quotes: _quotes, ...line } = mark;
+  if (list.length === 1) return [placed[0] ? (told(placed[0]) ? { ...placed[0] } : { ...line, ...placed[0] }) : line];
+  const lineSpeaker = String(line.speaker ?? '');
+  const named = new Set(placed.map(own => own?.speaker).filter(Boolean));
+  // Nothing placed while the quotes name more than one person is as unknown as two people placed.
+  const quoted = new Set(spoken.map(quote => quote.speaker).filter(Boolean));
+  const ambiguous = (lineSpeaker ? named.has(lineSpeaker) && named.size > 1 : named.size > 1)
+    || (!placed.some(Boolean) && quoted.size > 1);
+  // A line that names nobody still says how it is said.
+  const { sounds: _sounds, ...fields } = line;
+  const stand = ambiguous || !Object.keys(fields).length ? null : fields;
+  // The line's mood is its first speaker's. Where no quote names a mood of its own, the mood was written
+  // on the line alone, and a run the mark gives that same person, or nobody where that is safe, is said
+  // in it. A quote left without one beside quotes that name theirs was left so on purpose. The line's
+  // tone, a whisper or a shout, is one moment's and stays there.
+  const moodOnLine = Boolean(line.emotion) && !spoken.some(quote => quote.emotion);
+  return placed.map(own => {
+    if (!own) return stand ? { ...stand } : null;
+    if (told(own)) return own;
+    const same = moodOnLine && (own.speaker ? own.speaker === lineSpeaker : Boolean(stand));
+    const how = same ? { emotion: line.emotion, ...(line.intensity !== undefined ? { intensity: line.intensity } : {}) } : {};
+    const merged = { ...how, ...own };
+    return merged.speaker || !stand?.speaker ? merged : { ...merged, speaker: stand.speaker };
+  });
 }
 
 // Titles a model bolts onto a name even when told to copy the roster verbatim. Stripping only ever
@@ -1496,6 +1574,17 @@ function affixLeftoverStripper(metadata) {
   };
 }
 
+// True when a floor still holds a translation written before the owned block markers: a `{…}` line
+// outside every owned block. An owned affix may end in `{` itself (the default translation prefix, a
+// segment prefix), so the owned blocks are set aside before looking.
+export function hasLegacyTranslation(text) {
+  return normalizeNewlines(String(text ?? ''))
+    .replace(TRANSLATION_BLOCK_RE, '')
+    .replace(SOURCE_BLOCK_RE, '')
+    .replace(HIDDEN_BLOCK_RE, '')
+    .includes(`{${INVISIBLE_MARKER}`);
+}
+
 // True when a floor still carries visible tag affixes that have lost their invisible boundaries.
 export function detectUnmarkedAffixes(text, metadata) {
   const stripped = normalizeNewlines(String(text ?? ''))
@@ -2669,10 +2758,39 @@ function normalizeTranslationText(value) {
 const NON_SPEAKERS = new Set([
   '旁白', '叙述', '叙述者', '敘述', '敘述者', '描写', '描寫', '心理描写', '内心', '内心独白', '独白',
   '无', '無', '未知', '不明', '无人', 'narrator', 'narration', 'none', 'null', 'unknown', 'n/a', 'na', '-',
+  // A pronoun is nobody's name: given a colour it would join the roster as a person of its own. The
+  // host's placeholders stay unexpanded only by mistake. "User" is not here: it is the host's default
+  // name for the reader, and a real person on every chat that kept it.
+  '你', '我', '您', '他', '她', '它', '他们', '她们', '众人', '大家', '{{user}}', '{{char}}',
 ]);
 
 export function isPlaceholderSpeaker(name) {
-  return NON_SPEAKERS.has(String(name ?? '').trim().toLowerCase());
+  return NON_SPEAKERS.has(String(name ?? '').trim().toLowerCase()) || isExampleValue(name);
+}
+
+// The request's example shows each field with a stand-in in angle brackets. A model that copies one
+// back would otherwise earn a colour for 「<人名>」; the older stand-ins are here for the same reason. A
+// real value the model wrapped in the same brackets, 「<英梨梨>」, is that value.
+const EXAMPLE_WRAP_RE = /^[<＜〈]([^<>＜＞〈〉]*)[>＞〉]$/u;
+export const EXAMPLE_STAND_INS = Object.freeze([
+  '人名', '情绪词', '说法', '声音词', '台词开头几个字', '译文里这处台词开头 2 到 6 个字',
+  '这一项该怎么念的中文指令', '这句台词该怎么念的中文指令',
+]);
+const OLD_EXAMPLE_VALUES = new Set(['名单中的名字', '下列标签之一', '可选', '这句台词开头几个字']);
+
+// A value as the model meant it: '' for a stand-in copied back, the inside of the brackets for a real
+// value wrapped in them, anything else as written. A stand-in counts only in the example's brackets: a
+// head of 说法 or 人名 is two words of the translation. The older stand-ins were shown bare.
+function exampleFree(value) {
+  const text = String(value ?? '').trim();
+  const wrapped = text.match(EXAMPLE_WRAP_RE);
+  if (!wrapped) return OLD_EXAMPLE_VALUES.has(text) ? '' : text;
+  const bare = wrapped[1].trim();
+  return EXAMPLE_STAND_INS.includes(bare) || OLD_EXAMPLE_VALUES.has(bare) ? '' : bare;
+}
+
+function isExampleValue(value) {
+  return Boolean(String(value ?? '').trim()) && !exampleFree(value);
 }
 
 /**
@@ -2682,13 +2800,24 @@ export function isPlaceholderSpeaker(name) {
  */
 export function readAnnotationFields(object) {
   if (!object || typeof object !== 'object') return null;
-  const reportedSpeaker = String(object.speaker ?? object.who ?? object.name ?? object.character ?? '').trim().slice(0, 60);
+  const reportedSpeaker = exampleFree(object.speaker ?? object.who ?? object.name ?? object.character).slice(0, 60);
   const speaker = isPlaceholderSpeaker(reportedSpeaker) ? '' : reportedSpeaker;
-  const tone = String(object.tone ?? '').trim().slice(0, 30);
+  const tone = exampleFree(object.tone).slice(0, 30);
   // `tone` used to be read as the mood; a mark with a tone and no mood still is.
-  const emotion = String(object.emotion ?? object.emo ?? object.mood ?? (tone || '')).trim().slice(0, 40);
-  const direction = String(object.direction ?? object.instruction ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
-  if (!speaker && !emotion && !direction) return null;
+  const emotion = exampleFree(object.emotion ?? object.emo ?? object.mood ?? tone).slice(0, 40);
+  const direction = exampleFree(String(object.direction ?? object.instruction ?? '').replace(/\s+/g, ' ')).slice(0, 80);
+  const word = value => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 20);
+  const sounds = (Array.isArray(object.sounds) ? object.sounds : [])
+    .map(sound => {
+      const after = word(sound?.after);
+      const at = sound?.at === 'end' ? 'end' : (sound?.at === 'after' && after) ? 'after' : 'start';
+      return { at, tag: word(exampleFree(sound?.tag ?? sound?.sound)), ...(at === 'after' ? { after } : {}) };
+    })
+    .filter(sound => sound.tag)
+    .slice(0, 3);
+  // A run's mark may carry nothing but its sound: the prompt asks for the sound on the run, and says to
+  // leave out whatever else is unsure.
+  if (!speaker && !emotion && !direction && !sounds.length) return null;
   const intensity = Number(object.intensity ?? object.level ?? object.strength);
   const annotation = {};
   if (speaker) annotation.speaker = speaker;
@@ -2700,7 +2829,6 @@ export function readAnnotationFields(object) {
   if (speed === 'slow' || speed === 'fast') annotation.speed = speed;
   const volume = String(object.volume ?? '').trim().toLowerCase();
   if (volume === 'quiet' || volume === 'loud') annotation.volume = volume;
-  const word = value => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 20);
   const stress = [...new Set((Array.isArray(object.stress) ? object.stress : [object.stress]).map(word).filter(Boolean))].slice(0, 3);
   if (stress.length) annotation.stress = stress;
   const pauses = (Array.isArray(object.pauses) ? object.pauses : [])
@@ -2708,14 +2836,6 @@ export function readAnnotationFields(object) {
     .filter(pause => pause.after)
     .slice(0, 4);
   if (pauses.length) annotation.pauses = pauses;
-  const sounds = (Array.isArray(object.sounds) ? object.sounds : [])
-    .map(sound => {
-      const after = word(sound?.after);
-      const at = sound?.at === 'end' ? 'end' : (sound?.at === 'after' && after) ? 'after' : 'start';
-      return { at, tag: word(sound?.tag ?? sound?.sound), ...(at === 'after' ? { after } : {}) };
-    })
-    .filter(sound => sound.tag)
-    .slice(0, 3);
   if (sounds.length) annotation.sounds = sounds;
   const shiftSource = object.shift && typeof object.shift === 'object' ? object.shift : (Array.isArray(object.shifts) ? object.shifts[0] : null);
   if (shiftSource && typeof shiftSource === 'object') {
@@ -2725,16 +2845,26 @@ export function readAnnotationFields(object) {
   return annotation;
 }
 
-// A line's mark, plus one mark per quoted run when the reading asked for them: each with the opening
-// characters that place it on its run. Whatever is not a mark is dropped without a word.
+/**
+ * One quoted run's own mark, with the opening characters that place it on its run. A run in quotes that
+ * nobody says — a sign, a title — is marked as narration and nothing else: it is still counted, so the
+ * runs after it are placed by order where their heads cannot be matched, as on the original's side.
+ * Null for anything that is neither.
+ */
+export function readQuoteMark(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const head = exampleFree(entry.head ?? entry.start).slice(0, 20);
+  if (String(entry.type ?? '').trim().toLowerCase() === 'narration') return { ...(head ? { head } : {}), type: 'narration' };
+  const mark = readAnnotationFields(entry);
+  return mark ? { ...(head ? { head } : {}), ...mark } : null;
+}
+
+// A line's mark, plus one mark per quoted run when the reading asked for them. Whatever is not a mark
+// is dropped without a word.
 function readAnnotation(object) {
   if (!object || typeof object !== 'object') return null;
   const fields = readAnnotationFields(object) ?? {};
-  const quotes = (Array.isArray(object.quotes) ? object.quotes : []).slice(0, 12).map(entry => {
-    const mark = readAnnotationFields(entry);
-    const head = String(entry?.head ?? entry?.start ?? '').trim().slice(0, 20);
-    return mark ? { ...(head ? { head } : {}), ...mark } : null;
-  }).filter(Boolean);
+  const quotes = (Array.isArray(object.quotes) ? object.quotes : []).slice(0, 12).map(readQuoteMark).filter(Boolean);
   if (quotes.length) fields.quotes = quotes;
   return Object.keys(fields).length ? fields : null;
 }
@@ -2817,8 +2947,27 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
   const parsedCandidates = parseJsonCandidates(raw);
   const items = [];
   const seenItems = new Set();
+  // A run's own marks inside `quotes` parse as fragments of their own: the array alone reads as a list
+  // of items. None of them is a translation. Counted, one reported an empty item and upset the order
+  // fallback; one written with a text of its own could even hand a quote's words to a line by position.
+  const TEXT_KEYS = ['text', 'chinese', 'translation', 'zh', 'cn', 'id', 'segment_id', 'segmentId', 'index'];
+  const ID_KEYS = ['id', 'segment_id', 'segmentId', 'index'];
+  const runMarks = new Set();
+  const collectRuns = value => {
+    if (Array.isArray(value)) {
+      value.forEach(collectRuns);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value.quotes)) for (const quote of value.quotes) if (quote && typeof quote === 'object') runMarks.add(JSON.stringify(quote));
+    for (const key of ['translations', 'items', 'results', 'data']) if (Array.isArray(value[key])) value[key].forEach(collectRuns);
+  };
+  parsedCandidates.forEach(collectRuns);
+  const isRunMark = item => item && typeof item === 'object' && !Array.isArray(item)
+    && (!TEXT_KEYS.some(key => Object.hasOwn(item, key)) || (!ID_KEYS.some(key => Object.hasOwn(item, key)) && runMarks.has(JSON.stringify(item))));
   for (const parsed of parsedCandidates) {
     for (const item of translationItems(parsed)) {
+      if (isRunMark(item)) continue;
       const signature = typeof item === 'string' ? `text:${item}` : `json:${JSON.stringify(item)}`;
       if (!seenItems.has(signature)) {
         seenItems.add(signature);
@@ -2908,7 +3057,7 @@ export function assembleBilingual(layout, translationMap, options = {}) {
     const missingIds = ids.filter(id => !translationMap.get(id));
     if (missingIds.length && !allowMissing) throw new Error(`缺少第 ${missingIds.join('、')} 段译文。`);
     pieces.push(renderSourceBlock(part.sourceText ?? part.text, options));
-    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id)).filter(Boolean));
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''));
     const body = translationUnitBody(part, ids, translationMap, options, decoration);
     if (body) {
       pieces.push(`\n${renderTranslationBlock(body, {
@@ -2944,15 +3093,15 @@ function translationUnitBody(part, ids, translationMap, options, decoration = {}
   ids.forEach((id, index) => {
     const translation = translationMap.get(id);
     if (!translation) return;
-    const shaped = styledBody(String(translation), decoration.styleBody);
+    const shaped = styledBody(String(translation), decoration.styleBody, markedAffix, id);
     const format = carry ? formats[index] : null;
     if (!format?.open) {
       lines.push(shaped);
       return;
     }
     // Speaker colouring is an explicit choice about this line's colour, so it wins; the carried
-    // weight and slant still apply underneath it.
-    const open = decoration.paintsColor ? withoutCarriedColor(format.open) : format.open;
+    // weight and slant still apply underneath it. A line it did not paint keeps the original's colour.
+    const open = paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open;
     lines.push(`${markedAffix(open)}${shaped}${markedAffix(format.close)}`);
   });
   return lines.join('\n');
@@ -2974,8 +3123,19 @@ function segmentDecoration(styleFor, ids, texts = []) {
     stylePrefix: String(decoration.open),
     styleSuffix: String(decoration.close ?? ''),
     styleBody: typeof decoration.emphasis === 'function' ? decoration.emphasis : null,
-    paintsColor: decoration.paintsColor === true,
+    // True, or which lines: a unit painted run by run paints some of its lines and leaves the rest.
+    paintsColor: typeof decoration.paintsColor === 'function' ? decoration.paintsColor : decoration.paintsColor === true,
   };
+}
+
+// Whether the unit's decoration paints this line's colour, so the original's carried colour gives way.
+function paintsLine(decoration, id) {
+  if (typeof decoration?.paintsColor !== 'function') return decoration?.paintsColor === true;
+  try {
+    return decoration.paintsColor(id) === true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -3054,11 +3214,13 @@ export function liftSplitQuotes(pieces) {
   return lifted;
 }
 
-function styledBody(translation, styleBody, wrap = markedAffix) {
+// `id` is the line's segment id, so a unit with more than one speaker in it can paint each line's
+// quoted runs by that line's own marks.
+function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) {
   if (typeof styleBody !== 'function') return translation;
   let pieces;
   try {
-    pieces = styleBody(translation);
+    pieces = styleBody(translation, id);
   } catch {
     return translation; // Rhythm is decoration; it never costs the reader their translation.
   }
@@ -3117,9 +3279,9 @@ function replaceUnitBody(part, ids, translationMap, options, decoration = {}) {
     index += 1;
     const translation = translationMap.get(id);
     if (!translation) return markedAffix(line.source);
-    const shaped = styledBody(String(translation), decoration.styleBody);
+    const shaped = styledBody(String(translation), decoration.styleBody, markedAffix, id);
     const body = format?.open
-      ? `${markedAffix(decoration.paintsColor ? withoutCarriedColor(format.open) : format.open)}${shaped}${markedAffix(format.close)}`
+      ? `${markedAffix(paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open)}${shaped}${markedAffix(format.close)}`
       : shaped;
     return `${line.lead ?? ''}${body}${line.trail ?? ''}`;
   }).join('\n');
@@ -3135,7 +3297,7 @@ export function assembleReplace(layout, translationMap, options = {}) {
     }
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
     const sourceText = part.sourceText ?? part.text;
-    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id)).filter(Boolean));
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''));
     const byLine = Array.isArray(part.lineParts) && part.lineParts.length > 0;
     const body = !ids.some(id => translationMap.get(id)) ? ''
       : byLine ? replaceUnitBody(part, ids, translationMap, options, decoration)
@@ -3173,7 +3335,7 @@ export function assembleTranslationOnly(layout, translationMap, options = {}) {
       pieces.push(part.sourceText ?? part.text);
       continue;
     }
-    const decoration = segmentDecoration(options.styleFor, ids, texts);
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''));
     const formats = Array.isArray(part.formats) ? part.formats : [];
     const lineParts = Array.isArray(part.lineParts) && part.lineParts.length
       ? part.lineParts
@@ -3186,9 +3348,9 @@ export function assembleTranslationOnly(layout, translationMap, options = {}) {
       index += 1;
       const translation = translationMap.get(id);
       if (!translation) return line.source;
-      const shaped = styledBody(String(translation), decoration.styleBody, plain);
+      const shaped = styledBody(String(translation), decoration.styleBody, plain, id);
       const wrapped = format?.open
-        ? `${decoration.paintsColor ? withoutCarriedColor(format.open) : format.open}${shaped}${format.close}`
+        ? `${paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open}${shaped}${format.close}`
         : shaped;
       return `${line.lead ?? ''}${wrapped}${line.trail ?? ''}`;
     }).join('\n');
@@ -3326,6 +3488,67 @@ export function upgradeLegacyBilingual(text, metadata) {
   });
 }
 
+const TAG_RE = /<(\/?)([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*(\/?)>/g;
+
+// Whether the affixes kept inside a body are ones a body is written with and still pair up: nothing but
+// the tags the runs' colours and the original's carried formatting use, each closed by its own name in
+// order. Any other tag, or the speaker wrapper, belongs to an outer affix the record did not know about,
+// like a prefix changed while the record was not kept up, and keeping it would wrap it again inside the
+// new one.
+function balancedAffixes(affixes) {
+  const open = [];
+  for (const affix of affixes) {
+    const inside = affix.slice(AFFIX_START.length, -AFFIX_END.length);
+    if (inside.replace(TAG_RE, '').trim() || SPEAKER_OPEN_RE.test(inside)) return false;
+    for (const tag of inside.matchAll(TAG_RE)) {
+      if (!CARRYABLE_FORMAT_TAGS.has(tag[2].toLowerCase())) return false;
+      if (tag[3]) continue;
+      if (!tag[1]) open.push(tag[2].toLowerCase());
+      else if (open.pop() !== tag[2].toLowerCase()) return false;
+    }
+  }
+  return open.length === 0;
+}
+
+/**
+ * A translation block as it was written: the visible prefix and the speaker wrapper, the body, the
+ * wrapper's close and the visible suffix. The body's own affixes — each run in its speaker's colour, the
+ * rhythm, the original's carried formatting — are what a restyle has no annotations to rebuild, so
+ * they are kept byte for byte. Null when the block cannot be read that way: no record of the affixes it
+ * was written with, a block that no longer starts and ends with them, or a body whose tags would not
+ * pair up. The restyle then keeps only the words and the wrapper, as it always did.
+ */
+function translationBlockBody(translation, metadata) {
+  if (!(Number(metadata?.schema_version) >= 4)) return null;
+  if (typeof metadata.translation_prefix !== 'string' || typeof metadata.translation_suffix !== 'string') return null;
+  const { prefix, suffix } = translationAffixes({ translationPrefix: metadata.translation_prefix, translationSuffix: metadata.translation_suffix });
+  const padAfter = translation.replace(AFFIX_RE, '').endsWith('\n');
+  if (padAfter && !translation.endsWith('\n')) return null;
+  const content = padAfter ? translation.slice(0, -1) : translation;
+  const affixes = [...content.matchAll(AFFIX_RE)];
+  const inside = affix => affix[0].slice(AFFIX_START.length, -AFFIX_END.length);
+  let from = 0;
+  let to = content.length;
+  let wrapper = '';
+  const first = affixes[0];
+  const opening = first?.index === 0 ? inside(first) : null;
+  const rest = opening !== null && opening.startsWith(prefix) ? opening.slice(prefix.length) : null;
+  const wrapped = rest ? rest.match(SPEAKER_OPEN_RE) : null;
+  if (rest !== null && (rest === '' ? prefix !== '' : wrapped?.index === 0 && wrapped[0] === rest)) {
+    wrapper = rest;
+    from = first[0].length;
+  } else if (prefix) return null;
+  const closing = `${wrapper ? '</span>' : ''}${suffix}`;
+  if (closing) {
+    const last = affixes.at(-1);
+    if (!last || last.index < from || last.index + last[0].length !== content.length || inside(last) !== closing) return null;
+    to = last.index;
+  }
+  const body = content.slice(from, to);
+  if (!balancedAffixes([...body.matchAll(AFFIX_RE)].map(affix => affix[0]))) return null;
+  return { body, wrapper, padAfter };
+}
+
 export function restyleBilingual(text, options = {}, metadata) {
   return upgradeLegacyBilingual(text, metadata)
     .replace(SOURCE_BLOCK_RE, (match, source, offset, whole) => {
@@ -3336,6 +3559,14 @@ export function restyleBilingual(text, options = {}, metadata) {
       return renderSourceBlock(source.replace(AFFIX_RE, ''), options);
     })
     .replace(TRANSLATION_BLOCK_RE, (match, translation) => {
+      // Only the outer affixes change: the runs painted in each speaker's colour, the rhythm and the
+      // original's carried formatting inside the body are kept as they are.
+      const kept = translationBlockBody(translation, metadata);
+      if (kept) {
+        return `${match.startsWith('\n') ? '\n' : ''}${renderTranslationBlock(kept.body, {
+          ...options, padAfter: kept.padAfter, stylePrefix: kept.wrapper, styleSuffix: kept.wrapper ? '</span>' : '', styleBody: null,
+        })}`;
+      }
       // The 每行单独成段 separator is a newline stored after the suffix affix. Reading it back as
       // part of the translation moved the closing affix onto its own line, so it is recovered here
       // and re-applied as padding, keeping a restyle byte-identical when nothing else changed.

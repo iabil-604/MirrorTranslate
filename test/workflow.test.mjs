@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { DEFAULT_SETTINGS, INVISIBLE_MARKER, mergeSettings } from '../core.js';
 import { DEFAULT_PROMPT_PROFILE } from '../prompts.js';
 import { buildTranslationMessages, collectTranslationContext } from '../workflow.js';
+import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOUND_CUES, TONE_CUES } from '../tts.js';
 
 test('translation context carries display names, active worldbook and clean recent chat', async () => {
   let scanReceived = null;
@@ -175,13 +176,16 @@ test('the annotation request appears only when colouring is on and never during 
   const section = messages.find(message => message.content.includes('附加标注'));
   assert.ok(section, '开启后必须带上标注说明');
   assert.match(section.content, /英梨梨、加藤/);
-  assert.match(section.content, /neutral/);
-  assert.match(section.content, /拿不准时省略比猜测更好/);
+  // "No mood in particular" is asked for by leaving the mood out, so it is not offered as one.
+  assert.doesNotMatch(section.content, /\bneutral\b/);
+  assert.match(section.content, /看不出明显情绪就不写 emotion/);
+  assert.match(section.content, /拿不准的字段直接不写，不要猜/);
   const input = JSON.parse(messages.find(message => message.role === 'user').content);
   assert.deepEqual(input.annotate.roster, ['英梨梨', '加藤']);
   assert.equal(input.annotate.speaker, true);
   assert.equal(input.annotate.emotion, true);
   assert.ok(input.annotate.emotions.includes('angry'));
+  assert.equal(input.annotate.emotions.includes('neutral'), false);
 
   // Style repair rewrites a finished draft; re-asking for labels there only invites churn.
   const repair = buildTranslationMessages(segments, on, {}, 'style_repair', { roster: ['英梨梨'] });
@@ -210,8 +214,10 @@ test('the annotation section restates the output shape, because §9 shows an id/
   assert.deepEqual(Object.keys(item), ['id', 'text', 'speaker', 'emotion', 'intensity']);
   assert.match(section.content, /替换输出协议里的 JSON 示例/);
 
-  // Naming a real label in the example biases every segment towards it.
-  assert.equal(item.emotion, '下列标签之一');
+  // Naming a real label in the example biases every segment towards it; the stand-in is one the
+  // reader of the answer throws away if it comes back.
+  assert.equal(item.emotion, '<情绪词>');
+  assert.equal(item.speaker, '<人名>');
 
   const speakerOnly = buildTranslationMessages([{ id: 1, text: '雨' }], mergeSettings({ coloring: { speakers: true } }), {}, 'primary', {});
   const speakerShape = speakerOnly.find(message => message.content.includes('附加标注')).content.match(/\{"translations":\[[\s\S]*?\]\}/);
@@ -226,7 +232,7 @@ test('the reading asks the translation for Fish\'s own words and one mark per qu
   const section = messages.find(message => message.content.includes('附加标注'));
   assert.ok(section, 'the reading alone is reason enough to label');
   assert.match(section.content, /frustrated/);
-  assert.match(section.content, /whispering \/ soft tone \/ shouting \/ screaming \/ in a hurry tone/);
+  assert.match(section.content, /whispering（[^）]+）、soft tone（[^）]+）、shouting（[^）]+）、screaming（[^）]+）、in a hurry tone（[^）]+）/);
   assert.match(section.content, /「」/);
   assert.match(section.content, /不要把标注、情绪词或任何方括号标签写进 text/);
   const example = section.content.split('\n').find(line => line.startsWith('{"translations"'));
@@ -234,22 +240,28 @@ test('the reading asks the translation for Fish\'s own words and one mark per qu
   assert.deepEqual(Object.keys(item), ['id', 'text', 'speaker', 'emotion', 'intensity', 'tone', 'quotes'], 'the simple reading asks for no directions');
   assert.deepEqual(Object.keys(item.quotes[0]), ['head', 'speaker', 'emotion', 'intensity']);
   assert.doesNotMatch(section.content, /direction：一句 20 字左右/);
-  assert.match(section.content, /只在原文明确写了笑、叹气、喘息、倒吸气这类声音时写/);
-  assert.match(section.content, /chuckling/);
+  // Sounds only where the text writes them out, and never breath or moans.
+  assert.match(section.content, /chuckling（轻笑/);
+  assert.doesNotMatch(section.content, /moaning|panting|groaning|flirtatious/);
+  assert.match(section.content, /喘息、喘气、呻吟、娇喘、闷哼都不写 sounds/);
+  // 呼吸声 is what the breath slider calls sighing and gasping: forbidding it would forbid the written sigh.
+  assert.doesNotMatch(section.content, /呼吸声都不写/);
   const input = JSON.parse(messages.find(message => message.role === 'user').content);
   assert.equal(input.annotate.quotes, true);
   assert.equal(input.annotate.direction, undefined);
   assert.ok(input.annotate.sounds.includes('sighing'), 'the sounds offered are the ones Fish lists');
+  assert.equal(input.annotate.sounds.includes('moaning'), false);
   // The consoles reach the translation as rules under each name.
   const styled = buildTranslationMessages(segments, reading, {}, 'primary', { roster: ['樱井'], styles: [{ name: '樱井', rules: ['气息感明显但自然。'] }] });
   assert.match(styled.find(message => message.content.includes('附加标注')).content, /樱井：气息感明显但自然。/);
   assert.ok(input.annotate.emotions.includes('sarcastic'));
   assert.deepEqual(input.annotate.tones, ['whispering', 'soft tone', 'shouting', 'screaming', 'in a hurry tone']);
   assert.equal(buildTranslationMessages(segments, reading, {}, 'style_repair', {}).some(message => message.content.includes('附加标注')), false);
-  // Colouring on its own keeps the palette's twelve and asks for nothing per run.
+  // Colouring on its own keeps the palette's twelve and asks for the runs only where one line holds
+  // two people.
   const colouring = buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true } }), {}, 'primary', {});
   const plain = colouring.find(message => message.content.includes('附加标注'));
-  assert.doesNotMatch(plain.content, /quotes/);
+  assert.match(plain.content, /一项里有两个或更多不同的人说话时，再写 quotes/);
   assert.doesNotMatch(plain.content, /sarcastic/);
   // The deep reading reads the original by itself the moment it closes, so the translation is never
   // asked to mark anything: nothing of this request is its to reuse.
@@ -311,4 +323,113 @@ test('recent context quotes the extracted body and leaves the surrounding panels
   assert.match(packet.recent, /我抱起艾莉丝。/);
   // An AI floor with no body to quote contributes nothing rather than its panels.
   assert.doesNotMatch(packet.recent, /这一楼没有正文标签/);
+});
+
+test('the roster goes out as people, and stays open to anyone a colour or a voice can still be given to', () => {
+  const segments = [{ id: 1, text: '「来たんだね」' }];
+  const roster = [{ name: '莉莉丝', aliases: ['莉莉', 'Lilith'] }, '艾琳', { name: '艾琳', aliases: ['小艾'] }, { name: '露娜', aliases: ['艾琳'] }];
+  const section = settings => buildTranslationMessages(segments, mergeSettings(settings), {}, 'primary', { roster })
+    .find(message => message.content.includes('附加标注')).content;
+  const open = section({ coloring: { speakers: true } });
+  // One entry per person, the other spellings beside the name to write; an alias that is somebody
+  // else's own name is dropped rather than sending that person's lines to the wrong one.
+  assert.match(open, /已知人物：莉莉丝（又名 莉莉、Lilith）、艾琳（又名 小艾）、露娜。/);
+  assert.match(open, /名单外的人：写译文里对这个人的称呼/);
+  // Only with auto-colouring off and no reading is a name outside the roster of no use.
+  assert.match(section({ coloring: { speakers: true, autoSpeakers: false } }), /名单外的人不写 speaker。/);
+  assert.match(section({ coloring: { speakers: true, autoSpeakers: false }, tts: { enabled: true } }), /名单外的人：写译文里对这个人的称呼/);
+  // The request body still carries plain names.
+  const input = JSON.parse(buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true } }), {}, 'primary', { roster })
+    .find(message => message.role === 'user').content);
+  assert.deepEqual(input.annotate.roster, ['莉莉丝', '艾琳', '露娜']);
+});
+
+test('the reading\'s mood list is grouped, glossed and free of the words that pull a voice towards breath', () => {
+  const messages = buildTranslationMessages([{ id: 1, text: '「好」' }], mergeSettings({ tts: { enabled: true } }), {}, 'primary', {});
+  const section = messages.find(message => message.content.includes('附加标注')).content;
+  assert.match(section, /^害羞：shy（害羞）、embarrassed（难为情、尴尬）、ashamed（羞愧）$/m);
+  // The groups hold every word the reading hears, once; nothing else.
+  const grouped = FISH_EMOTION_GROUPS.flatMap(([, words]) => words.map(([word]) => word));
+  assert.deepEqual([...grouped].sort(), [...FISH_EMOTIONS].sort());
+  assert.equal(new Set(grouped).size, grouped.length);
+  for (const word of ['flirtatious', 'moaning', 'panting', 'groaning', 'neutral']) assert.doesNotMatch(section, new RegExp(`\\b${word}\\b`));
+  assert.doesNotMatch(section, /撒娇/, 'a coaxing scene is not steered onto a word of its own');
+  // Every English word in the section is one the model is asked to copy, or a field name.
+  const fields = new Set(['JSON', 'id', 'text', 'speaker', 'emotion', 'intensity', 'tone', 'quotes', 'head', 'sounds', 'at', 'tag', 'start', 'end', 'type', 'narration', 'translations']);
+  const offered = new Set([...FISH_EMOTIONS, ...FISH_TONES, ...ANNOTATION_SOUNDS].flatMap(word => word.split(' ')));
+  const english = section.replace(/\{"translations"[^\n]*\n/, '').match(/[A-Za-z]+/g) ?? [];
+  assert.deepEqual([...new Set(english.filter(word => !fields.has(word) && !offered.has(word)))], [], 'no English beyond the words to copy');
+  const input = JSON.parse(messages.find(message => message.role === 'user').content);
+  assert.deepEqual(input.annotate.emotions, [...FISH_EMOTIONS]);
+});
+
+test('every rule of the annotation section is one a model can check against the page', () => {
+  const styles = [{ name: '默认', rules: ['情感强度高：对白句都要给 emotion，不要省略。', '不要非语言声音：sounds 一律不写。'] }];
+  const section = buildTranslationMessages([{ id: 1, text: '「来たんだね」' }], mergeSettings({ tts: { enabled: true } }), {}, 'primary', { roster: ['樱井'], styles })
+    .find(message => message.content.includes('附加标注')).content;
+  // A tone and a sound are asked for by the very words the reading checks a mark against, in either
+  // language, and by what the words mean rather than by an exact string the source may not contain.
+  for (const tone of FISH_TONES) assert.match(section, new RegExp(`${tone}（${TONE_CUES[tone].join('、')}）`));
+  for (const sound of ANNOTATION_SOUNDS) assert.match(section, new RegExp(`${sound}（${SOUND_CUES[sound].join('、')}）`));
+  assert.match(section, /看意思，不要求逐字，原文或译文写了都算/);
+  assert.doesNotMatch(section, /逐字写了|原文依据逐字/);
+  // A sound is the narration's, never the quote's own interjection laid over again.
+  assert.match(section, /在引号外写了说这处台词的人发出/);
+  assert.match(section, /台词里已经写出这个声音（哈哈、唉、呜呜）/);
+  // Who speaks is read off what is written — self-reference and address included — not guessed.
+  assert.match(section, /台词里的自称（我、俺、僕、私）、口癖和语尾/);
+  assert.match(section, /只有称呼没有名字的人（老师、店长、大小姐这类）照写这个称呼/);
+  // The runs are the translation's, since that is where a head is looked for.
+  assert.match(section, /head 照抄译文里这处引号里开头 2 到 6 个字/);
+  // Strength by triggers that do not overlap without an order, and the ellipsis alone is no trigger.
+  assert.match(section, /两边都符合时写 2。省略号、结巴和重复字本身不改变强度/);
+  // The reader's sliders decide the leaning; a slider that forbids sounds is obeyed.
+  assert.match(section, /和上面的强度条件冲突时以它们为准；tone 和 sounds 仍然必须有原文依据；规则要求少写或不写 sounds、tone 时照做：默认：/);
+  assert.match(section, /不要非语言声音：sounds 一律不写/);
+  // One silent pass over the whole answer, never a report per id.
+  assert.match(section, /输出前整体核对一遍，不写出核对过程/);
+  assert.doesNotMatch(section, /逐项核对/);
+  // Colouring alone: the heads come from the translation too, and the loud and quiet moods are glossed
+  // with the same words as the reading's tones.
+  const colouring = buildTranslationMessages([{ id: 1, text: '「来たんだね」' }], mergeSettings({ coloring: { speakers: true, emotions: true } }), {}, 'primary', {})
+    .find(message => message.content.includes('附加标注')).content;
+  assert.match(colouring, /\{"head":"<译文里这处台词开头 2 到 6 个字>"/);
+  assert.match(colouring, new RegExp(`whisper（压低声音说，原文或译文写了${[...TONE_CUES.whispering, ...TONE_CUES['soft tone']].join('、')}这类说法才用）`));
+});
+
+test('the translation counts every quote, says where a sound may go and what a line of nothing but 嗯 may wear', async () => {
+  const { SOFT_MOODS, SOUND_PLACE_RULE } = await import('../tts.js');
+  const section = buildTranslationMessages([{ id: 1, text: '「来たんだね」' }], mergeSettings({ tts: { enabled: true } }), {}, 'primary', { roster: ['樱井'] })
+    .find(message => message.content.includes('附加标注')).content;
+  // A sign is counted as a quote of its own and marked as the narrator's: on the original's side the
+  // runs are placed by order, and a sign left out would shift every run after it.
+  assert.match(section, /quotes：译文里每一处引号写一项，按出现顺序，包括不算台词的那几处/);
+  assert.match(section, /不算台词的那处只写 head 和 "type":"narration"/);
+  // A line whose one quote is a sign still says so, or the sign is read as a line in the narration's mood.
+  assert.match(section, /只有一处引号、而且它是台词时可以不写/);
+  assert.doesNotMatch(section, /只有一处引号时可以不写/);
+  assert.match(section, /只有一处引号时也可以写在外层/);
+  assert.match(section, /quotes 的项数不多于译文里这一项的引号数/);
+  // A thought in quotes is its thinker's, the way the analyses read it.
+  assert.match(section, /这些引号里的话，心里想的话也算/);
+  assert.ok(section.includes(SOUND_PLACE_RULE));
+  assert.ok(section.includes(`台词只有嗯、啊、哈、唉这类语气词时：emotion 不用 ${SOFT_MOODS.join('、')}，tone 只能写 shouting 或 screaming，不写 sounds。`));
+  // Colouring alone names no moods for a reading it does not ask for.
+  const colouring = buildTranslationMessages([{ id: 1, text: '「来たんだね」' }], mergeSettings({ coloring: { speakers: true, emotions: true } }), {}, 'primary', {})
+    .find(message => message.content.includes('附加标注')).content;
+  assert.doesNotMatch(colouring, /台词只有嗯、啊/);
+});
+
+test('every stand-in the annotation example shows is thrown away when a model copies it back', async () => {
+  const { readAnnotationFields, EXAMPLE_STAND_INS } = await import('../core.js');
+  const sections = [
+    mergeSettings({ tts: { enabled: true } }),
+    mergeSettings({ coloring: { speakers: true, emotions: true } }),
+  ].map(settings => buildTranslationMessages([{ id: 1, text: '「来たんだね」' }], settings, {}, 'primary', {}).find(message => message.content.includes('附加标注'))?.content ?? '');
+  const shown = new Set(sections.flatMap(section => [...section.matchAll(/"<([^"<>]+)>"/g)].map(match => match[1])));
+  assert.ok(shown.size >= 4);
+  for (const standIn of shown) {
+    assert.ok(EXAMPLE_STAND_INS.includes(standIn), standIn);
+    assert.equal(readAnnotationFields({ speaker: `<${standIn}>`, emotion: `<${standIn}>`, tone: `<${standIn}>` }), null, standIn);
+  }
 });

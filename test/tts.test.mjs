@@ -142,7 +142,7 @@ test('the analysis request carries the floor as it reads, and never offers the m
   assert.equal(input.task, 'sketch_voices_for_audiobook');
   assert.deepEqual(input.roster, ['泰罗', '佐菲']);
   assert.deepEqual(input.emotions, FISH_EMOTIONS);
-  assert.deepEqual(input.sounds, FISH_SOUND_LIST, 'the simple reading offers only the sounds Fish lists');
+  assert.deepEqual(input.sounds, FISH_SOUND_LIST, 'the simple reading offers only the sounds one speaker makes: no moan, no crowd');
   assert.deepEqual(input.tones, FISH_TONE_LIST);
   assert.equal('styles' in input, false, 'no console set, none sent');
   assert.deepEqual(input.lines, [{ line: 1, text: '泰罗说：⟦2⟧「我操好热啊！」' }], 'the paragraph as it reads, the dialogue in it numbered');
@@ -359,7 +359,7 @@ test('the deep reply becomes labels plus a checked voice per sentence', () => {
   assert.equal(segments[1].voice.subtext, '想让人拦着');
   const summary = voiceSummary(segments[1].voice);
   assert.deepEqual(summary[0], ['情绪', '沮丧（强） · 难为情']);
-  assert.ok(summary.some(([term, value]) => term === '停顿' && value === '「我」后长停'));
+  assert.equal(summary.some(([term]) => term === '停顿'), false, 'a pause against 「……」 is performed as a held breath, so it is taken out');
   assert.ok(summary.some(([term, value]) => term === '潜台词' && value === '想让人拦着'));
 
   // Hints: an id alone, or a sentence left out, keeps the translation's own label; a partial answer
@@ -878,10 +878,10 @@ test('per-quote annotations tell the runs of one line apart, by the characters t
   assert.deepEqual(voices.get(id('嗯')), { emotion: 'uncertain', tone: 'whispering' });
   assert.equal(labels.get(id('走')).speaker, '樱井');
   assert.equal(labels.get(id('快')).speaker, '泰罗');
-  assert.deepEqual(voices.get(id('快')), { emotion: 'in a hurry tone' });
+  assert.deepEqual(voices.get(id('快')), { tone: 'in a hurry tone' }, 'a tone written in the mood\'s place is the tone');
   const segments = buildSegments(utterances, labels, { voices });
   assert.equal(sentenceFishText({ segment: segments.find(item => item.id === id('你来了')) }, { model: 's2-pro' }), '[very surprised][in a hurry tone] 你来了？');
-  assert.equal(sentenceFishText({ segment: segments.find(item => item.id === id('嗯')) }, { model: 's2-pro' }), '[uncertain][whispering] ……嗯。');
+  assert.equal(sentenceFishText({ segment: segments.find(item => item.id === id('嗯')) }, { model: 's2-pro' }), '[uncertain] ……嗯。', 'a whisper laid over nothing but 嗯 is the moan itself; the plain mood stays');
   // A miscount with no heads: every run keeps the line's mark.
   const loose = annotationReading(utterances, new Map([[4, { speaker: '泰罗', emotion: 'happy', quotes: [{ speaker: '樱井' }] }]]));
   assert.deepEqual([...loose.labels.values()].map(label => label.speaker), ['泰罗', '泰罗']);
@@ -944,7 +944,8 @@ test('a direction goes to the S2 models in the reader\'s own words, with the mar
 });
 
 test('the translation\'s marks carry the direction and its words into the reading, checked against the sentence', () => {
-  const utterances = splitUtterances([{ lineId: 1, text: '泰罗说：「热死了，我才不想喝。」' }]);
+  // The narration writes the sigh, so the sigh is heard.
+  const utterances = splitUtterances([{ lineId: 1, text: '泰罗叹了口气说：「热死了，我才不想喝。」' }]);
   const annotations = new Map([[1, { speaker: '泰罗', emotion: 'frustrated', intensity: 2, direction: '压着火，装冷淡', speed: 'slow', stress: ['不想'], pauses: [{ after: '不存在', length: 'long' }], sounds: [{ at: 'end', tag: '叹气' }] }]]);
   const { labels, voices } = annotationReading(utterances, annotations);
   assert.deepEqual(labels.get(2), { type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2 });
@@ -1057,7 +1058,7 @@ test('the console\'s speed lean nudges the prosody only where the voice said not
   assert.notDeepEqual(fingerprintOf(fish, { mode: 'off', consoles: 'c1' }), fingerprintOf(fish, { mode: 'off', consoles: 'c2' }), 'a different console is a different recording');
 });
 
-import { FISH_SOUNDS as FISH_SOUND_LIST, FISH_TONES as FISH_TONE_LIST } from '../tts.js';
+import { SPOKEN_SOUNDS as FISH_SOUND_LIST, FISH_TONES as FISH_TONE_LIST } from '../tts.js';
 
 import { encodeWav as encodeWavFile } from '../tts.js';
 import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages as buildVoiceAnalysisMessages, deepRequestSettings } from '../tts-deep.js';
@@ -1333,13 +1334,14 @@ test('the deep reading asks how a line is said, in Fish\'s own words, and nothin
   assert.ok(voiceSummary(voice).some(([term, value]) => term === '依据' && value === '嘴硬，其实怕被拦下来'));
   const segments = buildSegments(utterances, parsed.labels, { voices: parsed.voices });
   const text = fishTextOf({ segment: segments[1], voiceId: 'v' }, { model: 's2-pro' }, { lean: true });
-  assert.equal(text, '[nervous][whispering][gasping] 我……我要 [excited] 裸奔啦。', 'the turn lands as one of Fish\'s words at its word; nothing of the reason goes out');
+  assert.equal(text, '[nervous][whispering] 我……我要 [excited] 裸奔啦。', 'the turn lands as one of Fish\'s words at its word; nothing of the reason goes out, nor a gasp the text never wrote');
   assert.equal(DEEP_STATUS.available, true);
 });
 test('a sentence whose feeling turns is heard turning: a word of Fish\'s before each clause, sounds where they fall, stresses', () => {
-  const utterances = splitUtterances([{ lineId: 1, text: '「本来今天挺开心的，可是你一走，屋里就空了。」' }]);
+  // The narration beside the line writes the laugh and the sigh the reading places.
+  const utterances = splitUtterances([{ lineId: 1, text: '他笑出了声，又叹了口气。' }, { lineId: 2, text: '「本来今天挺开心的，可是你一走，屋里就空了。」' }]);
   const reply = JSON.stringify({ voices: [{
-    id: 1, type: 'dialogue', speaker: '泰罗', why: '先是高兴，想起分别就落下去',
+    id: 2, type: 'dialogue', speaker: '泰罗', why: '先是高兴，想起分别就落下去',
     emotion: 'happy',
     shifts: [{ at: '可是', emotion: 'sad' }, { at: '屋里', emotion: 'lonely' }, { at: '不在句里', emotion: 'angry' }],
     pauses: [{ after: '一走', length: 'short' }],
@@ -1347,14 +1349,18 @@ test('a sentence whose feeling turns is heard turning: a word of Fish\'s before 
     sounds: [{ at: 'after', after: '开心的', tag: 'chuckling' }, { at: 'end', tag: 'sighing' }],
   }] });
   const parsed = parseVoiceAnalysis(reply, utterances);
-  const voice = parsed.voices.get(1);
+  const voice = parsed.voices.get(2);
   assert.deepEqual(voice.shifts, [{ at: '可是', emotion: 'sad' }, { at: '屋里', emotion: 'lonely' }], 'a turn on a word not in the sentence is dropped');
   const segments = buildSegments(utterances, parsed.labels, { voices: parsed.voices });
-  const text = fishTextOf({ segment: segments[0], voiceId: 'v' }, { model: 's2-pro' }, { lean: true });
-  assert.equal(text, '[happy] 本来今天挺开心的 [chuckling] ， [sad] 可是你一走 [pause] ， [lonely] 屋里就 [emphasis] 空了。 [sighing]');
+  // One sound to a sentence: the laugh where it falls, and the sigh after it is one too many.
+  const text = fishTextOf({ segment: segments[1], voiceId: 'v' }, { model: 's2-pro' }, { lean: true });
+  assert.equal(text, '[happy] 本来今天挺开心的 [chuckling] ， [sad] 可是你一走 [pause] ， [lonely] 屋里就 [emphasis] 空了。');
   // S1 knows no stress mark; everything else it hears the same way, in its own brackets.
-  const plain = fishTextOf({ segment: segments[0], voiceId: 'v' }, { model: 's1' }, { lean: true });
-  assert.equal(plain, '(happy) 本来今天挺开心的 (chuckling) ， (sad) 可是你一走 (break) ， (lonely) 屋里就空了。 (sighing)');
+  const plain = fishTextOf({ segment: segments[1], voiceId: 'v' }, { model: 's1' }, { lean: true });
+  assert.equal(plain, '(happy) 本来今天挺开心的 (chuckling) ， (sad) 可是你一走 (break) ， (lonely) 屋里就空了。');
+  // Alone, a sound at the end the narration wrote is kept: Fish's own examples end on one.
+  const sighed = buildSegments(utterances, parsed.labels, { voices: new Map([[2, { emotion: 'sad', sounds: [{ at: 'end', tag: 'sighing' }] }]]) });
+  assert.equal(fishTextOf({ segment: sighed[1], voiceId: 'v' }, { model: 's2-pro' }, { lean: true }), '[sad] 本来今天挺开心的，可是你一走，屋里就空了。 [sighing]');
   assert.ok(voiceSummary(voice).some(([term, value]) => term === '句内变化' && /可是/.test(value)));
 });
 
@@ -1594,4 +1600,51 @@ test('whatever the floor, every request fits the budget as sent and nothing is l
       }
     }
   }
+});
+
+test('the translation\'s marks never hand the reading a moan, a breath or a free-form mood', () => {
+  const utterances = splitUtterances([
+    { lineId: 1, text: '「等一下……」她喘息着说，「不要停。」' },
+    { lineId: 2, text: '「好热……」' },
+    { lineId: 3, text: '她笑出声：「你真逗。」' },
+    { lineId: 4, text: '「哈哈，你真逗。」' },
+  ]);
+  const id = text => utterances.find(item => item.text.includes(text)).id;
+  const annotations = new Map([
+    // A paragraph mark with a sound and two runs, neither placed: the runs keep who and how, not the sound.
+    [1, { speaker: '莉莉丝', emotion: 'shy', sounds: [{ at: 'start', tag: 'panting' }], quotes: [] }],
+    // Words the request never offered: a free-form English mood and Fish's moan, in either language.
+    [2, { speaker: '莉莉丝', emotion: 'aroused', sounds: [{ at: 'start', tag: 'moaning' }, { at: 'end', tag: '呻吟' }] }],
+    [3, { speaker: '莉莉丝', emotion: 'flirtatious', sounds: [{ at: 'start', tag: 'laughing' }] }],
+    [4, { speaker: '莉莉丝', emotion: 'happy', sounds: [{ at: 'start', tag: 'laughing' }] }],
+  ]);
+  const { labels, voices } = annotationReading(utterances, annotations);
+  assert.equal(labels.get(id('等一下')).speaker, '莉莉丝');
+  assert.equal(labels.get(id('不要停')).speaker, '莉莉丝');
+  assert.equal(voices.get(id('等一下'))?.sounds, undefined, 'a paragraph\'s sound is not copied onto each of its runs');
+  assert.equal(voices.get(id('不要停'))?.sounds, undefined);
+  assert.equal(voices.has(id('好热')), false, 'neither [aroused] nor a moan reaches Fish');
+  assert.deepEqual(voices.get(id('你真逗')), { sounds: [{ at: 'start', tag: 'laughing' }] }, 'a sound the text writes out stays; a mood not offered does not');
+  // The palette still folds the unoffered mood for the label, so the line is not left moodless.
+  assert.equal(labels.get(id('你真逗')).emotion, 'tender');
+  // On the way to Fish: the narrated laugh is heard; a laugh laid over the line's own 哈哈 is the laugh twice.
+  const segments = buildSegments(utterances, labels, { voices });
+  assert.deepEqual(segments.find(item => item.id === id('你真逗')).voice.sounds, [{ at: 'start', tag: 'laughing' }]);
+  assert.equal(segments.find(item => item.id === id('哈哈')).voice?.sounds, undefined);
+});
+
+test('the translation hears the sliders about what it writes, and every slider that silences something', () => {
+  const only = { keys: ['intensity', 'range', 'breath', 'expression'], quiet: ['grain'] };
+  const loud = consoleDirections({ intensity: 90, range: 90, breath: 90, expression: 90, pause: 90, speed: 90, grain: 90 }, only);
+  assert.deepEqual(loud.map(line => line.split('：')[0]), ['呼吸感很重', '情感强度很高', '情绪幅度很大', '声音表现很外放'], 'no pauses or speed: those are not the translation\'s to write');
+  // Every slider that asks for a sound asks only for one the text wrote.
+  for (const line of loud.filter(item => /sounds|sighing/.test(item))) assert.match(line, /没写的(?:仍然|照样)?不加/);
+  // A reader who silenced the sounds, or the soft tone, is heard by the translation too.
+  const hushed = consoleDirections({ expression: 0, breath: 0, grain: 0, pause: 0 }, only);
+  assert.ok(hushed.includes('不要非语言声音：sounds 一律不写。'));
+  assert.ok(hushed.includes('不要呼吸声：sounds 里不写 gasping、panting、sighing。'));
+  assert.ok(hushed.some(line => /不用 soft tone/.test(line)));
+  assert.equal(hushed.some(line => /^几乎不停顿/.test(line)), false);
+  // Everything else still hears the whole console.
+  assert.equal(consoleDirections({ pause: 90, speed: 90 }).length, 2);
 });

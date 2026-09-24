@@ -942,11 +942,14 @@ test('speaker and emotion labels ride alongside the translation without touching
   assert.deepEqual(recovered.annotations.get(1), { speaker: '英梨梨', emotion: 'angry', intensity: 2 });
   assert.deepEqual(recovered.annotations.get(2), { speaker: '加藤', emotion: 'hesitant' });
   assert.equal(recovered.annotations.has(3), false, '没有标注的段落不该凭空得到一条');
-  // The reading's marks: a tone, and one mark per quoted run; whatever is not a mark is dropped.
+  // The reading's marks: a tone, and one mark per quoted run; whatever is not a mark is dropped, and
+  // so is a stand-in the request's example showed (可选) and the model copied back.
   assert.deepEqual(recovered.annotations.get(4), {
     speaker: '泰罗', emotion: 'surprised', tone: 'in a hurry tone',
-    quotes: [{ head: '你来了', speaker: '樱井', emotion: 'surprised', intensity: 2 }, { head: '坐吧', speaker: '泰罗', emotion: 'calm', tone: '可选' }],
+    quotes: [{ head: '你来了', speaker: '樱井', emotion: 'surprised', intensity: 2 }, { head: '坐吧', speaker: '泰罗', emotion: 'calm' }],
   });
+  // A run's own mark parses as a fragment of its own; it is no translation and is not reported as one.
+  assert.equal(recovered.warnings.some(warning => warning.includes('为空')), false);
   assert.equal(recovered.response.annotatedItems, 3);
   // A model that answers with nothing but text still parses; annotation is strictly optional.
   const plain = recoverStructuredTranslations(JSON.stringify([{ id: 1, text: '只有译文。' }]), [{ id: 1 }]);
@@ -1416,4 +1419,198 @@ test('the world books switched on are kept per card, names only', () => {
   const settings = mergeSettings({ worldInfoBooks: { 'avatar.png': ['设定集', '设定集', '', 3], broken: 'x' } });
   assert.deepEqual(settings.worldInfoBooks, { 'avatar.png': ['设定集', '3'] });
   assert.deepEqual(mergeSettings({}).worldInfoBooks, {});
+});
+
+test('each quoted run of a line finds its own mark, and the line\'s speaker only stands in where it can', async () => {
+  const { placeQuoteMarks } = await import('../core.js');
+  const runs = ['「你来了？」', '「坐吧。」'];
+  // By the characters each mark quotes, whatever order the marks came in.
+  const byHead = placeQuoteMarks(runs, { speaker: '泰罗', quotes: [{ head: '坐吧', speaker: '泰罗' }, { head: '你来了', speaker: '樱井' }] });
+  assert.deepEqual(byHead.map(mark => mark?.speaker), ['樱井', '泰罗']);
+  // No heads, equal counts: by order.
+  assert.deepEqual(placeQuoteMarks(runs, { quotes: [{ speaker: '樱井' }, { speaker: '泰罗' }] }).map(mark => mark?.speaker), ['樱井', '泰罗']);
+  // A run nobody placed is the line's speaker's, said the way the line is said, but never with its
+  // sounds: a sound belongs to one moment.
+  const loose = placeQuoteMarks(runs, { speaker: '泰罗', emotion: 'happy', tone: 'whispering', sounds: [{ at: 'start', tag: 'sighing' }], quotes: [{ head: '你来了', speaker: '泰罗' }] });
+  assert.deepEqual(loose[1], { speaker: '泰罗', emotion: 'happy', tone: 'whispering' });
+  // A line that names nobody still says how it is said: every run keeps the mood and the tone.
+  const unnamed = placeQuoteMarks(runs, { emotion: 'sad', tone: 'soft tone', sounds: [{ at: 'start', tag: 'sighing' }] });
+  assert.deepEqual(unnamed, [{ emotion: 'sad', tone: 'soft tone' }, { emotion: 'sad', tone: 'soft tone' }]);
+  // Two people already placed on an unnamed line: the third run is nobody's, mood included.
+  const crowd = placeQuoteMarks(['「你来了？」', '「嗯。」', '「坐吧。」'], { emotion: 'happy', quotes: [{ head: '你来了', speaker: '泰罗' }, { head: '嗯', speaker: '樱井' }] });
+  assert.equal(crowd[2], null);
+  // Once the placed runs show the line's speaker and somebody else, an unplaced run is nobody's.
+  const three = ['「你来了？」', '「嗯。」', '「坐吧。」'];
+  const mixed = placeQuoteMarks(three, { speaker: '泰罗', quotes: [{ head: '你来了', speaker: '泰罗' }, { head: '嗯', speaker: '樱井' }] });
+  assert.deepEqual(mixed.map(mark => mark?.speaker ?? null), ['泰罗', '樱井', null]);
+  // A run with a mark that names nobody takes the line's speaker when that is safe.
+  assert.equal(placeQuoteMarks(runs, { speaker: '泰罗', quotes: [{ head: '你来了', emotion: 'surprised' }, { head: '坐吧', emotion: 'calm' }] })[0].speaker, '泰罗');
+  // A line's only run takes the whole line: tone and sounds included, the run's own fields on top.
+  assert.deepEqual(placeQuoteMarks(['「嗯……」'], { speaker: '泰罗', tone: 'whispering', emotion: 'shy', quotes: [{ emotion: 'uncertain' }] })[0], { speaker: '泰罗', tone: 'whispering', emotion: 'uncertain' });
+  // No mark at all: nothing.
+  assert.deepEqual(placeQuoteMarks(runs, null), [null, null]);
+});
+
+test('a stand-in copied back from the request\'s example is not a name or a mood', () => {
+  const raw = JSON.stringify({ translations: [
+    { id: 1, text: '「走吧。」', speaker: '<人名>', emotion: '<情绪词>', intensity: 1, tone: '<说法>', quotes: [{ head: '<台词开头几个字>', speaker: '名单中的名字', emotion: 'calm' }] },
+  ] });
+  const recovered = recoverStructuredTranslations(raw, [{ id: 1 }]);
+  assert.equal(recovered.translations.get(1), '「走吧。」');
+  assert.deepEqual(recovered.annotations.get(1), { quotes: [{ emotion: 'calm' }] });
+});
+
+test('a run\'s mark may be nothing but its sound, and a run written with a text of its own is still no translation', () => {
+  // The prompt puts a sound on the run and says to leave out whatever else is unsure.
+  const soundOnly = recoverStructuredTranslations(JSON.stringify({ translations: [
+    { id: 1, text: '她叹了口气：「你来了。」「坐吧。」', speaker: '樱井', quotes: [{ head: '你来了', sounds: [{ at: 'start', tag: 'sighing' }] }] },
+  ] }), [{ id: 1 }]);
+  assert.deepEqual(soundOnly.annotations.get(1).quotes, [{ head: '你来了', sounds: [{ at: 'start', tag: 'sighing' }] }]);
+  // A model that wrote each run as {text, speaker}: the array of them parses as a list of its own, and
+  // none of it may count as an item — two items and one expected id would switch off the order fallback.
+  const raw = JSON.stringify({ translations: [
+    { text: '「你来了？」诗羽问道。', speaker: '诗羽', quotes: [{ text: '你来了？', speaker: '诗羽' }] },
+  ] });
+  const recovered = recoverStructuredTranslations(raw, [{ id: 4 }]);
+  assert.equal(recovered.translations.get(4), '「你来了？」诗羽问道。', 'the one item without an id is placed by position');
+  assert.equal(recovered.warnings.some(warning => warning.includes('为空')), false);
+  // A pronoun is nobody's name.
+  const pronoun = recoverStructuredTranslations(JSON.stringify({ translations: [{ id: 1, text: '「好。」', speaker: '你', emotion: 'happy' }] }), [{ id: 1 }]);
+  assert.deepEqual(pronoun.annotations.get(1), { emotion: 'happy' });
+});
+
+test('a run nobody placed is said the way its line is, and a run of the line\'s own speaker keeps the line\'s mood', async () => {
+  const { placeQuoteMarks } = await import('../core.js');
+  // No quotes to place by: each run takes the whole line but its sound. The words a pause or a stress
+  // points at are checked against each run's own text where the mark is read.
+  const line = {
+    speaker: '英梨梨', emotion: 'sad', intensity: 2, direction: '哽咽着，声音发抖',
+    pauses: [{ after: '求你', length: 'short' }], stress: ['不想'], sounds: [{ at: 'start', tag: 'sobbing' }],
+  };
+  const { sounds: _sounds, ...said } = line;
+  assert.deepEqual(placeQuoteMarks(['「我不想走。」', '「求你了。」'], line), [said, said]);
+  // Both runs placed, both the line's speaker's, neither with a mood: the line's mood on both.
+  const same = placeQuoteMarks(['「你真是个笨蛋。」', '「算了，走吧。」'], {
+    speaker: '莉莉', emotion: 'happy', intensity: 1, quotes: [{ head: '你真是', speaker: '莉莉' }, { head: '算了', speaker: '莉莉' }],
+  });
+  assert.deepEqual(same.map(mark => [mark.speaker, mark.emotion, mark.intensity]), [['莉莉', 'happy', 1], ['莉莉', 'happy', 1]]);
+  // Two people: the line's mood is its first speaker's, and never the other one's.
+  const two = placeQuoteMarks(['「你来了？」', '「嗯。」'], {
+    speaker: '诗羽', emotion: 'curious', quotes: [{ head: '你来了', speaker: '诗羽' }, { head: '嗯', speaker: '英梨梨' }],
+  });
+  assert.deepEqual(two.map(mark => [mark.speaker, mark.emotion]), [['诗羽', 'curious'], ['英梨梨', undefined]]);
+});
+
+test('a sign in quotes is counted and stays nobody\'s, so the runs after it are still placed by order', async () => {
+  const { placeQuoteMarks, readQuoteMark } = await import('../core.js');
+  assert.deepEqual(readQuoteMark({ head: '禁止入内', type: 'narration', speaker: '艾琳' }), { head: '禁止入内', type: 'narration' });
+  const raw = JSON.stringify({ translations: [{
+    id: 5, text: '「等等！」她指着招牌上的「禁止入内」。莉莉丝答道：「那里很危险哦」', speaker: '艾琳', emotion: 'nervous',
+    quotes: [{ head: '等等', speaker: '艾琳', emotion: 'nervous' }, { head: '禁止入内', type: 'narration' }, { head: '那里很危险', speaker: '莉莉丝', emotion: 'worried' }],
+  }] });
+  const mark = recoverStructuredTranslations(raw, [{ id: 5 }]).annotations.get(5);
+  assert.deepEqual(mark.quotes[1], { head: '禁止入内', type: 'narration' });
+  // The original's runs: no head matches them, and the counts agree.
+  const placed = placeQuoteMarks(['「待って！」', '「立入禁止」', '「そこは危ないよ」'], mark);
+  assert.deepEqual(placed.map(own => own?.type === 'narration' ? 'narration' : own?.speaker), ['艾琳', 'narration', '莉莉丝']);
+  // A line whose only run is a sign names nobody there.
+  assert.deepEqual(placeQuoteMarks(['「禁止入内」'], { speaker: '艾琳', quotes: [{ head: '禁止入内', type: 'narration' }] }), [{ head: '禁止入内', type: 'narration' }]);
+});
+
+test('the host\'s default reader name is a person, and a real value wrapped in the example\'s brackets is that value', async () => {
+  const { readAnnotationFields, EXAMPLE_STAND_INS } = await import('../core.js');
+  assert.equal(readAnnotationFields({ speaker: 'User', emotion: 'happy' })?.speaker, 'User');
+  assert.equal(readAnnotationFields({ speaker: '{{user}}', emotion: 'happy' })?.speaker, undefined);
+  const { parseTtsAnalysis } = await import('../tts.js');
+  const analysed = parseTtsAnalysis(JSON.stringify({ voices: [{ id: 1, speaker: 'User', emotion: 'happy' }] }), [{ id: 1, lineId: 1, kind: 'quoted', text: '嗨。' }]);
+  assert.equal(analysed.labels.get(1)?.speaker, 'User', 'the analyses keep the name too, so a voice row called User is used');
+  const wrapped = readAnnotationFields({ speaker: '<英梨梨>', emotion: '＜angry＞', tone: '<whispering>', intensity: 2 });
+  assert.deepEqual(wrapped, { speaker: '英梨梨', emotion: 'angry', intensity: 2, tone: 'whispering' });
+  for (const standIn of EXAMPLE_STAND_INS) assert.equal(readAnnotationFields({ speaker: `<${standIn}>`, emotion: `<${standIn}>` }), null, standIn);
+  // A head the model wrapped the same way still places its run.
+  const recovered = recoverStructuredTranslations(JSON.stringify({ translations: [
+    { id: 1, text: '「走吧。」「好。」', quotes: [{ head: '<走吧>', speaker: '<英梨梨>' }, { head: '<台词开头几个字>', speaker: '诗羽' }] },
+  ] }), [{ id: 1 }]);
+  assert.deepEqual(recovered.annotations.get(1).quotes, [{ head: '走吧', speaker: '英梨梨' }, { speaker: '诗羽' }]);
+});
+
+test('a restyle changes the outer affixes only: the runs painted one by one and the carried formatting stay', () => {
+  const run = color => `${AFFIX_START}<span class="jy-spk-x" style="color:${color} !important">${AFFIX_END}`;
+  const close = `${AFFIX_START}</span>${AFFIX_END}`;
+  const wrapper = '<span class="jy-spk" title="诗羽、英梨梨">';
+  const body = `${run('#00fffb')}「你来了？」${close}诗羽问道，英梨梨点点头：${run('#facf36')}「嗯。」${close}\n${AFFIX_START}<b>${AFFIX_END}警报。${AFFIX_START}</b>${AFFIX_END}`;
+  const floor = `${renderSourceBlock('原文。')}\n${renderTranslationBlock(body, { translationPrefix: '{', translationSuffix: '}', stylePrefix: wrapper, styleSuffix: '</span>' })}`;
+  const metadata = { schema_version: 4, translation_prefix: '{', translation_suffix: '}' };
+  const style = { translationPrefix: '【', translationSuffix: '】' };
+  const restyled = restyleBilingual(floor, style, metadata);
+  assert.ok(restyled.includes(body), 'the body comes back byte for byte');
+  assert.ok(restyled.includes(`${AFFIX_START}【${wrapper}${AFFIX_END}`));
+  assert.ok(restyled.includes(`${AFFIX_START}</span>】${AFFIX_END}`));
+  assert.equal(restyleBilingual(restyled, style, { ...metadata, translation_prefix: '【', translation_suffix: '】' }), restyled);
+  assert.deepEqual([...extractGeneratedTranslations(restyled, style).values()], [...extractGeneratedTranslations(floor, { translationPrefix: '{', translationSuffix: '}' }).values()]);
+  // Without a record of the affixes the block was written with, the old way: words and wrapper only.
+  const plain = restyleBilingual(floor, style, { schema_version: 4 });
+  assert.doesNotMatch(plain, /#00fffb|<b>/);
+  assert.match(plain, /title="诗羽、英梨梨"/);
+  // A body whose tags would no longer pair up is not kept either.
+  const broken = floor.replace(`${AFFIX_START}</b>${AFFIX_END}`, '');
+  assert.doesNotMatch(restyleBilingual(broken, style, metadata), /<b>/);
+});
+
+test('a restyle never keeps inside the body an outer affix its record does not know about', () => {
+  const wrapper = '<span class="jy-spk" title="诗羽">';
+  const style = { translationPrefix: '【', translationSuffix: '】' };
+  // Written with <jy-t>…</jy-t> while the record, not kept up, still says the block has no visible affixes.
+  const floor = `${renderSourceBlock('原文。')}\n${renderTranslationBlock('「你来了？」诗羽问道。', { translationPrefix: '<jy-t>', translationSuffix: '</jy-t>', stylePrefix: wrapper, styleSuffix: '</span>' })}`;
+  const record = { schema_version: 4, translation_prefix: '', translation_suffix: '' };
+  const restyled = restyleBilingual(floor, style, record);
+  assert.doesNotMatch(restyled, /jy-t/);
+  assert.ok(restyled.includes(`${AFFIX_START}【${wrapper}${AFFIX_END}「你来了？」诗羽问道。${AFFIX_START}</span>】${AFFIX_END}`));
+  // A prefix of formatting tags is told apart by the speaker wrapper it sits in front of.
+  const bold = floor.replace(/<jy-t>/g, '<b>').replace(/<\/jy-t>/g, '</b>');
+  assert.equal((restyleBilingual(bold, style, record).match(/<b>/g) ?? []).length, 0);
+  // The original's own formatting at the start of a block written with no visible affixes is the body's.
+  const carried = `${AFFIX_START}<span style="color:#ff0000">${AFFIX_END}警报响了。${AFFIX_START}</span>${AFFIX_END}`;
+  const bare = `${renderSourceBlock('原文。')}\n${renderTranslationBlock(carried, { translationPrefix: '', translationSuffix: '' })}`;
+  assert.ok(restyleBilingual(bare, style, record).includes(`${AFFIX_START}【${AFFIX_END}${carried}${AFFIX_START}】${AFFIX_END}`));
+});
+
+test('a head that happens to be one of the example\'s stand-in words still places its run', async () => {
+  const { placeQuoteMarks, readQuoteMark, readAnnotationFields } = await import('../core.js');
+  const quotes = [{ head: '是吗', speaker: '英梨梨' }, { head: '说法', speaker: '诗羽' }].map(readQuoteMark);
+  assert.deepEqual(quotes[1], { head: '说法', speaker: '诗羽' });
+  const placed = placeQuoteMarks(['「是吗。」', '「说法都不一样。」', '「算了。」'], { speaker: '英梨梨', quotes });
+  assert.deepEqual(placed.slice(0, 2).map(own => own?.speaker), ['英梨梨', '诗羽']);
+  // Only the stand-in copied back in the example's brackets is thrown away.
+  assert.equal(readQuoteMark({ head: '<说法>', speaker: '<人名>' }), null);
+  assert.equal(readAnnotationFields({ speaker: '名单中的名字', emotion: '可选' }), null, 'the older stand-ins were shown bare');
+});
+
+test('a run of the line\'s own speaker takes the line\'s mood only when no quote names a mood, and never its tone', async () => {
+  const { placeQuoteMarks } = await import('../core.js');
+  // The second quote was left without a mood beside one that names its own: it stays without.
+  const later = placeQuoteMarks(['「滚出去！」', '「……对不起。」'], {
+    speaker: '艾琳', emotion: 'angry', intensity: 2, tone: 'shouting',
+    quotes: [{ head: '滚出去', speaker: '艾琳', emotion: 'angry', intensity: 2, tone: 'shouting' }, { head: '对不起', speaker: '艾琳' }],
+  });
+  assert.deepEqual(later[1], { head: '对不起', speaker: '艾琳' });
+  // Quotes that name speakers only: the mood written on the line is theirs, the whisper is not.
+  const bare = placeQuoteMarks(['「别动。」', '「好了，你可以走了。」'], {
+    speaker: '艾琳', emotion: 'nervous', intensity: 1, tone: 'whispering', quotes: [{ head: '别动', speaker: '艾琳' }, { head: '好了', speaker: '艾琳' }],
+  });
+  assert.deepEqual(bare.map(own => [own.emotion, own.intensity, own.tone]), [['nervous', 1, undefined], ['nervous', 1, undefined]]);
+});
+
+test('the original\'s side places its runs by order without the signs it folded into narration', async () => {
+  const { placeQuoteMarks } = await import('../core.js');
+  // 看板の「立入禁止」を is narration on the original's side, so it has two runs to the translation's three quotes.
+  const mark = { speaker: '艾琳', emotion: 'nervous', quotes: [
+    { head: '等等', speaker: '艾琳', emotion: 'nervous' }, { head: '禁止入内', type: 'narration' }, { head: '那里很危险', speaker: '莉莉丝', emotion: 'worried' },
+  ] };
+  assert.deepEqual(placeQuoteMarks(['「待って！」', '「そこは危ないよ」'], mark).map(own => own?.speaker), ['艾琳', '莉莉丝']);
+  // Nothing placed, and the quotes name more than one person: nobody's name goes on a run by guess.
+  const unplaced = placeQuoteMarks(['「待って！」', '「そこは危ないよ」'], { speaker: '艾琳', quotes: [
+    { head: '等等', speaker: '艾琳' }, { head: '那里很危险', speaker: '莉莉丝' }, { head: '算了', speaker: '千夏' },
+  ] });
+  assert.deepEqual(unplaced.map(own => own?.speaker ?? null), [null, null]);
 });
