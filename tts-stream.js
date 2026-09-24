@@ -10,7 +10,7 @@
 // Pure functions only: index.js feeds them the reply as it stands and turns what they hand back into
 // requests and sound.
 
-import { DEFAULT_QUOTE_PAIRS, SPEECH_CLOSE, SPEECH_OPEN, SPEECH_SEP, parsePairList } from './core.js?v=0.36.0-beta.1';
+import { DEFAULT_QUOTE_PAIRS, SPEECH_CLOSE, SPEECH_OPEN, SPEECH_SEP, parsePairList } from './core.js?v=0.36.0-beta.2';
 
 // The characters a sentence ends on, and the ones the first stretch may also stop at.
 const SENTENCE_END = new Set(['。', '！', '？', '!', '?', '…', '．', '.']);
@@ -110,7 +110,12 @@ export function takeStreamPieces(lines, state, { final = false, quotePairs = DEF
       if (end < 0 || end <= offset) break;
       const piece = text.slice(offset, end);
       if (piece.trim()) {
-        pieces.push({ lineId: line.lineId, start: offset, end, text: piece, marks: line.marks ?? [] });
+        // A mood or a speaker given for the whole line goes with every stretch cut from it.
+        pieces.push({
+          lineId: line.lineId, start: offset, end, text: piece, marks: line.marks ?? [],
+          ...(line.mood ? { mood: line.mood } : {}),
+          ...(line.who ? { who: line.who } : {}),
+        });
         state.count += 1;
       }
       offset = end;

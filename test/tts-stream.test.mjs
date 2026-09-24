@@ -85,3 +85,13 @@ test('text handed over in chunks or whole comes to the same', () => {
   assert.equal(mergeStreamText('她笑', '了。'), '她笑了。');
   assert.equal(mergeStreamText('', '她'), '她');
 });
+
+test('a mood or a speaker given for a whole line goes with every stretch cut from it', () => {
+  const state = {};
+  const pieces = takeStreamPieces([{ lineId: 1, text: '今天也来了啊，我等了很久。你呢？', mood: '高兴', who: '樱井' }], state, { final: true, eager: true });
+  assert.ok(pieces.length >= 2, 'the line is cut');
+  assert.ok(pieces.every(piece => piece.mood === '高兴' && piece.who === '樱井'));
+  assert.equal(pieces.map(piece => piece.text).join(''), '今天也来了啊，我等了很久。你呢？');
+  const plain = takeStreamPieces([{ lineId: 1, text: '好。' }], {}, { final: true });
+  assert.equal('mood' in plain[0], false, 'a plain line carries nothing extra');
+});

@@ -1086,9 +1086,9 @@ test('the public interface reads text another extension hands over, in that char
 
   // Switched off, the door says so instead of throwing something a caller cannot show a user.
   __testing.configureForTest({ settings: { tts: { ...settings.tts, enabled: false } } });
-  await assert.rejects(__testing.apiSpeak({ text: '你好' }), /没有打开镜译的朗读功能/);
+  await assert.rejects(__testing.apiSpeak({ text: '你好' }), /镜译的朗读没有打开/);
   __testing.configureForTest({ settings: { tts: { ...settings.tts, enabled: true, fish: { ...FISH, key: '' } } } });
-  await assert.rejects(__testing.apiSpeak({ text: '你好' }), /还没有在镜译里填 Fish Audio/);
+  await assert.rejects(__testing.apiSpeak({ text: '你好' }), /镜译还没填 Fish Audio 的 API Key/);
 });
 
 test('the public interface announces itself on the page, and says what it can do before it is asked', t => {
@@ -2484,4 +2484,134 @@ test('cloud speech input sends a recording once, gives the microphone back, and 
   failNext = true;
   await assert.rejects(__testing.startSpeechInput({}), /录不了音/);
   assert.equal(tracks.at(-1).stopped, true, 'a recorder that cannot start gives the microphone back');
+});
+
+test('a caller gives each line its mood, and tts.stream says why nothing was heard when nothing was', async t => {
+  restoreGlobals(t);
+  mockHost('tts-api-mood');
+  __testing.configureForTest({
+    initialized: true,
+    settings: {
+      tts: { enabled: true, liveAudio: false, narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '樱井', aliases: [], voiceId: 'voice-sakurai' }, { name: '老胡', aliases: [], voiceId: 'voice-hu' }] },
+    },
+  });
+  t.after(() => __testing.configureForTest({ initialized: false }));
+
+  // A line may open with the story's own mark; a mark still being written holds its line back.
+  assert.deepEqual(__testing.streamPlainLines('<say mood="高兴">你好。</say>\n<say who="老胡" mood="生气">走开\n<say mo\n普通一行'), [
+    { lineId: 1, text: '你好。', mood: '高兴' },
+    { lineId: 2, text: '走开', mood: '生气', who: '老胡' },
+    { lineId: 3, text: '' },
+    { lineId: 4, text: '普通一行' },
+  ]);
+
+  // tts.speak: the whole reading in one mood, in Fish's own words.
+  const calls = mockFish();
+  const spoken = await __testing.apiSpeak({ text: '今天也来了啊。', speaker: '樱井', emotion: '高兴', play: false });
+  await spoken.done;
+  assert.deepEqual(calls.map(call => call.body.text), ['[happy] 今天也来了啊。']);
+
+  // tts.stream: each line in its own mood, the rest in the caller's; a line may name its own speaker.
+  const audio = mockAudio();
+  t.after(() => audio.restore());
+  calls.length = 0;
+  const call = __testing.apiStream({ speaker: '樱井', emotion: '平静' });
+  call.push('<say mood="高兴">今天也来了啊。\n等你很久了。\n<say who="老胡" mood="生气">快走吧。');
+  call.end();
+  const heard = await call.done;
+  assert.deepEqual(calls.map(item => item.body.text), ['[happy] 今天也来了啊。', '[calm] 等你很久了。', '[angry] 快走吧。']);
+  assert.deepEqual(calls.map(item => item.body.reference_id), ['voice-sakurai', 'voice-sakurai', 'voice-hu']);
+  assert.deepEqual([heard.played, heard.reason, heard.cancelled], [3, '', false]);
+
+  // Left out on purpose is not a failure: nothing asked for, and it says so.
+  __testing.configureForTest({ settings: { ttsVoices: { 'taro.png': [{ name: '樱井', aliases: [], voiceId: 'voice-sakurai', mute: true }] } } });
+  calls.length = 0;
+  const muted = __testing.apiStream({ speaker: '樱井' });
+  muted.push('今天也来了啊。');
+  muted.end();
+  const quiet = await muted.done;
+  assert.deepEqual([calls.length, quiet.played, quiet.reason, quiet.cancelled, quiet.skipped], [0, 0, 'skipped', false, 1]);
+
+  // Gone wrong, and stopped.
+  __testing.configureForTest({ settings: { ttsVoices: {} } });
+  mockFish({ status: 401, body: 'invalid key' });
+  const broken = __testing.apiStream({ speaker: '樱井' });
+  broken.push('今天也来了啊。');
+  broken.end();
+  const failed = await broken.done;
+  assert.deepEqual([failed.played, failed.reason, failed.cancelled], [0, 'failed', false]);
+  assert.ok(failed.failure, 'with the reason in words');
+  const stopped = __testing.apiStream({ speaker: '樱井' });
+  stopped.cancel();
+  assert.equal((await stopped.done).reason, 'cancelled');
+});
+
+test('tts.status says why it cannot read, in words the caller can show as they are', t => {
+  restoreGlobals(t);
+  mockHost('tts-api-reason');
+  __testing.configureForTest({ initialized: true, settings: { tts: { enabled: false, fish: FISH } } });
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  __testing.installPublicApi();
+  t.after(() => { delete globalThis.__JINGYI__; });
+  const api = globalThis.__JINGYI__;
+  assert.match(api.tts.status().reason, /朗读没有打开/);
+  assert.throws(() => api.tts.stream({}), /朗读没有打开/);
+  __testing.configureForTest({ settings: { tts: { enabled: true, fish: { ...FISH, key: '' } } } });
+  assert.match(api.tts.status().reason, /Fish Audio 的 API Key/);
+  assert.equal(api.tts.status().streamReady, false);
+  __testing.configureForTest({ settings: { tts: { enabled: true, fish: FISH, streamVoice: 'minimax' } } });
+  assert.match(api.tts.status().reason, /MiniMax 的 Key/);
+  __testing.configureForTest({ settings: { tts: { enabled: true, fish: FISH, streamVoice: 'fish' } } });
+  assert.equal(api.tts.status().reason, '');
+  assert.equal(api.tts.status().streamReady, true);
+});
+
+test('a caller\'s line with several marks is read mark by mark, and a broken or unknown mark never costs the line', async t => {
+  restoreGlobals(t);
+  mockHost('tts-api-marks', { async processRequest() { return { content: '{"voices":[]}' }; } });
+  __testing.configureForTest({
+    initialized: true,
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, liveAudio: false, narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '樱井', aliases: [], voiceId: 'voice-sakurai' }, { name: '老胡', aliases: [], voiceId: 'voice-hu' }] },
+    },
+  });
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  const audio = mockAudio();
+  t.after(() => audio.restore());
+  const read = async (options, text) => {
+    const calls = mockFish();
+    const session = __testing.apiStream(options);
+    session.push(text);
+    session.end();
+    const heard = await session.done;
+    return { heard, sent: calls.map(call => [call.body.text, call.body.reference_id]) };
+  };
+
+  // Two quotations, two marks: each speaker in their own voice and mood, the narration by the narrator.
+  const both = await read({ speaker: '樱井' }, '<say who="樱井" mood="开心">「你回来啦！」</say>她笑着说。<say who="老胡" mood="生气">「快走。」</say>');
+  assert.deepEqual(both.sent, [
+    ['<|speaker:0|>[happy] 你回来啦！\n<|speaker:1|>她笑着说。', ['voice-sakurai', 'voice-narrator']],
+    ['[angry] 快走。', 'voice-hu'],
+  ]);
+
+  // Any case of the tag names the same speaker.
+  const upper = await read({ speaker: '樱井' }, '<Say 老胡|生气>快走吧。');
+  assert.deepEqual(upper.sent, [['[angry] 快走吧。', 'voice-hu']]);
+
+  // A mark never closed: once the line is finished the words are read, not dropped.
+  const broken = await read({ speaker: '樱井' }, '<say mood="高兴"今天好。');
+  assert.deepEqual(broken.sent.map(([text]) => text), ['今天好。']);
+
+  // A mood word nobody knows leaves the caller's own.
+  const unknown = await read({ speaker: '樱井', emotion: '平静' }, '<say mood="随便吧">好吧好吧。');
+  assert.deepEqual(unknown.sent.map(([text]) => text), ['[calm] 好吧好吧。']);
+
+  // tts.speak with an analysis: the caller's mood stays where the analysis said nothing.
+  const calls = mockFish();
+  const spoken = await __testing.apiSpeak({ text: '你来了呀。', speaker: '樱井', emotion: '高兴', analyze: true, play: false });
+  await spoken.done;
+  assert.deepEqual(calls.map(call => call.body.text), ['[happy] 你来了呀。']);
 });

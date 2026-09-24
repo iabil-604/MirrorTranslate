@@ -13,9 +13,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.36.0-beta.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.36.0-beta.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.36.0-beta.1';
+} from './core.js?v=0.36.0-beta.2';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.36.0-beta.2';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.36.0-beta.2';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -402,6 +402,8 @@ function speechVocabulary() {
   const moods = new Map();
   // Every Chinese label the panel shows for one of Fish's moods is understood too; the offered words win.
   for (const [english, chinese] of Object.entries(FISH_TAG_LABELS)) if (FISH_EMOTIONS.includes(english)) moods.set(chinese, english);
+  // Words other plugins use for the same moods (the phone's calls say 高兴); understood, never offered.
+  for (const [chinese, english] of [['高兴', 'happy'], ['快乐', 'happy'], ['伤心', 'sad']]) moods.set(chinese, english);
   for (const [chinese, english] of SPEECH_MOODS) moods.set(chinese, english);
   const tones = new Map(SPEECH_TONES);
   for (const tone of FISH_TONES) if (FISH_TAG_LABELS[tone]) tones.set(FISH_TAG_LABELS[tone], tone);

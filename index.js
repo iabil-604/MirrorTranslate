@@ -79,7 +79,9 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.36.0-beta.1';
+  readSpeechAttributes,
+  speechMarkedLine,
+} from './core.js?v=0.36.0-beta.2';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -137,10 +139,11 @@ import {
   SPEECH_TONES,
   settledSpans,
   fishLivePayload,
-} from './tts.js?v=0.36.0-beta.1';
-import { createTtsStore } from './tts-store.js?v=0.36.0-beta.1';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.36.0-beta.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.36.0-beta.1';
+  speechMood,
+} from './tts.js?v=0.36.0-beta.2';
+import { createTtsStore } from './tts-store.js?v=0.36.0-beta.2';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.36.0-beta.2';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.36.0-beta.2';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -149,7 +152,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.36.0-beta.1';
+} from './processing.js?v=0.36.0-beta.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -166,13 +169,13 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.36.0-beta.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.36.0-beta.1';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.36.0-beta.1';
-import { createCall, createCallHistory } from './call.js?v=0.36.0-beta.1';
-import { createPcmPlayer } from './pcm-player.js?v=0.36.0-beta.1';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest } from './tts-cloud.js?v=0.36.0-beta.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.36.0-beta.1';
+} from './prompts.js?v=0.36.0-beta.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.36.0-beta.2';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.36.0-beta.2';
+import { createCall, createCallHistory } from './call.js?v=0.36.0-beta.2';
+import { createPcmPlayer } from './pcm-player.js?v=0.36.0-beta.2';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest } from './tts-cloud.js?v=0.36.0-beta.2';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.36.0-beta.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -186,15 +189,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.36.0-beta.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.36.0-beta.1';
+} from './palette.js?v=0.36.0-beta.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.36.0-beta.2';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.36.0-beta.1';
+} from './diagnostics.js?v=0.36.0-beta.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -14182,13 +14185,66 @@ function streamReplyLines(raw, settings = runtime.settings) {
   return lines;
 }
 
-/** Text a caller hands over: a line per line, nothing extracted. */
-function streamPlainLines(raw) {
-  return String(raw ?? '').split('\n').map((text, index) => ({ lineId: index + 1, text }));
+/**
+ * Text a caller hands over: a line per line, nothing extracted.
+ *
+ * A line may open with one mark of the story's own kind, <say mood="高兴"> (who="名字" too, the closing
+ * tag optional): the whole line is then read in that mood and voice, however it is cut, and the mark
+ * is never read. A mark still being written holds its line back until it is whole; one never closed
+ * is dropped once its line is finished, and the words are read. A line with several marks is read the
+ * way a reply's line is: each quotation by its own mark, the narration by the narrator.
+ */
+function streamPlainLines(raw, { final = false } = {}) {
+  const all = String(raw ?? '').split('\n');
+  return all.map((text, index) => {
+    const lineId = index + 1;
+    const finished = final || index < all.length - 1;
+    const open = text.match(/^\s*<say(?=[\s/>]|$)/i);
+    if (!open) {
+      const marked = /<say(?=[\s/>])/i.test(text) ? speechMarkedLine(text) : null;
+      return marked ? { lineId, text: marked.text, marks: marked.marks } : { lineId, text };
+    }
+    const close = text.indexOf('>');
+    if (close < 0) {
+      if (!finished) return { lineId, text: '' };
+      // Never closed: the mark's words go, the line's stay.
+      // Half an attribute name and nothing else (<say mo) is no words at all.
+      return { lineId, text: text.slice(open[0].length).replace(/^\s*(?:[^\s="'“<>]+\s*[=＝]\s*(?:"[^"]*"|'[^']*'|“[^”]*”|[^\s"'“<>]+)\s*)*\/?\s*/u, '').replace(/^[A-Za-z_-]*\s*$/, '') };
+    }
+    const rest = text.slice(close + 1);
+    if (/<say(?=[\s/>])/i.test(rest)) {
+      const marked = speechMarkedLine(text);
+      if (marked) return { lineId, text: marked.text, marks: marked.marks };
+    }
+    const { speaker, mood } = readSpeechAttributes(text.slice(open[0].length, close));
+    const words = rest
+      .replace(/<\/?say(?=[\s/>])[^<>]*>/gi, '')
+      // A closing tag not finished yet at the end of what has come so far.
+      .replace(/<\/?(?:s(?:a(?:y)?)?)?$/i, '');
+    return { lineId, text: words, ...(mood ? { mood } : {}), ...(speaker ? { who: speaker } : {}) };
+  });
+}
+
+/** A mood word the reading understands, or nothing: a word it does not know is no mood at all. */
+function knownMood(value) {
+  const { emotion, tone } = speechMood(value);
+  return emotion || tone ? String(value) : '';
+}
+
+/**
+ * A caller's mood for a reading, in the reading's two places: the mood the palette knows goes on the
+ * label, and Fish's own word or a tone on the voice — the same split the story's marks get.
+ */
+function apiMoodVoices(utterances, mood) {
+  const { emotion, tone } = speechMood(mood);
+  if (!emotion && !tone) return null;
+  // On the voice either way: narration keeps a mood only there.
+  const voice = { ...(emotion ? { emotion, intensity: 1 } : {}), ...(tone ? { tone } : {}) };
+  return new Map(utterances.map(item => [item.id, { ...voice }]));
 }
 
 /** The plain reading of text being streamed: the story's marks, then who speaks by the text itself. */
-function streamSegments(floor, utterances, settings) {
+function streamSegments(floor, utterances, settings, { mood = '' } = {}) {
   const tts = ttsSettings(settings);
   const tagged = ttsTagReading(floor, utterances, tts);
   const labels = new Map();
@@ -14198,8 +14254,11 @@ function streamSegments(floor, utterances, settings) {
     cast: ttsCast(settings), hints: new Map(), manual: new Map(), tagged: speakerHints(tagged.labels),
     protagonists: { character: host.name2 ?? '', user: host.name1 ?? '' },
   });
+  // A mood the caller gave is the default; a mark in the story says better for its own line.
+  const voices = new Map(apiMoodVoices(utterances, mood) ?? []);
+  for (const [id, voice] of tagged.voices) voices.set(id, voice);
   return buildSegments(utterances, pinSpeakers(labels, resolved, { fallback: 'hint' }), {
-    knownNames: ttsKnownNames(settings), voices: tagged.voices.size ? new Map(tagged.voices) : null,
+    knownNames: ttsKnownNames(settings), voices: voices.size ? voices : null,
   });
 }
 
@@ -14215,7 +14274,7 @@ function streamTimingText(times) {
  * text so far), `push` (the whole so far, or what came next), `end`, `cancel`, `pause`, `resume`,
  * `on('state')`, `state`, `done`, and `finished` (a promise).
  */
-function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang = '', startedAt = null }) {
+function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang = '', emotion = '', startedAt = null }) {
   const settings = runtime.settings;
   const tts = ttsSettings(settings);
   requireStreamKey(tts);
@@ -14263,6 +14322,8 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
   let sounding = false;
   // Stretches with nothing left to read once the reader's 朗读范围 and muted voices were applied.
   let skipped = 0;
+  // The player itself gave out: the reading ended, but nobody stopped it.
+  let broke = false;
   let settle = null;
   const finished = new Promise(resolve => { settle = resolve; });
   const state = () => (done ? 'idle' : paused ? 'paused' : playing ? 'speaking' : 'buffering');
@@ -14294,9 +14355,15 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
     const utterances = ttsUtterances(floor, settings);
     const own = utterances.filter(item => item.lineId === lineId);
     if (!own.length) return [];
-    const segments = speaker
-      ? buildSegments(own, apiLabels(own, { speaker, lang }), { knownNames: ttsKnownNames(settings) })
-      : streamSegments(floor, utterances, settings).filter(segment => segment.lineId === lineId);
+    // A line's own mark says who and how for that line; what the caller gave covers the rest.
+    const line = floor.lines.find(item => item.lineId === lineId);
+    const who = line?.who || speaker;
+    const mood = knownMood(line?.mood) || emotion;
+    const segments = line?.speech?.length
+      ? streamSegments(floor, utterances, settings, { mood }).filter(segment => segment.lineId === lineId)
+      : who
+      ? buildSegments(own, apiLabels(own, { speaker: who, lang }), { knownNames: ttsKnownNames(settings), voices: apiMoodVoices(own, mood) })
+      : streamSegments(floor, utterances, settings, { mood }).filter(segment => segment.lineId === lineId);
     // A caller's text (a call, a plugin, the 试听 button) is read whole, as tts.speak reads it; the
     // reader's 朗读范围 is about their chat, and applies to a reply read while it is written.
     const { items } = await ttsItemsFor(floor, segments, settings, speaker || kind === 'api' ? { range: 'all' } : {});
@@ -14371,7 +14438,12 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
     const index = pieces;
     pieces += 1;
     mark('firstPiece');
-    const line = { lineId: 100000 + index, text: read.text, ...(read.spans.length ? { speech: read.spans } : {}) };
+    const line = {
+      lineId: 100000 + index, text: read.text,
+      ...(read.spans.length ? { speech: read.spans } : {}),
+      ...(piece.mood ? { mood: piece.mood } : {}),
+      ...(piece.who ? { who: piece.who } : {}),
+    };
     const floor = {
       chatId, messageId: messageId ?? -1, swipeId, side: 'source', floorId, version: String(index),
       lines: [...seen.slice(-STREAM_CONTEXT_LINES), line],
@@ -14400,7 +14472,12 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
       floor: messageId, kind, times, pieces, played, requests, failures, cancelled, lanes, model: tts.fish.model,
     }, '', Number.isInteger(messageId) ? { floor: messageId } : {});
     if (!lastFailure && !played && skipped) lastFailure = `切出的 ${skipped} 段都按「朗读范围」或静音设置跳过了，没有发请求。`;
-    settle({ cancelled, pieces, played, requests, times: { ...times }, failure: lastFailure });
+    // Why nothing was heard, when nothing was: stopped, left out on purpose, or gone wrong.
+    const reason = played ? ''
+      : cancelled && !broke ? 'cancelled'
+        : broke || failures ? 'failed'
+          : skipped ? 'skipped' : '';
+    settle({ cancelled: cancelled && !broke, pieces, played, requests, skipped, reason, times: { ...times }, failure: lastFailure });
   };
   // The page may not sound yet (never tapped) or not any more (iOS took the sound for a phone call or
   // the lock screen): the reading waits for a tap, and says so once.
@@ -14476,6 +14553,7 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
       failures += 1;
       lastFailure = safeError(error);
       recordDiagnostic('warn', 'tts.stream', `边收边放出不了声：${lastFailure}`, { floor: messageId, piece: job.index }, '', Number.isInteger(messageId) ? { floor: messageId } : {});
+      broke = true;
       session.cancel();
       return;
     }
@@ -14563,7 +14641,7 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
     if (done) return;
     let lines;
     try {
-      lines = toLines(raw);
+      lines = toLines(raw, { final });
     } catch {
       return;
     }
@@ -15105,12 +15183,12 @@ const PUBLIC_API_VERSION = 1;
 const API_FLOOR_PREFIX = 'jy-api';
 
 /** Text somebody handed us, shaped as a floor so the whole reading pipeline applies to it unchanged. */
-async function apiFloor(text, { speaker = '', lang = '' } = {}) {
+async function apiFloor(text, { speaker = '', lang = '', emotion = '' } = {}) {
   const body = plainLineText(String(text ?? '')).trim();
   if (!body) throw new Error('没有可朗读的文字。');
   if (body.length > 20000) throw new Error('一次最多朗读 20000 字，请分几次。');
   const lines = body.split('\n').map(line => line.trim()).filter(Boolean).map((line, index) => ({ lineId: index + 1, text: line }));
-  const version = await hashText(JSON.stringify([lines.map(line => line.text), speaker, lang]));
+  const version = await hashText(JSON.stringify([lines.map(line => line.text), speaker, lang, ...(emotion ? [emotion] : [])]));
   return {
     chatId: API_FLOOR_PREFIX,
     messageId: -1,
@@ -15139,15 +15217,24 @@ function apiLabels(utterances, { speaker = '', lang = '' } = {}) {
   }]));
 }
 
-function apiTtsSettings({ stream = false } = {}) {
-  const settings = runtime.settings;
-  const tts = ttsSettings(settings);
-  if (!runtime.initialized) throw new Error('镜译还没启动完，稍后再试。');
-  if (!tts.enabled) throw new Error('用户没有打开镜译的朗读功能。');
+/**
+ * Why the interface cannot read right now, in words a caller can show the reader as they are; empty when
+ * it can. `stream` asks for tts.stream, whose voice is the one chosen for calls.
+ */
+function apiTtsReason({ stream = false } = {}) {
+  const tts = ttsSettings(runtime.settings);
+  if (!runtime.initialized) return '镜译还没启动完，稍后再试。';
+  if (!tts.enabled) return '镜译的朗读没有打开：镜译 → 朗读 → 打开朗读。';
   const voice = stream ? tts.streamVoice : 'fish';
-  if (voice === 'fish' && !tts.fish.key) throw new Error('用户还没有在镜译里填 Fish Audio 的 API Key。');
-  if (voice !== 'fish' && !tts[voice]?.key) throw new Error(spacedLatin(`用户还没有在镜译里填${CLOUD_VOICE_LABELS[voice]}的 Key。`));
-  return { settings, tts };
+  if (voice === 'fish' && !tts.fish.key) return '镜译还没填 Fish Audio 的 API Key：镜译 → 朗读 →「02 Fish Audio」。';
+  if (voice !== 'fish' && !tts[voice]?.key) return spacedLatin(`镜译还没填${CLOUD_VOICE_LABELS[voice]}的 Key：镜译 → 朗读 →「06 实时通话」。`);
+  return '';
+}
+
+function apiTtsSettings({ stream = false } = {}) {
+  const reason = apiTtsReason({ stream });
+  if (reason) throw new Error(reason);
+  return { settings: runtime.settings, tts: ttsSettings(runtime.settings) };
 }
 
 /**
@@ -15157,18 +15244,21 @@ function apiTtsSettings({ stream = false } = {}) {
  * pause, carry on, stop, and a promise for the end. A long story is cut at its paragraphs and each is
  * one Fish request, the next one made while this one plays.
  */
-async function apiSpeak({ text, speaker = '', lang = '', analyze = false, play = true, signal = null } = {}) {
+async function apiSpeak({ text, speaker = '', lang = '', emotion = '', analyze = false, play = true, signal = null } = {}) {
   const { settings, tts } = apiTtsSettings();
-  const floor = await apiFloor(text, { speaker, lang });
+  const floor = await apiFloor(text, { speaker, lang, emotion });
   const utterances = ttsUtterances(floor, settings);
   if (!utterances.length) throw new Error('没有可朗读的文字。');
   let labels = apiLabels(utterances, { speaker, lang });
-  let voices = null;
+  // The caller's mood; an analysis asked for says better, line by line.
+  let voices = apiMoodVoices(utterances, emotion);
   if (analyze) {
     // The simple reading only: who is speaking, in what mood, in Fish's own words. One sub-model call.
     const analysed = await analyzeTtsFloor(floor, utterances, settings, 'simple', {});
     for (const [id, label] of analysed.labels) labels.set(id, { ...labels.get(id), ...label });
-    voices = analysed.voices;
+    const merged = new Map(voices ?? []);
+    for (const [id, voice] of analysed.voices ?? []) merged.set(id, { ...merged.get(id), ...voice });
+    voices = merged.size ? merged : null;
   }
   const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices });
   // The reader's 朗读范围 is about their chat, not about what a caller asked for: all of it is read.
@@ -15319,13 +15409,13 @@ function apiSession(floor, items, settings, { play, signal, speaker = '' }) {
  * audio settings, Fish key and quota; nothing is written to the chat. `on('state', fn)` hears
  * 'buffering' / 'speaking' / 'paused' / 'idle'; `done` settles when the last stretch has been heard.
  */
-function apiStream({ speaker = '', lang = '', signal = null } = {}) {
+function apiStream({ speaker = '', lang = '', emotion = '', signal = null } = {}) {
   const { tts } = apiTtsSettings({ stream: true });
   stopTts();
   runtime.tts.liveWanted = true;
   // Called from a tap (a send button), the sound is allowed now, in the tap: iOS allows it nowhere else.
   if (tts.liveAudio) livePlayer()?.unlock();
-  const session = createTtsStream({ kind: 'api', toLines: streamPlainLines, speaker, lang });
+  const session = createTtsStream({ kind: 'api', toLines: streamPlainLines, speaker, lang, emotion: String(emotion ?? '') });
   if (signal?.aborted) session.cancel();
   else signal?.addEventListener?.('abort', () => session.cancel(), { once: true });
   return Object.freeze({
@@ -15358,6 +15448,8 @@ function installPublicApi() {
           // What tts.stream reads in, and whether it can: a caller that only streams asks this.
           streamProvider: tts.streamVoice,
           streamReady: tts.enabled === true && Boolean(tts.streamVoice === 'fish' ? tts.fish.key : tts[tts.streamVoice]?.key),
+          // Why tts.stream cannot read now, to show the reader as it is; empty when it can.
+          reason: apiTtsReason({ stream: true }),
           model: tts.fish.model,
           voices: ttsVoicesFor().filter(row => row.voiceId).length,
           busy: Boolean(runtime.tts.transport && runtime.tts.transport.state !== 'idle'),
@@ -15561,6 +15653,9 @@ export const __testing = Object.freeze({
   apiFloor,
   apiLabels,
   apiSpeak,
+  apiStream,
+  apiTtsReason,
+  streamPlainLines,
   installPublicApi,
   translateMessage,
   createTtsTransport,
