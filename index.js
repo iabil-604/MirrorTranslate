@@ -72,7 +72,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.34.3';
+} from './core.js?v=0.34.4';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -129,10 +129,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.34.3';
-import { createTtsStore } from './tts-store.js?v=0.34.3';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.34.3';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.34.3';
+} from './tts.js?v=0.34.4';
+import { createTtsStore } from './tts-store.js?v=0.34.4';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.34.4';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.34.4';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -141,7 +141,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.34.3';
+} from './processing.js?v=0.34.4';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -158,9 +158,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.34.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.34.3';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.34.3';
+} from './prompts.js?v=0.34.4';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.34.4';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.34.4';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -174,15 +174,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.34.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.34.3';
+} from './palette.js?v=0.34.4';
+import { sampleThemeBackground } from './theme-probe.js?v=0.34.4';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.34.3';
+} from './diagnostics.js?v=0.34.4';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -398,7 +398,7 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <div class="jy-processing-columns">
 <div class="jy-text-scope"><span class="jy-overline">送去翻译</span><h2>提取正文</h2><label><span class="jy-label">提取标签</span><textarea rows="4" data-jy-field="bodyTags" placeholder="story_scene" spellcheck="false"></textarea></label><p class="jy-muted">每行一个标签名，只取每种标签的最后一组完整内容。</p><label><span class="jy-label">替换标签（译文直接替换原文）</span><textarea rows="3" data-jy-field="replaceTags" placeholder="replace_scene" spellcheck="false"></textarea></label><p class="jy-muted">该标签内的内容照常翻译，但写回时译文直接顶替原文：显示与主模型都只看到译文，原文隐藏保留在楼层里，点小铅笔可见，重新翻译时自动还原。</p></div>
-<div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位。镜译自己的 <code>&lt;say&gt;</code> 说话人标记不用加在这里：翻译时自动去掉，显示时自动隐藏，朗读时自动读取。</p></div>
+<div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位，不翻译，也不朗读（比如生图插件的 &lt;image&gt;）。镜译自己的 <code>&lt;say&gt;</code> 说话人标记不用加在这里：翻译时自动去掉，显示时自动隐藏，朗读时自动读取。</p></div>
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 只要这一行里有匹配就算（要整行匹配请写 ^…$）。纯边框、纯符号、标签行和只有图片的行自动保留。</p></details>
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
@@ -2823,7 +2823,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
     }
   }
   if (!lines.length && side === 'translation') {
-    lines = linesFromTaggedText(message.mes, ttsSettings(settings).sourceTags);
+    lines = linesFromTaggedText(message.mes, ttsSettings(settings).sourceTags, { excludedTags: settings.excludedTags });
     source = 'tags';
   }
   if (!lines.length) return null;
