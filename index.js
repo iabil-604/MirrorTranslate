@@ -3634,25 +3634,30 @@ async function regenerateTtsSentence(messageId, utteranceId, side = null) {
  * floor's take or the sentences' and played the old reading again; as the newest take of its
  * sentences, this one is what is heard.
  */
-async function regenerateTtsParagraph(messageId, lineId, side = null) {
+// Several `lines` (a folded original's button) are each made as the paragraph they are, one after another.
+async function regenerateTtsParagraph(messageId, lineId, side = null, lines = [lineId]) {
   const prepared = await ttsPrepared(messageId, side);
-  const items = prepared.items.filter(candidate => candidate.segment.lineId === lineId);
-  if (!items.length) throw new Error('这一段不在当前的朗读范围里。');
-  await dropTtsRecordings(prepared, items);
+  const groups = lines
+    .map(id => [id, prepared.items.filter(candidate => candidate.segment.lineId === id)])
+    .filter(([, items]) => items.length);
+  if (!groups.length) throw new Error('这一段不在当前的朗读范围里。');
+  await dropTtsRecordings(prepared, groups.flatMap(([, items]) => items));
   const { floor, settings } = prepared;
   setTtsLineState(messageId, lineId, 'busy', floor.side);
   try {
-    await ensureTtsRecording(floor, `line:${lineId}`, items, settings, text => setTtsStatus(messageId, text, 'busy'), (id, patch) => ttsStep(floor, id, patch));
+    for (const [id, items] of groups) {
+      await ensureTtsRecording(floor, `line:${id}`, items, settings, text => setTtsStatus(messageId, text, 'busy'), (step, patch) => ttsStep(floor, step, patch));
+    }
   } finally {
     setTtsLineState(messageId, lineId, null, floor.side);
   }
   if (!ttsSettings(settings).playAfterGenerate) {
-    setTtsStatus(messageId, '这一段已重新生成，再点一次播放', 'idle');
+    setTtsStatus(messageId, `${groups.length > 1 ? `这 ${groups.length} 段` : '这一段'}已重新生成，再点一次播放`, 'idle');
     notifyTtsPanels();
     return;
   }
   setTtsStatus(messageId, '', 'idle');
-  await playTtsParagraph(messageId, lineId, side);
+  await playTtsParagraph(messageId, lineId, side, lines);
 }
 
 /**
@@ -4473,7 +4478,13 @@ function ttsButton(messageId, utteranceId, side = null) {
 function ttsLineButton(messageId, lineId, side = null) {
   if (typeof document === 'undefined' || lineId === null || lineId === undefined) return null;
   const which = side ?? primaryTtsSide();
-  return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-line-play[data-jy-tts-line="${lineId}"][data-jy-tts-side="${which}"]`);
+  return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-line-play:is([data-jy-tts-line="${lineId}"], [data-jy-tts-lines~="${lineId}"])[data-jy-tts-side="${which}"]`);
+}
+
+/** The paragraphs one paragraph button stands for: its own, or every one of a folded original's. */
+function ttsButtonLines(button) {
+  const lines = String(button?.dataset.jyTtsLines ?? '').split(' ').filter(Boolean).map(Number);
+  return lines.length ? lines : [Number(button?.dataset.jyTtsLine)];
 }
 
 /** Which paragraph a sentence of the floor being read belongs to; null when that floor is not the one open. */
@@ -5073,8 +5084,8 @@ async function runTtsTransport(transport) {
       const { floor, settings } = transport;
       const items = transport.items;
       const item = items[transport.index];
-      // A paragraph button reads its paragraph and stops at its end.
-      const stopLine = transport.paragraph ? item.segment.lineId : null;
+      // A paragraph button reads its paragraph and stops at its end; a folded original's, its paragraphs.
+      const within = !transport.paragraph ? null : Array.isArray(transport.paragraph) ? transport.paragraph : [item.segment.lineId];
       scheduleTtsAhead(transport);
       setTransport(transport, { state: 'loading', message: '正在准备音频…' });
       setTtsButtonState(transport.messageId, item.segment.id, 'busy', transport.side, item.segment.lineId);
@@ -5115,7 +5126,7 @@ async function runTtsTransport(transport) {
       for (let offset = transport.index; offset < items.length; offset += 1) {
         const candidate = items[offset];
         const found = record.timeline.findIndex(candidateEntry => candidateEntry.id === candidate.segment.id && candidateEntry.part === part);
-        if (found < 0 || (stopLine !== null && candidate.segment.lineId !== stopLine)) break;
+        if (found < 0 || (within && !within.includes(candidate.segment.lineId))) break;
         if (offset > transport.index) {
           const own = await findTtsEntry(floor, candidate, settings);
           if (own && own.record.key !== record.key) break;
@@ -5167,7 +5178,7 @@ async function runTtsTransport(transport) {
       if (outcome === 'stopped') return;
       transport.index = lastOffset + 1;
       if (transport.single) break;
-      if (stopLine !== null && items[transport.index]?.segment.lineId !== stopLine) break;
+      if (within && !within.includes(items[transport.index]?.segment.lineId)) break;
     }
     if (live()) {
       transport.index = Math.min(transport.index, transport.items.length - 1);
@@ -5237,7 +5248,7 @@ function ttsPickedLines(messageId, side) {
   if (!root) return [];
   return [...root.querySelectorAll('[data-jy-tts-pick-line]')]
     .filter(box => box.checked && (!side || box.dataset.jyTtsSide === side))
-    .map(box => Number(box.dataset.jyTtsPickLine));
+    .flatMap(box => (box.dataset.jyTtsPickLines ? box.dataset.jyTtsPickLines.split(' ').map(Number) : [Number(box.dataset.jyTtsPickLine)]));
 }
 
 /** Makes the ticked paragraphs and hands the file over, the same way every other save does. */
@@ -5453,8 +5464,10 @@ async function playTtsUtterance(messageId, utteranceId, side = null) {
  * A sentence click stops at the end of its sentence; a paragraph click is how the floor is read from
  * a place, so it leaves `single` off and the reading runs on into the paragraphs below it.
  */
-async function playTtsParagraph(messageId, lineId, side = null) {
+// `lines`: the paragraphs read together, first to last, when one button stands for several.
+async function playTtsParagraph(messageId, lineId, side = null, lines = null) {
   const wantedSide = side ?? primaryTtsSide();
+  const paragraph = Array.isArray(lines) && lines.length > 1 ? lines : true;
   const existing = runtime.tts.transport;
   if (existing && existing.messageId === messageId && existing.side === wantedSide && existing.floor && existing.items.length) {
     await syncTtsTransport(existing);
@@ -5465,7 +5478,7 @@ async function playTtsParagraph(messageId, lineId, side = null) {
       stopTtsPlayback();
       existing.index = index;
       existing.single = false;
-      existing.paragraph = true;
+      existing.paragraph = paragraph;
       existing.generateOnly = !ttsSettings().playAfterGenerate;
       await runTtsTransport(existing);
       return;
@@ -5477,7 +5490,7 @@ async function playTtsParagraph(messageId, lineId, side = null) {
     const prepared = await ttsPrepared(messageId, wantedSide);
     const first = prepared.items.find(item => item.segment.lineId === lineId);
     if (!first) throw new Error('这一段不在当前的朗读范围里。');
-    const transport = await createTtsTransport(messageId, { single: false, paragraph: true, fromUtterance: first.segment.id, side: wantedSide });
+    const transport = await createTtsTransport(messageId, { single: false, paragraph, fromUtterance: first.segment.id, side: wantedSide });
     if (!transport) return;
     await runTtsTransport(transport);
   } catch (error) {
@@ -6582,6 +6595,15 @@ function insertAfterRange(range, element, root) {
   marker.insertNode(element);
 }
 
+// 原文折叠 keeps the original inside a <details>: a paragraph's buttons hung at its end would fold
+// away with it, so they go right after the <details>, beside the 原文 chip while it is closed.
+function foldedOriginalOf(range, root) {
+  const end = range.endContainer;
+  const element = end.nodeType === Node.TEXT_NODE ? end.parentElement : end;
+  const details = element?.closest?.('details.jy-reading-original, details.custom-jy-reading-original');
+  return details && root.contains(details) ? details : null;
+}
+
 function makeTtsPlayButton(messageId, segment, side) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -6631,24 +6653,28 @@ function makeTtsLineTools(messageId, line, side) {
   box.dataset.jyTtsSide = side;
   box.setAttribute('contenteditable', 'false');
   const suffix = side === 'source' ? '（原文）' : '';
+  // One pair for several paragraphs: a folded original, whose chip stands for all of them.
+  const block = Array.isArray(line.lines) && line.lines.length > 1;
+  const which = block ? `这 ${line.lines.length} 段` : '这一段';
   const pick = document.createElement('label');
   pick.className = 'jy-tts-pick-box';
-  pick.title = '选中这一段，一起缓存到本地';
+  pick.title = `选中${which}，一起缓存到本地`;
   pick.setAttribute('contenteditable', 'false');
   const tick = document.createElement('input');
   tick.type = 'checkbox';
   tick.dataset.jyTtsPickLine = String(line.lineId);
+  if (block) tick.dataset.jyTtsPickLines = line.lines.join(' ');
   tick.dataset.jyTtsSide = side;
   pick.appendChild(tick);
   box.append(
     pick,
     makeTtsLineButton(messageId, line, side, {
       action: 'play-line', className: 'jy-tts-line-play', icon: TTS_ICON_PLAY, text: '播放',
-      label: `从这一段读起（${line.ids.length} 句）${suffix}`,
+      label: `${block ? `读${which}` : '从这一段读起'}（${line.ids.length} 句）${suffix}`,
     }),
     makeTtsLineButton(messageId, line, side, {
       action: 'regen-line', className: 'jy-tts-line-regen', icon: TTS_ICON_REDO, text: '重新生成',
-      label: `丢掉这一段的音频，再向 Fish 要一次${suffix}`,
+      label: `丢掉${which}的音频，再向 Fish 要一次${suffix}`,
     }),
   );
   return box;
@@ -6662,6 +6688,7 @@ function makeTtsLineButton(messageId, line, side, { action, className, icon, tex
   button.dataset.jyTtsAction = action;
   button.dataset.jyTtsMes = String(messageId);
   button.dataset.jyTtsLine = String(line.lineId);
+  if (Array.isArray(line.lines) && line.lines.length > 1) button.dataset.jyTtsLines = line.lines.join(' ');
   button.dataset.jyTtsSide = side;
   button.setAttribute('contenteditable', 'false');
   button.setAttribute('aria-label', label);
@@ -6862,13 +6889,40 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   // Later ranges first, so an insertion never sits between an earlier range and its own end. Where a
   // paragraph ends on its own last sentence the two share a point, and since each insertion goes in
   // front of the one before it, the paragraph's pair is placed first to end up after the sentence's.
-  const placements = [...lineButtons, ...buttons];
+  // A folded original shows one chip for every paragraph inside it, so they share one pair beside it.
+  const lineTools = [];
+  const folded = new Map();
+  for (const entry of lineButtons) {
+    const fold = foldedOriginalOf(entry.range, root);
+    if (!fold) {
+      lineTools.push(entry);
+      continue;
+    }
+    const bySide = folded.get(fold) ?? new Map();
+    folded.set(fold, bySide);
+    const block = bySide.get(entry.side);
+    if (block) {
+      block.line.ids.push(...entry.line.ids);
+      block.line.lines.push(entry.line.lineId);
+      continue;
+    }
+    const fresh = { ...entry, fold, line: { ...entry.line, ids: [...entry.line.ids], lines: [entry.line.lineId] } };
+    bySide.set(entry.side, fresh);
+    lineTools.push(fresh);
+  }
+  const placements = [...lineTools, ...buttons];
   placements.sort((left, right) => right.range.compareBoundaryPoints(Range.END_TO_END, left.range));
   const buttonMode = floorButtonMode(settings);
   for (const placement of placements) {
     if (buttonMode === 'off') break;
     if (placement.line) {
-      insertAfterRange(placement.range, makeTtsLineTools(messageId, placement.line, placement.side), root);
+      const tools = makeTtsLineTools(messageId, placement.line, placement.side);
+      if (placement.fold) {
+        tools.dataset.jyTtsFold = '';
+        placement.fold.after(tools);
+      } else {
+        insertAfterRange(placement.range, tools, root);
+      }
     } else if (buttonMode === 'sentence') {
       const play = makeTtsPlayButton(messageId, placement.segment, placement.side);
       insertAfterRange(placement.range, play, root);
@@ -7036,15 +7090,16 @@ function bindTtsDom() {
         else void playTtsUtterance(messageId, utteranceId, side);
       } else if (action === 'play-line') {
         const lineId = Number(target.dataset.jyTtsLine);
+        const lines = ttsButtonLines(target);
         const transport = runtime.tts.transport;
         const onThisParagraph = transport?.messageId === messageId && transport.side === (side ?? primaryTtsSide())
-          && transport.items[transport.index]?.segment.lineId === lineId;
+          && lines.includes(transport.items[transport.index]?.segment.lineId);
         if (transport?.state === 'playing' && onThisParagraph) pauseTts();
         // Paused inside this paragraph: carry on from there rather than starting it over.
         else if (transport?.state === 'paused' && onThisParagraph) resumeTts();
-        else void playTtsParagraph(messageId, lineId, side);
+        else void playTtsParagraph(messageId, lineId, side, lines);
       } else if (action === 'regen-line') {
-        void regenerateTtsParagraph(messageId, Number(target.dataset.jyTtsLine), side).catch(error => {
+        void regenerateTtsParagraph(messageId, Number(target.dataset.jyTtsLine), side, ttsButtonLines(target)).catch(error => {
           if (!isAbortError(error)) toast('error', safeError(error));
         });
       }
