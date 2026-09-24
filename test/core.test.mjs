@@ -16,6 +16,13 @@ import {
   INVISIBLE_MARKER,
   assembleBilingual,
   assembleReplace,
+  assembleTranslationOnly,
+  floorText,
+  hashTextSync,
+  readFloor,
+  restoreStrippedForPrompt,
+  HIDDEN_START,
+  MESSAGE_META_KEY,
   renderReplacePair,
   renderSourceBlock,
   renderTranslationBlock,
@@ -1277,4 +1284,120 @@ test('a connection carries its own last word, and every request on it sends it',
   // A connection without one changes nothing, which is what every existing setup has.
   const bare = normalizeChannel({ id: 'c2', url: 'https://relay.example/v1', key: 'k', model: 'm' });
   assert.equal(createIndependentRequest({ channels: [bare], selectedChannelId: 'c2' }, [{ role: 'user', content: '正文' }]).messages.length, 1);
+});
+
+test('只留译文 writes each line as its translation and leaves every picture and preserved line where it stood', () => {
+  const settings = { excludedTags: ['image'], carryFormatting: true };
+  const inner = '\nLine one.\n<image>a cat\nsitting</image>\nLine two <image>x</image> end.\n***\n<b>Bold line.</b>\n\n![pic](/a.png)\n\nLast.\n';
+  const segmented = segmentSource(inner, settings);
+  assert.deepEqual(segmented.segments.map(segment => segment.text), ['Line one.', 'Line two  end.', 'Bold line.', 'Last.']);
+  const translations = new Map([[1, '第一行。'], [2, '第二行。'], [3, '粗体行。'], [4, '最后。']]);
+  const out = assembleTranslationOnly(segmented.layout, translations, settings);
+  assert.equal(out, '\n第一行。\n<image>a cat\nsitting</image>\n第二行。<image>x</image>\n***\n<b>粗体行。</b>\n\n![pic](/a.png)\n\n最后。\n');
+  assert.doesNotMatch(out, /[\u2060-\u2064\u200b-\u200d\ufeff\uE000-\uF8FF]/u, 'no invisible marker goes in');
+  // A line still waiting for its translation keeps its original rather than vanishing.
+  assert.equal(assembleTranslationOnly(segmentSource('\nA.\nB.\n', settings).layout, new Map([[1, '甲。']]), settings), '\n甲。\nB.\n');
+});
+
+test('只留译文 keeps the speaker colours as plain HTML', () => {
+  const layout = segmentSource('\n「こんにちは」\n', {}).layout;
+  const styleFor = () => ({ open: '<span class="jy-spk jy-spk-a" style="color:#123456 !important">', close: '</span>' });
+  const out = assembleTranslationOnly(layout, new Map([[1, '「你好」']]), { styleFor });
+  assert.equal(out, '\n<span class="jy-spk jy-spk-a" style="color:#123456 !important">「你好」</span>\n');
+});
+
+test('a floor with only its translation left in it is read from the text kept for it, until something else changes it', () => {
+  const settings = { translationPrefix: '{', translationSuffix: '}' };
+  const layout = segmentSource('\n雨が降っている。\n', settings).layout;
+  const translations = new Map([[1, '下雨了。']]);
+  const mirror = `<story_scene>${assembleBilingual(layout, translations, settings)}</story_scene>`;
+  const projection = `<story_scene>${assembleTranslationOnly(layout, translations, settings)}</story_scene>`;
+  assert.equal(projection, '<story_scene>\n下雨了。\n</story_scene>');
+  const meta = { schema_version: 4, swipe_id: 0, complete: true, stripped: true, mirror, projection_hash: hashTextSync(projection), translation_prefix: '{', translation_suffix: '}' };
+  const floor = (mes, swipeId = 0, extra = { [MESSAGE_META_KEY]: meta }) => ({ mes, swipe_id: swipeId, extra });
+  const read = message => {
+    const { text, stripped, diverged } = readFloor(message);
+    return { text, stripped, diverged };
+  };
+
+  assert.deepEqual(read(floor(projection)), { text: mirror, stripped: true, diverged: false });
+  assert.equal(floorText(floor(projection)), mirror);
+  // A continue: the main model was shown the original and went on from it.
+  const continued = '<story_scene>\n雨が降っている。\n</story_scene>\n風も強い。';
+  assert.deepEqual(read(floor(continued)), { text: continued, stripped: false, diverged: false });
+  // Changed by hand: its text is what it holds, and it says so.
+  const edited = '<story_scene>\n下大雨了。\n</story_scene>';
+  assert.deepEqual(read(floor(edited)), { text: edited, stripped: true, diverged: true });
+  // The bilingual text put back is an ordinary floor again.
+  assert.deepEqual(read(floor(mirror)), { text: mirror, stripped: false, diverged: false });
+  // Another swipe is not this record's floor.
+  assert.deepEqual(read(floor('<story_scene>\n晴れ。\n</story_scene>', 1)), { text: '<story_scene>\n晴れ。\n</story_scene>', stripped: false, diverged: false });
+  // A host that keeps one metadata for every swipe: the swipe's own record is found.
+  const shared = { ...floor(projection, 1, { [MESSAGE_META_KEY]: { ...meta, swipe_id: 0 } }), swipe_info: [{}, { extra: { [MESSAGE_META_KEY]: { ...meta, swipe_id: 1 } } }] };
+  assert.deepEqual(read(shared), { text: mirror, stripped: true, diverged: false });
+  // A replace-tag floor shows the main model the translation, so a longer floor there is a change.
+  const replaceMirror = `<story_scene>${renderReplacePair('下雨了。', '雨が降っている。')}</story_scene>`;
+  const replaceMeta = { ...meta, mirror: replaceMirror };
+  assert.equal(read(floor('<story_scene>下雨了。</story_scene>\n又下了。', 0, { [MESSAGE_META_KEY]: replaceMeta })).diverged, true);
+  // The fingerprint is the same text's whatever its line endings.
+  assert.equal(hashTextSync('a\r\nb'), hashTextSync('a\nb'));
+});
+
+test('the main model is shown the original of a floor with only its translation left in it', () => {
+  const settings = { translationPrefix: '{', translationSuffix: '}' };
+  const layout = segmentSource('\n雨が降っている。\n', settings).layout;
+  const translations = new Map([[1, '下雨了。']]);
+  const mirror = `<story_scene>${assembleBilingual(layout, translations, settings)}</story_scene>`;
+  const projection = `<story_scene>${assembleTranslationOnly(layout, translations, settings)}</story_scene>`;
+  const extra = { [MESSAGE_META_KEY]: { schema_version: 4, swipe_id: 0, stripped: true, mirror, projection_hash: hashTextSync(projection) } };
+  const message = { mes: projection, swipe_id: 0, extra };
+  // The host renamed the tag in its prompt regexes, put the reasoning before and an attachment after.
+  const regexed = value => value.replaceAll('story_scene', 'scene');
+  const item = { ...message, mes: `<think>想了想</think>\n${regexed(projection)}\n[附件]` };
+  const restored = restoreStrippedForPrompt(item, message, regexed);
+  assert.equal(restored.mes, `<think>想了想</think>\n${regexed(mirror)}\n[附件]`);
+  const prompt = [{ ...item, mes: restored.mes }];
+  interceptGenerationChat(prompt);
+  assert.equal(prompt[0].mes, '<think>想了想</think>\n<scene>\n雨が降っている。\n</scene>\n[附件]');
+  // Without the host's regexes the floor as written is looked for.
+  assert.equal(restoreStrippedForPrompt({ ...message }, message).mes, mirror);
+  // Changed past recognition: said so, not guessed at.
+  assert.deepEqual(restoreStrippedForPrompt({ ...message, mes: '别的' }, message), { mes: null });
+  // Not one of these floors, or one changed by hand since: left alone.
+  assert.equal(restoreStrippedForPrompt({ mes: 'x' }, { mes: 'x', swipe_id: 0, extra: {} }), null);
+  assert.equal(restoreStrippedForPrompt({ mes: '改过' }, { ...message, mes: '改过' }), null);
+});
+
+test('a record is told to be a floor’s by what the floor holds, never by the swipe’s number', () => {
+  const settings = { translationPrefix: '{', translationSuffix: '}' };
+  const source = '\n夕暮れの教室には、誰もいなかった。\n窓から差し込む光が、机を淡く照らしている。\n';
+  const layout = segmentSource(source, settings).layout;
+  const translations = new Map([[1, '傍晚的教室里，一个人也没有。'], [2, '从窗外照进来的光，淡淡地照着桌面。']]);
+  const mirror = `<story_scene>${assembleBilingual(layout, translations, settings)}</story_scene>`;
+  const projection = `<story_scene>${assembleTranslationOnly(layout, translations, settings)}</story_scene>`;
+  const meta = { schema_version: 4, stripped: true, mirror, projection_hash: hashTextSync(projection) };
+  const record = swipeId => ({ [MESSAGE_META_KEY]: { ...meta, swipe_id: swipeId } });
+  const state = message => {
+    const { stripped, diverged } = readFloor(message);
+    return { stripped, diverged, mirror: readFloor(message).text === mirror };
+  };
+
+  // Swipe 1 was stripped and swipe 0 deleted; nothing renumbered its record.
+  assert.deepEqual(state({ mes: projection, swipe_id: 0, extra: record(1), swipe_info: [{ extra: record(1) }] }), { stripped: true, diverged: false, mirror: true });
+  // A new reply on a copy of the record of the swipe before it, whatever number the copy names.
+  const fresh = '<story_scene>\n夕暮れの廊下を、桜井がひとりで歩いていた。\n窓の外では雨が降り始めている。\n</story_scene>';
+  for (const copied of [record(0), record(1)]) {
+    assert.deepEqual(state({ mes: fresh, swipe_id: 1, extra: copied, swipe_info: [{ extra: record(0) }, { extra: copied }] }), { stripped: false, diverged: false, mirror: false });
+  }
+  // One word changed by hand, or every line touched: still the translation, so it is protected.
+  const oneWord = projection.replace('一个人也没有', '一个人都没有');
+  assert.deepEqual(state({ mes: oneWord, swipe_id: 0, extra: record(5) }), { stripped: true, diverged: true, mirror: false });
+  const everyLine = projection.replace('一个人也没有。', '一个人也没有！').replace('照着桌面。', '照着桌面！');
+  assert.deepEqual(state({ mes: everyLine, swipe_id: 0, extra: record(0) }), { stripped: true, diverged: true, mirror: false });
+  // Continued from the translation (the prompt could not be given the original): protected.
+  assert.equal(readFloor({ mes: `${projection}\n她叹了口气。`, swipe_id: 0, extra: record(0) }).diverged, true);
+  // Continued from the original, with the host's clean-up of spaces at line ends: an ordinary floor.
+  const spaced = mirror.replace('いなかった。', 'いなかった。  ');
+  const continued = `${stripGeneratedTranslationLines(mirror, meta)}\n桜井が振り返った。`;
+  assert.deepEqual(state({ mes: continued, swipe_id: 0, extra: { [MESSAGE_META_KEY]: { ...meta, mirror: spaced, swipe_id: 0 } } }), { stripped: false, diverged: false, mirror: false });
 });

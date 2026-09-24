@@ -8,12 +8,12 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.35.0-beta.9';
-import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.35.0-beta.9';
+} from './prompts.js?v=0.36.0-beta.1';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.36.0-beta.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.35.0-beta.9';
+export const APP_VERSION = '0.36.0-beta.1';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -653,6 +653,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   autoSwipe: true,
   autoEdit: false,
   streamingWriteback: false,
+  // 「只留译文」: a finished floor holds only its translation; the bilingual text goes into its metadata.
+  translationOnly: false,
   apiMode: 'follow',
   selectedChannelId: DEFAULT_CHANNEL.id,
   channels: [DEFAULT_CHANNEL],
@@ -1401,6 +1403,7 @@ export function mergeSettings(value = {}) {
   merged.autoSwipe = Boolean(merged.autoSwipe);
   merged.autoEdit = Boolean(merged.autoEdit);
   merged.streamingWriteback = Boolean(merged.streamingWriteback);
+  merged.translationOnly = merged.translationOnly === true;
   merged.showFloatingButton = Boolean(merged.showFloatingButton);
   merged.floatingStyle = FLOATING_STYLES.includes(merged.floatingStyle) ? merged.floatingStyle : DEFAULT_SETTINGS.floatingStyle;
   merged.floorButtons = FLOOR_BUTTON_MODES.includes(merged.floorButtons)
@@ -1710,6 +1713,122 @@ export function extractGeneratedTranslations(text, options = {}) {
     cursor = end + (generated?.full?.length || 0);
   }
   return translations;
+}
+
+/**
+ * The records a floor with only its translation left in it (「只留译文」) may have, for the swipe shown:
+ * the message's own and the swipe's. Each keeps the bilingual text the floor would otherwise hold, as
+ * `mirror`, with the fingerprint of what was written to the floor.
+ */
+function strippedRecords(message) {
+  const swipeId = Number(message?.swipe_id ?? 0);
+  const records = [message?.extra?.[MESSAGE_META_KEY], message?.swipe_info?.[swipeId]?.extra?.[MESSAGE_META_KEY]]
+    .filter(meta => meta?.stripped === true && typeof meta.mirror === 'string');
+  return records[0] && records[1] === records[0] ? [records[0]] : records;
+}
+
+/**
+ * A floor's full text, wherever it is kept. Everything that reads a floor reads it through here, so
+ * translating again, reading the original aloud and the main model's prompt all find the original of a
+ * floor with only its translation left in it.
+ *
+ * A record is told to be this floor's by what the floor holds, never by the swipe's number: the host
+ * renumbers nothing when a swipe is deleted, and a new swipe starts with a copy of the record of the
+ * swipe before it.
+ *
+ * - The floor holds exactly what was written to it: its text is the mirror.
+ * - It holds the bilingual text itself, or what the main model was shown of it and more (a continue):
+ *   an ordinary floor again.
+ * - It still carries the record's translation, changed (by hand, by another extension, a continue from
+ *   the translation): `diverged`. Its text is what it holds, and nothing may translate it — that would
+ *   take the translation for the original and write over the original in the mirror.
+ * - Anything else is not the record's floor at all (a new reply on a copied record): ordinary.
+ */
+export function readFloor(message) {
+  const text = typeof message?.mes === 'string' ? message.mes : '';
+  const ordinary = { text, stripped: false, diverged: false, metadata: null };
+  const records = strippedRecords(message);
+  if (!records.length) return ordinary;
+  const fingerprint = hashTextSync(text);
+  const written = records.find(meta => meta.projection_hash === fingerprint);
+  if (written) return { text: written.mirror, stripped: true, diverged: false, metadata: written };
+  for (const metadata of records) {
+    if (normalizeNewlines(text) === normalizeNewlines(metadata.mirror) || continuedFromMirror(text, metadata)) continue;
+    if (carriesTranslation(text, metadata)) return { text, stripped: true, diverged: true, metadata };
+  }
+  return ordinary;
+}
+
+/** The record `readFloor` holds this floor to, or null. */
+export function strippedMetadataOf(message) {
+  return readFloor(message).metadata;
+}
+
+// Blank lines and the spaces at line ends are what the host's clean-up of a reply changes.
+function looseText(value) {
+  return normalizeNewlines(value).replace(/[^\S\n]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Only a floor with a bilingual region can tell: what the main model sees of a replace-tag region is the
+// translation, which is what the floor holds anyway.
+function continuedFromMirror(text, metadata) {
+  if (!metadata.mirror.includes(TRANSLATION_START)) return false;
+  const shown = looseText(stripGeneratedTranslationLines(metadata.mirror, metadata, 'prompt'));
+  return Boolean(shown) && looseText(text).startsWith(shown);
+}
+
+/**
+ * Whether a floor still carries the record's translation: one of its lines word for word, or, when every
+ * line was touched, most of its wording. A reply in the original's language shares next to none of it.
+ */
+function carriesTranslation(text, metadata) {
+  const mirror = normalizeNewlines(metadata.mirror);
+  const bodies = [...mirror.matchAll(TRANSLATION_BLOCK_RE)].map(match => match[1]);
+  for (const match of mirror.matchAll(REPLACE_PAIR_BOTH_RE)) bodies.push(match[1]);
+  const bare = value => String(value ?? '').replace(AFFIX_RE, '').replace(/<[^<>]*>/g, '');
+  const original = bare(stripGeneratedTranslationLines(mirror, metadata));
+  const lines = bodies.flatMap(body => bare(body).split('\n')).map(line => line.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  const floor = bare(text);
+  // A line the translation left as it was (a name, a number) proves nothing.
+  if (lines.some(line => [...line].length >= 6 && floor.includes(line) && !original.includes(line))) return true;
+  const pairs = value => {
+    const chars = [...value.replace(/\s+/g, '')];
+    const found = new Set();
+    for (let index = 0; index < chars.length - 1; index += 1) found.add(`${chars[index]}${chars[index + 1]}`);
+    return found;
+  };
+  const wanted = pairs(lines.join(''));
+  if (!wanted.size) return false;
+  const present = pairs(floor);
+  let shared = 0;
+  for (const pair of wanted) if (present.has(pair)) shared += 1;
+  return shared / wanted.size >= 0.6;
+}
+
+export function floorText(message) {
+  return readFloor(message).text;
+}
+
+/**
+ * What the main model is shown of a floor with only its translation left in it: the text it would have
+ * been shown of the bilingual floor, which the prompt view then takes the translation out of as for
+ * every other floor. `item.mes` has already been through the host's prompt regexes (and may carry the
+ * reasoning before it and attachments after it); `regexed` runs the same regexes on another text when
+ * the host lends them. Null when the floor is not one of these; `{ mes: null }` when what the host made
+ * of it cannot be found in the item.
+ */
+export function restoreStrippedForPrompt(item, message, regexed = value => value) {
+  const floor = readFloor(message);
+  if (!floor.stripped || floor.diverged) return null;
+  const said = String(item?.mes ?? '');
+  const pairs = [[regexed(message.mes), regexed(floor.text)], [message.mes, floor.text]];
+  for (const [from, to] of pairs) {
+    if (typeof from !== 'string' || !from) continue;
+    const at = said.indexOf(from);
+    if (at >= 0) return { mes: `${said.slice(0, at)}${to}${said.slice(at + from.length)}` };
+  }
+  return { mes: null };
 }
 
 export function interceptGenerationChat(chat) {
@@ -3049,7 +3168,7 @@ export function liftSplitQuotes(pieces) {
   return lifted;
 }
 
-function styledBody(translation, styleBody) {
+function styledBody(translation, styleBody, wrap = markedAffix) {
   if (typeof styleBody !== 'function') return translation;
   let pieces;
   try {
@@ -3076,7 +3195,7 @@ function styledBody(translation, styleBody) {
         piece.css ? `style="${piece.css}"` : '',
       ].filter(Boolean).join(' ');
       return attributes
-        ? `${markedAffix(`<span ${attributes}>`)}${piece.text}${markedAffix('</span>')}`
+        ? `${wrap(`<span ${attributes}>`)}${piece.text}${wrap('</span>')}`
         : piece.text;
     })
     .join('');
@@ -3142,6 +3261,52 @@ export function assembleReplace(layout, translationMap, options = {}) {
       continue;
     }
     pieces.push(renderReplacePair(body, sourceText, { ...decoration, styleBody: null }));
+  }
+  return pieces.join('');
+}
+
+/**
+ * A region with only its translation left in it (「只留译文」): every translatable line becomes its
+ * translation, with any excluded block of the line beside it; every other line (a picture, a preserved
+ * line, what lies between paragraphs) stays exactly as written. The speaker colours and carried
+ * formatting stay as ordinary HTML. No invisible marker goes in: this is the text other extensions and
+ * front ends read, and the bilingual text it came from is kept elsewhere.
+ */
+export function assembleTranslationOnly(layout, translationMap, options = {}) {
+  const carry = options.carryFormatting !== false;
+  const plain = value => value;
+  const pieces = [];
+  for (const part of layout) {
+    if (part.type === 'raw' || part.type === 'blank') {
+      pieces.push(part.text);
+      continue;
+    }
+    const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
+    const texts = ids.map(id => translationMap.get(id)).filter(Boolean);
+    if (!texts.length) {
+      pieces.push(part.sourceText ?? part.text);
+      continue;
+    }
+    const decoration = segmentDecoration(options.styleFor, ids, texts);
+    const formats = Array.isArray(part.formats) ? part.formats : [];
+    const lineParts = Array.isArray(part.lineParts) && part.lineParts.length
+      ? part.lineParts
+      : ids.map(() => ({ semantic: true, source: '', lead: '', trail: '' }));
+    let index = 0;
+    const body = lineParts.map(line => {
+      if (!line.semantic) return line.source;
+      const id = ids[index];
+      const format = carry ? formats[index] : null;
+      index += 1;
+      const translation = translationMap.get(id);
+      if (!translation) return line.source;
+      const shaped = styledBody(String(translation), decoration.styleBody, plain);
+      const wrapped = format?.open
+        ? `${decoration.paintsColor ? withoutCarriedColor(format.open) : format.open}${shaped}${format.close}`
+        : shaped;
+      return `${line.lead ?? ''}${wrapped}${line.trail ?? ''}`;
+    }).join('\n');
+    pieces.push(`${decoration.stylePrefix ?? ''}${body}${decoration.styleSuffix ?? ''}`);
   }
   return pieces.join('');
 }
@@ -3310,6 +3475,15 @@ export async function hashText(text) {
   } catch {
     // Non-secure preview/test environments use the deterministic fallback below.
   }
+  return hashTextSync(normalized);
+}
+
+/**
+ * The same text always gives the same short fingerprint, at once. Used where the answer is needed
+ * without waiting, such as telling whether a floor still holds exactly what was written to it.
+ */
+export function hashTextSync(text) {
+  const normalized = normalizeNewlines(text);
   let hash = 2166136261;
   for (let index = 0; index < normalized.length; index += 1) {
     hash ^= normalized.charCodeAt(index);

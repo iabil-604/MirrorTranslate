@@ -1,7 +1,7 @@
-import { extractTaggedRegions, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, MESSAGE_META_KEY } from './core.js?v=0.35.0-beta.9';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.35.0-beta.9';
-import { EMOTION_KEYS } from './palette.js?v=0.35.0-beta.9';
-import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.35.0-beta.9';
+import { extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, MESSAGE_META_KEY } from './core.js?v=0.36.0-beta.1';
+import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.36.0-beta.1';
+import { EMOTION_KEYS } from './palette.js?v=0.36.0-beta.1';
+import { FISH_EMOTIONS, FISH_SOUNDS, FISH_TONES, SOUND_TAGS } from './tts.js?v=0.36.0-beta.1';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -66,7 +66,7 @@ function relevantMessages(snapshot, settings, includeTarget = false) {
  * translated either — so it contributes nothing rather than dragging its panels along.
  */
 function referenceBody(message, settings) {
-  const stripped = stripGeneratedTranslationLines(String(message?.mes ?? ''), message?.extra?.[MESSAGE_META_KEY]);
+  const stripped = stripGeneratedTranslationLines(floorText(message), message?.extra?.[MESSAGE_META_KEY]);
   if (message?.is_user) return stripped;
   const regions = [];
   for (const [tags, mode] of [[settings.bodyTags, 'bilingual'], [settings.replaceTags, 'replace']]) {
@@ -116,7 +116,7 @@ async function buildWorldbookContext(snapshot, settings) {
   const context = snapshot.context;
   if (!settings.includeWorldbook || typeof context.getWorldInfoPrompt !== 'function') return '';
   const scan = relevantMessages(snapshot, settings, true).map(message => {
-    const text = cleanReferenceText(message.mes);
+    const text = cleanReferenceText(floorText(message));
     return `${messageLabel(context, message)}: ${text}`;
   }).filter(Boolean).reverse();
   if (!scan.length) return '';
