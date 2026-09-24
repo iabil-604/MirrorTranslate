@@ -73,7 +73,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.35.0-beta.8';
+} from './core.js?v=0.35.0-beta.9';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -131,10 +131,10 @@ import {
   SPEECH_TONES,
   settledSpans,
   fishLivePayload,
-} from './tts.js?v=0.35.0-beta.8';
-import { createTtsStore } from './tts-store.js?v=0.35.0-beta.8';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.0-beta.8';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.0-beta.8';
+} from './tts.js?v=0.35.0-beta.9';
+import { createTtsStore } from './tts-store.js?v=0.35.0-beta.9';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.0-beta.9';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.0-beta.9';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -143,7 +143,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.35.0-beta.8';
+} from './processing.js?v=0.35.0-beta.9';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -160,13 +160,13 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.35.0-beta.8';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.0-beta.8';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.35.0-beta.8';
-import { createCall, createCallHistory } from './call.js?v=0.35.0-beta.8';
-import { createPcmPlayer } from './pcm-player.js?v=0.35.0-beta.8';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest } from './tts-cloud.js?v=0.35.0-beta.8';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.0-beta.8';
+} from './prompts.js?v=0.35.0-beta.9';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.0-beta.9';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.35.0-beta.9';
+import { createCall, createCallHistory } from './call.js?v=0.35.0-beta.9';
+import { createPcmPlayer } from './pcm-player.js?v=0.35.0-beta.9';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest } from './tts-cloud.js?v=0.35.0-beta.9';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.0-beta.9';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -180,15 +180,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.35.0-beta.8';
-import { sampleThemeBackground } from './theme-probe.js?v=0.35.0-beta.8';
+} from './palette.js?v=0.35.0-beta.9';
+import { sampleThemeBackground } from './theme-probe.js?v=0.35.0-beta.9';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.35.0-beta.8';
+} from './diagnostics.js?v=0.35.0-beta.9';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -1717,7 +1717,7 @@ const MAX_TRANSLATION_REQUESTS = 16;
 // Repeating an identical request that already truncated truncates again, so a batch that comes back
 // with nothing new is halved instead of being resent as-is.
 async function translateOneBatch(batch, settings, signal, packet, translations, budget, state, annotations = new Map()) {
-  let pending = batch;
+  let pending = batch.filter(segment => !translations.has(segment.id));
   let lastError = null;
   let attempts = 0;
   while (pending.length) {
@@ -1845,13 +1845,16 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
   const annotations = new Map(seedAnnotations);
   const channel = getActiveChannel(settings);
   const lanes = channelConcurrency(channel);
-  const batches = planTranslationBatches(segments, { maxChars: translationCharBudget(channel.maxTokens), parallel: lanes });
+  // Only what has no translation yet goes out: 补译 fills the gaps and leaves the rest as it is.
+  const needed = segments.filter(segment => !translations.has(segment.id));
+  const batches = planTranslationBatches(needed, { maxChars: translationCharBudget(channel.maxTokens), parallel: lanes });
   // `seeded` is fixed here rather than read off the map later: with lanes running side by side, a
   // batch starting after another one finished would otherwise take itself for a repair.
   const state = { requests: 0, roster: annotationRoster(settings), styles: translationStyles(settings), seeded: translations.size > 0 };
   let lastError;
   recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
-    segments: segments.length,
+    segments: needed.length,
+    seeded: segments.length - needed.length,
     batches: batches.length,
     charBudget: translationCharBudget(channel.maxTokens),
     maxTokens: channel.maxTokens,
