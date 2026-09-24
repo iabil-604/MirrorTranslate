@@ -22,6 +22,10 @@ import {
 } from '../diagnostics.js';
 import { __testing, interceptGeneration } from '../index.js';
 
+// What would be a toast in the host is dropped here rather than printed: the test runner reads this
+// process's output, and stray lines in it have broken the report when every file runs at once.
+globalThis.toastr ??= Object.fromEntries(['success', 'error', 'warning', 'info'].map(kind => [kind, () => {}]));
+
 // A headless stand-in for the parts of the host these paths actually touch.
 function mockHost(chat = [], extra = {}) {
   const context = {
