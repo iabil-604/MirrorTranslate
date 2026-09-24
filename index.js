@@ -7,6 +7,12 @@ import {
   MODULE_ID,
   assembleBilingual,
   assembleReplace,
+  assembleTranslationOnly,
+  floorText,
+  readFloor,
+  hashTextSync,
+  strippedMetadataOf,
+  restoreStrippedForPrompt,
   extractReplaceTranslations,
   createTranslationSignature,
   extractReasoningText,
@@ -72,7 +78,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.34.5';
+} from './core.js?v=0.35.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -129,10 +135,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.34.5';
-import { createTtsStore } from './tts-store.js?v=0.34.5';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.34.5';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.34.5';
+} from './tts.js?v=0.35.0';
+import { createTtsStore } from './tts-store.js?v=0.35.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -141,7 +147,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.34.5';
+} from './processing.js?v=0.35.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -158,9 +164,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.34.5';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.34.5';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.34.5';
+} from './prompts.js?v=0.35.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -174,15 +180,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.34.5';
-import { sampleThemeBackground } from './theme-probe.js?v=0.34.5';
+} from './palette.js?v=0.35.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.35.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.34.5';
+} from './diagnostics.js?v=0.35.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -214,6 +220,10 @@ const runtime = {
   interceptorSeen: false,
   interceptorWarned: false,
   promptFallbackStrips: 0,
+  // The host's regex engine, borrowed so a floor with only its translation left in it goes to the main
+  // model through the same prompt regexes as its bilingual text would have. Null until loaded, or on a
+  // host without it.
+  hostRegex: null,
   task: {
     status: 'idle',
     title: '等待正文',
@@ -347,6 +357,7 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <div class="jy-automation"><div><h3>自动接续翻译</h3><p class="jy-muted">主回复完成后，自动补上译文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label><label class="jy-check"><input type="checkbox" data-jy-field="streamingWriteback">流式写回（beta，勾选后所有翻译走流式；仅独立模式，跟随模式自动回退整包）</label></div>
 <div class="jy-automation" data-jy-tts-desk><div><h3>朗读（有声小说）</h3><p class="jy-muted">把译文或原文念出来，旁白和角色各用各的声音，副模型给每句写中文配音指令。关着就是只翻译，楼层里不加任何东西。需要 Fish Audio 的 API Key。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label><button type="button" class="jy-text-button" data-jy-action="open-tts" hidden>朗读设置 →</button></div>
+<div class="jy-automation" data-jy-translation-only><div><h3>只留译文</h3><p class="jy-muted">翻译完整的楼层，正文里只留译文；原文收进镜译的楼层数据，重译、朗读原文、发给主模型时自动取回。打开后新翻译的楼层生效。复制、导出 txt 和其他插件只拿得到译文；手改过的楼层不再自动翻译；卸载镜译前先点「恢复本聊天的原文」。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="translationOnly" aria-label="只留译文"><span></span></label><button type="button" class="jy-text-button" data-jy-action="restore-originals">恢复本聊天的原文</button></div>
 </section>
 
 <section class="jy-page" data-jy-page="prompt" role="tabpanel" hidden>
@@ -811,10 +822,28 @@ async function restyleCurrentChat(settings) {
       translation_prefix: settings.translationPrefix, translation_suffix: settings.translationSuffix,
     } };
   };
+  // A floor with only its translation left in it shows no affix or marker, so what changes is the
+  // bilingual text kept for it.
+  let mirrorsChanged = false;
+  const restyleMirror = extra => {
+    const meta = extra?.[MESSAGE_META_KEY];
+    if (meta?.stripped !== true || typeof meta.mirror !== 'string') return extra;
+    const mirror = restyleBilingual(meta.mirror, settings, meta);
+    if (mirror === meta.mirror) return extra;
+    mirrorsChanged = true;
+    return { ...extra, [MESSAGE_META_KEY]: {
+      ...meta, mirror, schema_version: 4,
+      segment_prefix: settings.segmentPrefix, segment_suffix: settings.segmentSuffix,
+      translation_prefix: settings.translationPrefix, translation_suffix: settings.translationSuffix,
+    } };
+  };
   for (const message of chat) {
-    if (!message || message.is_user || message.is_system || typeof message.mes !== 'string') continue;
+    // Hidden floors are system messages to the host and still shown, with their affixes.
+    if (!message || message.is_user || typeof message.mes !== 'string') continue;
+    mirrorsChanged = false;
     const next = { mes: restyleBilingual(message.mes, settings, message.extra?.[MESSAGE_META_KEY]), extra: message.extra };
     if (next.mes !== message.mes) next.extra = updateExtra(message.extra, next.mes);
+    next.extra = restyleMirror(next.extra);
     if (Array.isArray(message.swipes)) {
       next.swipes = [...message.swipes];
       next.swipe_info = message.swipe_info?.map(info => ({ ...info }));
@@ -822,10 +851,11 @@ async function restyleCurrentChat(settings) {
         const extra = message.swipe_info?.[index]?.extra;
         const text = index === Number(message.swipe_id ?? 0) ? next.mes : restyleBilingual(next.swipes[index], settings, extra?.[MESSAGE_META_KEY]);
         if (text !== next.swipes[index] && next.swipe_info?.[index]) next.swipe_info[index].extra = updateExtra(extra, text);
+        if (next.swipe_info?.[index]) next.swipe_info[index].extra = restyleMirror(next.swipe_info[index].extra);
         next.swipes[index] = text;
       }
     }
-    if (next.mes === message.mes && JSON.stringify(next.swipes) === JSON.stringify(message.swipes)) continue;
+    if (!mirrorsChanged && next.mes === message.mes && JSON.stringify(next.swipes) === JSON.stringify(message.swipes)) continue;
     changes.push({ message, before: { mes: message.mes, extra: message.extra, swipes: message.swipes, swipe_info: message.swipe_info }, next });
     Object.assign(message, next);
   }
@@ -872,8 +902,10 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   if (message.is_user || message.is_system) throw new Error('目标楼层不是普通 AI 回复。');
 
   const swipeId = Number(message.swipe_id ?? 0);
-  const metadata = message.extra?.[MESSAGE_META_KEY];
-  const upgraded = upgradeLegacyBilingual(message.mes, metadata);
+  // A floor with only its translation left in it is read from the bilingual text kept for it.
+  const floor = readFloor(message);
+  const metadata = floor.metadata ?? message.extra?.[MESSAGE_META_KEY];
+  const upgraded = upgradeLegacyBilingual(floor.text, metadata);
   const originalExtraction = extractAllRegions(upgraded, settings);
   // Metadata carries the affixes this floor was written with, so a wrapper that lost its invisible
   // boundaries is removed here instead of being re-wrapped on the next write.
@@ -916,7 +948,8 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   const metadataMatches = Boolean(
     metadata
     && metadata.source_hash === sourceHash
-    && Number(metadata.swipe_id ?? 0) === swipeId
+    // The record of a floor with only its translation left in it was found by the floor's own text.
+    && ((floor.stripped && !floor.diverged) || Number(metadata.swipe_id ?? 0) === swipeId)
   );
   const existingTranslations = new Map();
   if (metadataMatches) {
@@ -957,6 +990,10 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     // stored translations reusable.
     existingAnnotations: metadataMatches ? readStoredAnnotations(metadata) : new Map(),
     translated,
+    // Only the translation is on the floor; `diverged` when it has been changed since, which nothing
+    // may translate.
+    stripped: floor.stripped,
+    diverged: floor.diverged,
   };
 }
 
@@ -1892,6 +1929,8 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
   if (latest.chatId !== snapshot.chatId || latest.swipeId !== snapshot.swipeId) {
     throw new Error('翻译期间聊天或滑动页已经变化，旧结果没有写回。');
   }
+  // The bilingual text kept for the floor is only ever made from its real original.
+  if (latest.diverged) throw divergedFloorError(snapshot.messageId);
   let effectiveTranslations = translationMap;
   if (latest.sourceHash !== snapshot.sourceHash) {
     // Salvage the paragraphs whose source text survived the edit instead of discarding the whole run.
@@ -1948,6 +1987,18 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
     missing_ids: missingIds,
     annotations: storedAnnotations(effectiveAnnotations),
   };
+  // 「只留译文」: a finished floor holds only its translation, and the bilingual text goes into the
+  // metadata. A floor with gaps stays bilingual, so 补译 still has the original beside each gap. So does
+  // a floor with swipes on a host that keeps no record per swipe: the mirror would have nowhere to live.
+  const keepsSwipeRecord = !Array.isArray(message.swipes) || Boolean(message.swipe_info?.[snapshot.swipeId]);
+  const strip = settings.translationOnly === true && complete && keepsSwipeRecord;
+  if (settings.translationOnly === true && complete && !keepsSwipeRecord) {
+    recordDiagnostic('warn', 'translation.only-skipped', `第 ${snapshot.messageId} 楼没有滑动页记录，放不下原文备份，这一楼照常写双语。`, { messageId: snapshot.messageId });
+  }
+  const written = strip
+    ? rebuildTaggedRegions(latest.extraction, region => assembleTranslationOnly(region.layout, effectiveTranslations, { ...settings, styleFor }))
+    : bilingual;
+  if (strip) Object.assign(metadata, { stripped: true, mirror: bilingual, projection_hash: hashTextSync(written) });
 
   const previous = {
     mes: message.mes,
@@ -1955,10 +2006,10 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
     swipe: Array.isArray(message.swipes) ? message.swipes[snapshot.swipeId] : undefined,
     swipeInfoExtra: Array.isArray(message.swipe_info) ? message.swipe_info[snapshot.swipeId]?.extra : undefined,
   };
-  message.mes = bilingual;
+  message.mes = written;
   message.extra = { ...(message.extra || {}), [MESSAGE_META_KEY]: metadata };
   if (Array.isArray(message.swipes) && snapshot.swipeId >= 0 && snapshot.swipeId < message.swipes.length) {
-    message.swipes[snapshot.swipeId] = bilingual;
+    message.swipes[snapshot.swipeId] = written;
   }
   if (Array.isArray(message.swipe_info) && message.swipe_info[snapshot.swipeId]) {
     const info = message.swipe_info[snapshot.swipeId];
@@ -1987,7 +2038,13 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
       console.warn(`[${APP_NAME}] 其他扩展的 MESSAGE_UPDATED 监听器报错。`, error);
     }
   }
-  return { bilingual, complete, missingIds, rebased };
+  return { bilingual, complete, missingIds, rebased, stripped: strip };
+}
+
+function divergedFloorError(messageId) {
+  const error = new Error(`第 ${messageId} 楼只留了译文，后来又被改过，镜译不再翻译它（会把译文当成原文）。要重新翻译，先在总控页点「恢复本聊天的原文」，这一楼的改动会丢。`);
+  error.code = 'JY_FLOOR_DIVERGED';
+  return error;
 }
 
 async function translateMessage(messageId = null, { force = false, quiet = false, only = null } = {}) {
@@ -2003,6 +2060,10 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     throw error;
   }
   runtime.activeFloor = snapshot.messageId;
+  if (snapshot.diverged) {
+    if (quiet) return { skipped: true, reason: 'diverged', snapshot };
+    throw divergedFloorError(snapshot.messageId);
+  }
   if (!snapshot.segments.length) throw new Error('当前 AI 回复没有可翻译的正文段落。');
   // Paragraphs asked for by themselves are re-requested whatever the floor's state.
   const supersede = force || Boolean(only);
@@ -2252,6 +2313,10 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     throw error;
   }
   runtime.activeFloor = snapshot.messageId;
+  if (snapshot.diverged) {
+    if (quiet) return { skipped: true, reason: 'diverged', snapshot };
+    throw divergedFloorError(snapshot.messageId);
+  }
   if (!snapshot.segments.length) throw new Error('当前 AI 回复没有可翻译的正文段落。');
   // Same gate as the whole-request path: without it a finished floor streams nothing and still
   // reports success, which reads as "流式写回没有生效".
@@ -2503,6 +2568,85 @@ function startTranslation(messageId = null, { force = false, quiet = false, only
   return runtime.settings.streamingWriteback && !only
     ? translateMessageStreaming(messageId, { force, quiet })
     : translateMessage(messageId, { force, quiet, only });
+}
+
+/**
+ * Puts the bilingual text back on every floor of the chat that has only its translation left in it,
+ * every swipe included. A floor changed since loses the change: what it holds is a translation, and
+ * the original is only in the kept text. The switch itself is left as it is.
+ */
+async function restoreChatOriginals({ ask = () => true } = {}) {
+  const context = getContext();
+  const chat = context.chat;
+  if (!Array.isArray(chat) || !chat.length) throw new Error('没有打开的聊天。');
+  if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再放回原文。');
+  const withoutMirror = meta => {
+    const { stripped: _stripped, mirror: _mirror, projection_hash: _hash, ...rest } = meta;
+    return rest;
+  };
+  const plan = [];
+  let edited = 0;
+  for (const [messageId, message] of chat.entries()) {
+    // A hidden floor is a system message to the host, and its original is kept all the same.
+    if (!message || message.is_user || typeof message.mes !== 'string') continue;
+    const current = Number(message.swipe_id ?? 0);
+    const count = Array.isArray(message.swipes) ? message.swipes.length : 0;
+    const indexes = count ? [...Array(count).keys()] : [current];
+    const swipes = [];
+    for (const index of indexes) {
+      const text = index === current ? message.mes : message.swipes[index];
+      if (typeof text !== 'string') continue;
+      // The message's own record belongs to the swipe shown; another swipe is read with its own alone.
+      const view = { mes: text, swipe_id: index, extra: index === current ? message.extra : undefined, swipe_info: message.swipe_info };
+      const floor = readFloor(view);
+      if (!floor.stripped) continue;
+      if (floor.diverged) edited += 1;
+      swipes.push({ index, record: floor.metadata, text: floor.metadata.mirror });
+    }
+    if (swipes.length) plan.push({ messageId, message, current, swipes });
+  }
+  const restores = plan.reduce((sum, item) => sum + item.swipes.length, 0);
+  if (!restores) {
+    toast('info', '本聊天没有只留译文的楼层。');
+    return { restored: 0 };
+  }
+  if (!ask(`本聊天有 ${restores} 处只留了译文（${plan.length} 楼），要把原文放回去吗？放回后恢复成双语。${edited ? `其中 ${edited} 处的译文后来被改过，这些改动会丢。` : ''}`)) {
+    return { restored: 0, cancelled: true };
+  }
+  const changes = [];
+  for (const { message, current, swipes } of plan) {
+    const before = { mes: message.mes, extra: message.extra, swipes: message.swipes, swipe_info: message.swipe_info };
+    const next = {
+      mes: message.mes,
+      extra: message.extra,
+      swipes: Array.isArray(message.swipes) ? [...message.swipes] : message.swipes,
+      swipe_info: Array.isArray(message.swipe_info) ? message.swipe_info.map(info => ({ ...info })) : message.swipe_info,
+    };
+    // The same record, whether it is this object or the host's copy of it.
+    const same = (meta, record) => meta?.stripped === true && (meta === record || meta.projection_hash === record.projection_hash);
+    for (const { index, record, text } of swipes) {
+      if (index === current) next.mes = text;
+      if (Array.isArray(next.swipes) && index < next.swipes.length) next.swipes[index] = text;
+      const own = next.extra?.[MESSAGE_META_KEY];
+      if (index === current && same(own, record)) next.extra = { ...next.extra, [MESSAGE_META_KEY]: withoutMirror(own) };
+      const info = Array.isArray(next.swipe_info) ? next.swipe_info[index] : null;
+      const recorded = info?.extra?.[MESSAGE_META_KEY];
+      if (same(recorded, record)) info.extra = { ...info.extra, [MESSAGE_META_KEY]: withoutMirror(recorded) };
+    }
+    changes.push({ message, before, next });
+    Object.assign(message, next);
+  }
+  try {
+    await context.saveChat();
+  } catch (error) {
+    for (const { message, before, next } of changes) if (message.mes === next.mes && message.swipes === next.swipes) Object.assign(message, before);
+    throw error;
+  }
+  for (const { messageId } of plan) context.updateMessageBlock?.(messageId, chat[messageId]);
+  scheduleTtsDecorateAll({ force: true });
+  recordDiagnostic('info', 'translation.originals-restored', `本聊天放回了 ${restores} 处原文。`, { restored: restores, floors: plan.length, edited });
+  toast('success', `已放回 ${restores} 处原文。${runtime.settings.translationOnly ? '「只留译文」还开着，之后新翻译的楼层照样只留译文。' : ''}`);
+  return { restored: restores, edited };
 }
 
 /**
@@ -2787,6 +2931,8 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
   let sources = null;
   // The original's lines with the speaker marks the story wrote into them, when it wrote any.
   let speechSource = null;
+  // The original of a floor with only its translation left in it is read, but not on the page.
+  let offPage = false;
   // The original is readable on any floor whose body tags extract, translated or not; the translation
   // only on a floor this extension wrote, or through the literal source tags below.
   if (side === 'source' || message.extra?.[MESSAGE_META_KEY]) {
@@ -2807,6 +2953,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
         lines = snapshot.segments.map(originalLine).filter(line => line.text);
         references = new Map([...snapshot.existingTranslations].map(([lineId, text]) => [lineId, plainLineText(text)]));
         source = 'source';
+        offPage = snapshot.stripped === true;
       } else {
         lines = snapshot.segments
           .filter(segment => snapshot.existingTranslations.has(segment.id))
@@ -2826,7 +2973,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
     }
   }
   if (!lines.length && side === 'translation') {
-    lines = linesFromTaggedText(message.mes, ttsSettings(settings).sourceTags, { excludedTags: settings.excludedTags });
+    lines = linesFromTaggedText(floorText(message), ttsSettings(settings).sourceTags, { excludedTags: settings.excludedTags });
     source = 'tags';
   }
   if (!lines.length) return null;
@@ -2844,6 +2991,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
     // The original of each translated line, for the details page of a bilingual reader.
     sources: sources?.size ? sources : null,
     ...(speechSource ? { speechSource } : {}),
+    ...(offPage ? { offPage } : {}),
     source,
     // Whether the translation this floor reads is finished; the original is always whole.
     complete: side === 'source' || source === 'tags' ? true : complete,
@@ -6545,6 +6693,8 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices: analyses[index]?.voices ?? null });
     const visible = audibleSegments(segments, tts.range, ttsVoiceConfig(settings));
     visibleTotal += visible.length;
+    // Nothing of it is on the page to hang a button on; the reading is started from the bar.
+    if (floor.offPage) return;
     const found = locateAnchors(nodeTexts, floor.lines, utterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
     for (const utterance of utterances) {
       const hit = found.get(utterance.id);
@@ -7419,6 +7569,7 @@ function collectSettings(root) {
     'autoSwipe',
     'autoEdit',
     'streamingWriteback',
+    'translationOnly',
     'showFloatingButton',
     'leftHanded',
     'paragraphPerLine',
@@ -8681,7 +8832,7 @@ function castStorySample(context, limit = CAST_STORY_LIMIT) {
   for (let index = chat.length - 1; index >= 0 && size < limit; index -= 1) {
     const message = chat[index];
     if (!message || message.is_system || typeof message.mes !== 'string') continue;
-    const text = plainLineText(stripGeneratedTranslationLines(message.mes, message.extra?.[MESSAGE_META_KEY])).replace(/\s+/g, ' ').trim();
+    const text = plainLineText(stripGeneratedTranslationLines(floorText(message), message.extra?.[MESSAGE_META_KEY])).replace(/\s+/g, ' ').trim();
     if (!text) continue;
     const piece = text.slice(-(limit - size));
     parts.unshift(piece);
@@ -8829,7 +8980,7 @@ function speechRoster(settings = runtime.settings) {
 function storyQuotePair(context, settings = runtime.settings) {
   const pairs = parsePairList(ttsSettings(settings).quotePairs);
   const recent = (Array.isArray(context.chat) ? context.chat : []).filter(message => message && !message.is_user && !message.is_system).slice(-4)
-    .map(message => withoutSpeechMarks(String(message.mes ?? '')).replace(/<[^<>]*>/g, '')).join('\n');
+    .map(message => withoutSpeechMarks(floorText(message)).replace(/<[^<>]*>/g, '')).join('\n');
   let best = null;
   let most = 0;
   for (const pair of pairs) {
@@ -9303,7 +9454,7 @@ async function inspectCurrentFloor(root) {
   if (messageId === null) throw new Error('没有找到可检查的 AI 回复。');
   const message = context.chat[messageId];
   const report = inspectTagConfiguration(
-    stripGeneratedTranslationLines(message.mes),
+    stripGeneratedTranslationLines(floorText(message)),
     settings.bodyTags,
     settings.excludedTags,
     {
@@ -9554,6 +9705,8 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'translate') {
         saveSettings(collectSettings(root));
         await startTranslation(null, { force: true });
+      } else if (action === 'restore-originals') {
+        await restoreChatOriginals({ ask: text => typeof globalThis.confirm !== 'function' || globalThis.confirm(text) });
       } else if (action === 'translate-missing') {
         // Seeds with whatever is already written back, so only the gaps go to the API.
         saveSettings(collectSettings(root));
@@ -10126,7 +10279,7 @@ function createControlCenter(rootDocument = document) {
       runtime.mini?.syncQuickPickers?.();
       return;
     }
-    if (event.target.matches('[data-jy-field="autoGeneration"], [data-jy-field="autoSwipe"], [data-jy-field="streamingWriteback"], [data-jy-field="showFloatingButton"], [data-jy-field="includeWorldbook"], [data-jy-field="includeCharacterCard"], [data-jy-field="includeRecentContext"]')) {
+    if (event.target.matches('[data-jy-field="autoGeneration"], [data-jy-field="autoSwipe"], [data-jy-field="streamingWriteback"], [data-jy-field="translationOnly"], [data-jy-field="showFloatingButton"], [data-jy-field="includeWorldbook"], [data-jy-field="includeCharacterCard"], [data-jy-field="includeRecentContext"]')) {
       const name = event.target.dataset.jyField;
       for (const twin of fieldElements(root, name)) twin.checked = event.target.checked;
       saveSettings(collectSettings(root));
@@ -12883,6 +13036,7 @@ const AUTO_SKIP_REASONS = Object.freeze({
   'already-translated': '这一楼已经翻译过了',
   'not-translatable': '不是可以翻译的 AI 回复',
   cancelled: '翻译被取消了（换了聊天、停用了扩展，或者同一楼开始了新的翻译）',
+  diverged: '这一楼只留了译文，后来又被改过，不再自动翻译（要重译先在总控页点「恢复本聊天的原文」）',
 });
 
 function scheduleAuto(messageId, reason) {
@@ -12901,12 +13055,42 @@ function scheduleAuto(messageId, reason) {
     } catch (error) {
       if (isAbortError(error)) return;
       const message = safeError(error);
-      const routine = /没有找到|正文标签|已经翻译|不是普通 AI 回复|没有可翻译的正文段落/.test(message);
+      const routine = error?.code === 'JY_FLOOR_DIVERGED' || /没有找到|正文标签|已经翻译|不是普通 AI 回复|没有可翻译的正文段落/.test(message);
       recordDiagnostic(routine ? 'info' : 'error', 'translation.auto', `第 ${messageId} 楼自动翻译${routine ? '没有进行' : '失败'}：${message}`, { floor: Number(messageId), reason });
       if (!routine) toast('error', message);
     }
   }, 0);
   runtime.autoTimers.add(timer);
+}
+
+/**
+ * The host renumbers nothing when a swipe is deleted: each swipe's record keeps naming the place it had.
+ * Those behind the deleted one have moved up a place and their records follow them; a record that was
+ * only ever a copy (a new swipe starts with the record of the swipe before it) and now happens to name
+ * its new place is marked as nobody's.
+ */
+function renumberSwipeRecords(payload) {
+  const message = getContext().chat?.[Number(payload?.messageId)];
+  const deleted = Number(payload?.swipeId);
+  const shown = Number(payload?.newSwipeId);
+  if (!message || !Number.isInteger(deleted)) return;
+  const own = message.extra?.[MESSAGE_META_KEY];
+  const ownWas = own ? Number(own.swipe_id ?? 0) : null;
+  const infos = Array.isArray(message.swipe_info) ? message.swipe_info : [];
+  const renumbered = new Set();
+  infos.forEach((info, index) => {
+    const meta = info?.extra?.[MESSAGE_META_KEY];
+    if (!meta || index < deleted) return;
+    const was = Number(meta.swipe_id ?? 0);
+    if (was === index + 1) meta.swipe_id = index;
+    else if (was === index) meta.swipe_id = -1;
+    renumbered.add(meta);
+  });
+  // The shown swipe's record, by the same rules, when the shown swipe was not the one deleted (then the
+  // host puts the next one's record in its place). It may be the very object renumbered above.
+  if (!own || renumbered.has(own) || !Number.isInteger(shown) || deleted > shown) return;
+  if (ownWas === shown + 1) own.swipe_id = shown;
+  else if (ownWas === shown) own.swipe_id = -1;
 }
 
 function cancelPendingWork() {
@@ -12924,7 +13108,7 @@ function chatCarriesMirrorBlocks() {
   try {
     const chat = getContext().chat;
     if (!Array.isArray(chat)) return false;
-    return chat.some(item => typeof item?.mes === 'string' && item.mes.includes(INVISIBLE_MARKER));
+    return chat.some(item => typeof item?.mes === 'string' && (item.mes.includes(INVISIBLE_MARKER) || Boolean(strippedMetadataOf(item))));
   } catch {
     return false;
   }
@@ -12932,11 +13116,19 @@ function chatCarriesMirrorBlocks() {
 
 function verifyGenerationInterceptor() {
   if (runtime.interceptorSeen || runtime.interceptorWarned) return;
+  // Only the interceptor can put the original back into the prompt for a floor with only its
+  // translation left in it; the prompt events cannot tell which floor a prompt line came from.
+  let stripped = false;
+  try {
+    stripped = (getContext().chat ?? []).some(item => Boolean(strippedMetadataOf(item)));
+  } catch { /* no chat to look at */ }
   // The prompt-event fallback already removed the mirrors, so nothing leaked and nothing to report.
-  if (runtime.promptFallbackStrips > 0) return;
+  if (runtime.promptFallbackStrips > 0 && !stripped) return;
   if (!chatCarriesMirrorBlocks()) return;
   runtime.interceptorWarned = true;
-  const message = '当前酒馆既没有调用生成拦截器，也没有可用的提示词事件，聊天中的译文会随提示词进入主模型，正文质量会下降。建议升级酒馆，或先关闭「主回复完成后翻译」。';
+  const message = stripped
+    ? '当前酒馆没有调用生成拦截器，「只留译文」的楼层会以译文进入主模型，正文质量会下降。建议升级酒馆，或关掉「只留译文」后点「恢复本聊天的原文」。'
+    : '当前酒馆既没有调用生成拦截器，也没有可用的提示词事件，聊天中的译文会随提示词进入主模型，正文质量会下降。建议升级酒馆，或先关闭「主回复完成后翻译」。';
   recordDiagnostic('error', 'host.interceptor-missing', '宿主未调用生成拦截器，且提示词事件回退也未生效，译文正在泄漏进主模型上下文。', {
     promptEvents: PROMPT_EVENT_NAMES,
   });
@@ -13058,6 +13250,7 @@ function registerRuntimeEvents() {
     scheduleAuto(messageId, 'swipe');
   });
   bindEvent(eventTypes.MESSAGE_EDITED, messageId => scheduleAuto(messageId, 'edit'));
+  bindEvent(eventTypes.MESSAGE_SWIPE_DELETED, renumberSwipeRecords);
   // Floor buttons follow every redraw the host announces; the observer in bindTtsDom catches the rest.
   // The generation finished: the floor is whole, and the analyses may read it.
   bindEvent(eventTypes.CHARACTER_MESSAGE_RENDERED, messageId => {
@@ -13171,12 +13364,69 @@ export function interceptGeneration(chat, _contextSize, _abort, type) {
   // Side generations (summaries, impersonation, /gen) are skipped: the host clears the pending list
   // during its own scan, so an activation queued for a run that never scans would surface in the
   // next real reply as an entry nothing in that reply asked for.
+  try {
+    restoreStrippedFloors(chat, type);
+  } catch (error) {
+    recordDiagnostic('warn', 'translation.prompt-original', `只留译文的楼层没能换回原文：${safeError(error)}`);
+  }
   const sideGeneration = typeof type === 'string' && ['quiet', 'impersonate'].includes(type);
   const translations = Array.isArray(chat) && !sideGeneration
     ? chat.map(item => extractTranslationBlockText(item?.mes)).filter(Boolean).join('\n')
     : '';
   if (translations) forceActivateWorldInfoFromText(translations);
   return interceptGenerationChat(chat);
+}
+
+function loadHostRegex() {
+  if (runtime.hostRegex) return;
+  import('/scripts/extensions/regex/engine.js')
+    .then(engine => {
+      if (typeof engine?.getRegexedString === 'function') runtime.hostRegex = engine;
+    })
+    .catch(() => {});
+}
+
+/**
+ * A floor with only its translation left in it goes to the main model as its bilingual text would
+ * have: the original, the translation taken out afterwards as for every floor. Without this the main
+ * model reads the translation and starts writing like it. The chat handed over is the host's shallow
+ * copy, so the floor it came from is found by its metadata object.
+ */
+function restoreStrippedFloors(chat, type) {
+  if (!Array.isArray(chat)) return;
+  const floors = getContext().chat;
+  if (!Array.isArray(floors)) return;
+  const byExtra = new Map();
+  for (const message of floors) if (message?.extra && strippedMetadataOf(message)) byExtra.set(message.extra, message);
+  if (!byExtra.size) return;
+  const engine = runtime.hostRegex;
+  const placement = engine?.regex_placement?.AI_OUTPUT;
+  let missed = 0;
+  for (const [index, item] of chat.entries()) {
+    const message = item?.extra ? byExtra.get(item.extra) : null;
+    if (!message) continue;
+    // The depth the host gave the same floor's prompt regexes.
+    const depth = chat.length - (Number.isInteger(item.index) ? item.index : index) - (type === 'continue' ? 2 : 1);
+    const regexed = engine && placement !== undefined
+      ? value => {
+        try {
+          return engine.getRegexedString(value, placement, { isPrompt: true, depth });
+        } catch {
+          return value;
+        }
+      }
+      : value => value;
+    const restored = restoreStrippedForPrompt(item, message, regexed);
+    if (!restored) continue;
+    if (restored.mes === null) {
+      missed += 1;
+      continue;
+    }
+    chat[index] = { ...item, mes: restored.mes };
+  }
+  if (missed) {
+    recordDiagnostic('warn', 'translation.prompt-original', `有 ${missed} 楼只留了译文，但在发给主模型的内容里没找到它（可能被只作用于提示词的正则改过），这几楼主模型看到的是译文。`, { missed });
+  }
 }
 
 // A close-enough rebuild of the host's own key matcher. Forcing an entry the host would never have
@@ -13502,6 +13752,7 @@ export async function onActivate() {
   globalThis[INTERCEPTOR_NAME] = interceptGeneration;
   initializeSettings();
   runtime.initialized = true;
+  loadHostRegex();
   installPublicApi();
   syncSpeakerStylesheet(runtime.settings);
   scheduleEntries();
@@ -13575,6 +13826,8 @@ export const __testing = Object.freeze({
   latestAssistantMessageId,
   readMessageSnapshot,
   restyleCurrentChat,
+  restoreChatOriginals,
+  renumberSwipeRecords,
   initializeSettings,
   configureForTest,
   startTranslation,

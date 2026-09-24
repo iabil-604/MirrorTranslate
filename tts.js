@@ -13,9 +13,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.34.5';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.34.5';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.34.5';
+} from './core.js?v=0.35.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.35.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.35.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.

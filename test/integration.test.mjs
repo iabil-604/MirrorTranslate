@@ -20,7 +20,7 @@ import {
   formatFullDiagnosticReport,
   readDiagnostics,
 } from '../diagnostics.js';
-import { __testing } from '../index.js';
+import { __testing, interceptGeneration } from '../index.js';
 
 // A headless stand-in for the parts of the host these paths actually touch.
 function mockHost(chat = [], extra = {}) {
@@ -915,4 +915,200 @@ test('a registered hair colour overrides the name-derived one', async t => {
   // An alias resolves to the same entry as the registered name.
   const byAlias = await paint({ 'sakurai.png': [{ name: '爱', aliases: ['星野爱'], source: '#8b5ad6', from: 'hair' }] });
   assert.equal(byAlias, registered);
+});
+
+// 「只留译文」: one floor, translated with the switch on, then everything that reads it.
+function translationOnlyHost(replies) {
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify(replies[Math.min(asked.length, replies.length) - 1]));
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'follow', streamingWriteback: false, retries: 0, translationOnly: true, excludedTags: ['image'], bodyTags: ['story_scene'] },
+    initialized: true,
+  });
+  const original = '<story_scene>\n雨が降っている。\n<image>rain, city</image>\n風が強い。\n</story_scene>\n<status>HP 10</status>';
+  context.chat.push({ mes: original, swipe_id: 0, swipes: [original], swipe_info: [{ extra: {} }], extra: {} });
+  return { context, settings, asked, original };
+}
+
+test('only the translation is left on a finished floor, and everything that reads the floor still finds the original', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context, asked, original } = translationOnlyHost([
+    [{ id: 1, text: '下雨了。' }, { id: 2, text: '风很大。' }],
+    [{ id: 1, text: '在下雨。' }, { id: 2, text: '风很猛。' }],
+  ]);
+  const message = context.chat[0];
+  await __testing.startTranslation(0, { quiet: true });
+  const projection = '<story_scene>\n下雨了。\n<image>rain, city</image>\n风很大。\n</story_scene>\n<status>HP 10</status>';
+  assert.equal(message.mes, projection, 'the floor holds the translation, the picture and the panel, nothing else');
+  assert.equal(message.swipes[0], projection);
+  const meta = message.extra[MESSAGE_META_KEY];
+  assert.equal(meta.stripped, true);
+  assert.equal(stripGeneratedTranslationLines(meta.mirror, meta), original, 'the kept text holds the original');
+  assert.equal(message.swipe_info[0].extra[MESSAGE_META_KEY].mirror, meta.mirror, 'and so does the swipe’s own record');
+
+  const snapshot = await __testing.readMessageSnapshot(0);
+  assert.equal(snapshot.translated, true);
+  assert.equal(snapshot.stripped, true);
+  assert.equal((await __testing.startTranslation(0, { quiet: true })).reason, 'already-translated');
+
+  // The main model is shown the original, as for a bilingual floor.
+  const prompt = [{ ...message }];
+  interceptGeneration(prompt, 8192, () => {}, 'normal');
+  assert.equal(prompt[0].mes, original);
+  assert.equal(message.mes, projection, 'the floor itself is not touched');
+
+  // Reading the original aloud reads it off the kept text; it is not on the page.
+  const source = await __testing.collectTtsFloor(0, undefined, 'source');
+  assert.deepEqual(source.lines.map(line => line.text), ['雨が降っている。', '風が強い。']);
+  assert.equal(source.offPage, true);
+  const translation = await __testing.collectTtsFloor(0, undefined, 'translation');
+  assert.deepEqual(translation.lines.map(line => line.text), ['下雨了。', '风很大。']);
+
+  // Translated again from the original, not from the translation.
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(asked.length, 2);
+  assert.match(asked[1], /雨が降っている/);
+  assert.doesNotMatch(asked[1], /下雨了/);
+  assert.equal(message.mes, '<story_scene>\n在下雨。\n<image>rain, city</image>\n风很猛。\n</story_scene>\n<status>HP 10</status>');
+  assert.equal(stripGeneratedTranslationLines(message.extra[MESSAGE_META_KEY].mirror, message.extra[MESSAGE_META_KEY]), original);
+});
+
+test('a continued floor is an ordinary floor again, and a floor changed by hand is never translated again', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context, asked, original } = translationOnlyHost([
+    [{ id: 1, text: '下雨了。' }, { id: 2, text: '风很大。' }],
+  ]);
+  const message = context.chat[0];
+  await __testing.startTranslation(0, { quiet: true });
+  const projection = message.mes;
+  const mirror = message.extra[MESSAGE_META_KEY].mirror;
+
+  // The host wrote back what the main model was shown, and what it wrote after it.
+  message.mes = `${original}\n続き。`;
+  const continued = await __testing.readMessageSnapshot(0);
+  assert.equal(continued.stripped, false);
+  assert.equal(continued.diverged, false);
+  assert.equal(continued.translated, false);
+
+  // Changed by hand instead.
+  message.mes = projection.replace('下雨了。', '下大雨了。');
+  message.swipes[0] = message.mes;
+  const edited = await __testing.readMessageSnapshot(0);
+  assert.equal(edited.diverged, true);
+  assert.equal((await __testing.startTranslation(0, { quiet: true, force: true })).reason, 'diverged');
+  await assert.rejects(__testing.editTranslationSegment(0, 1, '别的'), error => error.code === 'JY_FLOOR_DIVERGED');
+  assert.equal(asked.length, 1, 'nothing was sent');
+  assert.equal(message.extra[MESSAGE_META_KEY].mirror, mirror, 'the kept text is untouched');
+  // The main model is shown the floor as it now is; the kept text no longer describes it.
+  const prompt = [{ ...message }];
+  interceptGeneration(prompt, 8192, () => {}, 'normal');
+  assert.equal(prompt[0].mes, message.mes);
+
+  // Put back: the bilingual text, the change lost, and the record gone.
+  const result = await __testing.restoreChatOriginals({ ask: () => true });
+  assert.deepEqual(result, { restored: 1, edited: 1 });
+  assert.equal(message.mes, mirror);
+  assert.equal(message.swipes[0], mirror);
+  assert.equal(message.extra[MESSAGE_META_KEY].stripped, undefined);
+  assert.equal(message.extra[MESSAGE_META_KEY].mirror, undefined);
+  assert.equal(message.swipe_info[0].extra[MESSAGE_META_KEY].mirror, undefined);
+  const restored = await __testing.readMessageSnapshot(0);
+  assert.equal(restored.translated, true, 'a bilingual floor that needs nothing more');
+  assert.equal(restored.stripped, false);
+});
+
+test('a floor with gaps stays bilingual, and a restyle changes only the text kept for a stripped floor', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context, settings } = translationOnlyHost([
+    [{ id: 1, text: '下雨了。' }],
+    [{ id: 1, text: '下雨了。' }, { id: 2, text: '风很大。' }],
+  ]);
+  const message = context.chat[0];
+  await __testing.startTranslation(0, { quiet: true });
+  assert.match(message.mes, /雨が降っている/, 'a partial floor keeps its original beside each gap');
+  assert.equal(message.extra[MESSAGE_META_KEY].stripped, undefined);
+  await __testing.startTranslation(0, { quiet: true });
+  assert.equal(message.extra[MESSAGE_META_KEY].stripped, true, '补译 finishes it, and then only the translation is left');
+  const projection = message.mes;
+
+  await __testing.restyleCurrentChat({ ...settings, translationPrefix: '【', translationSuffix: '】' });
+  assert.equal(message.mes, projection, 'the floor shows no affix, so it does not change');
+  assert.match(message.extra[MESSAGE_META_KEY].mirror, /【/);
+  assert.equal(message.extra[MESSAGE_META_KEY].translation_prefix, '【');
+  assert.equal((await __testing.readMessageSnapshot(0, { ...settings, translationPrefix: '【', translationSuffix: '】' })).translated, true);
+});
+
+test('deleting a swipe before a stripped one keeps its record its own, so a later change is still caught', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context } = translationOnlyHost([[{ id: 1, text: '下雨了。' }, { id: 2, text: '风很大。' }]]);
+  const message = context.chat[0];
+  const original = message.mes;
+  // Three swipes, the last one shown and translated.
+  message.swipes = ['<story_scene>\n一。\n</story_scene>', '<story_scene>\n二。\n</story_scene>', original];
+  message.swipe_info = [{ extra: {} }, { extra: {} }, { extra: {} }];
+  message.swipe_id = 2;
+  await __testing.startTranslation(0, { quiet: true });
+  assert.equal(message.extra[MESSAGE_META_KEY].stripped, true);
+  // As after a reload: the shown record and the swipe's record are two objects.
+  message.extra = structuredClone(message.extra);
+  const mirror = message.extra[MESSAGE_META_KEY].mirror;
+
+  // The host deletes swipe 0 the way it does: the arrays move, nothing inside them is renumbered.
+  message.swipes.splice(0, 1);
+  message.swipe_info.splice(0, 1);
+  message.swipe_id = 1;
+  __testing.renumberSwipeRecords({ messageId: 0, swipeId: 0, newSwipeId: 1 });
+  assert.equal(message.extra[MESSAGE_META_KEY].swipe_id, 1);
+  assert.equal(message.swipe_info[1].extra[MESSAGE_META_KEY].swipe_id, 1);
+  assert.equal((await __testing.readMessageSnapshot(0)).translated, true, 'still a finished floor');
+
+  message.mes = message.mes.replace('下雨了。', '下大雨了。');
+  message.swipes[1] = message.mes;
+  assert.equal((await __testing.readMessageSnapshot(0)).diverged, true, 'a change by hand is still caught');
+  const result = await __testing.restoreChatOriginals({ ask: () => true });
+  assert.equal(result.restored, 1);
+  assert.equal(message.mes, mirror);
+  assert.equal(message.swipes[1], mirror);
+  assert.equal(message.swipes[0], '<story_scene>\n二。\n</story_scene>', 'the other swipe is left as it was');
+});
+
+test('putting the originals back reaches hidden floors, and each swipe gets its own original back', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context } = translationOnlyHost([
+    [{ id: 1, text: '是的。' }, { id: 2, text: '风很大。' }],
+    [{ id: 1, text: '是的。' }, { id: 2, text: '风很大。' }],
+  ]);
+  const message = context.chat[0];
+  // Two swipes whose originals differ and whose translations are the same.
+  const first = '<story_scene>\nはい。\n<image>rain, city</image>\n風が強い。\n</story_scene>';
+  const second = '<story_scene>\nはい！\n<image>rain, city</image>\n風が強い。\n</story_scene>';
+  message.mes = first;
+  message.swipes = [first, second];
+  message.swipe_info = [{ extra: {} }, { extra: {} }];
+  message.swipe_id = 0;
+  await __testing.startTranslation(0, { quiet: true });
+  // The host moves to swipe 1: the shown record goes into swipe 0's slot, swipe 1's comes out.
+  message.swipe_info[0].extra = structuredClone(message.extra);
+  message.swipe_id = 1;
+  message.mes = second;
+  message.extra = structuredClone(message.swipe_info[1].extra);
+  await __testing.startTranslation(0, { quiet: true });
+  assert.equal(message.swipes[0], message.swipes[1], 'the same translation on both');
+  message.is_system = true; // hidden with /hide
+
+  const result = await __testing.restoreChatOriginals({ ask: () => true });
+  assert.equal(result.restored, 2);
+  assert.equal(stripGeneratedTranslationLines(message.swipes[0], {}), first);
+  assert.equal(stripGeneratedTranslationLines(message.swipes[1], {}), second);
+  assert.equal(message.mes, message.swipes[1]);
 });
