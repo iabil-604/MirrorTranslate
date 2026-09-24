@@ -47,6 +47,8 @@
 :is(.jy-reading-minimal, .custom-jy-reading-minimal) :is(.jy-reading-translation, .custom-jy-reading-translation) { margin-top: .65em; }
 :is(.jy-reading-fold, .custom-jy-reading-fold) { padding: 3px 0; }
 :is(.jy-reading-original, .custom-jy-reading-original) { margin: 0; padding: 0; border: 0; background: transparent; }
+/* Closed, the original is only its chip, and the paragraph's buttons that follow it share its line. */
+:is(.jy-reading-original, .custom-jy-reading-original):not([open]) { display: inline-block; vertical-align: middle; }
 :is(.jy-reading-original, .custom-jy-reading-original) > summary {
   width: fit-content;
   padding: 3px 10px;
@@ -163,6 +165,7 @@
   -webkit-text-fill-color: #91a196;
   opacity: .75;
 }
+#chat :is(.jy-reading-fold, .custom-jy-reading-fold) .jy-tts-line[data-jy-tts-fold] { margin-left: .5em; vertical-align: middle; }
 #chat :is(.jy-reading-fold, .custom-jy-reading-fold) .jy-tts-play:is(:hover, [data-state="playing"]) {
   background: #879b9238;
   opacity: 1;
@@ -196,6 +199,9 @@
 
    Both class spellings are listed because SillyTavern prefixes message classes with custom-. */
 :is(.jy-spk, .custom-jy-spk) { transition: color 120ms ease; }
+/* The host wraps quoted dialogue in <q> and gives it the theme's quote colour, some themes as a text fill
+   or behind a longer selector. A line with a speaker's colour keeps that colour inside its quotes. */
+#chat .mes .mes_text [class*="jy-spk-"] q { color: inherit !important; -webkit-text-fill-color: inherit !important; }
 :is(.jy-spk, .custom-jy-spk)[title] { cursor: help; }
 
 :is(.jy-emo-happy, .custom-jy-emo-happy) { font-weight: 560; }

@@ -8,14 +8,15 @@ import {
   normalizeNewlines,
   parseJsonCandidates,
   parsePairList,
+  placeQuoteMarks,
   unifySpeakerNames,
   MARK_TAGS,
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.36.0-beta.2';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.36.0-beta.2';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.36.0-beta.2';
+} from './core.js?v=0.37.0-beta.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.37.0-beta.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.37.0-beta.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -298,11 +299,12 @@ function readTtsLabel(item) {
 /**
  * The translation's own labels, read onto the utterances: no request at all.
  *
- * A line's mark names one speaker and one mood for the whole line; its `quotes` name them for each
- * quoted run in order, each with the first few characters of that run, so the runs are told apart
- * even when the model miscounted them. A narrated run wears no speaker even when the model gave the
- * line one, the same rule the colouring keeps. Fish's own words come back as the voice beside the
- * label, so the cue Fish hears is the word the translation chose and not the palette's fold of it.
+ * A line's mark names who opens it and in what mood; its `quotes` name them for each quoted run, each
+ * with the first few characters of that run, so the runs are told apart even when the model miscounted
+ * them. Which mark a run stands under is placeQuoteMarks' business, and the colouring asks it the same
+ * way. A narrated run wears no speaker even when the model gave the line one, the same rule the
+ * colouring keeps. Fish's own words come back as the voice beside the label, so the cue Fish hears is
+ * the word the translation chose and not the palette's fold of it.
  */
 export function annotationReading(utterances, annotations) {
   const labels = new Map();
@@ -317,53 +319,45 @@ export function annotationReading(utterances, annotations) {
   for (const [lineId, quoted] of byLine) {
     const mark = annotations.get(lineId);
     if (!mark) continue;
-    const quotes = (Array.isArray(mark.quotes) ? mark.quotes : []).filter(quote => quote && typeof quote === 'object');
-    const matched = matchQuoteMarks(quoted, quotes);
-    for (const utterance of quoted) {
-      const own = matched.get(utterance.id);
-      // A run's own mark fills in from the line's only where the line has just this one run to speak of.
-      const source = own ? (quoted.length === 1 ? { ...mark, ...own } : own) : mark;
+    const placed = placeQuoteMarks(quoted.map(utterance => utterance.text), mark, matchKey);
+    quoted.forEach((utterance, index) => {
+      const source = placed[index];
+      if (!source) return;
+      // A run the translation said nobody speaks, a sign or a title, is the narrator's.
+      if (source.type === 'narration') {
+        labels.set(utterance.id, { type: 'narration' });
+        return;
+      }
       const label = readTtsLabel({ type: 'dialogue', speaker: source.speaker, emotion: source.emotion, intensity: source.intensity });
       if (label) labels.set(utterance.id, label);
       const voice = annotationVoice(source, utterance.text);
       if (voice) voices.set(utterance.id, voice);
-    }
+    });
   }
   return { labels, voices };
 }
 
-// The runs of a line matched to the marks the translation gave them: by the opening characters each
-// mark quotes, then by order when the counts agree. What matches nothing keeps the line's own mark.
-function matchQuoteMarks(quoted, quotes) {
-  const matched = new Map();
-  if (!quotes.length) return matched;
-  const keys = quoted.map(utterance => matchKey(utterance.text));
-  const taken = new Set();
-  const pending = [];
-  for (const quote of quotes) {
-    const head = matchKey(quote.head ?? '');
-    const found = head ? keys.findIndex((key, index) => !taken.has(index) && key.startsWith(head)) : -1;
-    if (found >= 0) {
-      taken.add(found);
-      matched.set(quoted[found].id, quote);
-    } else pending.push(quote);
-  }
-  if (quotes.length === quoted.length) {
-    const rest = quoted.map((utterance, index) => index).filter(index => !taken.has(index));
-    pending.forEach((quote, offset) => {
-      if (rest[offset] !== undefined) matched.set(quoted[rest[offset]].id, quote);
-    });
-  }
-  return matched;
+// The sounds a translation's mark may carry: the ones its request offers, in Fish's word or ours.
+function translationSound(tag) {
+  return ANNOTATION_SOUNDS.includes(tag) || ANNOTATION_SOUNDS.includes(SOUND_WORDS[tag]);
 }
 
 // The voice a mark carries: the direction and the words it points at, checked against the sentence;
-// the mood when it is one of Fish's rather than one of the palette's; the tone.
+// the mood when it is one of Fish's words rather than one of the palette's; the tone; the sounds the
+// request offered. A tone written in the mood's place is the tone. Any other English phrase — [aroused],
+// [moaning] — would reach the S2 models as a free-form cue, so it goes no further than the palette's
+// fold of it.
 function annotationVoice(mark, text = '') {
   if (!mark || typeof mark !== 'object') return null;
   const voice = normalizeVoice({ ...mark, emotion: undefined, intensity: undefined }, text) ?? {};
+  if (voice.sounds) {
+    voice.sounds = voice.sounds.filter(sound => translationSound(sound.tag));
+    if (!voice.sounds.length) delete voice.sounds;
+  }
   const word = cueWord(mark.emotion);
-  if (word && word !== 'neutral' && !Object.hasOwn(EMOTION_STYLES, word)) voice.emotion = word;
+  if (FISH_TONES.includes(word)) {
+    if (!voice.tone) voice.tone = word;
+  } else if (FISH_EMOTIONS.includes(word) && !Object.hasOwn(EMOTION_STYLES, word)) voice.emotion = word;
   if (!Object.keys(voice).length) return null;
   const intensity = level(mark.intensity);
   if (intensity !== null) voice.intensity = intensity;
@@ -407,19 +401,26 @@ function speechVocabulary() {
   for (const [chinese, english] of SPEECH_MOODS) moods.set(chinese, english);
   const tones = new Map(SPEECH_TONES);
   for (const tone of FISH_TONES) if (FISH_TAG_LABELS[tone]) tones.set(FISH_TAG_LABELS[tone], tone);
-  speechWords = { moods, tones };
+  // The words are split at spaces, except Fish's own words of more than one ('soft tone', 'in a hurry
+  // tone'), which are taken whole where they stand.
+  const separators = '、,，;；+/|｜\\s';
+  const phrases = [...FISH_TONES, ...FISH_EMOTIONS].filter(word => /\s/.test(word))
+    .sort((left, right) => right.length - left.length)
+    .map(word => `${word.split(/\s+/).map(escapeRegex).join('\\s+')}(?![^${separators}])`);
+  const words = new RegExp([...phrases, `[^${separators}]+`].join('|'), 'giu');
+  speechWords = { moods, tones, words };
   return speechWords;
 }
 
 /** A mark's mood as Fish's words: one mood, one tone, whichever the words name, in either language. */
 export function speechMood(value) {
-  const { moods, tones } = speechVocabulary();
+  const { moods, tones, words } = speechVocabulary();
   let emotion = '';
   let tone = '';
-  for (const raw of String(value ?? '').split(/[、,，;；+/|｜\s]+/u)) {
+  for (const [raw] of String(value ?? '').matchAll(words)) {
     const word = raw.trim();
     if (!word) continue;
-    const lower = word.toLowerCase();
+    const lower = word.toLowerCase().replace(/\s+/g, ' ');
     const asTone = tones.get(word) ?? (FISH_TONES.includes(lower) ? lower : '');
     if (asTone) {
       tone ||= asTone;
@@ -620,20 +621,66 @@ export function referenceLines(translations) {
     : [];
 }
 
+// The words the text writes for each sound one speaker makes, as every prompt names them. The check
+// before Fish (SOUND_EVIDENCE in groundVoice) accepts each of them for its sound, so a model that follows
+// the prompt is never overruled. The Japanese ones are there because a floor is as often Japanese.
+export const SOUND_CUES = Object.freeze({
+  laughing: ['笑出声', '大笑', '笑了起来', '笑い出す'],
+  chuckling: ['轻笑', '低笑', '噗嗤', 'くすくす'],
+  sighing: ['叹气', '叹了口气', 'ため息'],
+  sobbing: ['哭', '抽泣', '哽咽', '泣き'],
+  'crying loudly': ['大哭', '嚎啕', '泣き叫ぶ'],
+  gasping: ['倒吸一口气', '倒抽一口冷气', '惊呼', '息を呑む'],
+  panting: ['喘着气', '上气不接下气', '息を切らす'],
+  groaning: ['闷哼', '痛哼', 'うめく'],
+  yawning: ['打哈欠', 'あくび'],
+  'clear throat': ['清嗓子', '咳払い'],
+});
+// The words that ask for a way of saying a line. The quiet two are checked the same way (QUIET_RE): a
+// whisper nobody asked for is breath with words in it.
+export const TONE_CUES = Object.freeze({
+  whispering: ['耳语', '贴着耳朵', '悄声', '囁く', '耳打ち', '声を潜める'],
+  'soft tone': ['小声', '轻声', '低声', '低语', '轻轻地说', '小さな声', '声を落とす'],
+  shouting: ['喊', '吼', '大声', '叫ぶ', '怒鳴る'],
+  screaming: ['尖叫', '惨叫', '悲鳴'],
+  'in a hurry tone': ['急忙', '急促', '慌てて', '早口'],
+});
+
+/** The sounds, each after the words that call for it, as a prompt lists them: 「笑出声、大笑→laughing；…」. */
+export function soundGrounds(sounds) {
+  return (Array.isArray(sounds) ? sounds : []).filter(sound => SOUND_CUES[sound]).map(sound => `${SOUND_CUES[sound].join('、')}→${sound}`).join('；');
+}
+
+// Every sound the analyses are offered, grounded.
+export const SOUND_GROUNDS = soundGrounds(Object.keys(SOUND_CUES));
+
+// Where a sound may not go, as every prompt says it. The check before Fish drops a sound beside a
+// trailing-off mark, and moves one written after a line that trails off to where the line starts.
+export const SOUND_PLACE_RULE = '声音不能紧挨省略号、破折号、波浪号：句首挨着就写在句尾，句尾挨着就写在句首，两头都挨着就不写。';
+// The analyses keep end for a line with more of its paragraph after it, so a line that trails off at its
+// start and ends its paragraph has nowhere left for a sound.
+export const SOUND_END_RULE = '句首挨着、end 又不能用时也不写。';
+
+// The moods that fold into the palette's tender and shy. Laid over nothing but 嗯 and 啊 they are the
+// moan itself, so the check before Fish drops them there, and every prompt names them one by one.
+export const SOFT_MOODS = Object.freeze(['tender', 'gentle', 'empathetic', 'sympathetic', 'compassionate', 'moved', 'nostalgic', 'shy', 'embarrassed', 'ashamed']);
+
 // The two system prompts, as templates the reader may replace in the settings. Placeholders:
 // {{user}} the user's role, {{palette}} the light emotion labels, {{sounds}} the Fish sound tags,
 // {{references_rule}} the rule about translations riding along when the original is read.
 export const DEFAULT_TTS_PROMPTS = Object.freeze({
   simple: [
-    '你是有声小说的配音助手。下面是一楼正文，按段给出，每句对白前面标着 ⟦编号⟧。你定下每句对白怎么念：谁说的、什么情绪、哪里停一口气、哪个词咬重。旁白不用管，也不用输出。不改写、不复述、不翻译任何句子。',
-    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","pauses":[{"after":"词","length":"short"}],"stress":["词"],"sounds":[{"at":"start","tag":"英文声音词"}]}]}。只输出对白的条目；每个编号最多出现一次；不要输出 text；用不上的字段不写。',
-    '1. speaker：优先从 roster 里逐字照抄名字，不加敬称；roster 里没有的人写正文里对这个人的称呼。看引号前后的人名和动作、话里叫到的名字（被叫到的是听的人，不是说的人）、两个人一来一回的顺序。{{user}}看不出是谁说的就省略，不要猜。输入里的 speakers 是用户手动定的说话人，那些编号照抄。',
-    '2. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个，看不出明显情绪就省略。不要自己造词，不要加程度词。',
-    '3. pauses：这句里真的要换一口气的地方，after 逐字照抄那个词（停顿加在它后面），length 是 short 或 long，最多两处；一口气能说完的短句不要写。stress：这句真正的重点词，逐字照抄，最多两个；每句都标等于没标。两项里的词必须原样出现在这句话里。',
-    '4. tone 只在原文明确写了小声、耳语、喊、尖叫、急促时写，取 tones 列表里的词。',
-    '5. sounds：只在原文明确写了笑、叹气、喘息这类声音时写，一句最多一处：[{"at":"start 或 end","tag":"sounds 列表里的词"}]。喊叫、发火、追问的句子不要在开头加叹气这类泄气的声音。moaning、groaning、panting 是拖着出声的，只有原文明写了呻吟、闷哼、喘息才用，其他情况一律不用。',
-    '6. 一楼是有走向的：情绪跟着剧情走，剧情转了才转。相邻两句还在同一件事、同一口气里的时候，不要从一个极端跳到另一个极端；真的转了，就让转折落在转的那一句上。',
-    '7. styles 是角色的表达习惯和用户定下的规则，是硬性要求，不是参考。',
+    '你是有声小说的配音助手。下面是一楼正文，按段给出，引号里的话前面标着 ⟦编号⟧。你定下每句带编号的话怎么念：谁说的、什么情绪、哪里停一口气、哪个词咬重、有没有正文写出来的声音。旁白不用管，也不用输出。不改写、不复述、不翻译任何句子。',
+    '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","pauses":[{"after":"词","length":"short"}],"stress":["词"],"sounds":[{"at":"start","tag":"英文声音词"}]},{"id":5,"type":"narration"}]}。每个编号都要回答，按编号从小到大，每个只出现一次；说话人和情绪都看不出时只写 {"id":N,"type":"dialogue"}；不要输出 text；用不上的字段不写。',
+    '1. speaker：优先从 roster 里逐字照抄名字，不加敬称；正文用昵称、称呼或「你」「我」指 roster 里的人，也写 roster 里的名字；roster 里没有的人写正文里对这个人的称呼。看引号前后的人名和动作、话里叫到的名字（被叫到的是听的人，不是说的人）、话里的自称和口癖、两个人一来一回的顺序。不要写「他」「她」「众人」「旁白」这类词。{{user}}看不出是谁说的就省略，不要猜。输入里的 speakers 是用户手动定的说话人，那些编号照抄。',
+    '2. 引号里不是说出口的话——书名、招牌、信上的字、拟声词——只写 {"id":N,"type":"narration"}。引号里心里想的话算这个人的话，照常写 speaker。',
+    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个。不要自己造词，不要加程度词；亲密、暧昧的场景也只从列表里选。按这句话本身和紧挨着它的神态描写选，不要拿整场的气氛代替这一句；看不出明显情绪就不写。常见说法：阴阳怪气、说反话 → sarcastic；冷淡、敷衍 → indifferent；压着火 → angry；担心 → worried；慌张 → anxious。',
+    '4. pauses：这句里真的要换一口气的地方，after 逐字照抄那个词（停顿加在它后面），length 是 short 或 long，最多两处；一口气能说完的短句不要写；省略号、破折号、波浪号紧挨着的地方和句子最后不写，那里本来就停。stress：这句真正的重点词，逐字照抄，最多两个；每句都标等于没标。两项里的词必须原样出现在这句话里。',
+    '5. tone 只在正文写了这句是小声、耳语、喊、尖叫、急促地说出来时写，取 tones 列表里的词；没写小声、耳语就不写 whispering 和 soft tone。',
+    `6. sounds：一句最多一处，tag 只能取 sounds 列表里的词，at 写 start；end 只在同一段里这句后面还有正文时用。只有这句所在的这一段、或前后紧挨着的没有台词的叙述段，在引号外写了说这句话的人发出这个声音，才写（看意思，不要求逐字）：${SOUND_GROUNDS}。正文没写的一律不加，气氛再暧昧也不加；台词里已经写出这个声音（哈哈、唉、呜呜、哈啊）时不再加；喊叫、发火、追问的句子不要在开头加叹气这类泄气的声音。${SOUND_PLACE_RULE}${SOUND_END_RULE}`,
+    `7. 只有嗯、啊、哈、唉这类语气词的句子：只写 speaker 和 emotion，emotion 不用 ${SOFT_MOODS.join('、')}，不写 pauses、stress、sounds，tone 只能写 shouting 或 screaming。去掉标点不到三个字（英文只有一个词）的句子不写 pauses、stress。`,
+    '8. 一楼是有走向的：情绪跟着剧情走，剧情转了才转。相邻两句还在同一件事、同一口气里的时候，不要从一个极端跳到另一个极端；真的转了，就让转折落在转的那一句上。',
+    '9. styles 是角色的表达习惯和用户定下的规则，是硬性要求，不是参考；它们要求多写 sounds、tone 时，仍然只写正文写了的，要求少写或不写时照做。',
     '{{lang_rule}}',
     '{{references_rule}}',
   ].join('\n'),
@@ -656,12 +703,14 @@ export const DEFAULT_TTS_PROMPTS = Object.freeze({
     '只改用户的意见涉及到的句子。意见没有说到的句子，只输出 {"id":N}，表示上一次的标注原样保留——这是最重要的一条，不要把没提到的句子重写一遍。',
     '只输出一个 JSON 对象，不要任何解释，格式和上一次一样：{"voices":[{"id":1},{"id":2,"type":"dialogue","speaker":"名字","emotion":"英文情绪词","tone":"英文语气词","speed":"slow","volume":"quiet","pauses":[{"after":"词","length":"short"}],"stress":["词"],"shifts":[{"at":"分句开头的词","emotion":"英文情绪词"}],"sounds":[{"at":"start","tag":"英文声音词"}]}]}',
     '改一句的时候，只动用户说到的那一项，其余字段照抄 current 里这一句原有的值——current 里有 pauses、stress、shifts 就原样带上，不要因为这次只谈情绪就把它们丢掉。current 里没有的字段也不要凭空加。',
-    '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、心理描写）。',
+    '1. type：dialogue（角色说出口的话）或 narration（旁白、叙述、动作、引号外的心理描写）。引号里是书名、招牌、信上的字、拟声词时是 narration；引号里心里想的话算这个人的话，照常写 speaker。',
     '2. speaker 只给 dialogue：优先从 roster 里逐字照抄名字，不加敬称。用户说「说话人不对」时，重新判断这几句到底是谁在说，参考前后文和 roster；current 里 manual 为 true 的句子是用户手动定的说话人，不要改。',
-    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个。用户说「情绪不够」就换一个更贴切、更强的词；说「太夸张」就换平一点的；不要自己造词，不要加 slightly、very 这类程度词。',
-    '4. tone：可选，只能取 tones 列表里的一个；sounds：只能取 sounds 列表里的词，at 是 start、end 或 after。用户嫌声音多就删掉，嫌少就在真的合适的地方加；moaning、groaning、panting 只有原文明写了才用。pauses 的 after、stress 的词、shifts 的 at 都必须逐字出现在这句话里。',
-    '5. styles 是角色的表达习惯和用户定下的规则，改的时候要遵守。',
-    '6. 每个 id 最多出现一次，不要输出 text。',
+    '3. emotion：只能取 emotions 列表里的一个英文词，逐字照抄，一句一个。用户说「情绪不够」就换一个更贴切、更强的词；说「太夸张」就换平一点的；不要自己造词，不要加表示程度的词。',
+    '4. tone：可选，只能取 tones 列表里的一个；正文没写小声、耳语时，whispering 和 soft tone 写了也会被丢掉。',
+    `5. sounds：一句最多一处，tag 只能取 sounds 列表里的词，at 是 start、end 或 after（after 逐字照抄那个词）。用户嫌声音多就删掉；嫌少时只加在正文写了这个声音的句子上（${SOUND_GROUNDS}），正文没写的加了也会被丢掉；台词里已经写出这个声音时不再加。${SOUND_PLACE_RULE}`,
+    '6. pauses 的 after、stress 的词、shifts 的 at 都必须逐字出现在这句话里；省略号、破折号、波浪号紧挨着的地方和句子最后不写 pauses。',
+    '7. styles 是角色的表达习惯和用户定下的规则，改的时候要遵守。',
+    '8. 每个 id 最多出现一次，不要输出 text。',
     '{{references_rule}}',
   ].join('\n'),
   // The older name of the simple prompt, for settings that still say it.
@@ -742,7 +791,7 @@ export function buildTtsAnalysisMessages(utterances, { roster = [], characterNam
     roster: rosterList(roster),
     emotions: FISH_EMOTIONS,
     tones: FISH_TONES,
-    sounds: FISH_SOUNDS,
+    sounds: SPOKEN_SOUNDS,
     ...(styleList.length ? { styles: styleList } : {}),
     ...(Object.keys(named).length ? { speakers: named } : {}),
     lines: floorTextWithMarks(list),
@@ -773,7 +822,7 @@ export function buildRefineAnalysisMessages(utterances, { roster = [], character
     roster: rosterList(roster),
     emotions: FISH_EMOTIONS,
     tones: FISH_TONES,
-    sounds: FISH_SOUNDS,
+    sounds: SPOKEN_SOUNDS,
     ...(styleList.length ? { styles: styleList } : {}),
     feedback: String(feedback ?? '').slice(0, 600),
     current: list.map(item => ({ id: item.id, ...(known.get(item.id) ?? {}) })),
@@ -817,19 +866,43 @@ export function parseTtsAnalysis(raw, utterances) {
 // and absent means ordinary. Nothing in it is text to be read.
 // ---------------------------------------------------------------------------------------------
 
-// Fish's own emotion vocabulary, offered to the model first; anything else it says is used as free-form
-// natural language, which the S2 models also accept.
+// Fish's own emotion vocabulary, the moods every request offers: the forty-nine Fish documents, then a
+// few plain moods a story needs and the S2 models read as written. Anything else a model says is dropped
+// before it reaches Fish (groundVoice): a free-form word is what S2 acts out literally, breath and all,
+// which is why flirtatious is no longer among them.
 export const FISH_EMOTIONS = Object.freeze([
   'happy', 'sad', 'angry', 'excited', 'calm', 'nervous', 'confident', 'surprised', 'satisfied', 'delighted', 'scared',
   'worried', 'upset', 'frustrated', 'depressed', 'empathetic', 'embarrassed', 'disgusted', 'moved', 'proud', 'relaxed',
   'grateful', 'curious', 'sarcastic', 'disdainful', 'unhappy', 'anxious', 'hysterical', 'indifferent', 'uncertain',
   'doubtful', 'confused', 'disappointed', 'regretful', 'guilty', 'ashamed', 'jealous', 'envious', 'hopeful', 'optimistic',
   'pessimistic', 'nostalgic', 'lonely', 'bored', 'contemptuous', 'sympathetic', 'compassionate', 'determined', 'resigned',
-  'tender', 'gentle', 'shy', 'serious', 'playful', 'cold', 'pleading', 'mysterious', 'tired', 'flirtatious',
+  'tender', 'gentle', 'shy', 'serious', 'playful', 'cold', 'pleading', 'mysterious', 'tired',
 ]);
 export const FISH_SOUNDS = Object.freeze(['sighing', 'gasping', 'sobbing', 'laughing', 'chuckling', 'moaning', 'groaning', 'panting', 'crying loudly', 'clear throat', 'yawning', 'crowd laughing', 'background laughter', 'audience laughing']);
 // The ways of delivering a line Fish names. One optional choice, for the translation and the deep reading alike.
 export const FISH_TONES = Object.freeze(['whispering', 'soft tone', 'shouting', 'screaming', 'in a hurry tone']);
+// The same moods as the translation lists them for the reading: grouped the way a reader tells them
+// apart, each with the Chinese it stands for, so the model is not left to guess where one bare English
+// word ends and the next begins. Every word of FISH_EMOTIONS, once.
+export const FISH_EMOTION_GROUPS = Object.freeze([
+  ['平静', [['calm', '平静'], ['relaxed', '放松、随意'], ['indifferent', '冷淡、无所谓'], ['cold', '冷漠'], ['bored', '无聊、没兴致']]],
+  ['开心', [['happy', '开心'], ['excited', '兴奋'], ['delighted', '惊喜、欣喜'], ['satisfied', '满意'], ['grateful', '感激'], ['proud', '得意、骄傲'], ['confident', '自信'], ['hopeful', '期待'], ['optimistic', '乐观'], ['playful', '调皮、逗弄']]],
+  ['温柔', [['tender', '温柔、亲昵'], ['gentle', '轻柔'], ['empathetic', '体贴、理解'], ['sympathetic', '同情'], ['compassionate', '怜惜、心疼'], ['moved', '感动'], ['nostalgic', '怀念']]],
+  ['害羞', [['shy', '害羞'], ['embarrassed', '难为情、尴尬'], ['ashamed', '羞愧']]],
+  ['难过', [['sad', '难过'], ['upset', '委屈、心烦'], ['unhappy', '不高兴'], ['disappointed', '失望'], ['lonely', '孤单'], ['regretful', '后悔'], ['guilty', '内疚'], ['depressed', '消沉、绝望'], ['resigned', '无奈、认命'], ['pessimistic', '悲观'], ['pleading', '恳求'], ['tired', '疲惫']]],
+  ['生气', [['angry', '生气'], ['frustrated', '烦躁、恼火'], ['disgusted', '厌恶'], ['jealous', '吃醋、嫉妒'], ['envious', '羡慕'], ['sarcastic', '讽刺、挖苦'], ['disdainful', '不屑'], ['contemptuous', '鄙视']]],
+  ['不安', [['nervous', '紧张'], ['anxious', '焦虑'], ['worried', '担心'], ['scared', '害怕'], ['uncertain', '没把握、犹豫'], ['doubtful', '怀疑'], ['confused', '困惑']]],
+  ['惊讶', [['surprised', '惊讶'], ['curious', '好奇']]],
+  ['其他', [['serious', '严肃、郑重'], ['determined', '坚定、下定决心'], ['mysterious', '神秘'], ['hysterical', '崩溃、失控']]],
+]);
+// The sounds one speaker makes, which the analyses are offered: moaning is not among the sounds Fish
+// documents, and the room's laughter is never one person's. Each comes with the words that call for it
+// (SOUND_CUES).
+export const SPOKEN_SOUNDS = Object.freeze(FISH_SOUNDS.filter(sound => !['moaning', 'crowd laughing', 'background laughter', 'audience laughing'].includes(sound)));
+// The sounds the translation may mark. The drawn-out ones are left to the analyses, which read the
+// floor whole: marked off the narration at translation time, a pant or a groan came out as a moan on a
+// line that never had one.
+export const ANNOTATION_SOUNDS = Object.freeze(SPOKEN_SOUNDS.filter(sound => !['panting', 'groaning'].includes(sound)));
 // The sounds a sentence can carry, in the reader's own words, each with Fish's fixed tag for the S1
 // model that only knows its set; the S2 models read the word as written. An empty tag has no S1 twin.
 export const SOUND_WORDS = Object.freeze({
@@ -838,7 +911,9 @@ export const SOUND_WORDS = Object.freeze({
   清嗓子: 'clear throat', 呻吟: 'moaning', 闷哼: 'groaning', 哈欠: 'yawning', 打哈欠: 'yawning', 冷哼: '', 哼: '', 吞咽: '', 深呼吸: '',
   人群笑声: 'crowd laughing', 背景笑声: 'background laughter', 观众笑声: 'audience laughing',
 });
-export const SOUND_TAGS = Object.freeze(Object.keys(SOUND_WORDS));
+// The reader's words a prompt offers ({{sounds}}): every one but a moan and the room's laughter, which are
+// still read in a mark already stored, and dropped on the way to Fish.
+export const SOUND_TAGS = Object.freeze(Object.keys(SOUND_WORDS).filter(word => !SOUND_WORDS[word] || SPOKEN_SOUNDS.includes(SOUND_WORDS[word])));
 
 // A sound as a mark names it: one of the Chinese words, one of Fish's English tags, or any short
 // Chinese word for a sound the S2 models can read as written.
@@ -1017,13 +1092,25 @@ export function parseVoiceAnalysis(raw, utterances, { hints = null } = {}) {
  *
  * Both texts cut into the same lines and the same run of quotes per line, so the k-th quoted utterance
  * of a line in one language is the k-th in the other. Speaker and mood carry over; the language does
- * not, nor do pauses, stresses and shifts, which name words of the other text.
+ * not, nor do pauses, stresses and shifts, which name words of the other text. Where the other language
+ * has fewer quoted runs on a line, the runs the read side calls narration (a sign, a title the other
+ * side kept inside its sentence, 看板の「立入禁止」を) are the ones it lacks, and are passed over.
  */
 export function deriveLabelsForSide(primaryUtterances, primaryLabels, primaryVoices, otherUtterances) {
   const byLine = new Map();
   for (const utterance of Array.isArray(primaryUtterances) ? primaryUtterances : []) {
     if (!byLine.has(utterance.lineId)) byLine.set(utterance.lineId, { quoted: [], narration: [] });
     byLine.get(utterance.lineId)[utterance.kind === 'quoted' ? 'quoted' : 'narration'].push(utterance.id);
+  }
+  const otherQuoted = new Map();
+  for (const utterance of Array.isArray(otherUtterances) ? otherUtterances : []) {
+    if (utterance.kind === 'quoted') otherQuoted.set(utterance.lineId, (otherQuoted.get(utterance.lineId) ?? 0) + 1);
+  }
+  for (const [lineId, line] of byLine) {
+    const wanted = otherQuoted.get(lineId) ?? 0;
+    if (wanted >= line.quoted.length) continue;
+    const spoken = line.quoted.filter(id => !(primaryLabels instanceof Map && primaryLabels.get(id)?.type === 'narration'));
+    if (spoken.length >= wanted && spoken.length < line.quoted.length) line.quoted = spoken;
   }
   const labels = new Map();
   const voices = new Map();
@@ -1100,6 +1187,340 @@ export function voiceSummary(voice) {
   return lines;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Held to the text. Whatever read a line — the translation's marks, the simple or the deep analysis, a
+// correction, a reading kept from an older version, a prompt of the reader's own — Fish hears only what
+// the text backs: a mood Fish knows, a sound the narration writes out for that line, a quiet tone the
+// text asks for, a pause where the text does not already trail off. A line of nothing but 嗯 and 啊 keeps
+// a plain mood and nothing laid inside it. buildSegments runs this on every sentence, so no path to Fish
+// goes round it. Only what the compile sends is touched: a field Fish never hears is left as it is, so a
+// reading that changes nothing audible keeps its recording.
+// ---------------------------------------------------------------------------------------------
+
+const LAUGH_RE = /(?<![微玩可好取嘲见見])(?<!微微一|淡淡一|笑了)笑(?![容意脸臉颜顏眯话話顔み]|了笑)|哈哈|呵呵|嘿嘿|嘻嘻|噗嗤|扑哧|\blaugh|\bgiggl|\bchuckl|\bsnicker|ふふ|あはは|くすくす/i;
+
+/**
+ * What the narration has to say for a line to carry each sound, in the languages a floor comes in. A
+ * smile is not a laugh, a joke is not one either, an exclamation (感叹) is not a sigh, a deep breath is
+ * not a gasp, and 娇喘 or 喘ぎ is a moan, not a pant.
+ */
+export const SOUND_EVIDENCE = Object.freeze({
+  laughing: LAUGH_RE,
+  chuckling: LAUGH_RE,
+  sighing: /(?<![感赞讚惊驚咏詠])[叹嘆](?![为為服])|唉|\bsigh(?:s|ed|ing)?\b|ため息|溜め?息/i,
+  sobbing: /哭|泣|哽咽|抽噎|呜咽|嗚咽|\bsob(?:s|bed|bing)?\b|\bwe(?:ep|eps|eping|pt)\b|\bcr(?:y|ies|ied|ying)\b/i,
+  'crying loudly': /大哭|嚎啕|号啕|號啕|痛哭|放声大?哭|放聲大?哭|\bwail|\bbawl|泣き叫|号泣|號泣/i,
+  gasping: /倒吸|倒抽|抽气|抽氣|[抽吸]了?一?口[冷凉涼][气氣]|惊呼|驚呼|\bgasp|息を[呑の飲]|[はハ]っと/i,
+  panting: /(?<![娇嬌])喘(?![ぎぐいが])|上气不接下气|上氣不接下氣|\bpant(?:ed|ing)\b|out of breath|breathless|息を切ら|息が(?:荒|上が)|はぁはぁ|ハァハァ/i,
+  groaning: /闷哼|悶哼|痛哼|呻(?!吟)|\bgroan|\bgrunt|うめ/i,
+  yawning: /哈欠|呵欠|\byawn|あくび|欠伸/i,
+  'clear throat': /清嗓|清了清|咳|\bahem\b|clear(?:s|ed|ing)? (?:his|her|their|my|your) throat/i,
+});
+// Two words for one sound share its count: a laugh the text wrote once is heard once.
+const SOUND_GROUP = Object.freeze({ chuckling: 'laughing', 'crying loudly': 'sobbing' });
+// Breaths that go on rather than happen once: written after a line, they belong to what follows it.
+const DRAWN_OUT_SOUNDS = new Set(['panting', 'groaning']);
+// The sound the words of the line already make: a tag on top of 哈哈 is the laugh twice.
+const VOICED_SOUND = Object.freeze({
+  laughing: /哈哈|呵呵|嘿嘿|嘻嘻|噗嗤|噗哈|ふふ|あはは|\bhaha|\bhehe/i,
+  sighing: /唉/,
+  sobbing: /呜呜|嗚嗚|うぅ|ぐすっ/,
+  panting: /哈啊|はぁ|ハァ/,
+});
+// The text asking for a quiet voice: without it, whispering and a soft tone are breath with words in.
+// A voice kept low or soft asks for it, a voice low in pitch (低沉) or a word said at an ear does not by
+// itself: a shout goes there too, so only speech said there without one counts. Fish's own names for the
+// two, written by a mark or a caller, ask for it as well.
+const QUIET_RE = /小声|小聲|低声|低聲|轻声|輕聲|柔声|柔聲|耳语|耳語|低语|低語|悄声|悄聲|悄悄|压低|壓低|细声|細聲|呢喃|嘀咕|咕哝|咕噥|附耳|[凑湊贴貼].{0,6}耳|\bwhisper|\bmurmur|\bmutter|\bsoftly\b|\bsoft\s+tone\b|\bquietly\b|under (?:his|her|their) breath|轻轻(?:地)?(?:说|道|问|答|唤|开口)|声音(?:[放压壓]得?)?(?:很|极|極|更|有些|有点|有點|越来越|越來越|也|又|渐渐|漸漸|慢慢|逐渐|逐漸|微微|稍稍)?[轻輕低](?![沉哑啞蔑])|低低地|压着嗓|壓著嗓|耳[边邊畔](?:(?![大吼喊叫嚷怒])[^，。！？：:「」\n]){0,3}?(?:说|說|道|问|問)|耳元(?:(?![大叫怒喚])[^、。！？「」\n]){0,4}?(?:言|囁|ささや|呟|つぶや)|ささや|囁|耳打ち|ひそひそ|小さな声|呟|声を(?:潜|ひそ|落と|殺)|ぼそ/i;
+// An ellipsis, a dash, a tilde or a heart: the text already trails off there, and a pause or a sound
+// beside one is performed as a held, breathy vowel rather than as what it was asked to be.
+const DRAWN_BEFORE_RE = /(?:[…‥⋯—～~♡❤♥]|\.\.)$/;
+const DRAWN_AFTER_RE = /^(?:[…‥⋯—～~♡❤♥]|\.\.)/;
+const DRAWN_END_RE = /(?:[…‥⋯—～~]|\.\.)$/;
+const CJK_CHAR_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}ー]/gu;
+// What a line is made of when it says nothing else: 嗯, 啊, 哈 and their kin, in kana too.
+const INTERJECTION_CHARS = new Set([...'嗯恩啊哈唔呜嗚哼呃噢哦呀欸诶誒喔哇嘤嚶咿嗷呼嘿唉哎嗳噯咦呵嘻噗呐嘶啧ぁあぃいぅうぇえぉおっんはひふへほァアィイゥウェエォオッンハヒフヘホー']);
+const LATIN_INTERJECTION_RE = /^(?:a+h*|o+h*|u+h+|u*m+|h+m+|h+u+h+|(?:h+a+)+h*|(?:h+e+)+h*|e+h+|o+w+|u+g+h+|m+h+m+)$/i;
+const STEP_WORDS_RE = /^(?:slightly|very|extremely)\s+/;
+// The moods that, laid over nothing but 嗯 and 啊, are the moan itself.
+const SOFT_FOLDS = new Set(['tender', 'shy', 'whisper']);
+// A line this short is said, not staged: 「不……」 「好吧。」 keep a mood, a tone and a sound the narration
+// wrote, and nothing placed inside them: no turn, no pause, no stress.
+export const SHORT_LINE_UNITS = 2;
+
+// Yes and no in kana are words, though every letter of them is also an interjection's.
+const KANA_WORDS_RE = /^(?:はい|いいえ|いえ|いい|ハイ|イイエ)$/;
+
+/** How much a line says: a character of Han or kana is one, a Latin word two; `core` leaves the interjections out. */
+function lineSize(text) {
+  const value = String(text ?? '');
+  const bare = value.replace(/[\s\p{P}\p{S}]/gu, '');
+  if (KANA_WORDS_RE.test(bare)) return { units: [...bare].length, core: [...bare].length };
+  const characters = value.match(CJK_CHAR_RE) ?? [];
+  const words = value.replace(CJK_CHAR_RE, ' ').match(/[\p{L}\p{N}]+/gu) ?? [];
+  return {
+    units: characters.length + words.length * 2,
+    core: characters.filter(character => !INTERJECTION_CHARS.has(character)).length + words.filter(word => !LATIN_INTERJECTION_RE.test(word)).length,
+  };
+}
+
+// A mood as Fish is sent it: a word it knows, one of its tones, or one the palette folds into a column of
+// its words. The strength comes from the intensity, never from an adverb in the word. flirtatious folds
+// too, but it is what the model reached for on the lines that came out breathy, so it is not sent.
+function spokenEmotion(value) {
+  const word = cueWord(value).replace(STEP_WORDS_RE, '');
+  if (!word || word === 'neutral' || word === 'flirtatious') return '';
+  return FISH_EMOTIONS.includes(word) || FISH_TONES.includes(word) || normalizeEmotion(word) ? word : '';
+}
+
+function quietWord(word) {
+  return word === 'whispering' || word === 'soft tone' || normalizeEmotion(word) === 'whisper';
+}
+
+const GLOBAL_EVIDENCE = new Map();
+function countOf(pattern, text) {
+  if (!GLOBAL_EVIDENCE.has(pattern)) GLOBAL_EVIDENCE.set(pattern, new RegExp(pattern.source, `${pattern.flags}g`));
+  return (String(text ?? '').match(GLOBAL_EVIDENCE.get(pattern)) ?? []).length;
+}
+
+// One written sound spent: the first place that writes it and has not given it to another line yet. A
+// place may keep some sounds from the line (`withholds`), sharing its count with the lines that may have them.
+function spendSound(sources, tag) {
+  const group = SOUND_GROUP[tag] ?? tag;
+  for (const source of sources) {
+    if (source.withholds?.has(group)) continue;
+    if (!source.texts.some(text => SOUND_EVIDENCE[tag].test(text))) continue;
+    // Both languages say the same sigh once: the count is the larger of the two, not their sum.
+    if (!source.budget.has(group)) source.budget.set(group, Math.max(0, ...source.texts.map(text => countOf(SOUND_EVIDENCE[group], text))));
+    if (source.budget.get(group) <= 0) continue;
+    source.budget.set(group, source.budget.get(group) - 1);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * One sentence's voice held to the text. `text` is the sentence; `evidence` is what the text says around
+ * it (its paragraph, the narration either side, the other language, the story's own marks), for a
+ * quiet voice; `sources` are the narration a sound may be written in, each with what of it the lines
+ * before have spent — without them `evidence` stands in, unspent. Returns the voice to use (the same
+ * object when nothing changed), what was taken out with a reason each — unknown, quiet, no-text, said,
+ * count, drawn-out, bare-end, short, turn, interjection — and whether anything changed.
+ */
+export function groundVoice(voice, { text = '', evidence = '', sources = null } = {}) {
+  if (!voice || typeof voice !== 'object') return { voice: voice ?? null, dropped: [], changed: false };
+  const sentence = String(text ?? '');
+  const said = `${sentence}\n${evidence ?? ''}`;
+  const places = Array.isArray(sources) ? sources : [{ texts: [String(evidence ?? '')], budget: new Map() }];
+  const size = lineSize(sentence);
+  const dropped = [];
+  const out = { ...voice };
+  let rewritten = false;
+  const drop = (field, value, why) => dropped.push({ field, value, why });
+  const cut = (key, why) => {
+    if (out[key] === undefined) return;
+    drop(key, out[key], why);
+    delete out[key];
+  };
+  const keep = (key, list) => {
+    if (list.length) out[key] = list;
+    else delete out[key];
+  };
+  const settle = () => (!dropped.length && !rewritten
+    ? { voice, dropped, changed: false }
+    : { voice: Object.keys(out).length ? out : null, dropped, changed: true });
+  const quiet = QUIET_RE.test(said);
+  if (out.emotion !== undefined) {
+    const word = spokenEmotion(out.emotion);
+    const soft = !size.core && word && (SOFT_FOLDS.has(normalizeEmotion(word)) || quietWord(word));
+    if (!word || soft || (quietWord(word) && !quiet)) {
+      drop('emotion', out.emotion, !word ? 'unknown' : soft ? 'interjection' : 'quiet');
+      delete out.emotion;
+      delete out.intensity;
+    } else if (word !== out.emotion) {
+      // An adverb in the word was the strength: it moves to the intensity rather than being lost.
+      const said = cueWord(out.emotion);
+      const step = /^(?:very|extremely)\s/.test(said) ? 2 : /^slightly\s/.test(said) ? 0 : null;
+      out.emotion = word;
+      if (step !== null && out.intensity === undefined) out.intensity = step;
+      rewritten = true;
+    }
+  }
+  if (!size.core) {
+    // Nothing but 嗯 and 啊: the words carry the sound, so nothing is placed inside them, and a soft mood
+    // or a quiet tone laid over them is the moan itself. A plain mood, a shout, stays.
+    for (const key of ['shifts', 'pauses', 'stress', 'sounds']) cut(key, 'interjection');
+    if (out.tone !== undefined && !['shouting', 'screaming'].includes(out.tone)) cut('tone', 'interjection');
+    return settle();
+  }
+  if (out.tone && quietWord(out.tone) && !quiet) cut('tone', 'quiet');
+  const short = size.units <= SHORT_LINE_UNITS;
+  if (short) for (const key of ['pauses', 'stress']) cut(key, 'short');
+  if (Array.isArray(out.shifts)) {
+    if (short) {
+      // Only a turn to another of Fish's moods is sent; one in the reader's own words stays for the panel.
+      const sent = out.shifts.filter(shift => shift?.emotion);
+      for (const shift of sent) drop('shifts', shift, 'short');
+      keep('shifts', out.shifts.filter(shift => !shift?.emotion));
+    } else {
+      const head = sentence.match(/^[\s\p{P}\p{S}]*/u)[0].length;
+      let current = out.emotion ?? '';
+      const kept = [];
+      for (const shift of out.shifts) {
+        if (!shift?.emotion) {
+          kept.push(shift);
+          continue;
+        }
+        const word = spokenEmotion(shift.emotion);
+        if (!word || (quietWord(word) && !quiet)) drop('shifts', shift, word ? 'quiet' : 'unknown');
+        else if (sentence.indexOf(shift.at) <= head || word === current) drop('shifts', shift, 'turn');
+        else {
+          if (word !== shift.emotion) rewritten = true;
+          kept.push(word === shift.emotion ? shift : { ...shift, emotion: word });
+          current = word;
+        }
+      }
+      keep('shifts', kept);
+    }
+  }
+  if (Array.isArray(out.pauses)) {
+    keep('pauses', out.pauses.filter(pause => {
+      const at = sentence.indexOf(pause?.after ?? '');
+      if (!pause?.after || at < 0) return true;
+      const end = at + pause.after.length;
+      const rest = sentence.slice(end).trimStart();
+      if (DRAWN_BEFORE_RE.test(sentence.slice(0, end).trimEnd()) || DRAWN_AFTER_RE.test(rest)) {
+        drop('pauses', pause, 'drawn-out');
+        return false;
+      }
+      // A pause with nothing said after it is silence the voice fills with breath.
+      if (!lineSize(rest).core) {
+        drop('pauses', pause, 'bare-end');
+        return false;
+      }
+      return true;
+    }));
+  }
+  if (Array.isArray(out.sounds)) {
+    const kept = [];
+    for (const written of out.sounds) {
+      let sound = written;
+      // A sound at the end of a line that trails off would be drawn out with it: it goes where the line
+      // starts instead, when the start is clear. A heart is left where it is: the line ends in it.
+      if (sound?.at === 'end' && DRAWN_END_RE.test(sentence.trimEnd()) && !DRAWN_AFTER_RE.test(sentence.trimStart()) && officialSound(sound.tag)) {
+        sound = { ...sound, at: 'start' };
+        rewritten = true;
+      }
+      // A word Fish was never sent (冷哼, 咳嗽) stays as it is: nothing of it is heard.
+      if (!fishSound(sound?.tag)) {
+        kept.push(sound);
+        continue;
+      }
+      const tag = officialSound(sound.tag);
+      if (!tag) {
+        drop('sounds', sound, 'unknown');
+        continue;
+      }
+      const index = sound.at === 'after' ? sentence.indexOf(sound.after ?? '') : -1;
+      const place = sound.at === 'start' ? 0 : sound.at === 'end' ? sentence.length : index >= 0 ? index + sound.after.length : -1;
+      const before = place > 0 ? sentence.slice(0, place).trimEnd() : '';
+      const after = place >= 0 ? sentence.slice(place).trimStart() : '';
+      if (place >= 0 && (DRAWN_AFTER_RE.test(after) || DRAWN_BEFORE_RE.test(before))) drop('sounds', sound, 'drawn-out');
+      else if (VOICED_SOUND[SOUND_GROUP[tag] ?? tag]?.test(sentence)) drop('sounds', sound, 'said');
+      else if (kept.some(item => officialSound(item?.tag))) drop('sounds', sound, 'count');
+      else if (!spendSound(places, tag)) drop('sounds', sound, 'no-text');
+      else kept.push(sound);
+    }
+    keep('sounds', kept);
+  }
+  return settle();
+}
+
+// What the text says around each line: the narration outside its quotes, and the narration of the lines
+// either side that hold no dialogue — in the floor's own language and, when the caller has it, the
+// other one. `sources` are where a sound may be written for the line: its own paragraph and the one
+// before it, which leads into it. `later` is the one after it, which the line reaches only for what the
+// lines it leads into left (see buildSegments). `evidence` is all of it, the quotes included, for a
+// quiet voice.
+function textAround(utterances, other = null) {
+  const order = [];
+  const whole = new Map();
+  const told = new Map();
+  const spoken = new Set();
+  for (const utterance of utterances) {
+    if (!whole.has(utterance.lineId)) {
+      whole.set(utterance.lineId, '');
+      told.set(utterance.lineId, '');
+      order.push(utterance.lineId);
+    }
+    whole.set(utterance.lineId, `${whole.get(utterance.lineId)}${utterance.anchor ?? utterance.text ?? ''}`);
+    if (utterance.kind === 'quoted') spoken.add(utterance.lineId);
+    else told.set(utterance.lineId, `${told.get(utterance.lineId)}${utterance.text ?? ''}\n`);
+  }
+  const counterpart = other instanceof Map ? other : new Map();
+  const outside = text => splitByPairs(String(text ?? '')).filter(part => !part.spoken).map(part => part.text).join('\n');
+  const sources = new Map();
+  const source = lineId => {
+    if (!sources.has(lineId)) sources.set(lineId, { texts: [told.get(lineId), outside(counterpart.get(lineId))].filter(Boolean), budget: new Map() });
+    return sources.get(lineId);
+  };
+  const result = new Map();
+  const narrated = lineId => lineId !== undefined && !spoken.has(lineId);
+  order.forEach((lineId, index) => {
+    const before = narrated(order[index - 1]) ? [order[index - 1]] : [];
+    const after = narrated(order[index + 1]) ? [order[index + 1]] : [];
+    result.set(lineId, {
+      sources: [lineId, ...before].map(source),
+      later: after.map(source),
+      // The line that narration leads into, which spends it first.
+      leadsInto: after.length ? order[index + 2] : undefined,
+      evidence: [lineId, ...before, ...after].map(id => `${whole.get(id)}\n${counterpart.get(id) ?? ''}`).join('\n'),
+    });
+  });
+  return result;
+}
+
+// Who each spelling is: a cast row's name and every alias of it are one person, and a name the reading
+// reported is whoever the cast knows it as.
+function namedPeople(cast, names = new Map()) {
+  const whose = new Map();
+  for (const entry of Array.isArray(cast) ? cast : []) {
+    const name = String(entry?.name ?? '').trim();
+    if (!name) continue;
+    for (const spelling of [name, ...(Array.isArray(entry.aliases) ? entry.aliases : [])]) {
+      const clean = String(spelling ?? '').trim();
+      if (clean && !whose.has(clean)) whose.set(clean, name);
+    }
+  }
+  return name => {
+    const clean = String(name ?? '').trim();
+    const known = names.get(clean);
+    return whose.get(clean) ?? (known ? whose.get(known) ?? known : clean);
+  };
+}
+
+// The person a sentence names first, or null when it names nobody the floor knows. Of two spellings
+// found at the same place the longer is the name: 莉莉丝 is not 莉莉.
+function firstPersonNamed(spellings, cast, personOf) {
+  const castSpellings = (Array.isArray(cast) ? cast : []).flatMap(entry => [entry?.name, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])]);
+  const finders = [...new Set([...spellings, ...castSpellings].map(name => String(name ?? '').trim()).filter(name => [...name].length >= 2))]
+    .sort((a, b) => b.length - a.length)
+    .map(name => ({ name, pattern: /^[\x20-\x7e]+$/.test(name) ? new RegExp(`\\b${escapeRegex(name)}\\b`, 'i') : null }));
+  return sentence => {
+    let best = null;
+    for (const { name, pattern } of finders) {
+      const at = pattern ? (sentence.match(pattern)?.index ?? -1) : sentence.indexOf(name);
+      if (at >= 0 && (!best || at < best.at)) best = { at, name };
+    }
+    return best ? personOf(best.name) : null;
+  };
+}
+
+// A text cut after each sentence's closing mark and each line break, every piece kept as written.
+function sentencesOf(text) {
+  return String(text ?? '').split(/(?<=[。！？!?；;\n]|\.\s)/).filter(Boolean);
+}
+
 /**
  * Utterances plus labels, in the provider-neutral shape.
  *
@@ -1107,20 +1528,100 @@ export function voiceSummary(voice) {
  * reach the same voice. A label that is missing or invalid costs the utterance its speaker or mood and
  * nothing else; the type falls back to what the quotation marks said. The language is what the label
  * says, else what the script says.
+ *
+ * Every voice is held to the text on the way (groundVoice). `evidence` is the floor's other language by
+ * line id, with the moods its own marks name, when the caller has them; `dropped`, when given, collects
+ * what was taken out and why.
+ *
+ * A written sound is spent in two passes. First every line with its own paragraph and the narration
+ * before it, which leads into it; then a line whose sound found nothing there with the narration after
+ * it too, what the first pass left of it. 「又来了。」艾琳说。/ 莉莉笑出了声。/「你真是个笨蛋。」: the
+ * laugh is the line it leads into, and a sound asked for on the line before cannot take it away, so
+ * correcting that line does not change what this one sends. `ready`, while a reading is still arriving,
+ * holds the ids already read: a line whose next line is not among them waits for it before it takes
+ * anything from the narration between them, and `undecided`, when given, collects the ids of the lines
+ * left waiting so, whose voice may still change. `cast`, rows of `{ name, aliases }`, says which
+ * spellings are one person, so the narration after a line that names its speaker by another name is
+ * still hers.
  */
-export function buildSegments(utterances, labels = new Map(), { knownNames = [], voices = null } = {}) {
+export function buildSegments(utterances, labels = new Map(), { knownNames = [], cast = null, voices = null, evidence = null, dropped = null, ready = null, undecided = null } = {}) {
   const reported = [...labels.values()].map(label => label?.speaker).filter(Boolean);
   const names = unifySpeakerNames(reported, knownNames);
-  return (Array.isArray(utterances) ? utterances : []).map(utterance => {
+  const list = Array.isArray(utterances) ? utterances : [];
+  const around = textAround(list, evidence);
+  const nowhere = { sources: [], later: [], evidence: '' };
+  const lines = list.map(utterance => {
     const label = labels.get(utterance.id) ?? {};
     const type = label.type || (utterance.kind === 'quoted' ? 'dialogue' : 'narration');
-    const lang = label.lang || detectLanguage(utterance.text);
     const rawVoice = voices instanceof Map ? (voices.get(utterance.id) ?? null) : null;
     // A voice that says how but not what mood — the model added restraint to a hinted line — keeps the
     // label's mood under it.
-    const voice = rawVoice && !rawVoice.emotion && label.emotion && label.emotion !== 'neutral'
+    const merged = rawVoice && !rawVoice.emotion && label.emotion && label.emotion !== 'neutral'
       ? { emotion: label.emotion, intensity: label.intensity ?? 1, ...rawVoice }
       : rawVoice;
+    // A label's mood alone is a cue as well — the compile falls back to it — so it is held to the text too.
+    const labelMood = type === 'dialogue' && label.emotion && label.emotion !== 'neutral' ? label.emotion : null;
+    const start = merged ?? (labelMood ? { emotion: labelMood, intensity: label.intensity ?? 1 } : null);
+    const near = around.get(utterance.lineId) ?? nowhere;
+    return { utterance, label, type, merged, labelMood, start, near };
+  });
+  const grounded = new Map();
+  for (const line of lines) {
+    grounded.set(line.utterance.id, groundVoice(line.start, { text: line.utterance.text, evidence: line.near.evidence, sources: line.near.sources }));
+  }
+  // The narration after a line is the next line's first, and it may be about somebody else. A sound
+  // written there reaches this line only once the line it leads into is read — a reading still arriving
+  // has not said yet what that line takes — only from a sentence that names this line's speaker first or
+  // names nobody, and never a breath drawn out, which carries on into what comes next.
+  const idsOf = new Map();
+  for (const utterance of list) {
+    if (!idsOf.has(utterance.lineId)) idsOf.set(utterance.lineId, []);
+    idsOf.get(utterance.lineId).push(utterance.id);
+  }
+  const waiting = lineId => ready instanceof Set && (idsOf.get(lineId) ?? []).some(id => !ready.has(id));
+  const personOf = namedPeople(cast, names);
+  const firstNamed = firstPersonNamed([...reported, ...names.values(), ...(Array.isArray(knownNames) ? knownNames : [])], cast, personOf);
+  // The sentences of a narration that may be this line's speaker's: those that name her first or nobody.
+  // Where the floor's own text writes the sound only in sentences about somebody else, the other
+  // language says the same about them, whatever names it spells them by. A line nobody is named for has
+  // no one to tell apart from the rest.
+  const about = (texts, own, asked) => {
+    if (own === null) return texts;
+    const hers = sentence => [null, own].includes(firstNamed(sentence));
+    const [read = '', ...others] = texts;
+    const sentences = sentencesOf(read);
+    const writes = sentence => asked.some(pattern => pattern.test(sentence));
+    const theirs = sentences.some(writes) && !sentences.some(sentence => writes(sentence) && hers(sentence));
+    return [read, ...(theirs ? [] : others)].map(text => sentencesOf(text).filter(hers).join('')).filter(Boolean);
+  };
+  for (const line of lines) {
+    const first = grounded.get(line.utterance.id);
+    if (!line.near.later.length || !first.dropped.some(item => item.field === 'sounds' && item.why === 'no-text')) continue;
+    if ((first.voice?.sounds ?? []).some(sound => officialSound(sound?.tag))) continue;
+    const asked = first.dropped
+      .filter(item => item.field === 'sounds' && item.why === 'no-text' && !DRAWN_OUT_SOUNDS.has(SOUND_GROUP[item.value?.tag] ?? item.value?.tag))
+      .map(item => SOUND_EVIDENCE[item.value?.tag]).filter(Boolean);
+    const own = line.type === 'dialogue' && line.label.speaker ? personOf(line.label.speaker) : null;
+    const later = line.near.later.map(source => ({ ...source, texts: about(source.texts, own, asked), withholds: DRAWN_OUT_SOUNDS }));
+    // Narration that writes none of the sounds asked for gives the line nothing, now or once more is read.
+    if (!later.some(source => source.texts.some(text => asked.some(pattern => pattern.test(text))))) continue;
+    if (waiting(line.near.leadsInto)) {
+      if (Array.isArray(undecided)) undecided.push(line.utterance.id);
+      continue;
+    }
+    grounded.set(line.utterance.id, groundVoice(line.start, { text: line.utterance.text, evidence: line.near.evidence, sources: [...line.near.sources, ...later] }));
+  }
+  return lines.map(({ utterance, label, type, merged, labelMood, near }) => {
+    const lang = label.lang || detectLanguage(utterance.text);
+    const held = grounded.get(utterance.id);
+    if (held.changed && Array.isArray(dropped)) for (const item of held.dropped) dropped.push({ id: utterance.id, ...item });
+    // Untouched, a segment is exactly what it was, so the audio already made for it is still its audio.
+    let voice = held.changed ? held.voice : merged;
+    // The reading's own word was one Fish does not hear: the label's mood, held to the same text, stands in.
+    if (held.changed && labelMood && !voice?.emotion && held.dropped.some(item => item.field === 'emotion' && item.why === 'unknown')) {
+      const under = { emotion: labelMood, intensity: label.intensity ?? 1 };
+      if (!groundVoice(under, { text: utterance.text, evidence: near.evidence, sources: [] }).changed) voice = { ...under, ...(voice ?? {}) };
+    }
     const base = { id: utterance.id, lineId: utterance.lineId, type, text: utterance.text, anchor: utterance.anchor, lang, voice };
     // When the reading this sentence goes by was asked for: audio from before then is not its audio.
     if (Number(label.at) > 0) base.analyzedAt = Number(label.at);
@@ -1130,7 +1631,7 @@ export function buildSegments(utterances, labels = new Map(), { knownNames = [],
       return { ...base, speaker: NARRATOR, emotion: mood, intensity: mood ? normalizeIntensity(voice.intensity ?? 1) : null };
     }
     const speaker = label.speaker ? (names.get(label.speaker) ?? label.speaker) : null;
-    const emotion = voice?.emotion ? voice.emotion : (label.emotion && label.emotion !== 'neutral' ? label.emotion : null);
+    const emotion = voice?.emotion ? voice.emotion : (!held.changed && labelMood ? labelMood : null);
     return {
       ...base, speaker, emotion, intensity: emotion ? normalizeIntensity(voice?.intensity ?? label.intensity) : null,
       // Where the name came from — the reader, the text, the translation or the model — and what showed it.
@@ -1266,7 +1767,7 @@ export function planVoices(segments, config) {
 // S1 only knows a fixed parenthesised set, so its column stays inside that set.
 const FISH_S2_CUES = Object.freeze({
   happy: ['[satisfied]', '[happy]', '[delighted]'],
-  tender: ['[warm]', '[gentle]', '[tender][soft tone]'],
+  tender: ['[warm]', '[gentle]', '[tender]'],
   sad: ['[disappointed]', '[sad]', '[very sad]'],
   angry: ['[frustrated]', '[angry]', '[furious]'],
   fear: ['[nervous]', '[scared]', '[terrified]'],
@@ -1279,7 +1780,8 @@ const FISH_S2_CUES = Object.freeze({
 });
 const FISH_S1_CUES = Object.freeze({
   happy: ['(satisfied)', '(happy)', '(delighted)'],
-  tender: ['(relaxed)', '(soft tone)', '(soft tone)'],
+  // No soft tone: that is a quiet voice, which only the text may ask for (groundVoice).
+  tender: ['(relaxed)', '(empathetic)', '(empathetic)'],
   sad: ['(disappointed)', '(sad)', '(depressed)'],
   angry: ['(frustrated)', '(angry)', '(angry)(shouting)'],
   fear: ['(nervous)', '(scared)', '(scared)'],
@@ -1406,11 +1908,18 @@ export function applyPunctuationMarks(text, marks, model = 's2-pro', { leading =
   return result.replace(/\s{2,}/g, ' ').trim();
 }
 
-// A sound word as Fish lists it, whichever way the mark spelled it; an unlisted sound is dropped.
-function officialSound(tag) {
+// A sound word as Fish lists it, whichever way the mark spelled it; an unlisted sound is ''.
+function fishSound(tag) {
   const raw = String(tag ?? '').trim();
   if (FISH_SOUNDS.includes(raw)) return raw;
   return Object.hasOwn(SOUND_WORDS, raw) && FISH_SOUNDS.includes(SOUND_WORDS[raw]) ? SOUND_WORDS[raw] : '';
+}
+
+// The sound a sentence goes out with: Fish's word for it, and only one a single speaker makes. A moan
+// and a crowd's laughter are never sent, whatever wrote them.
+function officialSound(tag) {
+  const word = fishSound(tag);
+  return SPOKEN_SOUNDS.includes(word) ? word : '';
 }
 
 /**
@@ -1592,23 +2101,23 @@ const CONSOLE_BANDS = Object.freeze({
   pause: [
     '几乎不停顿：pauses 一律不写。',
     '停顿少：pauses 只在真正哽住、话说一半的地方写，整楼两三处以内。',
-    '停顿感强：犹豫、转折、话没说完的地方可以多写 pauses，允许 long。',
-    '停顿感很强：该停的地方尽量都写 pauses，转折和哽咽用 long；一口气说完更自然的句子仍然不写。',
+    '停顿感强：犹豫、转折、话没说完的地方可以多写 pauses，允许 long；省略号、破折号、波浪号紧挨着的地方不写。',
+    '停顿感很强：该停的地方尽量都写 pauses，转折和哽咽用 long；一口气说完更自然的句子仍然不写，省略号、破折号、波浪号紧挨着的地方也不写。',
   ],
   breath: [
     '不要呼吸声：sounds 里不写 gasping、panting、sighing。',
-    '呼吸声少：只有原文明写了喘、叹气才在 sounds 里写。',
-    '呼吸感明显：紧张、害羞、疲惫、犹豫的句子可以在句首用 sighing 或 gasping，真的该有才写，一句最多一个。',
-    '呼吸感很重：情绪起伏的句子可以在句首或句尾用 sighing 或 gasping，一句仍然最多一个；不要用 panting、moaning 这类拖着的声音来表现呼吸。',
+    '呼吸声少：sighing、gasping 只写在文中明写了叹气、倒吸一口气的句子上，挑最明显的写。',
+    '呼吸感明显：文中写了叹气、倒吸一口气的句子写上 sighing 或 gasping，一句最多一个；文中没写的不加。',
+    '呼吸感很重：文中写到的叹气、倒吸一口气一处不漏，都写上 sighing 或 gasping；文中没写的仍然不加，只有语气词的句子也不加，不要用拖着的声音代替没写出来的呼吸。',
   ],
   grain: [
     '说话顺畅利落：不写表示迟疑的 pauses，不用 soft tone。',
     '口语毛边少：迟疑的短停顿只在明显吞吞吐吐的地方写。',
-    '口语颗粒度高：迟疑、重复、支支吾吾的地方用 short pauses 表现，小声嘀咕的句子给 soft tone。',
-    '口语颗粒度很高：真人说话的毛边要多，迟疑处普遍写 short pauses，含糊小声的句子写 soft tone 或 whispering。',
+    '口语颗粒度高：迟疑、重复、支支吾吾的地方用 short pauses 表现，省略号、破折号、波浪号旁边不写；文中写了小声、嘀咕的句子给 soft tone。',
+    '口语颗粒度很高：真人说话的毛边要多，迟疑处普遍写 short pauses，省略号、破折号、波浪号旁边不写；文中写了小声、嘀咕、耳语的句子写 soft tone 或 whispering。',
   ],
   intensity: [
-    '情感强度极低：intensity 一律写 0，情绪词选克制的（calm、gentle、indifferent 这类），不要 hysterical 这类爆发词。',
+    '情感强度极低：intensity 一律写 0，情绪词选克制的（calm、relaxed、indifferent 这类），不要 hysterical 这类爆发词。',
     '情感强度低：intensity 多写 0，最高 1；情绪词选含蓄的。',
     '情感强度高：对白句都要给 emotion，不要省略；intensity 多写 1 和 2，明显的情绪句写 2。',
     '情感强度很高：对白句全部给 emotion，一半以上写 intensity 2，允许 hysterical、excited、scared 这类强烈的词。',
@@ -1617,7 +2126,7 @@ const CONSOLE_BANDS = Object.freeze({
     '情绪幅度极小：整楼情绪平稳，相邻句子的情绪词尽量一致，不写 shouting、screaming 这类 tone。',
     '情绪幅度小：整体平稳，情绪词少换，intensity 不跳变。',
     '情绪幅度大：情绪跟着句意起伏，相邻句子可以从平静跳到激动，intensity 可以 0 到 2 跳变。',
-    '情绪幅度很大：激动处写 shouting，压抑处写 whispering，intensity 大起大落。',
+    '情绪幅度很大：intensity 大起大落；文中写了喊、吼的句子写 shouting，写了小声、耳语的句子写 whispering。',
   ],
   speed: [
     '语速很慢：对白句多写 speed: slow，不写 fast。',
@@ -1627,9 +2136,9 @@ const CONSOLE_BANDS = Object.freeze({
   ],
   expression: [
     '不要非语言声音：sounds 一律不写。',
-    '声音表现克制：sounds 只在原文明写了笑、叹气、咳嗽时写。',
-    '声音表现外放：合适的地方可以写 sounds（笑声、叹气、清嗓子），贴合当下的情绪就写，不必凑数。',
-    '声音表现很外放：情绪明显的对白句可以各配一个 sounds，笑就 laughing 或 chuckling，难过就 sobbing 或 sighing；一句最多一个，平静的句子仍然不写。',
+    '声音表现克制：sounds 只写在文中明写了笑、叹气、咳嗽的句子上。',
+    '声音表现外放：文中写了笑、叹气、哭、清嗓子的地方，可以给对应的句子写 sounds，贴合当下的情绪就写，不必凑数；文中没写的不加。',
+    '声音表现很外放：文中写到的笑、叹气、哭、清嗓子一处不漏，都写进对应句子的 sounds，笑就 laughing 或 chuckling，哭就 sobbing；文中没写的仍然不加，一句最多一个，只有语气词的句子不加。',
   ],
 });
 
@@ -1638,7 +2147,7 @@ const CONSOLE_BANDS = Object.freeze({
  * speak, and the further out, the more they demand; the reader's own rules ride along as written.
  * The numbers themselves never go out.
  */
-export function consoleDirections(console) {
+export function consoleDirections(console, { keys = null, quiet = [] } = {}) {
   if (!console || typeof console !== 'object') return [];
   const lines = [];
   // 声音表现倾向 decides whether there are non-verbal sounds at all. When it says none, 气息感 does not
@@ -1648,6 +2157,9 @@ export function consoleDirections(console) {
   for (const [key, bands] of Object.entries(CONSOLE_BANDS)) {
     const value = Number(console[key]);
     if (!Number.isFinite(value)) continue;
+    // A request that asks for fewer fields hears only the sliders about those fields — and still the ones
+    // named `quiet` when they are turned all the way down, so a reader who silenced a thing is obeyed.
+    if (keys && !keys.includes(key) && !(quiet.includes(key) && value <= 15)) continue;
     if (key === 'breath' && silent && value >= 65) continue;
     if (value <= 15) lines.push(bands[0]);
     else if (value <= 35) lines.push(bands[1]);
@@ -1962,7 +2474,7 @@ export const FISH_ADAPTER = Object.freeze({
   id: 'fish',
   label: 'Fish Audio',
   /** The words the analysis may use for a mood, a tone and a sound: the ones this provider hears. */
-  vocabulary: Object.freeze({ emotions: FISH_EMOTIONS, tones: FISH_TONES, sounds: FISH_SOUNDS }),
+  vocabulary: Object.freeze({ emotions: FISH_EMOTIONS, tones: FISH_TONES, sounds: SPOKEN_SOUNDS }),
   /** The text one sentence sends: its cues in the provider's markup ahead of the words. */
   sentenceText: (item, tts) => sentenceFishText(item, tts.fish, fishCompileOptions(tts)),
   /** The provider's prosody parameters for one sentence; a floor sent whole has the floor's. */

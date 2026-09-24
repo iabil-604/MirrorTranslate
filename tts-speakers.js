@@ -1,4 +1,4 @@
-import { isPlaceholderSpeaker, unifySpeakerNames } from './core.js?v=0.36.0-beta.2';
+import { isPlaceholderSpeaker, unifySpeakerNames } from './core.js?v=0.37.0-beta.1';
 
 // ---------------------------------------------------------------------------------------------
 // Who is speaking, read off the text itself.
@@ -391,6 +391,9 @@ export function pinSpeakers(labels, resolved, { fallback = 'model' } = {}) {
     const had = out.get(id) ?? null;
     const label = { ...(had ?? {}) };
     if (entry?.speaker) {
+      // A line the reader, or the story's own mark, gave to somebody is spoken, whatever a model made
+      // of the quote: it is read in that person's voice, not the narrator's.
+      if ((entry.source === 'manual' || entry.source === 'tag') && label.type === 'narration') delete label.type;
       // A label carried over from the other language keeps saying where its name was read.
       const carried = entry.source === 'hint' && label.speaker === entry.speaker && had?.speakerSource;
       label.speaker = entry.speaker;

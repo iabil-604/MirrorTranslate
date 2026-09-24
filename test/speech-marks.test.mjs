@@ -79,6 +79,12 @@ test('a mood is heard in Fish\'s own words, whichever language the mark wrote it
   assert.deepEqual(speechMood('悲伤'), { emotion: 'sad', tone: '' }, 'the panel\'s own labels are understood too');
   assert.deepEqual(speechMood('耳语'), { emotion: '', tone: 'whispering' });
   assert.deepEqual(speechMood('不存在的情绪'), { emotion: '', tone: '' });
+  // Fish's own tones of more than one word, as a caller or a mark writes them.
+  assert.deepEqual(speechMood('soft tone'), { emotion: '', tone: 'soft tone' });
+  assert.deepEqual(speechMood('Soft  Tone'), { emotion: '', tone: 'soft tone' });
+  assert.deepEqual(speechMood('生气 in a hurry tone'), { emotion: 'angry', tone: 'in a hurry tone' });
+  assert.deepEqual(speechMood('happy, soft tone'), { emotion: 'happy', tone: 'soft tone' });
+  assert.deepEqual(speechMood('soft tones'), { emotion: '', tone: '' }, 'only the phrase itself');
   for (const [, english] of SPEECH_MOODS) assert.ok(FISH_EMOTIONS.includes(english), `${english} is a word Fish knows`);
 });
 

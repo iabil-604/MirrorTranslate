@@ -17,11 +17,14 @@ import {
   createTranslationSignature,
   extractReasoningText,
   detectUnmarkedAffixes,
+  hasLegacyTranslation,
   DEFAULT_COLORING,
   normalizeColoring,
   normalizeSpeakerList,
   SPEAKER_CLASS,
-  describeSpeechShape,
+  isPlaceholderSpeaker,
+  placeQuoteMarks,
+  readQuoteMark,
   splitSpeechParts,
   unifySpeakerNames,
   looksUntranslated,
@@ -81,7 +84,7 @@ import {
   withoutSpeechMarks,
   readSpeechAttributes,
   speechMarkedLine,
-} from './core.js?v=0.36.0-beta.2';
+} from './core.js?v=0.37.0-beta.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -140,10 +143,10 @@ import {
   settledSpans,
   fishLivePayload,
   speechMood,
-} from './tts.js?v=0.36.0-beta.2';
-import { createTtsStore } from './tts-store.js?v=0.36.0-beta.2';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.36.0-beta.2';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.36.0-beta.2';
+} from './tts.js?v=0.37.0-beta.1';
+import { createTtsStore } from './tts-store.js?v=0.37.0-beta.1';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.37.0-beta.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.37.0-beta.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -152,7 +155,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.36.0-beta.2';
+} from './processing.js?v=0.37.0-beta.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -169,13 +172,13 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.36.0-beta.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.36.0-beta.2';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.36.0-beta.2';
-import { createCall, createCallHistory } from './call.js?v=0.36.0-beta.2';
-import { createPcmPlayer } from './pcm-player.js?v=0.36.0-beta.2';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest } from './tts-cloud.js?v=0.36.0-beta.2';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.36.0-beta.2';
+} from './prompts.js?v=0.37.0-beta.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.37.0-beta.1';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.37.0-beta.1';
+import { createCall, createCallHistory } from './call.js?v=0.37.0-beta.1';
+import { createPcmPlayer } from './pcm-player.js?v=0.37.0-beta.1';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest } from './tts-cloud.js?v=0.37.0-beta.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.37.0-beta.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -183,21 +186,22 @@ import {
   computeSafeBand,
   emphasisContour,
   isNeutralColor,
+  normalizeEmotion,
   oklchToSrgb,
   parseCssColor,
   resolveSegmentStyle,
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.36.0-beta.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.36.0-beta.2';
+} from './palette.js?v=0.37.0-beta.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.37.0-beta.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.36.0-beta.2';
+} from './diagnostics.js?v=0.37.0-beta.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -229,6 +233,19 @@ const runtime = {
   interceptorSeen: false,
   interceptorWarned: false,
   promptFallbackStrips: 0,
+  // What the chat's last message was when the open generation began: its reply is told apart from it.
+  generationBase: null,
+  // The host announced the open generation's end; whether its reply ever came is known at the next start.
+  generationEnded: false,
+  // The floor the last reply was taken on, so a script announcing the same render again is not logged.
+  consumedFloor: null,
+  // A generation that ended with its reply not rendered yet when the next one began: its reply is still
+  // taken when it comes (a script held the render while the reader sent again).
+  lateReply: null,
+  // The chat the last CHAT_CHANGED was about: the same chat announced again was only redrawn.
+  chatSeen: null,
+  // The chat and body tags a missing body tag was last pointed out for.
+  bodyTagNoted: '',
   // The host's regex engine, borrowed so a floor with only its translation left in it goes to the main
   // model through the same prompt regexes as its bilingual text would have. Null until loaded, or on a
   // host without it.
@@ -248,8 +265,9 @@ const runtime = {
   thinkingOpen: null,
   // Who the model reported on the last floor, and whether the palette could paint each of them.
   speakerCoverage: null,
-  // Every auto-coloured name seen this session, so the generated stylesheet covers them too.
-  autoSpeakerNames: new Set(),
+  // Every auto-coloured name seen this session, per character card or group chat, so the generated
+  // stylesheet covers them and the next floor's roster knows them. One cast never reaches another's roster.
+  autoSpeakerNames: new Map(),
   subscribers: new Set(),
   diagnosticSubscribers: new Set(),
   update: { status: 'idle', installType: null, details: null },
@@ -308,6 +326,8 @@ const runtime = {
     // Floors a generation just wrote, waiting to be read aloud by themselves; and the texts already
     // read that way, so the passes after a translation lands do not read them again.
     fresh: new Set(),
+    // Floors an automatic translation was started for and has not settled: id → { since, token }.
+    awaiting: new Map(),
     autoRead: new Set(),
     // 边写边读: the reading of text still being written, the floors read that way, and the generation
     // they belong to (when it started, so the log can say how long the first word took).
@@ -410,7 +430,7 @@ const CONTROL_CENTER_MARKUP = `
  </div></div>
  <details class="jy-advanced"><summary>请求参数</summary><div class="jy-form-grid">
  <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
- </div></details><details class="jy-advanced"><summary>这条连接的后置提示词（附在每次请求的最末尾）</summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">列出全局挂载与当前角色卡激活的世界书条目；勾选后节约模式下仅注入这些内容，白名单跟随当前角色卡保存。一个都不勾则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
+ </div></details><details class="jy-advanced"><summary>这条连接的后置提示词（附在每次请求的最末尾）</summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存，点「保存连接」生效；一本都不开则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
 </div>
 <footer class="jy-footer"><span class="jy-save-note">修改后保存设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-settings">保存设置</button></footer>
 </section>
@@ -798,7 +818,8 @@ function saveSettings(next) {
   const previousRules = getActiveProcessingProfile(previous).regexScripts;
   const visualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
     || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
-  if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || visualChanged) cancelPendingWork();
+  // A change of look re-renders translations already written; the reply being generated is still owed one.
+  if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || visualChanged) cancelPendingWork({ gate: false });
   context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, active);
   context.extensionSettings[MODULE_ID] = runtime.settings;
   context.saveSettingsDebounced?.();
@@ -853,8 +874,9 @@ async function restyleCurrentChat(settings) {
   const changes = [];
   const updateExtra = (extra, text) => {
     // Keep the original provenance if an edited legacy block could not be migrated.
-    // New owned blocks can be read without consulting these visible-affix settings.
-    if (text.includes(`{${INVISIBLE_MARKER}`)) return extra;
+    // New owned blocks can be read without consulting these visible-affix settings. Everything else
+    // records the affixes the text now carries: the next restyle keeps each body by them.
+    if (hasLegacyTranslation(text)) return extra;
     return { ...extra, [MESSAGE_META_KEY]: {
       ...extra?.[MESSAGE_META_KEY], schema_version: 4,
       segment_prefix: settings.segmentPrefix, segment_suffix: settings.segmentSuffix,
@@ -880,7 +902,13 @@ async function restyleCurrentChat(settings) {
     // Hidden floors are system messages to the host and still shown, with their affixes.
     if (!message || message.is_user || typeof message.mes !== 'string') continue;
     mirrorsChanged = false;
-    const next = { mes: restyleBilingual(message.mes, settings, message.extra?.[MESSAGE_META_KEY]), extra: message.extra };
+    // A host that keeps no record per swipe leaves the record of the swipe translated last on the floor,
+    // whichever swipe is shown. Its affixes are not this text's, so the body is not kept by them.
+    const shown = Number(message.swipe_id ?? 0);
+    const record = message.extra?.[MESSAGE_META_KEY];
+    const ownRecord = !Array.isArray(message.swipes) || Boolean(message.swipe_info?.[shown])
+      || !(Number(record?.schema_version) >= 4) || Number(record?.swipe_id) === shown;
+    const next = { mes: restyleBilingual(message.mes, settings, ownRecord ? record : undefined), extra: message.extra };
     if (next.mes !== message.mes) next.extra = updateExtra(message.extra, next.mes);
     next.extra = restyleMirror(next.extra);
     if (Array.isArray(message.swipes)) {
@@ -1184,10 +1212,23 @@ function readableWorldInfoEntries() {
   return entries;
 }
 
+/**
+ * The world books switched on for the token-saving mode for this card. A card saved before books could
+ * be switched has on the books its ticked entries come from.
+ */
+function worldInfoBooksOn(settings = runtime.settings, characterKey = worldInfoCharacterKey()) {
+  const saved = settings.worldInfoBooks?.[characterKey];
+  if (Array.isArray(saved)) return new Set(saved);
+  return new Set((settings.worldInfoWhitelist?.[characterKey] ?? []).map(pick => String(pick.world)));
+}
+
 function whitelistedWorldbookContent() {
   const picks = runtime.settings.worldInfoWhitelist?.[worldInfoCharacterKey()];
   if (!picks?.length) return '';
-  const wanted = new Set(picks.map(pick => `${pick.world}.${pick.uid}`));
+  // An entry goes in when it is ticked and its book is switched on.
+  const books = worldInfoBooksOn();
+  const wanted = new Set(picks.filter(pick => books.has(String(pick.world))).map(pick => `${pick.world}.${pick.uid}`));
+  if (!wanted.size) return '';
   const context = getContext();
   // The host expands macros before a worldbook entry reaches the main model. Sending {{char}} and
   // friends verbatim to the translator loses exactly the names it needs most.
@@ -1220,37 +1261,80 @@ function speakerPaletteFor(settings = runtime.settings) {
   return normalizeSpeakerList(settings?.speakerPalette?.[worldInfoCharacterKey()]);
 }
 
-// The roster handed to the model. A closed list turns "who is speaking" from an open-ended naming
-// problem into a multiple-choice question, which is the whole reason this stays reliable.
+// Every name and spelling the palette knows, for the reading's name matching. The translation's
+// roster is annotationRoster, which keeps each person's spellings together.
 function speakerRoster(settings = runtime.settings) {
   const names = speakerPaletteFor(settings).flatMap(speaker => [speaker.name, ...speaker.aliases]);
   return [...new Set(names.filter(Boolean))];
 }
 
-// The names the translation is asked to label speakers with: the colouring's palette, and, with the
-// reading on, the cast the voices are registered under, so a label reaches its voice by name.
 /**
  * The characters' consoles as sentences: the default one first, under the name every reading knows
  * it by, then each row that was set apart. Nothing goes out for a console left at the middle.
  */
-function ttsStyles(settings = runtime.settings) {
+function ttsStyles(settings = runtime.settings, only = {}) {
   const tts = ttsSettings(settings);
   const styles = [];
-  const base = consoleDirections(tts.console);
+  const base = consoleDirections(tts.console, only);
   if (base.length) styles.push({ name: '默认', rules: base });
   for (const row of ttsVoicesFor(settings)) {
-    const own = row.console ? consoleDirections(row.console) : [];
+    const own = row.console ? consoleDirections(row.console, only) : [];
     if (own.length) styles.push({ name: row.name, rules: own });
   }
   return styles;
 }
 
+// The translation is asked for moods, strengths, tones and a sound where the text writes one, so it
+// hears the sliders about those. Pauses and speed are not its to write; of the grain slider it hears
+// only the end that forbids a soft tone, so a reader who turned that off is obeyed there too.
+const TRANSLATION_CONSOLE = Object.freeze({ keys: Object.freeze(['intensity', 'range', 'breath', 'expression']), quiet: Object.freeze(['grain']) });
+
 function translationStyles(settings = runtime.settings) {
-  return ttsSettings(settings).enabled ? ttsStyles(settings) : [];
+  return ttsSettings(settings).enabled ? ttsStyles(settings, TRANSLATION_CONSOLE) : [];
 }
 
+/** The names auto-colouring has given this card's speakers so far this session; a group chat is one cast. */
+function autoSpeakerNames() {
+  const context = getContext();
+  const key = context.groupId !== null && context.groupId !== undefined ? `group:${context.groupId}` : worldInfoCharacterKey();
+  if (!runtime.autoSpeakerNames.has(key)) runtime.autoSpeakerNames.set(key, new Set());
+  return runtime.autoSpeakerNames.get(key);
+}
+
+// A card or a persona named for more than one person: 「卡米拉 & 露娜」, 「Rin & Sakura」, 「A·B」.
+const MANY_NAMES_RE = /[&＆/／、,，+＋·・•･=＝]|\s/u;
+
+/**
+ * The people the translation is asked to name, each once with the other spellings they go by: the
+ * voiced characters when the reading is on, then the palette, the card's character and the reader —
+ * the two who speak most — then whoever this card's floors have already been painted for. Anyone else
+ * is named the way the translation names them, and gets a colour of their own (see
+ * resolvedSpeakerColors). The card's and the reader's names join only as one person's name the roster
+ * does not know yet: a card named for two people offered as one merged them into one colour, and a
+ * name the reading throws away (你, 她) would only be asked for to be lost.
+ */
 function annotationRoster(settings = runtime.settings) {
-  return ttsSettings(settings).enabled ? ttsKnownNames(settings) : speakerRoster(settings);
+  const context = getContext();
+  const entries = new Map();
+  const add = (name, aliases = []) => {
+    const clean = String(name ?? '').trim();
+    if (!clean) return;
+    const entry = entries.get(clean) ?? { name: clean, aliases: [] };
+    for (const alias of aliases ?? []) {
+      const spelling = String(alias ?? '').trim();
+      if (spelling && spelling !== clean && !entry.aliases.includes(spelling)) entry.aliases.push(spelling);
+    }
+    entries.set(clean, entry);
+  };
+  if (ttsSettings(settings).enabled) for (const row of ttsVoicesFor(settings)) add(row.name, row.aliases);
+  for (const speaker of speakerPaletteFor(settings)) add(speaker.name, speaker.aliases);
+  const known = spelling => entries.has(spelling) || [...entries.values()].some(entry => entry.aliases.includes(spelling));
+  for (const name of [context.name2, context.name1]) {
+    const clean = String(name ?? '').trim();
+    if (clean && !MANY_NAMES_RE.test(clean) && !isPlaceholderSpeaker(clean) && !known(clean)) add(clean);
+  }
+  for (const name of autoSpeakerNames()) add(name);
+  return [...entries.values()];
 }
 
 // Hair colours cluster: two blondes in one cast would otherwise get near-identical speech. Hues are
@@ -1318,8 +1402,17 @@ function canonicalAnnotations(settings, annotations) {
   const quotesOf = mark => (Array.isArray(mark?.quotes) ? mark.quotes : []);
   const reported = [...annotations.values()].flatMap(mark => [mark?.speaker, ...quotesOf(mark).map(quote => quote?.speaker)]).filter(Boolean);
   if (!reported.length) return annotations;
-  const names = unifySpeakerNames(reported, [...speakerRoster(settings), ...runtime.autoSpeakerNames]);
-  const canonical = speaker => (speaker ? names.get(String(speaker).trim()) ?? speaker : speaker);
+  const roster = annotationRoster(settings);
+  const names = unifySpeakerNames(reported, roster.flatMap(entry => [entry.name, ...entry.aliases]));
+  // A spelling the roster keeps under somebody's name is that person. Without this a voice row's alias
+  // took a colour of its own beside the name it belongs to: one person in two colours.
+  const own = new Set(roster.map(entry => entry.name));
+  const owner = new Map(roster.flatMap(entry => entry.aliases.filter(alias => !own.has(alias)).map(alias => [alias, entry.name])));
+  const canonical = speaker => {
+    if (!speaker) return speaker;
+    const unified = names.get(String(speaker).trim()) ?? speaker;
+    return owner.get(unified) ?? unified;
+  };
   const result = new Map();
   for (const [id, mark] of annotations) {
     const speaker = canonical(mark?.speaker);
@@ -1338,89 +1431,138 @@ function canonicalAnnotations(settings, annotations) {
  *
  * Returns null when nothing would be painted, so a floor translated with colouring off is written
  * byte-for-byte the way it always was.
+ *
+ * A unit is one paragraph of the floor, often several lines: a line of narration and the line of
+ * dialogue it leads into, or two people answering each other. Speaker colour goes on the quoted runs,
+ * each by the mark placed on it — placeQuoteMarks, the same placing the reading uses. A unit used to
+ * be painted only when every line carried the same speaker and the same mood, so the narrated line
+ * the request tells the model to leave unnamed, a line it left unmarked, or a second person in the
+ * paragraph cost the whole paragraph its colour. The emotion's typography covers the whole unit, so it
+ * goes on only when the lines that name a mood agree on it.
  */
 function buildSegmentStyler(settings, reportedAnnotations) {
   const coloring = activeColoring(settings);
   const band = coloring.band;
   if (!band || (!coloring.speakers && !coloring.emotions) || !(reportedAnnotations instanceof Map) || !reportedAnnotations.size) return null;
   const annotations = canonicalAnnotations(settings, reportedAnnotations);
-  const named = [...annotations.values()].map(mark => mark?.speaker).filter(Boolean);
+  // Every name the marks carry, the runs' own included: somebody named only on a run of a line that
+  // another person opens still needs a colour. Each name counts once per line.
+  const named = [...annotations.values()].flatMap(mark => [...new Set([
+    mark?.speaker,
+    ...(Array.isArray(mark?.quotes) ? mark.quotes.map(quote => quote?.speaker) : []),
+  ].filter(Boolean))]);
   const speakers = coloring.speakers ? resolvedSpeakerColors(settings, named) : new Map();
   // Say out loud who the model reported and who the palette recognised. A speaker that resolves to
   // nothing costs the line its colour, and with nothing written down that is invisible.
   reportSpeakerCoverage(named, speakers, coloring);
-  return (ids, texts = []) => {
-    // A multi-line unit only gets a colour when the whole unit agrees; mixed speakers in one block
-    // cannot be painted separately without splitting the block, so it stays neutral.
-    const marks = ids.map(id => annotations.get(id)).filter(Boolean);
-    if (marks.length !== ids.length || !marks.length) return null;
-    const first = marks[0];
-    if (marks.some(mark => mark.speaker !== first.speaker || mark.emotion !== first.emotion)) return null;
-    const speaker = coloring.speakers ? speakers.get(String(first.speaker ?? '')) : null;
-    const emotion = coloring.emotions ? first.emotion : '';
-    if (!speaker && !emotion) return null;
+  // Both spellings of the colour, and both marked important.
+  //
+  // `-webkit-text-fill-color` decides the painted glyph in every WebKit and Blink browser and wins
+  // over `color` outright — themes set it for gradient text. When they do, the glyphs take the
+  // theme's colour while getComputedStyle still reports ours, so the colour looks like it is being
+  // applied and simply never appears. Writing both is a harmless duplicate when no theme does it.
+  const toInline = items => items
+    .flatMap(item => (item.startsWith('color:') ? [item, `-webkit-text-fill-${item}`] : [item]))
+    .map(item => `${item} !important`)
+    .join(';');
+  // One person at one mood, the way a quoted run wears it.
+  const runPaint = mark => {
+    const speaker = coloring.speakers && mark?.speaker ? speakers.get(String(mark.speaker)) : null;
+    if (!speaker) return null;
     const style = resolveSegmentStyle({
-      speakerColor: speaker?.source || speaker?.base || '',
-      name: speaker?.name ?? '',
-      emotion,
-      intensity: first.intensity,
+      speakerColor: speaker.source || speaker.base || '',
+      name: speaker.name,
+      emotion: coloring.emotions ? mark.emotion : '',
+      intensity: mark.intensity,
       band,
       vividness: coloring.vividness,
     });
-    // Speaker colour belongs to the words someone actually said. A unit with no quoted span in it
-    // is narration and wears nobody's colour; a unit that mixes narration with a quoted line paints
-    // only the quoted runs. The colour used to cover the whole line, which is how 「あ、そう」と呟き、
-    // 通話を切った ended up with its narration in the speaker's pink.
-    const shape = speaker ? describeSpeechShape(texts) : 'narration';
-    // All-speech units keep the old shape exactly: colour on the wrapper, rhythm inside it.
-    const paintsOutside = Boolean(speaker) && shape === 'spoken';
-    const paintsInside = Boolean(speaker) && shape === 'mixed';
+    return {
+      speaker,
+      className: `${SPEAKER_CLASS}-${speakerSlug(speaker.name)}`,
+      css: toInline(style.declarations.filter(item => item.startsWith('color:'))),
+    };
+  };
+  return (ids, texts = []) => {
+    // Each line with its speech cut out and a paint, or none, for every quoted run in it.
+    const lines = ids.map((id, index) => {
+      const text = String(texts[index] ?? '');
+      const mark = annotations.get(id) ?? null;
+      const parts = splitSpeechParts(text);
+      const placed = placeQuoteMarks(parts.filter(part => part.spoken).map(part => part.text), mark);
+      return { id, text, mark, parts, paints: placed.map(runPaint) };
+    });
+    if (!lines.some(line => line.mark)) return null;
+    const runs = lines.flatMap(line => line.paints);
+    const painted = runs.filter(Boolean);
+    const who = [...new Set(painted.map(paint => paint.speaker.name))];
+    // Speaker colour belongs to the words someone actually said. Narration wears nobody's colour, which
+    // is how 「あ、そう」と呟き、通話を切った stopped carrying the speaker's pink over its narration.
+    const narrated = lines.some(line => line.parts.some(part => !part.spoken && part.text.trim()));
+    // One person says every quoted run and nothing is narrated: the old shape exactly, colour on the
+    // wrapper and rhythm inside it. Anything else paints the runs one by one.
+    const sole = runs.length > 0 && painted.length === runs.length && who.length === 1 && !narrated ? painted[0].speaker : null;
+    const paintsInside = !sole && painted.length > 0;
+    // The unit's mood: the lines that name one must agree on it, read through the palette's fold so
+    // that one person's excited and happy are the same typography. A calm line names no mood, and does
+    // not cancel the angry one beside it. The typography dresses the whole unit, so a line of narration
+    // that nobody marked keeps the unit plain: its words were never said in that mood.
+    const moodOf = line => {
+      const mood = normalizeEmotion(line.mark?.emotion);
+      return mood === 'neutral' ? '' : mood;
+    };
+    const moods = coloring.emotions ? [...new Set(lines.map(moodOf).filter(Boolean))] : [];
+    const bare = lines.some(line => line.text.trim() && !line.parts.some(part => part.spoken) && !moodOf(line));
+    const emotion = moods.length === 1 && !bare ? moods[0] : '';
+    const intensity = emotion ? lines.find(line => moodOf(line) === emotion)?.mark?.intensity : undefined;
+    if (!sole && !paintsInside && !emotion) return null;
+    const style = resolveSegmentStyle({
+      speakerColor: sole?.source || sole?.base || '',
+      name: sole?.name ?? '',
+      emotion,
+      intensity,
+      band,
+      vividness: coloring.vividness,
+    });
     // Emotion-only mode leaves the colour alone and changes weight and shape instead.
-    const declarations = paintsOutside ? style.declarations : style.declarations.filter(item => !item.startsWith('color:'));
+    const declarations = sole ? style.declarations : style.declarations.filter(item => !item.startsWith('color:'));
     if (!declarations.length && !paintsInside) return null;
     // Two carriers on purpose. The inline style holds the fully resolved colour, including whatever
     // the emotion did to it. The classes carry the same information through the host's own
     // stylesheet, so a sanitiser that drops style attributes still leaves speakers distinguishable.
+    // The slug class travels with the colour: on the wrapper for a one-person all-speech unit, on
+    // each quoted run otherwise, nowhere for narration.
     const classes = [SPEAKER_CLASS];
-    // The slug class paints through the host stylesheet, so it travels with the colour: on the
-    // wrapper for an all-speech unit, on the quoted runs for a mixed one, nowhere for narration.
-    const speakerClass = speaker ? `${SPEAKER_CLASS}-${speakerSlug(speaker.name)}` : '';
-    if (paintsOutside) classes.push(speakerClass);
+    if (sole) classes.push(`${SPEAKER_CLASS}-${speakerSlug(sole.name)}`);
     if (style.emotion && style.emotion !== 'neutral' && style.intensity) {
       classes.push(`jy-emo-${style.emotion}`, `jy-emo-l${style.intensity}`);
     }
-    const label = [speaker?.name, style.emotion && EMOTION_STYLES[style.emotion]?.label].filter(Boolean).join(' · ');
-    // Both spellings of the colour, and both marked important.
-    //
-    // `-webkit-text-fill-color` decides the painted glyph in every WebKit and Blink browser and wins
-    // over `color` outright — themes set it for gradient text. When they do, the glyphs take the
-    // theme's colour while getComputedStyle still reports ours, so the colour looks like it is being
-    // applied and simply never appears. Writing both is a harmless duplicate when no theme does it.
-    const toInline = items => items
-      .flatMap(item => (item.startsWith('color:') ? [item, `-webkit-text-fill-${item}`] : [item]))
-      .map(item => `${item} !important`)
-      .join(';');
+    const label = [who.join('、'), style.emotion && EMOTION_STYLES[style.emotion]?.label].filter(Boolean).join(' · ');
     const inline = toInline(declarations);
-    // The same colour the wrapper would have carried, ready to ride on the quoted runs instead.
-    const speechInline = toInline(style.declarations.filter(item => item.startsWith('color:')));
     // The rhythm rides on inner spans so the outer one keeps the colour and the classes: a size step
     // inherits the speaker's colour instead of restating it, and a sanitiser that drops the inner
     // tags leaves the line whole and coloured.
     const rhythm = translation => {
-      const contour = emphasisContour(translation, { emotion, intensity: first.intensity });
+      const contour = emphasisContour(translation, { emotion, intensity });
       return contour?.map(piece => ({
         text: piece.text,
         css: piece.scale === 1 ? '' : `font-size:${piece.scale.toFixed(3)}em !important`,
       })) ?? null;
     };
-    // Mixed lines trade rhythm for getting the colour right: the contour reads a whole line at a
-    // time, and a line cut into speech and narration is no longer one line to it.
-    const paintSpeech = translation => {
-      const parts = splitSpeechParts(translation);
-      if (!parts.some(part => part.spoken)) return null;
-      return parts.map(part => (part.spoken
-        ? { text: part.text, className: speakerClass, css: speechInline }
-        : { text: part.text }));
+    // Painted runs trade rhythm for getting the colour right: the contour reads a whole line at a
+    // time, and a line cut into speech and narration is no longer one line to it. The assembler hands
+    // over each line's id; a caller that does not is matched by the text.
+    const byId = new Map(lines.map(line => [line.id, line]));
+    const paintSpeech = (translation, id) => {
+      const line = byId.get(id) ?? lines.find(item => item.text === translation);
+      if (!line || line.text !== translation || !line.paints.some(Boolean)) return null;
+      let run = 0;
+      return line.parts.map(part => {
+        if (!part.spoken) return { text: part.text };
+        const paint = line.paints[run];
+        run += 1;
+        return paint ? { text: part.text, className: paint.className, css: paint.css } : { text: part.text };
+      });
     };
     const emphasis = paintsInside ? paintSpeech : (coloring.rhythm === false ? null : rhythm);
     return {
@@ -1428,9 +1570,10 @@ function buildSegmentStyler(settings, reportedAnnotations) {
       close: '</span>',
       emphasis,
       // Tells the assembler to drop the colour out of any wrapper carried over from the original
-      // line: two colours on one line would only mean the outer one losing without saying so.
-      // True for the mixed case as well, where the colour lands inside rather than on the wrapper.
-      paintsColor: paintsOutside || paintsInside,
+      // line: two colours on one line would only mean the outer one losing without saying so. Painted
+      // run by run, only the lines with a painted run lose it; a line nobody painted, an alarm the
+      // original wrote in red, keeps its red.
+      paintsColor: sole ? true : paintsInside ? id => Boolean(byId.get(id)?.paints.some(Boolean)) : false,
     };
   };
 }
@@ -1463,8 +1606,8 @@ function reportSpeakerCoverage(named, speakers, coloring) {
   runtime.speakerCoverage = coverage;
   let discovered = false;
   for (const item of coverage.reported) {
-    if (!item.painted || item.registered || runtime.autoSpeakerNames.has(item.name)) continue;
-    runtime.autoSpeakerNames.add(item.name);
+    if (!item.painted || item.registered || autoSpeakerNames().has(item.name)) continue;
+    autoSpeakerNames().add(item.name);
     discovered = true;
   }
   // A name first seen on this floor needs its rule before the floor is painted, or the class-based
@@ -1506,7 +1649,7 @@ function syncSpeakerStylesheet(settings = runtime.settings) {
   const existing = document.getElementById(SPEAKER_STYLE_ID);
   const coloring = activeColoring(settings);
   const resolved = coloring.speakers && coloring.band
-    ? resolvedSpeakerColors(settings, [...runtime.autoSpeakerNames])
+    ? resolvedSpeakerColors(settings, [...autoSpeakerNames()])
     : new Map();
   if (!resolved.size) {
     existing?.remove();
@@ -1542,11 +1685,7 @@ function readStoredAnnotations(metadata) {
     if (!Number.isInteger(key) || !value || typeof value !== 'object') continue;
     const annotation = storedMark(value) ?? {};
     // The reading's own marks, one per quoted run of the line, each with the characters that place it.
-    const quotes = (Array.isArray(value.quotes) ? value.quotes : []).slice(0, 12).map(entry => {
-      const mark = storedMark(entry);
-      const head = mark && entry.head ? String(entry.head).slice(0, 20) : '';
-      return mark ? { ...(head ? { head } : {}), ...mark } : null;
-    }).filter(Boolean);
+    const quotes = (Array.isArray(value.quotes) ? value.quotes : []).slice(0, 12).map(readQuoteMark).filter(Boolean);
     if (quotes.length) annotation.quotes = quotes;
     if (Object.keys(annotation).length) map.set(key, annotation);
   }
@@ -1592,6 +1731,7 @@ function renderWorldInfoList(root) {
   const entries = readableWorldInfoEntries();
   const picks = new Set((runtime.settings.worldInfoWhitelist?.[worldInfoCharacterKey()] ?? [])
     .map(pick => `${pick.world}.${pick.uid}`));
+  const booksOn = worldInfoBooksOn();
   list.replaceChildren();
   if (!entries.length) {
     const note = document.createElement('p');
@@ -1600,20 +1740,78 @@ function renderWorldInfoList(root) {
     list.appendChild(note);
     return;
   }
+  // One group per world book, in the order the host lists them.
+  const books = new Map();
   for (const entry of entries) {
-    const label = document.createElement('label');
-    label.className = 'jy-check jy-wi-entry';
+    const name = String(entry.world ?? '');
+    if (!books.has(name)) books.set(name, []);
+    books.get(name).push(entry);
+  }
+  for (const [name, members] of books) {
+    const group = document.createElement('div');
+    group.className = 'jy-wi-book';
+    group.dataset.jyWiBook = name;
+    const head = document.createElement('div');
+    head.className = 'jy-wi-book-head';
+    const title = document.createElement('span');
+    title.className = 'jy-wi-book-name';
+    title.textContent = name || '（未命名世界书）';
+    const count = document.createElement('span');
+    count.className = 'jy-muted jy-wi-book-count';
+    const toggle = document.createElement('label');
+    toggle.className = 'jy-switch';
     const box = document.createElement('input');
     box.type = 'checkbox';
-    box.dataset.jyWiPick = '';
-    box.dataset.jyWorld = String(entry.world ?? '');
-    box.dataset.jyUid = String(entry.uid ?? '');
-    box.checked = picks.has(`${entry.world}.${entry.uid}`);
-    const text = document.createElement('span');
-    text.textContent = `${String(entry.comment || `条目 ${entry.uid}`).trim()}（${entry.world}）`;
-    label.append(box, text);
-    list.appendChild(label);
+    box.dataset.jyWiBookSwitch = '';
+    box.dataset.jyWorld = name;
+    box.checked = booksOn.has(name);
+    box.setAttribute('aria-label', `世界书开关：${name}`);
+    toggle.append(box, document.createElement('span'));
+    head.append(title, count, toggle);
+    const body = document.createElement('div');
+    body.className = 'jy-wi-book-entries';
+    body.hidden = !box.checked;
+    for (const entry of members) {
+      const label = document.createElement('label');
+      label.className = 'jy-check jy-wi-entry';
+      const pick = document.createElement('input');
+      pick.type = 'checkbox';
+      pick.dataset.jyWiPick = '';
+      pick.dataset.jyWorld = name;
+      pick.dataset.jyUid = String(entry.uid ?? '');
+      pick.checked = picks.has(`${entry.world}.${entry.uid}`);
+      const text = document.createElement('span');
+      text.textContent = String(entry.comment || `条目 ${entry.uid}`).trim();
+      label.append(pick, text);
+      body.appendChild(label);
+    }
+    group.append(head, body);
+    list.appendChild(group);
+    updateWorldInfoBookCount(group);
   }
+}
+
+/** A book's head says how many entries it has and how many go in. */
+function updateWorldInfoBookCount(group) {
+  const count = group.querySelector('.jy-wi-book-count');
+  if (!count) return;
+  const boxes = [...group.querySelectorAll('[data-jy-wi-pick]')];
+  const on = group.querySelector('[data-jy-wi-book-switch]')?.checked;
+  count.textContent = on ? `${boxes.length} 条 · 带 ${boxes.filter(box => box.checked).length} 条` : `${boxes.length} 条 · 关着`;
+}
+
+/**
+ * A book switched on shows its entries; switched on with none ticked it brings them all, and the ones not
+ * wanted are unticked. Switched off it is hidden and brings none, and its ticks are kept for next time.
+ */
+function toggleWorldInfoBook(box) {
+  const group = box.closest('.jy-wi-book');
+  if (!group) return;
+  const entries = group.querySelector('.jy-wi-book-entries');
+  const picks = [...group.querySelectorAll('[data-jy-wi-pick]')];
+  if (box.checked && !picks.some(pick => pick.checked)) for (const pick of picks) pick.checked = true;
+  if (entries) entries.hidden = !box.checked;
+  updateWorldInfoBookCount(group);
 }
 
 /**
@@ -1801,7 +1999,7 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
         recordDiagnostic('warn', 'translation.no-annotations', '副模型没有返回任何说话人或情绪标注，这一批按普通样式显示；朗读这一楼时简单分析会另外问一次。', {
           request: state.requests,
           returned: translations.size,
-          roster: state.roster ?? [],
+          roster: (state.roster ?? []).map(entry => entry.name),
         });
       }
       if (!pending.length) return null;
@@ -2095,7 +2293,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
   try {
     snapshot = await readMessageSnapshot(messageId, settings);
   } catch (error) {
-    if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable' };
+    if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable', detail: safeError(error) };
     throw error;
   }
   runtime.activeFloor = snapshot.messageId;
@@ -2233,7 +2431,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     if (runtime.inflight.get(lockKey)?.promise === work) runtime.inflight.delete(lockKey);
   });
 
-  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash });
+  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash, messageId: snapshot.messageId, message: snapshot.message, since: Date.now() });
   return work;
 }
 
@@ -2348,7 +2546,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
   try {
     snapshot = await readMessageSnapshot(messageId, settings);
   } catch (error) {
-    if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable' };
+    if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable', detail: safeError(error) };
     throw error;
   }
   runtime.activeFloor = snapshot.messageId;
@@ -2410,7 +2608,9 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       progressChain = progressChain.catch(() => {}).then(async () => {
         if (controller.signal.aborted || runtime.epoch !== epoch) return;
         const latest = await readMessageSnapshot(snapshot.messageId, settings).catch(() => null);
-        if (!latest) return;
+        // Floors before it deleted, another swipe shown, the chat reloaded with a floor put in: this is not
+        // the text being translated any more, and the end-of-run write sorts out what still fits.
+        if (!latest || latest.sourceHash !== snapshot.sourceHash || latest.swipeId !== snapshot.swipeId) return;
         await writeTranslation(latest, translations, epoch, settings, annotations);
       });
       return progressChain;
@@ -2596,7 +2796,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     if (runtime.inflight.get(lockKey)?.promise === work) runtime.inflight.delete(lockKey);
   });
 
-  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash });
+  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash, messageId: snapshot.messageId, message: snapshot.message, since: Date.now() });
   return work;
 }
 
@@ -2870,7 +3070,7 @@ function ttsVoiceConfig(settings = runtime.settings) {
 // Everyone this cast is known by: voiced characters first, then the colour palette and the names the
 // model has already reported this session.
 function ttsKnownNames(settings = runtime.settings) {
-  return [...new Set([...voiceRosterNames(ttsVoicesFor(settings)), ...speakerRoster(settings), ...runtime.autoSpeakerNames])];
+  return [...new Set([...voiceRosterNames(ttsVoicesFor(settings)), ...speakerRoster(settings), ...autoSpeakerNames()])];
 }
 
 /**
@@ -2896,7 +3096,7 @@ function ttsCast(settings = runtime.settings) {
   for (const speaker of speakerPaletteFor(settings)) add(speaker.name, speaker.aliases);
   add(context.name2);
   add(context.name1);
-  for (const name of runtime.autoSpeakerNames) add(name);
+  for (const name of autoSpeakerNames()) add(name);
   return cast;
 }
 
@@ -3320,6 +3520,23 @@ async function ttsPrimaryFloor(floor, settings) {
 }
 
 /**
+ * The paragraphs of a reading still arriving that can be made now. A line whose voice waits on the
+ * paragraph after it (`undecided`, see buildSegments) is not made until that one is read, and nothing
+ * after it is either, so the floor is still heard in order and every line is made once.
+ */
+function settledPrefix(utterances, partial, undecided) {
+  if (!undecided.length) return { readyIds: partial.readyIds, ready: partial.ready };
+  const lineOf = new Map(utterances.map(item => [item.id, item.lineId]));
+  const order = [...new Set(utterances.map(item => item.lineId))];
+  const stop = Math.min(...undecided.map(id => order.indexOf(lineOf.get(id))));
+  const held = new Set(order.slice(stop));
+  return {
+    readyIds: new Set([...partial.readyIds].filter(id => !held.has(lineOf.get(id)))),
+    ready: Math.min(partial.ready, stop),
+  };
+}
+
+/**
  * Utterances plus labels for one floor.
  *
  * The translation's own annotations are the starting point and cost nothing. When the model is asked,
@@ -3461,13 +3678,11 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           onPrefix: onPartial ? partial => {
             const partialLabels = new Map(reading.labels);
             for (const [id, label] of partial.labels) partialLabels.set(id, label);
-            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `深度分析（${utterances.length} 句）` : `简单分析（${utterances.length} 句）`, detail: `已回 ${partial.ready}/${partial.total} 段，先读这些` });
-            onPartial({
-              segments: buildSegments(utterances, pinSpeakers(partialLabels, resolved, { fallback: 'model' }), { knownNames: ttsKnownNames(settings), voices: mergeVoiceMaps(reading.voices, partial.voices) }),
-              readyIds: partial.readyIds,
-              ready: partial.ready,
-              total: partial.total,
-            });
+            const undecided = [];
+            const segments = buildSegments(utterances, pinSpeakers(partialLabels, resolved, { fallback: 'model' }), { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: mergeVoiceMaps(reading.voices, partial.voices), evidence: ttsEvidence(floor), ready: partial.readyIds, undecided });
+            const { readyIds, ready } = settledPrefix(utterances, partial, undecided);
+            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `深度分析（${utterances.length} 句）` : `简单分析（${utterances.length} 句）`, detail: `已回 ${ready}/${partial.total} 段，先读这些` });
+            onPartial({ segments, readyIds, ready, total: partial.total });
           } : null,
           onRequest: () => {
             requested = true;
@@ -3505,8 +3720,55 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   // The reader's word, and the plain reading's own naming, are written over whatever the labels say;
   // the labels' own speakers stand where nobody else named one.
   const pinned = pinSpeakers(labels, resolved, { fallback });
-  const segments = buildSegments(utterances, pinned, { knownNames: ttsKnownNames(settings), voices });
+  const dropped = [];
+  const segments = buildSegments(utterances, pinned, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices, evidence: ttsEvidence(floor), dropped });
+  noteGroundedTags(floor, dropped, depth);
   return { utterances, labels: pinned, voices, segments, depth, passive };
+}
+
+/**
+ * What else the text says about each line, by line id: the floor's other language, and the moods the
+ * story's own <say> marks named. A sound or a quiet voice may be written there instead — a mark's 耳语
+ * is the text asking for a whisper as surely as 小声 in the narration.
+ */
+function ttsEvidence(floor) {
+  const other = floor?.sources ?? floor?.references ?? null;
+  const marked = [...(floor?.lines ?? []), ...(floor?.speechSource ?? [])].filter(line => Array.isArray(line?.speech) && line.speech.length);
+  if (!marked.length) return other;
+  const evidence = new Map(other ?? []);
+  for (const line of marked) {
+    const moods = line.speech.map(span => span?.mood).filter(Boolean).join(' ');
+    if (moods) evidence.set(line.lineId, `${evidence.get(line.lineId) ?? ''}\n${moods}`);
+  }
+  return evidence;
+}
+
+// What the reading took out before Fish heard it, in the reader's words.
+const GROUND_REASONS = Object.freeze({
+  unknown: 'Fish 不认识或不再使用的词',
+  quiet: '原文没写小声、耳语却标了耳语或轻声',
+  'no-text': '原文没写的声音',
+  said: '台词里已经念出来的声音',
+  count: '一句里多出来的声音',
+  'drawn-out': '贴着省略号、破折号或波浪号的停顿和声音',
+  'bare-end': '后面没有话的停顿',
+  short: '太短的句子里的停顿、重读和句内变化',
+  turn: '没有真正转折的句内变化',
+  interjection: '只有语气词的句子上的标签',
+});
+
+/** Once per floor text: what the reading took out before Fish heard it, and why. */
+function noteGroundedTags(floor, dropped, depth) {
+  if (!dropped.length) return;
+  const key = `${ttsLabelKey(floor)}|grounded`;
+  if (runtime.tts.anchorWarned.has(key)) return;
+  runtime.tts.anchorWarned.add(key);
+  const counts = new Map();
+  for (const item of dropped) counts.set(item.why, (counts.get(item.why) ?? 0) + 1);
+  const parts = [...counts].map(([why, count]) => `${GROUND_REASONS[why] ?? why} ${count} 处`);
+  recordDiagnostic('info', 'tts.analysis', `这一楼朗读前去掉了 ${dropped.length} 处标签：${parts.join('，')}。`, {
+    floor: floor.floorId, depth, dropped: dropped.slice(0, 20),
+  }, '', { floor: floor.messageId });
 }
 
 /** The labels with only who speaks left on them: what the plain reading keeps for its voices. */
@@ -3583,25 +3845,30 @@ async function regenerateTtsSentence(messageId, utteranceId, side = null) {
  * floor's take or the sentences' and played the old reading again; as the newest take of its
  * sentences, this one is what is heard.
  */
-async function regenerateTtsParagraph(messageId, lineId, side = null) {
+// Several `lines` (a folded original's button) are each made as the paragraph they are, one after another.
+async function regenerateTtsParagraph(messageId, lineId, side = null, lines = [lineId]) {
   const prepared = await ttsPrepared(messageId, side);
-  const items = prepared.items.filter(candidate => candidate.segment.lineId === lineId);
-  if (!items.length) throw new Error('这一段不在当前的朗读范围里。');
-  await dropTtsRecordings(prepared, items);
+  const groups = lines
+    .map(id => [id, prepared.items.filter(candidate => candidate.segment.lineId === id)])
+    .filter(([, items]) => items.length);
+  if (!groups.length) throw new Error('这一段不在当前的朗读范围里。');
+  await dropTtsRecordings(prepared, groups.flatMap(([, items]) => items));
   const { floor, settings } = prepared;
   setTtsLineState(messageId, lineId, 'busy', floor.side);
   try {
-    await ensureTtsRecording(floor, `line:${lineId}`, items, settings, text => setTtsStatus(messageId, text, 'busy'), (id, patch) => ttsStep(floor, id, patch));
+    for (const [id, items] of groups) {
+      await ensureTtsRecording(floor, `line:${id}`, items, settings, text => setTtsStatus(messageId, text, 'busy'), (step, patch) => ttsStep(floor, step, patch));
+    }
   } finally {
     setTtsLineState(messageId, lineId, null, floor.side);
   }
   if (!ttsSettings(settings).playAfterGenerate) {
-    setTtsStatus(messageId, '这一段已重新生成，再点一次播放', 'idle');
+    setTtsStatus(messageId, `${groups.length > 1 ? `这 ${groups.length} 段` : '这一段'}已重新生成，再点一次播放`, 'idle');
     notifyTtsPanels();
     return;
   }
   setTtsStatus(messageId, '', 'idle');
-  await playTtsParagraph(messageId, lineId, side);
+  await playTtsParagraph(messageId, lineId, side, lines);
 }
 
 /**
@@ -4570,7 +4837,13 @@ function ttsButton(messageId, utteranceId, side = null) {
 function ttsLineButton(messageId, lineId, side = null) {
   if (typeof document === 'undefined' || lineId === null || lineId === undefined) return null;
   const which = side ?? primaryTtsSide();
-  return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-line-play[data-jy-tts-line="${lineId}"][data-jy-tts-side="${which}"]`);
+  return document.querySelector(`#chat .mes[mesid="${messageId}"] .jy-tts-line-play:is([data-jy-tts-line="${lineId}"], [data-jy-tts-lines~="${lineId}"])[data-jy-tts-side="${which}"]`);
+}
+
+/** The paragraphs one paragraph button stands for: its own, or every one of a folded original's. */
+function ttsButtonLines(button) {
+  const lines = String(button?.dataset.jyTtsLines ?? '').split(' ').filter(Boolean).map(Number);
+  return lines.length ? lines : [Number(button?.dataset.jyTtsLine)];
 }
 
 /** Which paragraph a sentence of the floor being read belongs to; null when that floor is not the one open. */
@@ -4983,6 +5256,8 @@ async function askTtsSave({ messageId, lineIndex = null, lineText = '' }) {
 }
 
 async function createTtsTransport(messageId, { single = false, paragraph = false, fromUtterance = null, side = null } = {}) {
+  // Heard now, by hand or by itself: the new reply is not read aloud again when its translation lands.
+  runtime.tts.fresh.delete(Number(messageId));
   const settings = runtime.settings;
   const tts = ttsSettings(settings);
   requireClosedFloor(messageId);
@@ -5170,8 +5445,8 @@ async function runTtsTransport(transport) {
       const { floor, settings } = transport;
       const items = transport.items;
       const item = items[transport.index];
-      // A paragraph button reads its paragraph and stops at its end.
-      const stopLine = transport.paragraph ? item.segment.lineId : null;
+      // A paragraph button reads its paragraph and stops at its end; a folded original's, its paragraphs.
+      const within = !transport.paragraph ? null : Array.isArray(transport.paragraph) ? transport.paragraph : [item.segment.lineId];
       scheduleTtsAhead(transport);
       setTransport(transport, { state: 'loading', message: '正在准备音频…' });
       setTtsButtonState(transport.messageId, item.segment.id, 'busy', transport.side, item.segment.lineId);
@@ -5212,7 +5487,7 @@ async function runTtsTransport(transport) {
       for (let offset = transport.index; offset < items.length; offset += 1) {
         const candidate = items[offset];
         const found = record.timeline.findIndex(candidateEntry => candidateEntry.id === candidate.segment.id && candidateEntry.part === part);
-        if (found < 0 || (stopLine !== null && candidate.segment.lineId !== stopLine)) break;
+        if (found < 0 || (within && !within.includes(candidate.segment.lineId))) break;
         if (offset > transport.index) {
           const own = await findTtsEntry(floor, candidate, settings);
           if (own && own.record.key !== record.key) break;
@@ -5264,7 +5539,7 @@ async function runTtsTransport(transport) {
       if (outcome === 'stopped') return;
       transport.index = lastOffset + 1;
       if (transport.single) break;
-      if (stopLine !== null && items[transport.index]?.segment.lineId !== stopLine) break;
+      if (within && !within.includes(items[transport.index]?.segment.lineId)) break;
     }
     if (live()) {
       transport.index = Math.min(transport.index, transport.items.length - 1);
@@ -5335,7 +5610,7 @@ function ttsPickedLines(messageId, side) {
   if (!root) return [];
   return [...root.querySelectorAll('[data-jy-tts-pick-line]')]
     .filter(box => box.checked && (!side || box.dataset.jyTtsSide === side))
-    .map(box => Number(box.dataset.jyTtsPickLine));
+    .flatMap(box => (box.dataset.jyTtsPickLines ? box.dataset.jyTtsPickLines.split(' ').map(Number) : [Number(box.dataset.jyTtsPickLine)]));
 }
 
 /** Makes the ticked paragraphs and hands the file over, the same way every other save does. */
@@ -5554,8 +5829,10 @@ async function playTtsUtterance(messageId, utteranceId, side = null) {
  * A sentence click stops at the end of its sentence; a paragraph click is how the floor is read from
  * a place, so it leaves `single` off and the reading runs on into the paragraphs below it.
  */
-async function playTtsParagraph(messageId, lineId, side = null) {
+// `lines`: the paragraphs read together, first to last, when one button stands for several.
+async function playTtsParagraph(messageId, lineId, side = null, lines = null) {
   const wantedSide = side ?? primaryTtsSide();
+  const paragraph = Array.isArray(lines) && lines.length > 1 ? lines : true;
   const existing = runtime.tts.transport;
   if (existing && existing.messageId === messageId && existing.side === wantedSide && existing.floor && existing.items.length) {
     await syncTtsTransport(existing);
@@ -5566,7 +5843,7 @@ async function playTtsParagraph(messageId, lineId, side = null) {
       stopTtsPlayback();
       existing.index = index;
       existing.single = false;
-      existing.paragraph = true;
+      existing.paragraph = paragraph;
       existing.generateOnly = !ttsSettings().playAfterGenerate;
       await runTtsTransport(existing);
       return;
@@ -5578,7 +5855,7 @@ async function playTtsParagraph(messageId, lineId, side = null) {
     const prepared = await ttsPrepared(messageId, wantedSide);
     const first = prepared.items.find(item => item.segment.lineId === lineId);
     if (!first) throw new Error('这一段不在当前的朗读范围里。');
-    const transport = await createTtsTransport(messageId, { single: false, paragraph: true, fromUtterance: first.segment.id, side: wantedSide });
+    const transport = await createTtsTransport(messageId, { single: false, paragraph, fromUtterance: first.segment.id, side: wantedSide });
     if (!transport) return;
     await runTtsTransport(transport);
   } catch (error) {
@@ -5720,6 +5997,9 @@ function requireClosedFloor(messageId) {
  * for. Nothing here waits for the translation, and nothing here runs while the floor is still being
  * written: a floor read halfway is a floor read wrong and paid for twice.
  */
+// How long the deep reading waits for an automatic translation before it reads the original without it.
+const TTS_TRANSLATION_HOLD_MS = 30000;
+
 function ttsFloorClosed(messageId, { translated = false, reason = 'generation' } = {}) {
   const tts = ttsSettings();
   const id = Number(messageId);
@@ -5759,8 +6039,30 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
     // that already carries its translation is waiting for nothing.
     const meta = message.extra?.[MESSAGE_META_KEY];
     const carries = meta?.complete === true && Number(meta.swipe_id ?? 0) === Number(message.swipe_id ?? 0);
+    // A translation is on its way only while one is really being made: this extension writing the floor,
+    // or an automatic one started and not settled. What the switches say is not enough — a translation
+    // that failed or was skipped used to be waited for for ever, and the new reply was never read.
     const automatic = reason === 'swipe' ? settings.autoSwipe === true : reason === 'edit' ? settings.autoEdit === true : settings.autoGeneration === true;
-    const translating = settings.enabled !== false && automatic && !translated && !carries;
+    const awaited = runtime.tts.awaiting.get(id);
+    const translating = !translated && !carries && (busy || Boolean(awaited));
+    // Translation first, then the deep reading: it reads the translation's names and references once the
+    // translation has landed. The settling asks again; a translation taking too long is not waited for.
+    // A translation being written, whoever started it, is waited for too: a floor half written would give
+    // the analysis half the names, and that analysis is kept.
+    const since = awaited?.since ?? ttsTranslationSince(id);
+    if (current.mode === 'deep' && !carries && since !== null && Date.now() - since < TTS_TRANSLATION_HOLD_MS) {
+      const chatAt = getCurrentChatId();
+      // Kept where the floor's appointments are: the settling, a new chat and a stop all cancel it.
+      const wait = globalThis.setTimeout(() => {
+        runtime.tts.closing.delete(id);
+        runtime.timers.delete(wait);
+        if (getCurrentChatId() !== chatAt) return;
+        ttsFloorClosed(id, { translated, reason });
+      }, since + TTS_TRANSLATION_HOLD_MS + 50 - Date.now());
+      runtime.tts.closing.set(id, wait);
+      runtime.timers.add(wait);
+      return;
+    }
     // The original is read: it is there whatever the translation is doing, so every announcement of
     // this floor is a chance to read it. Asking twice costs nothing — the analysis is kept per text
     // version, and the second call finds it. Only the translation is read: it has to exist first, so
@@ -5773,16 +6075,27 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
     const primaryReady = primary === 'source' || translated || carries || !translating;
     // Read while it was written: the original has been heard, and is not analysed, made or read again.
     const streamed = runtime.tts.streamed.has(id);
-    const due = current.autoRead && !streamed && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy);
+    // A translation was asked for and none was written: the translation side has nothing to read, and
+    // the reader is told rather than left waiting for a voice.
+    const untranslated = primary === 'translation' && !translated && !carries && !translating && Boolean(automatic);
+    const due = current.autoRead && !streamed && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy) && !untranslated;
     // A call has the voice: the reply is prepared like any floor not read by itself, and said once.
     const calling = callActive();
     const autoRead = due && !calling;
+    // A floor read while it was written was heard already; nothing was held back from it.
+    if (current.autoRead && untranslated && !streamed && runtime.tts.fresh.has(id)) {
+      runtime.tts.fresh.delete(id);
+      recordDiagnostic('info', 'tts.auto-read', `第 ${id} 楼没有写入译文，没有自动朗读。`, { floor: id });
+      toast('info', `第 ${id} 楼没有写入译文，没有自动朗读；要听原文，点楼层里的「朗读」。`);
+    }
     if (autoRead || !current.autoRead || (calling && due)) runtime.tts.fresh.delete(id);
     if (calling && due) toast('info', `第 ${id} 楼有新回复：挂断以后点楼层开头的「朗读」就能听。`);
+    // The reading prepares its own side, and joins an analysis of the same text already asked for; an
+    // analysis of the other side failing is no reason for the new reply to stay silent.
+    if (autoRead) void autoReadTtsFloor(id, primary);
     try {
       // The side read aloud is analysed by the reading itself, as it prepares.
       if (readable && !(autoRead && side === primary) && !(streamed && side === 'source') && (current.mode === 'deep' || (current.mode === 'simple' && !translating))) await analyseTtsFloorNow(id, side, current.mode);
-      if (autoRead) void autoReadTtsFloor(id, primary);
       if (current.autoGenerate) {
         let made = 0;
         for (const each of reads) {
@@ -5804,6 +6117,14 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
   }, translated ? 800 : 1200);
   runtime.tts.closing.set(id, timer);
   runtime.timers.add(timer);
+}
+
+/** When the translation being written into this floor began, or null when none is. */
+function ttsTranslationSince(messageId) {
+  const context = getContext();
+  const message = context.chat?.[Number(messageId)];
+  if (!message) return null;
+  return runtime.inflight.get(`${getCurrentChatId(context)}|${Number(messageId)}|${Number(message.swipe_id ?? 0)}`)?.since ?? null;
 }
 
 /** Whether this extension is writing a translation into this floor right now. */
@@ -6185,6 +6506,7 @@ async function autoReadTtsFloor(messageId, side) {
   if (runtime.tts.autoRead.has(key)) return;
   runtime.tts.autoRead.add(key);
   const current = runtime.tts.transport;
+  const release = () => runtime.tts.autoRead.delete(key);
   if (current && ['loading', 'playing', 'paused'].includes(current.state)) {
     toast('info', `第 ${messageId} 楼的新回复可以听了：正在读的这一楼读完后，点「朗读」或者悬浮窗的播放键。`);
     return;
@@ -6197,8 +6519,10 @@ async function autoReadTtsFloor(messageId, side) {
   try {
     const transport = await createTtsTransport(messageId, { single: false, side });
     if (transport) await runTtsTransport(transport);
+    else release();
   } catch (error) {
     if (isAbortError(error)) return;
+    release();
     setTtsStatus(messageId, safeError(error), 'error');
     toast('error', safeError(error));
   }
@@ -6645,6 +6969,15 @@ function insertAfterRange(range, element, root) {
   marker.insertNode(element);
 }
 
+// 原文折叠 keeps the original inside a <details>: a paragraph's buttons hung at its end would fold
+// away with it, so they go right after the <details>, beside the 原文 chip while it is closed.
+function foldedOriginalOf(range, root) {
+  const end = range.endContainer;
+  const element = end.nodeType === Node.TEXT_NODE ? end.parentElement : end;
+  const details = element?.closest?.('details.jy-reading-original, details.custom-jy-reading-original');
+  return details && root.contains(details) ? details : null;
+}
+
 function makeTtsPlayButton(messageId, segment, side) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -6694,24 +7027,28 @@ function makeTtsLineTools(messageId, line, side) {
   box.dataset.jyTtsSide = side;
   box.setAttribute('contenteditable', 'false');
   const suffix = side === 'source' ? '（原文）' : '';
+  // One pair for several paragraphs: a folded original, whose chip stands for all of them.
+  const block = Array.isArray(line.lines) && line.lines.length > 1;
+  const which = block ? `这 ${line.lines.length} 段` : '这一段';
   const pick = document.createElement('label');
   pick.className = 'jy-tts-pick-box';
-  pick.title = '选中这一段，一起缓存到本地';
+  pick.title = `选中${which}，一起缓存到本地`;
   pick.setAttribute('contenteditable', 'false');
   const tick = document.createElement('input');
   tick.type = 'checkbox';
   tick.dataset.jyTtsPickLine = String(line.lineId);
+  if (block) tick.dataset.jyTtsPickLines = line.lines.join(' ');
   tick.dataset.jyTtsSide = side;
   pick.appendChild(tick);
   box.append(
     pick,
     makeTtsLineButton(messageId, line, side, {
       action: 'play-line', className: 'jy-tts-line-play', icon: TTS_ICON_PLAY, text: '播放',
-      label: `从这一段读起（${line.ids.length} 句）${suffix}`,
+      label: `${block ? `读${which}` : '从这一段读起'}（${line.ids.length} 句）${suffix}`,
     }),
     makeTtsLineButton(messageId, line, side, {
       action: 'regen-line', className: 'jy-tts-line-regen', icon: TTS_ICON_REDO, text: '重新生成',
-      label: `丢掉这一段的音频，再向 Fish 要一次${suffix}`,
+      label: `丢掉${which}的音频，再向 Fish 要一次${suffix}`,
     }),
   );
   return box;
@@ -6725,6 +7062,7 @@ function makeTtsLineButton(messageId, line, side, { action, className, icon, tex
   button.dataset.jyTtsAction = action;
   button.dataset.jyTtsMes = String(messageId);
   button.dataset.jyTtsLine = String(line.lineId);
+  if (Array.isArray(line.lines) && line.lines.length > 1) button.dataset.jyTtsLines = line.lines.join(' ');
   button.dataset.jyTtsSide = side;
   button.setAttribute('contenteditable', 'false');
   button.setAttribute('aria-label', label);
@@ -6891,7 +7229,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   floors.forEach((floor, index) => {
     const utterances = ttsUtterances(floor, settings);
     const labels = analyses[index]?.labels ?? annotationReading(utterances, floor.annotations).labels;
-    const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices: analyses[index]?.voices ?? null });
+    const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: analyses[index]?.voices ?? null, evidence: ttsEvidence(floor) });
     const visible = audibleSegments(segments, tts.range, ttsVoiceConfig(settings));
     visibleTotal += visible.length;
     // Nothing of it is on the page to hang a button on; the reading is started from the bar.
@@ -6925,13 +7263,40 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   // Later ranges first, so an insertion never sits between an earlier range and its own end. Where a
   // paragraph ends on its own last sentence the two share a point, and since each insertion goes in
   // front of the one before it, the paragraph's pair is placed first to end up after the sentence's.
-  const placements = [...lineButtons, ...buttons];
+  // A folded original shows one chip for every paragraph inside it, so they share one pair beside it.
+  const lineTools = [];
+  const folded = new Map();
+  for (const entry of lineButtons) {
+    const fold = foldedOriginalOf(entry.range, root);
+    if (!fold) {
+      lineTools.push(entry);
+      continue;
+    }
+    const bySide = folded.get(fold) ?? new Map();
+    folded.set(fold, bySide);
+    const block = bySide.get(entry.side);
+    if (block) {
+      block.line.ids.push(...entry.line.ids);
+      block.line.lines.push(entry.line.lineId);
+      continue;
+    }
+    const fresh = { ...entry, fold, line: { ...entry.line, ids: [...entry.line.ids], lines: [entry.line.lineId] } };
+    bySide.set(entry.side, fresh);
+    lineTools.push(fresh);
+  }
+  const placements = [...lineTools, ...buttons];
   placements.sort((left, right) => right.range.compareBoundaryPoints(Range.END_TO_END, left.range));
   const buttonMode = floorButtonMode(settings);
   for (const placement of placements) {
     if (buttonMode === 'off') break;
     if (placement.line) {
-      insertAfterRange(placement.range, makeTtsLineTools(messageId, placement.line, placement.side), root);
+      const tools = makeTtsLineTools(messageId, placement.line, placement.side);
+      if (placement.fold) {
+        tools.dataset.jyTtsFold = '';
+        placement.fold.after(tools);
+      } else {
+        insertAfterRange(placement.range, tools, root);
+      }
     } else if (buttonMode === 'sentence') {
       const play = makeTtsPlayButton(messageId, placement.segment, placement.side);
       insertAfterRange(placement.range, play, root);
@@ -7106,15 +7471,16 @@ function bindTtsDom() {
         else void playTtsUtterance(messageId, utteranceId, side);
       } else if (action === 'play-line') {
         const lineId = Number(target.dataset.jyTtsLine);
+        const lines = ttsButtonLines(target);
         const transport = runtime.tts.transport;
         const onThisParagraph = transport?.messageId === messageId && transport.side === (side ?? primaryTtsSide())
-          && transport.items[transport.index]?.segment.lineId === lineId;
+          && lines.includes(transport.items[transport.index]?.segment.lineId);
         if (transport?.state === 'playing' && onThisParagraph) pauseTts();
         // Paused inside this paragraph: carry on from there rather than starting it over.
         else if (transport?.state === 'paused' && onThisParagraph) resumeTts();
-        else void playTtsParagraph(messageId, lineId, side);
+        else void playTtsParagraph(messageId, lineId, side, lines);
       } else if (action === 'regen-line') {
-        void regenerateTtsParagraph(messageId, Number(target.dataset.jyTtsLine), side).catch(error => {
+        void regenerateTtsParagraph(messageId, Number(target.dataset.jyTtsLine), side, ttsButtonLines(target)).catch(error => {
           if (!isAbortError(error)) toast('error', safeError(error));
         });
       }
@@ -7841,6 +8207,14 @@ function collectSettings(root) {
     const characterKey = worldInfoCharacterKey();
     if (wiPicks.length) current.worldInfoWhitelist[characterKey] = wiPicks;
     else delete current.worldInfoWhitelist[characterKey];
+    // Books switched on here, and the ones not listed now (another chat's own book) as they were.
+    const switches = [...root.querySelectorAll('[data-jy-wi-book-switch]')];
+    if (switches.length) {
+      const listed = new Set(switches.map(element => String(element.dataset.jyWorld || '')));
+      const kept = [...worldInfoBooksOn(current, characterKey)].filter(name => !listed.has(name));
+      const on = switches.filter(element => element.checked).map(element => String(element.dataset.jyWorld || ''));
+      current.worldInfoBooks = { ...(current.worldInfoBooks || {}), [characterKey]: [...new Set([...kept, ...on])] };
+    }
   }
   collectColoringFields(root, current);
   collectTtsFields(root, current);
@@ -10561,6 +10935,11 @@ function createControlCenter(rootDocument = document) {
       for (const twin of fieldElements(root, name)) twin.checked = event.target.checked;
       saveSettings(collectSettings(root));
       syncFields(root, runtime.settings);
+    }
+    if (event.target.matches('[data-jy-wi-book-switch]')) toggleWorldInfoBook(event.target);
+    if (event.target.matches('[data-jy-wi-pick]')) {
+      const group = event.target.closest('.jy-wi-book');
+      if (group) updateWorldInfoBookCount(group);
     }
     if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringAutoSpeakers"], [data-jy-field="coloringContrast"]')) {
       saveSettings(collectSettings(root));
@@ -13650,7 +14029,7 @@ function bindEvent(eventType, handler) {
  * the log says which time and why. A greeting and a slash command's insert are no generation's reply
  * and pass without a word.
  */
-function noteUntranslatedRender(messageId, type, pending) {
+function noteUntranslatedRender(messageId, type, pending, { stale = false } = {}) {
   if (!runtime.settings?.autoGeneration || ['first_message', 'command'].includes(type)) return;
   const message = getContext().chat?.[messageId];
   if (!message || message.is_user || message.is_system) return;
@@ -13658,9 +14037,11 @@ function noteUntranslatedRender(messageId, type, pending) {
   runtime.stoppedGeneration = null;
   const why = stopped
     ? '这次生成是手动停下的，停下的回复不自动翻译，需要的话点翻译'
-    : pending
-      ? `酒馆报的生成类型对不上（开始时是 ${pending.type}，渲染时是 ${type ?? '空'}），没有自动翻译`
-      : '没有看到这次回复的生成开始（可能是别的扩展或脚本写进来的），没有自动翻译';
+    : pending && stale
+      ? `这一楼还是生成开始前的那一楼（开始时是 ${pending.type}，渲染时是 ${type ?? '空'}，多半是脚本重画了它），没有自动翻译`
+      : pending
+        ? `酒馆报的生成类型对不上（开始时是 ${pending.type}，渲染时是 ${type ?? '空'}），没有自动翻译`
+        : '没有看到这次回复的生成开始（可能是别的扩展或脚本写进来的），没有自动翻译';
   recordDiagnostic('info', 'translation.auto-skip', `第 ${messageId} 楼渲染完成，${why}。`, {
     floor: messageId, renderType: type ?? null, startedType: pending?.type ?? null, stopped: Boolean(stopped),
   });
@@ -13677,25 +14058,51 @@ const AUTO_SKIP_REASONS = Object.freeze({
 function scheduleAuto(messageId, reason) {
   const timer = globalThis.setTimeout(async () => {
     runtime.autoTimers.delete(timer);
+    const id = Number(messageId);
+    // Set while this translation is the one the floor is waiting for; a newer one for the same floor
+    // takes the place, and only the newest settling lets the reading go.
+    const token = {};
+    let wrote = false;
     try {
       const settings = runtime.settings;
       if (reason === 'generation' && !settings.autoGeneration) return;
       if (reason === 'swipe' && !settings.autoSwipe) return;
       if (reason === 'edit' && !settings.autoEdit) return;
-      recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼${reason === 'generation' ? '生成结束' : reason === 'swipe' ? '划动了' : '编辑过'}，自动翻译开始。`, { floor: Number(messageId), reason });
-      const result = await startTranslation(Number(messageId), { force: reason === 'edit', quiet: true });
+      runtime.tts.awaiting.set(id, { since: Date.now(), token });
+      recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼${reason === 'generation' ? '生成结束' : reason === 'swipe' ? '划动了' : '编辑过'}，自动翻译开始。`, { floor: id, reason });
+      const result = await startTranslation(id, { force: reason === 'edit', quiet: true });
+      wrote = Boolean(result) && !result.skipped;
       if (result?.skipped) {
-        recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼自动翻译没有进行：${AUTO_SKIP_REASONS[result.reason] ?? result.reason}。`, { floor: Number(messageId), reason, skipped: result.reason });
+        recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼自动翻译没有进行：${AUTO_SKIP_REASONS[result.reason] ?? result.reason}${result.detail ? `（${result.detail.replace(/[。.]$/, '')}）` : ''}。`, { floor: id, reason, skipped: result.reason });
+        if (/正文标签/.test(result.detail ?? '')) noteMissingBodyTag(id, result.detail);
       }
     } catch (error) {
       if (isAbortError(error)) return;
       const message = safeError(error);
       const routine = error?.code === 'JY_FLOOR_DIVERGED' || /没有找到|正文标签|已经翻译|不是普通 AI 回复|没有可翻译的正文段落/.test(message);
-      recordDiagnostic(routine ? 'info' : 'error', 'translation.auto', `第 ${messageId} 楼自动翻译${routine ? '没有进行' : '失败'}：${message}`, { floor: Number(messageId), reason });
+      recordDiagnostic(routine ? 'info' : 'error', 'translation.auto', `第 ${messageId} 楼自动翻译${routine ? '没有进行' : '失败'}：${message}`, { floor: id, reason });
       if (!routine) toast('error', message);
+      else if (/正文标签/.test(message)) noteMissingBodyTag(id, message);
+    } finally {
+      if (runtime.tts.awaiting.get(id)?.token === token) {
+        runtime.tts.awaiting.delete(id);
+        // The reading was waiting for this translation: whatever came of it, it is told.
+        ttsFloorClosed(id, { translated: wrote, reason });
+      }
     }
   }, 0);
   runtime.autoTimers.add(timer);
+}
+
+/**
+ * A reply automatic translation could not find the body of says so on screen, once per chat and body-tag
+ * setting: the log alone left 「不自动翻译」 unexplained for a preset whose replies use another tag.
+ */
+function noteMissingBodyTag(messageId, message) {
+  const key = `${getCurrentChatId()}|${(runtime.settings.bodyTags ?? []).join(',')}`;
+  if (runtime.bodyTagNoted === key) return;
+  runtime.bodyTagNoted = key;
+  toast('warning', `第 ${messageId} 楼没有自动翻译：${message.replace(/[。.]$/, '')}。这张卡的回复用的是别的标签的话，到「正文处理」页把正文标签改成它。`);
 }
 
 /**
@@ -13728,8 +14135,79 @@ function renumberSwipeRecords(payload) {
   else if (ownWas === shown) own.swipe_id = -1;
 }
 
-function cancelPendingWork() {
-  runtime.generationGate.clear();
+/**
+ * What the chat's last message was when a generation began. Its reply is a message that was not there
+ * then (a send, a regenerate), one more alternative (a swipe), or a longer text (a continue).
+ */
+function newestMessageMark(context = getContext()) {
+  const chat = Array.isArray(context.chat) ? context.chat : [];
+  const last = chat[chat.length - 1] ?? null;
+  return { index: chat.length - 1, message: last, swipes: Array.isArray(last?.swipes) ? last.swipes.length : 0, mes: last?.mes ?? null };
+}
+
+/** The host is still streaming this floor: a render of it now is not its end. */
+function replyStillStreaming(messageId, context = getContext()) {
+  const streaming = context.streamingProcessor;
+  return Boolean(streaming && !streaming.isFinished && !streaming.isStopped && Number(streaming.messageId) === Number(messageId));
+}
+
+/**
+ * Whether a render can be the reply of the generation that is open: finished, and not the message that
+ * stood last when the generation began — a floor at that place that changed since, or a floor after it
+ * (a script may add one of its own behind the reply before the reply is rendered).
+ */
+function renderIsNewReply(messageId, context = getContext(), base = runtime.generationBase) {
+  const chat = Array.isArray(context.chat) ? context.chat : [];
+  const id = Number(messageId);
+  if (!Number.isInteger(id) || id < 0 || id >= chat.length || replyStillStreaming(id, context)) return false;
+  if (!base) return id === chat.length - 1;
+  // Where that message stands now: floors before it may have been deleted while the reply was written.
+  const at = base.message ? chat.indexOf(base.message) : -1;
+  const message = chat[id];
+  // Gone, as a regenerate deletes it: the reply is the newest floor, or the one before a floor a script
+  // added behind it.
+  if (at < 0) return id >= chat.length - 2 && Boolean(message) && !message.is_user;
+  if (id < at) return false;
+  if (id > at) return Boolean(message) && !message.is_user;
+  return (Array.isArray(message?.swipes) ? message.swipes.length : 0) !== base.swipes
+    || message?.mes !== base.mes;
+}
+
+/** The host's stream for this floor broke off with an error: what was rendered is its placeholder. */
+function replyFailed(messageId, context = getContext()) {
+  const streaming = context.streamingProcessor;
+  if (streaming?.isStopped && Number(streaming.messageId) === Number(messageId)) return true;
+  return ['', '...'].includes(String(context.chat?.[Number(messageId)]?.mes ?? '').trim());
+}
+
+/** A reply taken: remembered, handed to automatic translation, and read aloud when that is on. */
+function takeReply(id, type, chatId) {
+  runtime.consumedFloor = `${chatId}|${id}`;
+  runtime.stoppedGeneration = null;
+  // A reply just written, and a whole one: a continue adds to a floor already heard.
+  if (!['continue', 'appendFinal'].includes(type)) runtime.tts.fresh.add(id);
+  runtime.mini?.followLatest?.(id);
+  verifyGenerationInterceptor();
+  scheduleAuto(id, 'generation');
+}
+
+/** Calls `done` once the host's stream has finished, broken off or been replaced, in this chat. */
+function watchStreamEnd(streaming, done, { chatId = getCurrentChatId(), until = Date.now() + 10 * 60 * 1000 } = {}) {
+  const timer = globalThis.setTimeout(() => {
+    runtime.timers.delete(timer);
+    if (getCurrentChatId() !== chatId || Date.now() > until) return;
+    const current = getContext().streamingProcessor;
+    if (current === streaming && !streaming.isFinished && !streaming.isStopped) {
+      watchStreamEnd(streaming, done, { chatId, until });
+      return;
+    }
+    done();
+  }, 500);
+  runtime.timers.add(timer);
+}
+
+function cancelPendingWork({ gate = true } = {}) {
+  if (gate) runtime.generationGate.clear();
   for (const timer of runtime.autoTimers) globalThis.clearTimeout(timer);
   runtime.autoTimers.clear();
   for (const entry of runtime.inflight.values()) entry.controller.abort();
@@ -13826,25 +14304,64 @@ function registerPromptFallback(eventTypes) {
 function registerRuntimeEvents() {
   const eventTypes = getContext().eventTypes ?? {};
   registerPromptFallback(eventTypes);
-  bindEvent(eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
+  // A message sent as a slash command starts a generation the command then takes over: nothing is written
+  // and nothing ends it. The host says the generation really goes ahead once the commands have run.
+  bindEvent(eventTypes.GENERATION_AFTER_COMMANDS ?? eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
     if (!dryRun && !['quiet', 'impersonate'].includes(type)) runtime.mainGenerationActive = true;
-    if (runtime.generationGate.begin(getCurrentChatId(), type, dryRun)) runtime.generationSerial += 1;
+    const unrendered = runtime.generationEnded ? runtime.generationGate.peek() : null;
+    const base = runtime.generationBase;
+    if (runtime.generationGate.begin(getCurrentChatId(), type, dryRun)) {
+      // The generation before that one ended and its reply never came (an error, an empty answer): said
+      // now, when it is certain, rather than guessed a few seconds after the end.
+      const lost = runtime.lateReply;
+      if (lost) recordDiagnostic('info', 'translation.auto-skip', `上一次生成（${lost.type}）结束后没有渲染出回复，可能报错了或被过滤，没有可自动翻译的内容。`, { startedType: lost.type });
+      // The one that just ended may still be rendered: a script can hold the render while the reader sends again.
+      runtime.lateReply = unrendered ? { ...unrendered, base } : null;
+      runtime.generationSerial += 1;
+      runtime.generationEnded = false;
+      runtime.generationBase = newestMessageMark();
+      runtime.consumedFloor = null;
+    }
   });
   bindEvent(eventTypes.CHARACTER_MESSAGE_RENDERED, (messageId, type) => {
     const pending = runtime.generationGate.peek();
-    if (runtime.generationGate.consume(getCurrentChatId(), type)) {
+    const context = getContext();
+    const chatId = getCurrentChatId(context);
+    const id = Number(messageId);
+    // A stream that broke off with an error renders its placeholder: no reply to translate.
+    if (pending && replyFailed(id, context)) {
+      runtime.generationGate.clear();
+      runtime.generationEnded = false;
       runtime.mainGenerationActive = false;
-      runtime.stoppedGeneration = null;
-      // A reply just written, and a whole one: a continue adds to a floor already heard.
-      if (!['continue', 'appendFinal'].includes(type)) runtime.tts.fresh.add(Number(messageId));
-      runtime.mini?.followLatest?.(Number(messageId));
-      verifyGenerationInterceptor();
-      scheduleAuto(messageId, 'generation');
+      recordDiagnostic('info', 'translation.auto-skip', `第 ${id} 楼的生成出错了，楼里没有回复，没有自动翻译。`, { floor: id, renderType: type ?? null });
       return;
     }
-    noteUntranslatedRender(Number(messageId), type, pending);
+    const newest = renderIsNewReply(id, context);
+    if (runtime.generationGate.consume(chatId, type, { newest })) {
+      runtime.generationEnded = false;
+      runtime.mainGenerationActive = false;
+      takeReply(id, type, chatId);
+      return;
+    }
+    // The reply of a generation that ended before the one now running began.
+    const late = runtime.lateReply;
+    if (late && late.chatId === chatId && typeof type === 'string' && type && !['first_message', 'command'].includes(type)
+      && runtime.consumedFloor !== `${chatId}|${id}` && renderIsNewReply(id, context, late.base) && !replyFailed(id, context)) {
+      runtime.lateReply = null;
+      takeReply(id, type, chatId);
+      return;
+    }
+    // Only the chat's last floor can be anybody's reply: a redraw of an older one (酒馆助手 tops the
+    // screen up that way when a floor is deleted), the reply just taken announced again by a script, and
+    // a floor the host is still streaming are not worth a line.
+    const chat = Array.isArray(context.chat) ? context.chat : [];
+    if (id !== chat.length - 1 || runtime.consumedFloor === `${chatId}|${id}` || replyStillStreaming(id, context)) return;
+    noteUntranslatedRender(id, type, pending, { stale: Boolean(pending) && !newest });
   });
-  bindEvent(eventTypes.GENERATION_STOPPED, () => {
+  bindEvent(eventTypes.GENERATION_STOPPED, generationId => {
+    // 酒馆助手 announces the end of its own generate() with that generation's id; the host's stop names none.
+    // Nobody pressed stop then, so a reply being read while it is written is not cut off either.
+    if (generationId !== undefined) return;
     // Stopped by hand: the reader wants quiet, not the rest of the reading.
     if (runtime.tts.stream?.kind === 'reply' && !runtime.tts.stream.done) runtime.tts.stream.cancel();
     runtime.mainGenerationActive = false;
@@ -13858,7 +14375,9 @@ function registerRuntimeEvents() {
     if (pending) runtime.stoppedGeneration = { ...pending, at: Date.now() };
     runtime.generationGate.clear();
   });
-  bindEvent(eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
+  // Bound where the gate is: a slash command that takes the generation over writes no reply, so it neither
+  // counts as one nor ends the reading of the one before.
+  bindEvent(eventTypes.GENERATION_AFTER_COMMANDS ?? eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
     if (dryRun || ['quiet', 'impersonate'].includes(type)) return;
     runtime.tts.generationId += 1;
     runtime.tts.generationStartedAt = globalThis.performance?.now?.() ?? Date.now();
@@ -13868,27 +14387,28 @@ function registerRuntimeEvents() {
   // 边写边读: every streamed chunk is stored, and read a stretch at a time from a timer — the host
   // awaits this listener inside its stream loop, so nothing here may take time.
   if (eventTypes.STREAM_TOKEN_RECEIVED) bindEvent(eventTypes.STREAM_TOKEN_RECEIVED, text => onReplyStreaming(text));
-  bindEvent(eventTypes.GENERATION_ENDED, () => {
+  const generationEnded = () => {
     // However the reply ended, what was written of it is read to its end.
     if (runtime.tts.stream?.kind === 'reply' && !runtime.tts.stream.done) runtime.tts.stream.end();
-    // A reply that is rendered takes the gate within a moment of this. One that is still waiting a few
-    // seconds later never came — an error, an empty answer — and says so in the log instead of nowhere.
-    const serial = runtime.generationSerial;
-    const waiting = runtime.generationGate.peek();
-    if (waiting) {
-      const timer = globalThis.setTimeout(() => {
-        runtime.timers.delete(timer);
-        const still = runtime.generationGate.peek();
-        if (!still || runtime.generationSerial !== serial || still.chatId !== waiting.chatId || still.type !== waiting.type) return;
-        runtime.generationGate.clear();
-        recordDiagnostic('info', 'translation.auto-skip', `这次生成（${waiting.type}）没有产出回复，可能报错了或被过滤，没有可自动翻译的内容。`, { startedType: waiting.type });
-      }, 3000);
-      runtime.timers.add(timer);
-    }
+    // The gate stays open. With streaming the host announces the end before its listeners of the received
+    // message have run, and the render comes only after them — seconds later when a script waits on a
+    // model of its own. Whether the reply never came is known at the next start.
+    if (runtime.generationGate.peek()) runtime.generationEnded = true;
     if (!runtime.mainGenerationActive) return;
     runtime.mainGenerationActive = false;
     const latest = latestAssistantMessageId(getContext());
     if (Number.isInteger(latest)) scheduleTtsDecorate(latest, { delay: 400 });
+  };
+  bindEvent(eventTypes.GENERATION_ENDED, () => {
+    // 酒馆助手's generate() ends by giving the host's send buttons back, which announces this while the
+    // host's own reply may still be streaming; that is not this reply's end, and the host's own end then
+    // says nothing (its stop button is already hidden). The stream is watched to its end instead.
+    const streaming = getContext().streamingProcessor;
+    if (streaming && !streaming.isFinished && !streaming.isStopped) {
+      watchStreamEnd(streaming, generationEnded);
+      return;
+    }
+    generationEnded();
   });
   bindEvent(eventTypes.MESSAGE_SWIPED, messageId => {
     // A swipe past the last alternative is a reply about to be generated: the text on the floor is still
@@ -13932,6 +14452,10 @@ function registerRuntimeEvents() {
   });
   bindEvent(eventTypes.MESSAGE_EDITED, messageId => ttsFloorClosed(Number(messageId), { reason: 'edit' }));
   bindEvent(eventTypes.MESSAGE_DELETED, () => {
+    // A floor gone was heard as it was written; the reply written in its place next (a regenerate deletes
+    // the old one first) is a new one, read by itself unless it too is read as it is written.
+    const length = getContext().chat?.length ?? 0;
+    for (const id of runtime.tts.streamed) if (id >= length) runtime.tts.streamed.delete(id);
     // The host says how long the chat is now, not which floor went: a reading goes on when its floor
     // still reads the same where it was.
     void ttsReadingStands().then(stands => {
@@ -13946,11 +14470,34 @@ function registerRuntimeEvents() {
       if (lore && Array.isArray(lore.globalLore)) runtime.wiEntries = lore;
     });
   }
-  bindEvent(eventTypes.CHAT_CHANGED, () => {
-    runtime.mainGenerationActive = false;
-    runtime.call?.hangUp('换了聊天');
-    runtime.stoppedGeneration = null;
-    cancelPendingWork();
+  bindEvent(eventTypes.CHAT_CHANGED, chatId => {
+    // The same chat announced again was only redrawn (酒馆助手's regex refresh, a reload of the chat):
+    // what runs in it keeps running, and the reply being generated is still owed its translation.
+    const now = String(chatId ?? getCurrentChatId() ?? '');
+    // No id (a chat closed, a temporary one) is never the same chat.
+    const sameChat = now !== '' && runtime.chatSeen !== null && now === runtime.chatSeen;
+    runtime.chatSeen = now;
+    if (!sameChat) {
+      runtime.mainGenerationActive = false;
+      // A call is about the chat it was started in.
+      runtime.call?.hangUp('换了聊天');
+      runtime.stoppedGeneration = null;
+      runtime.generationBase = null;
+      runtime.generationEnded = false;
+      runtime.consumedFloor = null;
+      runtime.lateReply = null;
+      cancelPendingWork();
+    } else {
+      // Reloaded, the chat has new message objects, and a slash command may have put a floor in before a
+      // floor being translated: a translation whose floor is not the message it began on is called off.
+      const chat = getContext().chat ?? [];
+      for (const [key, entry] of [...runtime.inflight]) {
+        if (entry.message && chat[entry.messageId] !== entry.message) {
+          entry.controller.abort();
+          runtime.inflight.delete(key);
+        }
+      }
+    }
     scheduleEntries();
     // The speaker palette is per character card, so a different chat may need a different sheet.
     syncSpeakerStylesheet(runtime.settings);
@@ -13960,6 +14507,18 @@ function registerRuntimeEvents() {
       refreshCurrentCard(runtime.panel.controller.root);
       // The voice table may be per chat; the page shows the one that belongs to the chat just opened.
       syncTtsFields(runtime.panel.controller.root, runtime.settings);
+    }
+    // The page was redrawn: the buttons go back on the new floors; a reading goes on while its floor still
+    // reads the same where it was.
+    if (sameChat) {
+      void ttsReadingStands().then(stands => {
+        if (!stands) stopTts();
+      });
+      runtime.tts.ranges.clear();
+      runtime.tts.floors.clear();
+      runtime.tts.mesSeen.clear();
+      scheduleTtsDecorateAll();
+      return;
     }
     // Message ids restart in another chat; nothing playing or pending can carry over.
     stopTts();
@@ -13973,6 +14532,7 @@ function registerRuntimeEvents() {
     runtime.tts.mesSeen.clear();
     runtime.tts.fresh.clear();
     runtime.tts.streamed.clear();
+    runtime.tts.awaiting.clear();
     scheduleTtsDecorateAll();
   });
 }
@@ -13982,6 +14542,12 @@ function cleanupRuntime() {
   runtime.call?.hangUp('镜译停用了');
   runtime.epoch += 1;
   cancelPendingWork();
+  runtime.generationBase = null;
+  runtime.generationEnded = false;
+  runtime.consumedFloor = null;
+  runtime.lateReply = null;
+  runtime.chatSeen = null;
+  runtime.tts.awaiting.clear();
   for (const binding of runtime.eventBindings.splice(0)) {
     binding.source.removeListener(binding.eventType, binding.handler);
   }
@@ -14243,6 +14809,20 @@ function apiMoodVoices(utterances, mood) {
   return new Map(utterances.map(item => [item.id, { ...voice }]));
 }
 
+/**
+ * What a caller's text asks for, beside its words: the story's marks, as for any floor, and the mood a
+ * line's own mark or the caller names. A whisper asked for that way is the text asking for it, the way
+ * the story's own mark is, so the reading's check against the text lets it through.
+ */
+function callerEvidence(floor, mood = '') {
+  const evidence = new Map(ttsEvidence(floor) ?? []);
+  for (const line of floor?.lines ?? []) {
+    const moods = [line?.mood, mood].filter(Boolean).join(' ');
+    if (moods) evidence.set(line.lineId, `${evidence.get(line.lineId) ?? ''}\n${moods}`);
+  }
+  return evidence.size ? evidence : null;
+}
+
 /** The plain reading of text being streamed: the story's marks, then who speaks by the text itself. */
 function streamSegments(floor, utterances, settings, { mood = '' } = {}) {
   const tts = ttsSettings(settings);
@@ -14258,7 +14838,7 @@ function streamSegments(floor, utterances, settings, { mood = '' } = {}) {
   const voices = new Map(apiMoodVoices(utterances, mood) ?? []);
   for (const [id, voice] of tagged.voices) voices.set(id, voice);
   return buildSegments(utterances, pinSpeakers(labels, resolved, { fallback: 'hint' }), {
-    knownNames: ttsKnownNames(settings), voices: voices.size ? voices : null,
+    knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: voices.size ? voices : null, evidence: callerEvidence(floor, mood),
   });
 }
 
@@ -14362,7 +14942,7 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
     const segments = line?.speech?.length
       ? streamSegments(floor, utterances, settings, { mood }).filter(segment => segment.lineId === lineId)
       : who
-      ? buildSegments(own, apiLabels(own, { speaker: who, lang }), { knownNames: ttsKnownNames(settings), voices: apiMoodVoices(own, mood) })
+      ? buildSegments(own, apiLabels(own, { speaker: who, lang }), { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: apiMoodVoices(own, mood), evidence: callerEvidence(floor, mood) })
       : streamSegments(floor, utterances, settings, { mood }).filter(segment => segment.lineId === lineId);
     // A caller's text (a call, a plugin, the 试听 button) is read whole, as tts.speak reads it; the
     // reader's 朗读范围 is about their chat, and applies to a reply read while it is written.
@@ -15260,7 +15840,7 @@ async function apiSpeak({ text, speaker = '', lang = '', emotion = '', analyze =
     for (const [id, voice] of analysed.voices ?? []) merged.set(id, { ...merged.get(id), ...voice });
     voices = merged.size ? merged : null;
   }
-  const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), voices });
+  const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices, evidence: callerEvidence(floor, emotion) });
   // The reader's 朗读范围 is about their chat, not about what a caller asked for: all of it is read.
   const { items } = await ttsItemsFor(floor, segments, settings, { range: 'all' });
   if (!items.length) throw new Error('没有可朗读的文字。');

@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.36.0-beta.2';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.37.0-beta.1';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 
@@ -684,69 +684,146 @@ export function findForbiddenPhraseHits(translations, profile) {
   return hits;
 }
 
+// The palette's moods as a reader tells them apart. A bare English word leaves the model to guess where
+// fear ends and serious begins; two of them are ways of saying a line, not moods at all, and are asked
+// for only where the text says so (see quietWords below).
+const PALETTE_EMOTION_GLOSS = Object.freeze({
+  happy: '开心、愉快、兴奋',
+  tender: '温柔、亲昵、体贴',
+  sad: '难过、失落、委屈',
+  angry: '生气、烦躁、厌恶',
+  fear: '害怕、紧张、不安、犹豫',
+  shy: '害羞、难为情',
+  surprise: '惊讶、意外、困惑',
+  serious: '严肃、冷淡、嘲讽',
+  resolute: '坚定、自信、得意',
+});
+
+// A word with the words that call for it beside it: 「sighing（叹气、叹了口气、ため息）」.
+const glossed = (words, gloss) => words.map(word => {
+  const said = Array.isArray(gloss[word]) ? gloss[word].join('、') : gloss[word];
+  return said ? `${word}（${said}）` : word;
+}).join('、');
+
+// Each person once, under the name the palette or the voice table keeps them by, with the other
+// spellings beside it. Listing the spellings as names of their own read as that many people.
+function rosterLine(roster) {
+  return (Array.isArray(roster) ? roster : [])
+    .map(entry => (typeof entry === 'string' ? { name: entry, aliases: [] } : entry))
+    .filter(entry => entry?.name)
+    .map(entry => (entry.aliases?.length ? `${entry.name}（又名 ${entry.aliases.join('、')}）` : entry.name))
+    .join('、');
+}
+
 /**
- * The extra instruction sent only when speaker colouring or emotion typography is on.
+ * The extra instruction sent only when speaker colouring, emotion typography or the reading is on.
  *
  * It lives outside the editable prompt profile on purpose. This is a display feature: it must not
  * appear in, or be lost by, a user's own translation rules, and turning colouring off has to remove
  * every trace of it from the request.
  *
- * The whole design of this section is to keep the job small. The model is not asked to choose a
- * colour, invent a vocabulary or emit markup — only to pick a name off a list it is given and a
- * label out of a closed set, with an explicit "leave it out if unsure" escape.
+ * The job stays small and checkable. The model picks a name off a list (or, with the roster open,
+ * writes the name the translation uses), a label out of a closed set, and a tone or a sound only where
+ * the words that call for it are on the page, in the original or the translation — with "leave it out
+ * if unsure" everywhere. The unit it labels is one item, one line of the floor, which is also the unit
+ * the colouring and the reading place the marks on; the lines beside it are where the text says who is
+ * talking and how. The words that call for a tone or a sound (`toneCues`, `soundCues`) are the ones the
+ * reading checks a mark against before Fish hears it, so a model that follows the rule is never
+ * overruled.
  */
-export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], emotionLabels = [], voice = false, tones = [], quoteMarks = [], sounds = [], styles = [], directions = false } = {}) {
+export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], openRoster = true, emotionLabels = [], emotionGroups = null, voice = false, tones = [], toneCues = {}, quoteMarks = [], sounds = [], soundCues = {}, soundPlace = '', softMoods = [], styles = [], directions = false } = {}) {
   if (!speakers && !emotions) return '';
+  const marks = (quoteMarks.length ? quoteMarks : ['「」', '『』', '“”', '""']).join(' ');
   const fields = [];
-  const rules = [];
+  const rules = [`台词指 ${marks} 这些引号里的话，心里想的话也算；引号里只是书名、称号、招牌、拟声词或被引用的一个词时，不算台词。`];
+  const checks = [];
   // The spec's §9 shows a literal {id, text} object, and a model copies the shape it was shown far
   // more readily than it follows a later instruction to add fields. So this section restates the
-  // shape with the annotation fields present and says outright that it supersedes that example.
+  // shape with the annotation fields present and says outright that it supersedes that example. The
+  // stand-ins sit in angle brackets, which the reader of the answer throws away if they come back.
   const example = { id: 7, text: '对应的译文' };
   if (speakers) {
-    example.speaker = '名单中的名字';
-    fields.push('speaker：这一段的说话者');
-    rules.push(roster.length
-      ? `speaker 只能取以下名单中的一个，逐字照抄，不要改写、不要加敬称：${roster.join('、')}。名单外的人物、旁白、心理描写和无法确定的段落一律省略 speaker 字段。`
-      : 'speaker 写这一段说话者在译文中使用的名字。旁白、心理描写和无法确定的段落省略 speaker 字段。');
+    example.speaker = '<人名>';
+    fields.push('speaker（谁说这一项里的台词）');
+    rules.push('一项里没有台词（纯叙述、动作、心理描写）就不写 speaker。');
+    const people = rosterLine(roster);
+    const loose = '写译文里对这个人的称呼，去掉敬称和头衔（先生、小姐、大人、酱、さん、様之类）；只有称呼没有名字的人（老师、店长、大小姐这类）照写这个称呼；同一个人在整批里只用一种写法。';
+    if (!people) rules.push(`speaker ${loose}`);
+    else {
+      rules.push(`已知人物：${people}。已知人物一律写括号前的名字，逐字照抄，不加敬称，不换成括号里的别名或全名。`);
+      rules.push(openRoster ? `名单外的人：${loose}` : '名单外的人不写 speaker。');
+    }
+    rules.push('判断谁在说话只用写在文字里的线索：这一项和紧挨着的上一项、下一项里的「某某说」「某某问」和动作；台词里的自称（我、俺、僕、私）、口癖和语尾；台词里对别人的称呼（被叫到的是听的人）；两个人一来一回对话时的顺序；参考资料里写明的说话方式。这些线索都没有才不写。你、我、他、她这类代词不是名字：认得出是谁就写名字，认不出就不写。');
+    checks.push('写了 speaker 的项里确实有台词');
+    if (!voice) {
+      // Colouring alone asks for the runs only where one line holds two people; one colour for the
+      // whole line was how the second speaker's words came out in the first one's colour.
+      rules.push(`一项里有两个或更多不同的人说话时，再写 quotes：按译文里台词出现的顺序，每处一项，写成 {"head":"<译文里这处台词开头 2 到 6 个字>","speaker":"<人名>"}${emotions ? '，可以再加这处台词自己的 emotion 和 intensity' : ''}；这时这一项外层的 speaker 写第一处台词的人。只有一个人说话的项不写 quotes。`);
+    }
   }
   if (emotions) {
-    // A placeholder rather than a real label: naming one here biases every segment towards it, and
-    // naming `neutral` would contradict the intensity rule two lines below.
-    example.emotion = '下列标签之一';
+    // A stand-in rather than a real label: naming one here biases every item towards it.
+    example.emotion = '<情绪词>';
     example.intensity = 1;
-    fields.push('emotion：这一段的情绪；intensity：情绪强度，0 弱、1 中、2 强');
+    fields.push('emotion（情绪）', 'intensity（强度，0、1、2）');
+    // The two ways of saying a line are glossed with the very words the reading's tones are.
+    const quietWords = [...(toneCues.whispering ?? []), ...(toneCues['soft tone'] ?? [])].join('、') || '小声、耳语';
+    const loudWords = [...(toneCues.shouting ?? []), ...(toneCues.screaming ?? [])].join('、') || '喊、尖叫';
+    const gloss = {
+      ...PALETTE_EMOTION_GLOSS,
+      whisper: `压低声音说，原文或译文写了${quietWords}这类说法才用`,
+      shout: `放大声音说，原文或译文写了${loudWords}这类说法才用`,
+    };
+    const table = Array.isArray(emotionGroups) && emotionGroups.length
+      ? emotionGroups.map(([group, words]) => `${group}：${words.map(([word, meaning]) => `${word}（${meaning}）`).join('、')}`).join('\n')
+      : glossed(emotionLabels, gloss);
     rules.push(voice
-      ? `emotion 只能取以下英文词之一，逐字照抄（这些是语音模型认得的情绪词）：${emotionLabels.join('、')}。判断依据是这一段本身写出来的内容，不是你对剧情的推测。看不出明显情绪就写 neutral 或直接省略；不要为了填满字段而猜。`
-      : `emotion 只能取以下之一，逐字照抄：${emotionLabels.join('、')}。判断依据是这一段本身写出来的内容，不是你对剧情的推测。看不出明显情绪就写 neutral 或直接省略；不要为了填满字段而猜。`);
-    rules.push('intensity 只在 emotion 不是 neutral 时才有意义，默认 1。只有原文明确用了加强或减弱的写法（惊叹、破折号、省略号、气声、重复、加粗）才写 2 或 0。');
+      ? `emotion 只能从下表挑一个，逐字照抄英文词（这些是配音模型认得的词）：\n${table}`
+      : `emotion 只能从下面挑一个，逐字照抄英文词：${table}。`);
+    rules.push('有台词的项，emotion 是说话人说这句台词时的情绪；没有台词的项，写叙述本身的基调，平铺直叙就不写。');
+    rules.push('只凭写出来的东西判断：台词的字面和标点，以及这一项和紧挨着的叙述里写明的神态和说法（红着脸、冷笑、咬着牙、声音发抖），原文或译文写了都算。不要按剧情推测；亲密或暧昧的场景也按字面挑词，不要一律选温柔、害羞类。看不出明显情绪就不写 emotion。');
+    rules.push('intensity 只在写了 emotion 时写，默认 1。写 2：台词连用感叹号或问号（！！、？！），或叙述写了大喊、尖叫、哭喊、崩溃、浑身发抖。写 0：叙述写了淡淡地、随口、若无其事、面无表情、嘟囔。两边都符合时写 2。省略号、结巴和重复字本身不改变强度。');
+    checks.push('emotion 的词都在上面的表里');
   }
   if (voice) {
     // The reading wants each quoted run told apart, and the way a line is delivered when the text
-    // says so. The head is what places a mark on its run; a model that miscounts still lands most.
-    const marks = quoteMarks.length ? `（${quoteMarks.join(' ')} 这些符号里的话）` : '';
-    example.tone = '可选';
-    if (directions) example.direction = '这一段该怎么念的中文指令';
+    // says so. The head is what places a mark on its run, and it is matched against the translation,
+    // so it is copied from there; a model that miscounts still lands most.
+    example.tone = '<说法>';
+    if (directions) example.direction = '<这一项该怎么念的中文指令>';
     example.quotes = [directions
-      ? { head: '这句台词开头几个字', speaker: '名单中的名字', emotion: '下列标签之一', intensity: 1, direction: '这句台词该怎么念的中文指令' }
-      : { head: '这句台词开头几个字', speaker: '名单中的名字', emotion: '下列标签之一', intensity: 1 }];
-    fields.push(directions ? 'direction：这一段该怎么念；tone：可选的说法；quotes：这一段里每一处台词各自的标注' : 'tone：可选的说法；quotes：这一段里每一处台词各自的标注');
-    if (directions) rules.push('direction：一句 20 字左右、最多 40 字的中文配音指令，写这句真正该怎么念：基础情绪、情绪的变化、语气（压着、装冷淡、带笑、发抖……）、语速倾向、必要的停顿感。要写成配音演员能照着演的话，不要只写一个情绪词。平淡的句子省略。旁白段也可以给，写叙述的口吻。');
-    if (directions) rules.push(`quotes 里每一项还可以带这些细节，只在真的需要时写：speed（slow / fast，明显时才写）、volume（quiet / loud）、stress（要重读的词，最多 3 个）、pauses（[{"after":"词","length":"short|long"}]，最多 4 处）、sounds（[{"at":"start|end|after","tag":"声音词","after":"词"}]，tag 取 ${sounds.length ? sounds.join(' / ') : '简短的中文声音词'} 之一）、shift（{"at":"从这个词起","direction":"转变后的指令"}）。这些词必须逐字出现在这句台词里。`);
+      ? { head: '<台词开头几个字>', speaker: '<人名>', emotion: '<情绪词>', intensity: 1, direction: '<这句台词该怎么念的中文指令>' }
+      : { head: '<台词开头几个字>', speaker: '<人名>', emotion: '<情绪词>', intensity: 1 }];
+    fields.push(...(directions ? ['direction（该怎么念）'] : []), 'tone（说法，可选）', 'quotes（每处台词各自的标注）');
+    rules.push(`tone 只在这一项或紧挨着的叙述里明确写了括号里这类说法时才写（看意思，不要求逐字，原文或译文写了都算），只能取括号前的英文词：${glossed(tones, toneCues)}。其余情况不写。`);
+    // Every quoted run is counted, a sign or a title too: on the original's side the heads, copied from
+    // the translation, cannot place a mark, and the runs are placed by order only when the counts agree.
+    rules.push('quotes：译文里每一处引号写一项，按出现顺序，包括不算台词的那几处；只有一处引号、而且它是台词时可以不写。每项的 head 照抄译文里这处引号里开头 2 到 6 个字（不含引号）；不算台词的那处只写 head 和 "type":"narration"；其余各项的 speaker、emotion、intensity、tone、sounds 只管这一处，规则同上。一项里有几个人说话时，这一项外层的 speaker 和 emotion 写第一处台词的。');
+    if (directions) {
+      rules.push('direction：一句 20 字左右、最多 40 字的中文配音指令，写这句真正该怎么念：基础情绪、情绪的变化、语气（压着、装冷淡、带笑、发抖……）、语速倾向、必要的停顿感。要写成配音演员能照着演的话，不要只写一个情绪词。平淡的句子省略。旁白段也可以给，写叙述的口吻。');
+      rules.push(`quotes 里每一项还可以带这些细节，只在真的需要时写：speed（slow / fast，明显时才写）、volume（quiet / loud）、stress（要重读的词，最多 3 个）、pauses（[{"after":"词","length":"short|long"}]，最多 4 处）、sounds（[{"at":"start|end|after","tag":"声音词","after":"词"}]，tag 取 ${sounds.length ? sounds.join(' / ') : '简短的中文声音词'} 之一）、shift（{"at":"从这个词起","direction":"转变后的指令"}）。这些词必须逐字出现在这句台词里。`);
+    } else if (sounds.length) {
+      rules.push(`sounds 跟着具体那处台词写（写进 quotes 里它那一项；只有一处引号时也可以写在外层），每处最多一个，写成 [{"at":"start","tag":"<声音词>"}]，at 是 start 或 end。只有这一项、或前后紧挨着的没有台词的叙述项，在引号外写了说这处台词的人发出括号里这类声音才写（看意思，不要求逐字，原文或译文写了都算），tag 只能取括号前的英文词：${glossed(sounds, soundCues)}。台词里已经写出这个声音（哈哈、唉、呜呜）时不写。${soundPlace}喘息、喘气、呻吟、娇喘、闷哼都不写 sounds，也不要换成别的声音词，只用 emotion 表达。`);
+      checks.push('tone 和 sounds 的依据在原文或译文里写明');
+    }
+    // The same line of nothing but 嗯 and 啊 the analyses are told about: the reading drops a soft mood,
+    // a quiet tone and a sound laid over it, so the translation is asked for what survives.
+    const soft = softMoods.length ? softMoods.join('、') : '温柔或害羞的词';
+    rules.push(`台词只有嗯、啊、哈、唉这类语气词时：emotion 不用 ${soft}，tone 只能写 shouting 或 screaming，不写 sounds。`);
     const styleLines = (Array.isArray(styles) ? styles : []).map(style => `${style.name}：${(style.rules ?? []).join(' ')}`).filter(line => line.length > 2).slice(0, 40);
-    if (styleLines.length) rules.push(directions ? `写 direction 时要遵守下面这些角色的表达习惯和用户定下的规则（「默认」一条对所有人和旁白生效）：${styleLines.join('；')}` : `判断情绪、语气和声音时参考下面这些角色的表达习惯和用户定下的规则（「默认」一条对所有人和旁白生效）：${styleLines.join('；')}`);
-    if (!directions) rules.push(`quotes 里每一项还可以带 sounds（[{"at":"start|end","tag":"声音词"}]），只在原文明确写了笑、叹气、喘息、倒吸气这类声音时写，tag 只能取：${sounds.join('、')}。`);
-    rules.push(`tone 可选，只能取 ${tones.join(' / ')} 之一，只在原文明确写了小声、耳语、喊、尖叫、急促这类说法时写，其余省略。`);
-    rules.push(`quotes：这一段的译文里有几处台词${marks}就写几项，按出现顺序；每项的 head 逐字照抄这句台词开头的 2 到 6 个字（不含引号），speaker、emotion、intensity、tone 只针对这一句台词，规则同上。整段没有台词就不写 quotes；只有一处台词时也可以不写，段级的字段就是它的。段级的 speaker 和 emotion 照常写，一段里有几个人说话时写主要的那一位。`);
+    if (styleLines.length) rules.push(directions
+      ? `写 direction 时要遵守下面这些角色的表达习惯和用户定下的规则（「默认」一条对所有人和旁白生效）：${styleLines.join('；')}`
+      : `下面是各角色的说话习惯和用户定下的规则（「默认」一条对所有人生效）。它们决定 emotion 和 intensity 的整体取向，和上面的强度条件冲突时以它们为准；tone 和 sounds 仍然必须有原文依据；规则要求少写或不写 sounds、tone 时照做：${styleLines.join('；')}`);
+    checks.push('quotes 的项数不多于译文里这一项的引号数');
   }
+  if (checks.length) rules.push(`输出前整体核对一遍，不写出核对过程：${checks.join('；')}。`);
   return [
     '# 附加标注（本节替换输出协议里的 JSON 示例）',
-    `本次请求中，translations 数组的每一项除 id 和 text 之外还要给出：${fields.join('；')}。`,
-    '输出协议的其余要求全部不变，只有每项的字段变多。以本节的示例为准：',
+    `本次 translations 的每一项（一个 id）除 id 和 text 外，还要按下面的规则给出：${fields.join('、')}。输出协议的其余要求不变。格式以这个示例为准，尖括号里是要换成实际内容的说明，不要照抄：`,
     JSON.stringify({ translations: [example] }),
     ...rules,
     voice
-      ? '这些字段只用于界面显示和朗读配音，不进入正文，也不影响翻译本身。字段缺失、拼错或不在允许取值内时会被忽略，因此拿不准时省略比猜测更好。绝对不要把标注、情绪词或任何方括号标签写进 text，也不要因为要标注而改动译文措辞。'
-      : '这些字段只影响译文在界面上的显示，不进入正文，也不影响翻译本身。字段缺失、拼错或不在允许取值内时会被忽略，界面按普通样式显示，因此拿不准时省略比猜测更好。绝对不要把标注写进 text，也不要因为要标注而改动译文措辞。',
+      ? '这些字段只用于界面显示和朗读配音，不进入正文，也不影响翻译本身。拿不准的字段直接不写，不要猜。绝对不要把标注、情绪词或任何方括号标签写进 text，也不要因为要标注而改动译文措辞。'
+      : '这些字段只影响译文在界面上的显示，不进入正文，也不影响翻译本身。拿不准的字段直接不写，不要猜。绝对不要把标注写进 text，也不要因为要标注而改动译文措辞。',
   ].join('\n');
 }
