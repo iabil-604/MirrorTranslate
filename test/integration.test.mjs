@@ -109,6 +109,42 @@ test('a re-roll on the same floor is translated, not swallowed by the old text\'
   assert.equal(old.reason, 'cancelled', 'the stuck run was called off and says so');
 });
 
+test('补译 asks only for the paragraphs that have no translation yet', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([{ id: 2, text: '风很大。' }]));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 0 }, initialized: true });
+  const source = '雨が降っている。\n\n風が強い。';
+  const segmented = segmentSource(source, settings);
+  const partial = assembleBilingual(segmented.layout, new Map([[1, '下雨了。']]), { ...settings, allowMissing: true });
+  const inner = `\n${partial}\n`;
+  context.chat.push({
+    mes: `<story_scene>${inner}</story_scene>`,
+    swipe_id: 0,
+    extra: {
+      [MESSAGE_META_KEY]: {
+        schema_version: 4, swipe_id: 0, complete: false, missing_ids: [2],
+        source_hash: await hashText(createTranslationSignature([{ tagName: 'story_scene', segments: segmentSource(inner, settings).segments }])),
+        segment_prefix: settings.segmentPrefix ?? '', segment_suffix: settings.segmentSuffix ?? '',
+        translation_prefix: settings.translationPrefix ?? '{', translation_suffix: settings.translationSuffix ?? '}',
+        paragraph_per_line: false,
+      },
+    },
+  });
+  await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /風が強い/);
+  assert.doesNotMatch(asked[0], /雨が降っている/, 'the paragraph already translated is not sent again');
+  assert.match(context.chat[0].mes, /下雨了。/, 'and its translation is kept');
+  assert.match(context.chat[0].mes, /风很大。/);
+});
+
 test('streaming and whole-request paths agree on the already-translated gate', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });

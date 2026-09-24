@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.34.4';
+} from './prompts.js?v=0.34.5';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.34.4';
+export const APP_VERSION = '0.34.5';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -1933,6 +1933,27 @@ function maskExcludedTags(source, tagNames) {
   return { masked, blocks };
 }
 
+/**
+ * The excluded blocks inside one translatable line (a picture's prompt written mid-sentence), split by
+ * where they stand: before any of the line's words, or after. A replace-tag region shows the translation
+ * in the original's place, and these go back beside it — the translation has no place for them inside.
+ */
+function excludedAround(maskedLine, blocks) {
+  let lead = '';
+  let trail = '';
+  const found = blocks
+    .map(block => ({ block, at: maskedLine.indexOf(block.token) }))
+    .filter(item => item.at >= 0)
+    .sort((left, right) => left.at - right.at);
+  for (const { block, at } of found) {
+    let before = maskedLine.slice(0, at);
+    for (const other of blocks) before = before.split(other.token).join('');
+    if (/[\p{L}\p{N}]/u.test(stripStructuralTags(before))) trail += block.text;
+    else lead += block.text;
+  }
+  return { lead, trail };
+}
+
 function replaceMaskedBlocks(value, blocks, mode) {
   let output = String(value ?? '');
   for (const block of blocks) output = output.split(block.token).join(mode === 'restore' ? block.text : '');
@@ -2210,13 +2231,15 @@ export function segmentSource(text, options = {}) {
       );
       if (customPreserved) customPreservedLines += 1;
       if (builtinPreserved) builtinPreservedLines += 1;
+      const semantic = Boolean(translationText) && !customPreserved && !builtinPreserved;
       return {
         source: sourceLine,
         separator: line.separator,
         translationText,
+        ...(semantic ? excludedAround(line.text, blocks) : { lead: '', trail: '' }),
         // Who says what, when the story marked it; kept beside the segment, never on it.
         speech: speechMarkedLine(withoutExcluded),
-        semantic: Boolean(translationText) && !customPreserved && !builtinPreserved,
+        semantic,
         closingTagOnly: isClosingTagOnlyLine(withoutExcluded),
         // Read from the masked text so an excluded block inside the line cannot be mistaken for
         // part of the wrapper; the tokens that stand in for it carry no angle brackets.
@@ -2258,6 +2281,7 @@ export function segmentSource(text, options = {}) {
           text: segment.text,
           sourceText: line.source,
           formats: [line.format ?? null],
+          lineParts: [{ semantic: true, source: line.source, lead: line.lead, trail: line.trail }],
           padAfter: index !== lastSemantic,
         });
         paragraphs += 1;
@@ -2294,6 +2318,10 @@ export function segmentSource(text, options = {}) {
       text: unitTexts.join('\n'),
       sourceText,
       formats: unitFormats,
+      // Every line of the unit in order, translatable or not: a replace-tag region rebuilds the
+      // paragraph from these so what is not for translation stays where it stood.
+      lineParts: lines.slice(firstSemantic, lastIncluded + 1)
+        .map(line => ({ semantic: line.semantic, source: line.source, lead: line.lead, trail: line.trail })),
     });
     paragraphs += 1;
 
@@ -2938,6 +2966,31 @@ export function renderReplacePair(translation, source, decoration = {}) {
   return `${SOURCE_START}${open}${body}${close}${SOURCE_END}\n${HIDDEN_START}${String(source ?? '')}${HIDDEN_END}`;
 }
 
+/**
+ * A replace-tag paragraph's visible side, line by line: each translatable line as its translation with
+ * any excluded block of the line beside it, every other line (a picture on its own line, a preserved
+ * line) exactly as written. A line not translated yet shows its original inside the invisible markers,
+ * so reading the floor back takes it for missing, not for a translation.
+ */
+function replaceUnitBody(part, ids, translationMap, options, decoration = {}) {
+  const carry = options.carryFormatting !== false;
+  const formats = Array.isArray(part?.formats) ? part.formats : [];
+  let index = 0;
+  return part.lineParts.map(line => {
+    if (!line.semantic) return line.source;
+    const id = ids[index];
+    const format = carry ? formats[index] : null;
+    index += 1;
+    const translation = translationMap.get(id);
+    if (!translation) return markedAffix(line.source);
+    const shaped = styledBody(String(translation), decoration.styleBody);
+    const body = format?.open
+      ? `${markedAffix(decoration.paintsColor ? withoutCarriedColor(format.open) : format.open)}${shaped}${markedAffix(format.close)}`
+      : shaped;
+    return `${line.lead ?? ''}${body}${line.trail ?? ''}`;
+  }).join('\n');
+}
+
 export function assembleReplace(layout, translationMap, options = {}) {
   const allowMissing = options.allowMissing === true;
   const pieces = [];
@@ -2949,7 +3002,10 @@ export function assembleReplace(layout, translationMap, options = {}) {
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
     const sourceText = part.sourceText ?? part.text;
     const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id)).filter(Boolean));
-    const body = translationUnitBody(part, ids, translationMap, options, decoration);
+    const byLine = Array.isArray(part.lineParts) && part.lineParts.length > 0;
+    const body = !ids.some(id => translationMap.get(id)) ? ''
+      : byLine ? replaceUnitBody(part, ids, translationMap, options, decoration)
+        : translationUnitBody(part, ids, translationMap, options, decoration);
     if (!body) {
       if (!allowMissing) throw new Error(`缺少第 ${ids.join('、')} 段译文。`);
       // Untranslated replace segments stay as their original plain text, ready for 补译.
@@ -2959,6 +3015,48 @@ export function assembleReplace(layout, translationMap, options = {}) {
     pieces.push(renderReplacePair(body, sourceText, { ...decoration, styleBody: null }));
   }
   return pieces.join('');
+}
+
+/**
+ * A replace pair's visible side read back along the paragraph it was built from (replaceUnitBody): a
+ * line not for translation must be there exactly as written, a translated line is its translation with
+ * the line's excluded blocks beside it, a line not translated yet has nothing left once the markers are
+ * gone. Blocks and pictures may run over several lines, so the reading follows the text, not a line
+ * count. Anything that does not follow (a floor written before this, an edited floor) gives null, and
+ * the older line-count reading is used.
+ */
+function readReplaceBodyByLine(body, lineParts, ids) {
+  if (!Array.isArray(lineParts) || !lineParts.length) return null;
+  const found = new Map();
+  let rest = body;
+  let index = 0;
+  for (let at = 0; at < lineParts.length; at += 1) {
+    const line = lineParts[at];
+    if (!line.semantic) {
+      if (!rest.startsWith(line.source)) return null;
+      rest = rest.slice(line.source.length);
+    } else {
+      const id = ids[index];
+      index += 1;
+      // Not translated yet: its original was inside the markers, and nothing of it is left.
+      if (rest && !rest.startsWith('\n')) {
+        if (line.lead) {
+          if (!rest.startsWith(line.lead)) return null;
+          rest = rest.slice(line.lead.length);
+        }
+        const end = line.trail ? rest.indexOf(line.trail) : (rest.indexOf('\n') < 0 ? rest.length : rest.indexOf('\n'));
+        if (end < 0) return null;
+        const translation = rest.slice(0, end).trim();
+        rest = rest.slice(end + (line.trail ? line.trail.length : 0));
+        if (translation) found.set(id, translation);
+      }
+    }
+    if (at < lineParts.length - 1) {
+      if (!rest.startsWith('\n')) return null;
+      rest = rest.slice(1);
+    }
+  }
+  return rest === '' ? found : null;
 }
 
 // Seeds for 补译: each replace pair's source block holds that part's translation.
@@ -2983,7 +3081,10 @@ export function extractReplaceTranslations(text, options = {}) {
     if (typeof body !== 'string' || !body.trim()) continue;
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
     const lines = normalizeNewlines(body).split('\n');
-    if (ids.length === lines.length) {
+    const lineWise = readReplaceBodyByLine(normalizeNewlines(body), part.lineParts, ids);
+    if (lineWise) {
+      for (const [id, translation] of lineWise) translations.set(id, translation);
+    } else if (ids.length === lines.length) {
       ids.forEach((id, line) => {
         const translation = lines[line].trim();
         if (translation) translations.set(id, translation);
@@ -3047,7 +3148,13 @@ export function upgradeLegacyBilingual(text, metadata) {
 
 export function restyleBilingual(text, options = {}, metadata) {
   return upgradeLegacyBilingual(text, metadata)
-    .replace(SOURCE_BLOCK_RE, (_match, source) => renderSourceBlock(source.replace(AFFIX_RE, ''), options))
+    .replace(SOURCE_BLOCK_RE, (match, source, offset, whole) => {
+      // A replace pair's source-block position holds the translation, dressed in its speaker colours;
+      // the visible prefixes are never part of it, so a restyle leaves the pair exactly as it is.
+      const after = whole.slice(offset + match.length);
+      if (after.startsWith(HIDDEN_START) || after.startsWith(`\n${HIDDEN_START}`)) return match;
+      return renderSourceBlock(source.replace(AFFIX_RE, ''), options);
+    })
     .replace(TRANSLATION_BLOCK_RE, (match, translation) => {
       // The 每行单独成段 separator is a newline stored after the suffix affix. Reading it back as
       // part of the translation moved the closing affix onto its own line, so it is recovered here

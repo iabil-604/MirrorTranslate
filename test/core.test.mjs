@@ -16,6 +16,9 @@ import {
   INVISIBLE_MARKER,
   assembleBilingual,
   assembleReplace,
+  renderReplacePair,
+  renderSourceBlock,
+  renderTranslationBlock,
   estimateRequestTokens,
   extractReplaceTranslations,
   createTranslationSignature,
@@ -760,6 +763,35 @@ test('request tokens are estimated from CJK and non-CJK characters separately', 
 });
 
 // --- v0.13.4 regressions: the four field reports and the review findings they map to. ---
+
+test('a replace-tag paragraph keeps what is not for translation where the reader and the main model see it', () => {
+  const options = { excludedTags: ['image'], preserveLineRules: '' };
+  const original = 'Line one.\n<image>a cat</image>\nLine two <image>x</image> end.';
+  const { layout } = segmentSource(original, options);
+  const floor = assembleReplace(layout, new Map([[1, '第一行。'], [2, '第二行。']]), options);
+  const prompt = stripGeneratedTranslationLines(floor, null, 'prompt');
+  assert.equal(prompt, '第一行。\n<image>a cat</image>\n第二行。<image>x</image>', 'the picture on its own line and the one inside a line both stay');
+  assert.equal(stripGeneratedTranslationLines(floor), original, 'the original comes back whole, nothing twice');
+  assert.deepEqual([...extractReplaceTranslations(floor, options)], [[1, '第一行。'], [2, '第二行。']], '补译 reads the translations alone');
+  const partial = assembleReplace(layout, new Map([[1, '第一行。']]), { ...options, allowMissing: true });
+  assert.deepEqual([...extractReplaceTranslations(partial, options)], [[1, '第一行。']], 'a line not translated yet reads as missing');
+  assert.match(stripGeneratedTranslationLines(partial, null, 'prompt'), /<image>a cat<\/image>/);
+  // A picture prompt that runs over several lines is one line of the paragraph, not several.
+  const long = 'The lamp was low.\n<image>image###[Mage].\nA woman smiles.###</image>\nShe touched its nose <image>x</image> and smiled.';
+  const longFloor = assembleReplace(segmentSource(long, options).layout, new Map([[1, '灯光很暗。'], [2, '她摸了摸鼻子，笑了。']]), options);
+  assert.deepEqual([...extractReplaceTranslations(longFloor, options)], [[1, '灯光很暗。'], [2, '她摸了摸鼻子，笑了。']]);
+  assert.equal(stripGeneratedTranslationLines(longFloor), long);
+});
+
+test('a restyle leaves a replace pair as it is and restyles the bilingual blocks around it', () => {
+  const pair = renderReplacePair('"你好"她说。', '"Hi," she said.', { stylePrefix: '<span class="jy-spk" style="color:red">', styleSuffix: '</span>' });
+  const bilingual = `${renderSourceBlock('Rain.', { segmentPrefix: '<jy-source>', segmentSuffix: '</jy-source>' })}\n${renderTranslationBlock('下雨了。', { translationPrefix: '{', translationSuffix: '}' })}`;
+  const floor = `${pair}\n\n${bilingual}`;
+  const restyled = restyleBilingual(floor, { segmentPrefix: '<p>', segmentSuffix: '</p>', translationPrefix: '[', translationSuffix: ']' });
+  assert.ok(restyled.startsWith(pair), 'the pair is untouched: colours kept, no source prefixes put on the translation');
+  assert.match(restyled, /<p>/);
+  assert.match(restyled, /\[/);
+});
 
 test('a partly translated replace-tag floor seeds 补译 by hidden original, not by position', () => {
   const options = { segmentPrefix: '', segmentSuffix: '', translationPrefix: '', translationSuffix: '' };
