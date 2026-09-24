@@ -1411,3 +1411,9 @@ test('the gate takes the newest reply only, and a render with no type only after
   gate.begin('c', undefined);
   assert.equal(gate.consume('c', undefined), true, 'a start with no type is answered by a render with none');
 });
+
+test('the world books switched on are kept per card, names only', () => {
+  const settings = mergeSettings({ worldInfoBooks: { 'avatar.png': ['设定集', '设定集', '', 3], broken: 'x' } });
+  assert.deepEqual(settings.worldInfoBooks, { 'avatar.png': ['设定集', '3'] });
+  assert.deepEqual(mergeSettings({}).worldInfoBooks, {});
+});

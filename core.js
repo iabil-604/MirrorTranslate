@@ -1271,6 +1271,14 @@ export function mergeSettings(value = {}) {
       .map(item => ({ world: String(item.world), uid: Number(item.uid) }));
     if (picks.length) merged.worldInfoWhitelist[characterKey] = picks;
   }
+  // The world books switched on for the token-saving mode, per character card like the picks. A card with
+  // no list yet has the books of its picks on (the whitelist before books could be switched).
+  merged.worldInfoBooks = {};
+  const rawBooks = source.worldInfoBooks && typeof source.worldInfoBooks === 'object' ? source.worldInfoBooks : {};
+  for (const [characterKey, list] of Object.entries(rawBooks)) {
+    if (!Array.isArray(list)) continue;
+    merged.worldInfoBooks[characterKey] = [...new Set(list.map(name => String(name ?? '')).filter(Boolean))];
+  }
   merged.coloring = normalizeColoring(source.coloring);
   // The speaker palette follows the character card, like the worldbook whitelist above.
   merged.speakerPalette = {};

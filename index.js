@@ -409,7 +409,7 @@ const CONTROL_CENTER_MARKUP = `
  </div></div>
  <details class="jy-advanced"><summary>请求参数</summary><div class="jy-form-grid">
  <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
- </div></details><details class="jy-advanced"><summary>这条连接的后置提示词（附在每次请求的最末尾）</summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">列出全局挂载与当前角色卡激活的世界书条目；勾选后节约模式下仅注入这些内容，白名单跟随当前角色卡保存。一个都不勾则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
+ </div></details><details class="jy-advanced"><summary>这条连接的后置提示词（附在每次请求的最末尾）</summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存，点「保存连接」生效；一本都不开则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
 </div>
 <footer class="jy-footer"><span class="jy-save-note">修改后保存设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-settings">保存设置</button></footer>
 </section>
@@ -1161,10 +1161,23 @@ function readableWorldInfoEntries() {
   return entries;
 }
 
+/**
+ * The world books switched on for the token-saving mode for this card. A card saved before books could
+ * be switched has on the books its ticked entries come from.
+ */
+function worldInfoBooksOn(settings = runtime.settings, characterKey = worldInfoCharacterKey()) {
+  const saved = settings.worldInfoBooks?.[characterKey];
+  if (Array.isArray(saved)) return new Set(saved);
+  return new Set((settings.worldInfoWhitelist?.[characterKey] ?? []).map(pick => String(pick.world)));
+}
+
 function whitelistedWorldbookContent() {
   const picks = runtime.settings.worldInfoWhitelist?.[worldInfoCharacterKey()];
   if (!picks?.length) return '';
-  const wanted = new Set(picks.map(pick => `${pick.world}.${pick.uid}`));
+  // An entry goes in when it is ticked and its book is switched on.
+  const books = worldInfoBooksOn();
+  const wanted = new Set(picks.filter(pick => books.has(String(pick.world))).map(pick => `${pick.world}.${pick.uid}`));
+  if (!wanted.size) return '';
   const context = getContext();
   // The host expands macros before a worldbook entry reaches the main model. Sending {{char}} and
   // friends verbatim to the translator loses exactly the names it needs most.
@@ -1569,6 +1582,7 @@ function renderWorldInfoList(root) {
   const entries = readableWorldInfoEntries();
   const picks = new Set((runtime.settings.worldInfoWhitelist?.[worldInfoCharacterKey()] ?? [])
     .map(pick => `${pick.world}.${pick.uid}`));
+  const booksOn = worldInfoBooksOn();
   list.replaceChildren();
   if (!entries.length) {
     const note = document.createElement('p');
@@ -1577,20 +1591,78 @@ function renderWorldInfoList(root) {
     list.appendChild(note);
     return;
   }
+  // One group per world book, in the order the host lists them.
+  const books = new Map();
   for (const entry of entries) {
-    const label = document.createElement('label');
-    label.className = 'jy-check jy-wi-entry';
+    const name = String(entry.world ?? '');
+    if (!books.has(name)) books.set(name, []);
+    books.get(name).push(entry);
+  }
+  for (const [name, members] of books) {
+    const group = document.createElement('div');
+    group.className = 'jy-wi-book';
+    group.dataset.jyWiBook = name;
+    const head = document.createElement('div');
+    head.className = 'jy-wi-book-head';
+    const title = document.createElement('span');
+    title.className = 'jy-wi-book-name';
+    title.textContent = name || '（未命名世界书）';
+    const count = document.createElement('span');
+    count.className = 'jy-muted jy-wi-book-count';
+    const toggle = document.createElement('label');
+    toggle.className = 'jy-switch';
     const box = document.createElement('input');
     box.type = 'checkbox';
-    box.dataset.jyWiPick = '';
-    box.dataset.jyWorld = String(entry.world ?? '');
-    box.dataset.jyUid = String(entry.uid ?? '');
-    box.checked = picks.has(`${entry.world}.${entry.uid}`);
-    const text = document.createElement('span');
-    text.textContent = `${String(entry.comment || `条目 ${entry.uid}`).trim()}（${entry.world}）`;
-    label.append(box, text);
-    list.appendChild(label);
+    box.dataset.jyWiBookSwitch = '';
+    box.dataset.jyWorld = name;
+    box.checked = booksOn.has(name);
+    box.setAttribute('aria-label', `世界书开关：${name}`);
+    toggle.append(box, document.createElement('span'));
+    head.append(title, count, toggle);
+    const body = document.createElement('div');
+    body.className = 'jy-wi-book-entries';
+    body.hidden = !box.checked;
+    for (const entry of members) {
+      const label = document.createElement('label');
+      label.className = 'jy-check jy-wi-entry';
+      const pick = document.createElement('input');
+      pick.type = 'checkbox';
+      pick.dataset.jyWiPick = '';
+      pick.dataset.jyWorld = name;
+      pick.dataset.jyUid = String(entry.uid ?? '');
+      pick.checked = picks.has(`${entry.world}.${entry.uid}`);
+      const text = document.createElement('span');
+      text.textContent = String(entry.comment || `条目 ${entry.uid}`).trim();
+      label.append(pick, text);
+      body.appendChild(label);
+    }
+    group.append(head, body);
+    list.appendChild(group);
+    updateWorldInfoBookCount(group);
   }
+}
+
+/** A book's head says how many entries it has and how many go in. */
+function updateWorldInfoBookCount(group) {
+  const count = group.querySelector('.jy-wi-book-count');
+  if (!count) return;
+  const boxes = [...group.querySelectorAll('[data-jy-wi-pick]')];
+  const on = group.querySelector('[data-jy-wi-book-switch]')?.checked;
+  count.textContent = on ? `${boxes.length} 条 · 带 ${boxes.filter(box => box.checked).length} 条` : `${boxes.length} 条 · 关着`;
+}
+
+/**
+ * A book switched on shows its entries; switched on with none ticked it brings them all, and the ones not
+ * wanted are unticked. Switched off it is hidden and brings none, and its ticks are kept for next time.
+ */
+function toggleWorldInfoBook(box) {
+  const group = box.closest('.jy-wi-book');
+  if (!group) return;
+  const entries = group.querySelector('.jy-wi-book-entries');
+  const picks = [...group.querySelectorAll('[data-jy-wi-pick]')];
+  if (box.checked && !picks.some(pick => pick.checked)) for (const pick of picks) pick.checked = true;
+  if (entries) entries.hidden = !box.checked;
+  updateWorldInfoBookCount(group);
 }
 
 /**
@@ -7695,6 +7767,14 @@ function collectSettings(root) {
     const characterKey = worldInfoCharacterKey();
     if (wiPicks.length) current.worldInfoWhitelist[characterKey] = wiPicks;
     else delete current.worldInfoWhitelist[characterKey];
+    // Books switched on here, and the ones not listed now (another chat's own book) as they were.
+    const switches = [...root.querySelectorAll('[data-jy-wi-book-switch]')];
+    if (switches.length) {
+      const listed = new Set(switches.map(element => String(element.dataset.jyWorld || '')));
+      const kept = [...worldInfoBooksOn(current, characterKey)].filter(name => !listed.has(name));
+      const on = switches.filter(element => element.checked).map(element => String(element.dataset.jyWorld || ''));
+      current.worldInfoBooks = { ...(current.worldInfoBooks || {}), [characterKey]: [...new Set([...kept, ...on])] };
+    }
   }
   collectColoringFields(root, current);
   collectTtsFields(root, current);
@@ -10350,6 +10430,11 @@ function createControlCenter(rootDocument = document) {
       for (const twin of fieldElements(root, name)) twin.checked = event.target.checked;
       saveSettings(collectSettings(root));
       syncFields(root, runtime.settings);
+    }
+    if (event.target.matches('[data-jy-wi-book-switch]')) toggleWorldInfoBook(event.target);
+    if (event.target.matches('[data-jy-wi-pick]')) {
+      const group = event.target.closest('.jy-wi-book');
+      if (group) updateWorldInfoBookCount(group);
     }
     if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringAutoSpeakers"], [data-jy-field="coloringContrast"]')) {
       saveSettings(collectSettings(root));

@@ -1116,3 +1116,23 @@ test('putting the originals back reaches hidden floors, and each swipe gets its 
   assert.equal(stripGeneratedTranslationLines(message.swipes[1], {}), second);
   assert.equal(message.mes, message.swipes[1]);
 });
+
+test('世界书开关: only the books switched on bring their ticked entries, and a card saved before keeps its picks', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  mockHost();
+  const entries = {
+    globalLore: [{ world: '杂项', uid: 1, content: '全局的杂七杂八。' }],
+    characterLore: [{ world: '角色书', uid: 2, content: '樱井怕黑。' }, { world: '角色书', uid: 3, content: '樱井喜欢猫。' }],
+  };
+  const picks = [{ world: '杂项', uid: 1 }, { world: '角色书', uid: 2 }];
+  // Saved before books could be switched: the books of the ticked entries are on.
+  __testing.configureForTest({ settings: { worldInfoWhitelist: { 'sakurai.png': picks }, worldInfoBooks: {} }, worldInfoEntries: entries });
+  assert.equal(__testing.whitelistedWorldbookContent(), '全局的杂七杂八。\n\n樱井怕黑。');
+  // The global book switched off: its ticks stay, it brings nothing.
+  __testing.configureForTest({ settings: { worldInfoWhitelist: { 'sakurai.png': picks }, worldInfoBooks: { 'sakurai.png': ['角色书'] } } });
+  assert.equal(__testing.whitelistedWorldbookContent(), '樱井怕黑。');
+  // Every book off: nothing at all.
+  __testing.configureForTest({ settings: { worldInfoWhitelist: { 'sakurai.png': picks }, worldInfoBooks: { 'sakurai.png': [] } } });
+  assert.equal(__testing.whitelistedWorldbookContent(), '');
+});
