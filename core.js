@@ -8,11 +8,11 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.35.0';
+} from './prompts.js?v=0.35.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.35.0';
+export const APP_VERSION = '0.35.1';
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -1428,15 +1428,22 @@ function generationKind(type) {
  */
 export function createGenerationGate() {
   let pending = null;
+  let untyped = false;
+  const typed = type => typeof type === 'string' && type !== '';
   return Object.freeze({
     begin(chatId, type, dryRun = false) {
       const kind = generationKind(type);
       if (!chatId || dryRun || ['quiet', 'impersonate'].includes(kind)) return false;
       pending = { chatId: String(chatId), type: kind };
+      untyped = !typed(type);
       return true;
     },
-    consume(chatId, type) {
-      if (!pending || pending.chatId !== String(chatId)) return false;
+    // `newest`: the render is of a message that was not there, or not like that, when the generation
+    // began. A reply always is. A render that names no type is a script redrawing a floor — the host
+    // names the type of every reply it renders — unless the generation itself was started without one.
+    consume(chatId, type, { newest = true } = {}) {
+      if (!pending || pending.chatId !== String(chatId) || !newest) return false;
+      if (!typed(type) && !untyped) return false;
       const rendered = generationKind(type);
       const continuing = ['continue', 'append', 'appendFinal'].includes(pending.type);
       const matched = rendered === pending.type

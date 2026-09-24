@@ -78,7 +78,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.35.0';
+} from './core.js?v=0.35.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -135,10 +135,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.35.0';
-import { createTtsStore } from './tts-store.js?v=0.35.0';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.0';
+} from './tts.js?v=0.35.1';
+import { createTtsStore } from './tts-store.js?v=0.35.1';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.35.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.35.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -147,7 +147,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.35.0';
+} from './processing.js?v=0.35.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -164,9 +164,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.35.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.0';
+} from './prompts.js?v=0.35.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.35.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.35.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -180,15 +180,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.35.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.35.0';
+} from './palette.js?v=0.35.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.35.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.35.0';
+} from './diagnostics.js?v=0.35.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -220,6 +220,19 @@ const runtime = {
   interceptorSeen: false,
   interceptorWarned: false,
   promptFallbackStrips: 0,
+  // What the chat's last message was when the open generation began: its reply is told apart from it.
+  generationBase: null,
+  // The host announced the open generation's end; whether its reply ever came is known at the next start.
+  generationEnded: false,
+  // The floor the last reply was taken on, so a script announcing the same render again is not logged.
+  consumedFloor: null,
+  // A generation that ended with its reply not rendered yet when the next one began: its reply is still
+  // taken when it comes (a script held the render while the reader sent again).
+  lateReply: null,
+  // The chat the last CHAT_CHANGED was about: the same chat announced again was only redrawn.
+  chatSeen: null,
+  // The chat and body tags a missing body tag was last pointed out for.
+  bodyTagNoted: '',
   // The host's regex engine, borrowed so a floor with only its translation left in it goes to the main
   // model through the same prompt regexes as its bilingual text would have. Null until loaded, or on a
   // host without it.
@@ -299,6 +312,8 @@ const runtime = {
     // Floors a generation just wrote, waiting to be read aloud by themselves; and the texts already
     // read that way, so the passes after a translation lands do not read them again.
     fresh: new Set(),
+    // Floors an automatic translation was started for and has not settled: id → { since, token }.
+    awaiting: new Map(),
     autoRead: new Set(),
     // messageId → the mes last decorated, so a redraw with the same text costs one string compare.
     mesSeen: new Map(),
@@ -760,7 +775,8 @@ function saveSettings(next) {
   const previousRules = getActiveProcessingProfile(previous).regexScripts;
   const visualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
     || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
-  if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || visualChanged) cancelPendingWork();
+  // A change of look re-renders translations already written; the reply being generated is still owed one.
+  if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || visualChanged) cancelPendingWork({ gate: false });
   context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, active);
   context.extensionSettings[MODULE_ID] = runtime.settings;
   context.saveSettingsDebounced?.();
@@ -2056,7 +2072,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
   try {
     snapshot = await readMessageSnapshot(messageId, settings);
   } catch (error) {
-    if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable' };
+    if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable', detail: safeError(error) };
     throw error;
   }
   runtime.activeFloor = snapshot.messageId;
@@ -2194,7 +2210,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     if (runtime.inflight.get(lockKey)?.promise === work) runtime.inflight.delete(lockKey);
   });
 
-  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash });
+  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash, messageId: snapshot.messageId, message: snapshot.message, since: Date.now() });
   return work;
 }
 
@@ -2309,7 +2325,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
   try {
     snapshot = await readMessageSnapshot(messageId, settings);
   } catch (error) {
-    if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable' };
+    if (quiet && /没有找到|不是普通 AI 回复/.test(safeError(error))) return { skipped: true, reason: 'not-translatable', detail: safeError(error) };
     throw error;
   }
   runtime.activeFloor = snapshot.messageId;
@@ -2371,7 +2387,9 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       progressChain = progressChain.catch(() => {}).then(async () => {
         if (controller.signal.aborted || runtime.epoch !== epoch) return;
         const latest = await readMessageSnapshot(snapshot.messageId, settings).catch(() => null);
-        if (!latest) return;
+        // Floors before it deleted, another swipe shown, the chat reloaded with a floor put in: this is not
+        // the text being translated any more, and the end-of-run write sorts out what still fits.
+        if (!latest || latest.sourceHash !== snapshot.sourceHash || latest.swipeId !== snapshot.swipeId) return;
         await writeTranslation(latest, translations, epoch, settings, annotations);
       });
       return progressChain;
@@ -2557,7 +2575,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     if (runtime.inflight.get(lockKey)?.promise === work) runtime.inflight.delete(lockKey);
   });
 
-  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash });
+  runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash, messageId: snapshot.messageId, message: snapshot.message, since: Date.now() });
   return work;
 }
 
@@ -4796,6 +4814,8 @@ async function askTtsSave({ messageId, lineIndex = null, lineText = '' }) {
 }
 
 async function createTtsTransport(messageId, { single = false, paragraph = false, fromUtterance = null, side = null } = {}) {
+  // Heard now, by hand or by itself: the new reply is not read aloud again when its translation lands.
+  runtime.tts.fresh.delete(Number(messageId));
   const settings = runtime.settings;
   const tts = ttsSettings(settings);
   requireClosedFloor(messageId);
@@ -5527,6 +5547,9 @@ function requireClosedFloor(messageId) {
  * for. Nothing here waits for the translation, and nothing here runs while the floor is still being
  * written: a floor read halfway is a floor read wrong and paid for twice.
  */
+// How long the deep reading waits for an automatic translation before it reads the original without it.
+const TTS_TRANSLATION_HOLD_MS = 30000;
+
 function ttsFloorClosed(messageId, { translated = false, reason = 'generation' } = {}) {
   const tts = ttsSettings();
   const id = Number(messageId);
@@ -5566,8 +5589,30 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
     // that already carries its translation is waiting for nothing.
     const meta = message.extra?.[MESSAGE_META_KEY];
     const carries = meta?.complete === true && Number(meta.swipe_id ?? 0) === Number(message.swipe_id ?? 0);
+    // A translation is on its way only while one is really being made: this extension writing the floor,
+    // or an automatic one started and not settled. What the switches say is not enough — a translation
+    // that failed or was skipped used to be waited for for ever, and the new reply was never read.
     const automatic = reason === 'swipe' ? settings.autoSwipe === true : reason === 'edit' ? settings.autoEdit === true : settings.autoGeneration === true;
-    const translating = settings.enabled !== false && automatic && !translated && !carries;
+    const awaited = runtime.tts.awaiting.get(id);
+    const translating = !translated && !carries && (busy || Boolean(awaited));
+    // Translation first, then the deep reading: it reads the translation's names and references once the
+    // translation has landed. The settling asks again; a translation taking too long is not waited for.
+    // A translation being written, whoever started it, is waited for too: a floor half written would give
+    // the analysis half the names, and that analysis is kept.
+    const since = awaited?.since ?? ttsTranslationSince(id);
+    if (current.mode === 'deep' && !carries && since !== null && Date.now() - since < TTS_TRANSLATION_HOLD_MS) {
+      const chatAt = getCurrentChatId();
+      // Kept where the floor's appointments are: the settling, a new chat and a stop all cancel it.
+      const wait = globalThis.setTimeout(() => {
+        runtime.tts.closing.delete(id);
+        runtime.timers.delete(wait);
+        if (getCurrentChatId() !== chatAt) return;
+        ttsFloorClosed(id, { translated, reason });
+      }, since + TTS_TRANSLATION_HOLD_MS + 50 - Date.now());
+      runtime.tts.closing.set(id, wait);
+      runtime.timers.add(wait);
+      return;
+    }
     // The original is read: it is there whatever the translation is doing, so every announcement of
     // this floor is a chance to read it. Asking twice costs nothing — the analysis is kept per text
     // version, and the second call finds it. Only the translation is read: it has to exist first, so
@@ -5578,12 +5623,22 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
     // text is final. The reading makes its own audio as it goes, so that side is not made beforehand.
     const primary = reads[0];
     const primaryReady = primary === 'source' || translated || carries || !translating;
-    const autoRead = current.autoRead && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy);
+    // A translation was asked for and none was written: the translation side has nothing to read, and
+    // the reader is told rather than left waiting for a voice.
+    const untranslated = primary === 'translation' && !translated && !carries && !translating && Boolean(automatic);
+    const autoRead = current.autoRead && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy) && !untranslated;
+    if (current.autoRead && untranslated && runtime.tts.fresh.has(id)) {
+      runtime.tts.fresh.delete(id);
+      recordDiagnostic('info', 'tts.auto-read', `第 ${id} 楼没有写入译文，没有自动朗读。`, { floor: id });
+      toast('info', `第 ${id} 楼没有写入译文，没有自动朗读；要听原文，点楼层里的「朗读」。`);
+    }
     if (autoRead || !current.autoRead) runtime.tts.fresh.delete(id);
+    // The reading prepares its own side, and joins an analysis of the same text already asked for; an
+    // analysis of the other side failing is no reason for the new reply to stay silent.
+    if (autoRead) void autoReadTtsFloor(id, primary);
     try {
       // The side read aloud is analysed by the reading itself, as it prepares.
       if (readable && !(autoRead && side === primary) && (current.mode === 'deep' || (current.mode === 'simple' && !translating))) await analyseTtsFloorNow(id, side, current.mode);
-      if (autoRead) void autoReadTtsFloor(id, primary);
       if (current.autoGenerate) {
         let made = 0;
         for (const each of reads) {
@@ -5604,6 +5659,14 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
   }, translated ? 800 : 1200);
   runtime.tts.closing.set(id, timer);
   runtime.timers.add(timer);
+}
+
+/** When the translation being written into this floor began, or null when none is. */
+function ttsTranslationSince(messageId) {
+  const context = getContext();
+  const message = context.chat?.[Number(messageId)];
+  if (!message) return null;
+  return runtime.inflight.get(`${getCurrentChatId(context)}|${Number(messageId)}|${Number(message.swipe_id ?? 0)}`)?.since ?? null;
 }
 
 /** Whether this extension is writing a translation into this floor right now. */
@@ -5984,6 +6047,7 @@ async function autoReadTtsFloor(messageId, side) {
   if (runtime.tts.autoRead.has(key)) return;
   runtime.tts.autoRead.add(key);
   const current = runtime.tts.transport;
+  const release = () => runtime.tts.autoRead.delete(key);
   if (current && ['loading', 'playing', 'paused'].includes(current.state)) {
     toast('info', `第 ${messageId} 楼的新回复可以听了：正在读的这一楼读完后，点「朗读」或者悬浮窗的播放键。`);
     return;
@@ -5996,8 +6060,10 @@ async function autoReadTtsFloor(messageId, side) {
   try {
     const transport = await createTtsTransport(messageId, { single: false, side });
     if (transport) await runTtsTransport(transport);
+    else release();
   } catch (error) {
     if (isAbortError(error)) return;
+    release();
     setTtsStatus(messageId, safeError(error), 'error');
     toast('error', safeError(error));
   }
@@ -13015,7 +13081,7 @@ function bindEvent(eventType, handler) {
  * the log says which time and why. A greeting and a slash command's insert are no generation's reply
  * and pass without a word.
  */
-function noteUntranslatedRender(messageId, type, pending) {
+function noteUntranslatedRender(messageId, type, pending, { stale = false } = {}) {
   if (!runtime.settings?.autoGeneration || ['first_message', 'command'].includes(type)) return;
   const message = getContext().chat?.[messageId];
   if (!message || message.is_user || message.is_system) return;
@@ -13023,9 +13089,11 @@ function noteUntranslatedRender(messageId, type, pending) {
   runtime.stoppedGeneration = null;
   const why = stopped
     ? '这次生成是手动停下的，停下的回复不自动翻译，需要的话点翻译'
-    : pending
-      ? `酒馆报的生成类型对不上（开始时是 ${pending.type}，渲染时是 ${type ?? '空'}），没有自动翻译`
-      : '没有看到这次回复的生成开始（可能是别的扩展或脚本写进来的），没有自动翻译';
+    : pending && stale
+      ? `这一楼还是生成开始前的那一楼（开始时是 ${pending.type}，渲染时是 ${type ?? '空'}，多半是脚本重画了它），没有自动翻译`
+      : pending
+        ? `酒馆报的生成类型对不上（开始时是 ${pending.type}，渲染时是 ${type ?? '空'}），没有自动翻译`
+        : '没有看到这次回复的生成开始（可能是别的扩展或脚本写进来的），没有自动翻译';
   recordDiagnostic('info', 'translation.auto-skip', `第 ${messageId} 楼渲染完成，${why}。`, {
     floor: messageId, renderType: type ?? null, startedType: pending?.type ?? null, stopped: Boolean(stopped),
   });
@@ -13042,25 +13110,51 @@ const AUTO_SKIP_REASONS = Object.freeze({
 function scheduleAuto(messageId, reason) {
   const timer = globalThis.setTimeout(async () => {
     runtime.autoTimers.delete(timer);
+    const id = Number(messageId);
+    // Set while this translation is the one the floor is waiting for; a newer one for the same floor
+    // takes the place, and only the newest settling lets the reading go.
+    const token = {};
+    let wrote = false;
     try {
       const settings = runtime.settings;
       if (reason === 'generation' && !settings.autoGeneration) return;
       if (reason === 'swipe' && !settings.autoSwipe) return;
       if (reason === 'edit' && !settings.autoEdit) return;
-      recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼${reason === 'generation' ? '生成结束' : reason === 'swipe' ? '划动了' : '编辑过'}，自动翻译开始。`, { floor: Number(messageId), reason });
-      const result = await startTranslation(Number(messageId), { force: reason === 'edit', quiet: true });
+      runtime.tts.awaiting.set(id, { since: Date.now(), token });
+      recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼${reason === 'generation' ? '生成结束' : reason === 'swipe' ? '划动了' : '编辑过'}，自动翻译开始。`, { floor: id, reason });
+      const result = await startTranslation(id, { force: reason === 'edit', quiet: true });
+      wrote = Boolean(result) && !result.skipped;
       if (result?.skipped) {
-        recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼自动翻译没有进行：${AUTO_SKIP_REASONS[result.reason] ?? result.reason}。`, { floor: Number(messageId), reason, skipped: result.reason });
+        recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼自动翻译没有进行：${AUTO_SKIP_REASONS[result.reason] ?? result.reason}${result.detail ? `（${result.detail.replace(/[。.]$/, '')}）` : ''}。`, { floor: id, reason, skipped: result.reason });
+        if (/正文标签/.test(result.detail ?? '')) noteMissingBodyTag(id, result.detail);
       }
     } catch (error) {
       if (isAbortError(error)) return;
       const message = safeError(error);
       const routine = error?.code === 'JY_FLOOR_DIVERGED' || /没有找到|正文标签|已经翻译|不是普通 AI 回复|没有可翻译的正文段落/.test(message);
-      recordDiagnostic(routine ? 'info' : 'error', 'translation.auto', `第 ${messageId} 楼自动翻译${routine ? '没有进行' : '失败'}：${message}`, { floor: Number(messageId), reason });
+      recordDiagnostic(routine ? 'info' : 'error', 'translation.auto', `第 ${messageId} 楼自动翻译${routine ? '没有进行' : '失败'}：${message}`, { floor: id, reason });
       if (!routine) toast('error', message);
+      else if (/正文标签/.test(message)) noteMissingBodyTag(id, message);
+    } finally {
+      if (runtime.tts.awaiting.get(id)?.token === token) {
+        runtime.tts.awaiting.delete(id);
+        // The reading was waiting for this translation: whatever came of it, it is told.
+        ttsFloorClosed(id, { translated: wrote, reason });
+      }
     }
   }, 0);
   runtime.autoTimers.add(timer);
+}
+
+/**
+ * A reply automatic translation could not find the body of says so on screen, once per chat and body-tag
+ * setting: the log alone left 「不自动翻译」 unexplained for a preset whose replies use another tag.
+ */
+function noteMissingBodyTag(messageId, message) {
+  const key = `${getCurrentChatId()}|${(runtime.settings.bodyTags ?? []).join(',')}`;
+  if (runtime.bodyTagNoted === key) return;
+  runtime.bodyTagNoted = key;
+  toast('warning', `第 ${messageId} 楼没有自动翻译：${message.replace(/[。.]$/, '')}。这张卡的回复用的是别的标签的话，到「正文处理」页把正文标签改成它。`);
 }
 
 /**
@@ -13093,8 +13187,79 @@ function renumberSwipeRecords(payload) {
   else if (ownWas === shown) own.swipe_id = -1;
 }
 
-function cancelPendingWork() {
-  runtime.generationGate.clear();
+/**
+ * What the chat's last message was when a generation began. Its reply is a message that was not there
+ * then (a send, a regenerate), one more alternative (a swipe), or a longer text (a continue).
+ */
+function newestMessageMark(context = getContext()) {
+  const chat = Array.isArray(context.chat) ? context.chat : [];
+  const last = chat[chat.length - 1] ?? null;
+  return { index: chat.length - 1, message: last, swipes: Array.isArray(last?.swipes) ? last.swipes.length : 0, mes: last?.mes ?? null };
+}
+
+/** The host is still streaming this floor: a render of it now is not its end. */
+function replyStillStreaming(messageId, context = getContext()) {
+  const streaming = context.streamingProcessor;
+  return Boolean(streaming && !streaming.isFinished && !streaming.isStopped && Number(streaming.messageId) === Number(messageId));
+}
+
+/**
+ * Whether a render can be the reply of the generation that is open: finished, and not the message that
+ * stood last when the generation began — a floor at that place that changed since, or a floor after it
+ * (a script may add one of its own behind the reply before the reply is rendered).
+ */
+function renderIsNewReply(messageId, context = getContext(), base = runtime.generationBase) {
+  const chat = Array.isArray(context.chat) ? context.chat : [];
+  const id = Number(messageId);
+  if (!Number.isInteger(id) || id < 0 || id >= chat.length || replyStillStreaming(id, context)) return false;
+  if (!base) return id === chat.length - 1;
+  // Where that message stands now: floors before it may have been deleted while the reply was written.
+  const at = base.message ? chat.indexOf(base.message) : -1;
+  const message = chat[id];
+  // Gone, as a regenerate deletes it: the reply is the newest floor, or the one before a floor a script
+  // added behind it.
+  if (at < 0) return id >= chat.length - 2 && Boolean(message) && !message.is_user;
+  if (id < at) return false;
+  if (id > at) return Boolean(message) && !message.is_user;
+  return (Array.isArray(message?.swipes) ? message.swipes.length : 0) !== base.swipes
+    || message?.mes !== base.mes;
+}
+
+/** The host's stream for this floor broke off with an error: what was rendered is its placeholder. */
+function replyFailed(messageId, context = getContext()) {
+  const streaming = context.streamingProcessor;
+  if (streaming?.isStopped && Number(streaming.messageId) === Number(messageId)) return true;
+  return ['', '...'].includes(String(context.chat?.[Number(messageId)]?.mes ?? '').trim());
+}
+
+/** A reply taken: remembered, handed to automatic translation, and read aloud when that is on. */
+function takeReply(id, type, chatId) {
+  runtime.consumedFloor = `${chatId}|${id}`;
+  runtime.stoppedGeneration = null;
+  // A reply just written, and a whole one: a continue adds to a floor already heard.
+  if (!['continue', 'appendFinal'].includes(type)) runtime.tts.fresh.add(id);
+  runtime.mini?.followLatest?.(id);
+  verifyGenerationInterceptor();
+  scheduleAuto(id, 'generation');
+}
+
+/** Calls `done` once the host's stream has finished, broken off or been replaced, in this chat. */
+function watchStreamEnd(streaming, done, { chatId = getCurrentChatId(), until = Date.now() + 10 * 60 * 1000 } = {}) {
+  const timer = globalThis.setTimeout(() => {
+    runtime.timers.delete(timer);
+    if (getCurrentChatId() !== chatId || Date.now() > until) return;
+    const current = getContext().streamingProcessor;
+    if (current === streaming && !streaming.isFinished && !streaming.isStopped) {
+      watchStreamEnd(streaming, done, { chatId, until });
+      return;
+    }
+    done();
+  }, 500);
+  runtime.timers.add(timer);
+}
+
+function cancelPendingWork({ gate = true } = {}) {
+  if (gate) runtime.generationGate.clear();
   for (const timer of runtime.autoTimers) globalThis.clearTimeout(timer);
   runtime.autoTimers.clear();
   for (const entry of runtime.inflight.values()) entry.controller.abort();
@@ -13191,25 +13356,63 @@ function registerPromptFallback(eventTypes) {
 function registerRuntimeEvents() {
   const eventTypes = getContext().eventTypes ?? {};
   registerPromptFallback(eventTypes);
-  bindEvent(eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
+  // A message sent as a slash command starts a generation the command then takes over: nothing is written
+  // and nothing ends it. The host says the generation really goes ahead once the commands have run.
+  bindEvent(eventTypes.GENERATION_AFTER_COMMANDS ?? eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
     if (!dryRun && !['quiet', 'impersonate'].includes(type)) runtime.mainGenerationActive = true;
-    if (runtime.generationGate.begin(getCurrentChatId(), type, dryRun)) runtime.generationSerial += 1;
+    const unrendered = runtime.generationEnded ? runtime.generationGate.peek() : null;
+    const base = runtime.generationBase;
+    if (runtime.generationGate.begin(getCurrentChatId(), type, dryRun)) {
+      // The generation before that one ended and its reply never came (an error, an empty answer): said
+      // now, when it is certain, rather than guessed a few seconds after the end.
+      const lost = runtime.lateReply;
+      if (lost) recordDiagnostic('info', 'translation.auto-skip', `上一次生成（${lost.type}）结束后没有渲染出回复，可能报错了或被过滤，没有可自动翻译的内容。`, { startedType: lost.type });
+      // The one that just ended may still be rendered: a script can hold the render while the reader sends again.
+      runtime.lateReply = unrendered ? { ...unrendered, base } : null;
+      runtime.generationSerial += 1;
+      runtime.generationEnded = false;
+      runtime.generationBase = newestMessageMark();
+      runtime.consumedFloor = null;
+    }
   });
   bindEvent(eventTypes.CHARACTER_MESSAGE_RENDERED, (messageId, type) => {
     const pending = runtime.generationGate.peek();
-    if (runtime.generationGate.consume(getCurrentChatId(), type)) {
+    const context = getContext();
+    const chatId = getCurrentChatId(context);
+    const id = Number(messageId);
+    // A stream that broke off with an error renders its placeholder: no reply to translate.
+    if (pending && replyFailed(id, context)) {
+      runtime.generationGate.clear();
+      runtime.generationEnded = false;
       runtime.mainGenerationActive = false;
-      runtime.stoppedGeneration = null;
-      // A reply just written, and a whole one: a continue adds to a floor already heard.
-      if (!['continue', 'appendFinal'].includes(type)) runtime.tts.fresh.add(Number(messageId));
-      runtime.mini?.followLatest?.(Number(messageId));
-      verifyGenerationInterceptor();
-      scheduleAuto(messageId, 'generation');
+      recordDiagnostic('info', 'translation.auto-skip', `第 ${id} 楼的生成出错了，楼里没有回复，没有自动翻译。`, { floor: id, renderType: type ?? null });
       return;
     }
-    noteUntranslatedRender(Number(messageId), type, pending);
+    const newest = renderIsNewReply(id, context);
+    if (runtime.generationGate.consume(chatId, type, { newest })) {
+      runtime.generationEnded = false;
+      runtime.mainGenerationActive = false;
+      takeReply(id, type, chatId);
+      return;
+    }
+    // The reply of a generation that ended before the one now running began.
+    const late = runtime.lateReply;
+    if (late && late.chatId === chatId && typeof type === 'string' && type && !['first_message', 'command'].includes(type)
+      && runtime.consumedFloor !== `${chatId}|${id}` && renderIsNewReply(id, context, late.base) && !replyFailed(id, context)) {
+      runtime.lateReply = null;
+      takeReply(id, type, chatId);
+      return;
+    }
+    // Only the chat's last floor can be anybody's reply: a redraw of an older one (酒馆助手 tops the
+    // screen up that way when a floor is deleted), the reply just taken announced again by a script, and
+    // a floor the host is still streaming are not worth a line.
+    const chat = Array.isArray(context.chat) ? context.chat : [];
+    if (id !== chat.length - 1 || runtime.consumedFloor === `${chatId}|${id}` || replyStillStreaming(id, context)) return;
+    noteUntranslatedRender(id, type, pending, { stale: Boolean(pending) && !newest });
   });
-  bindEvent(eventTypes.GENERATION_STOPPED, () => {
+  bindEvent(eventTypes.GENERATION_STOPPED, generationId => {
+    // 酒馆助手 announces the end of its own generate() with that generation's id; the host's stop names none.
+    if (generationId !== undefined) return;
     runtime.mainGenerationActive = false;
     // The floor being written was left without buttons while it streamed; a stopped reply may not be
     // rendered again, so it gets them now.
@@ -13221,25 +13424,26 @@ function registerRuntimeEvents() {
     if (pending) runtime.stoppedGeneration = { ...pending, at: Date.now() };
     runtime.generationGate.clear();
   });
-  bindEvent(eventTypes.GENERATION_ENDED, () => {
-    // A reply that is rendered takes the gate within a moment of this. One that is still waiting a few
-    // seconds later never came — an error, an empty answer — and says so in the log instead of nowhere.
-    const serial = runtime.generationSerial;
-    const waiting = runtime.generationGate.peek();
-    if (waiting) {
-      const timer = globalThis.setTimeout(() => {
-        runtime.timers.delete(timer);
-        const still = runtime.generationGate.peek();
-        if (!still || runtime.generationSerial !== serial || still.chatId !== waiting.chatId || still.type !== waiting.type) return;
-        runtime.generationGate.clear();
-        recordDiagnostic('info', 'translation.auto-skip', `这次生成（${waiting.type}）没有产出回复，可能报错了或被过滤，没有可自动翻译的内容。`, { startedType: waiting.type });
-      }, 3000);
-      runtime.timers.add(timer);
-    }
+  const generationEnded = () => {
+    // The gate stays open. With streaming the host announces the end before its listeners of the received
+    // message have run, and the render comes only after them — seconds later when a script waits on a
+    // model of its own. Whether the reply never came is known at the next start.
+    if (runtime.generationGate.peek()) runtime.generationEnded = true;
     if (!runtime.mainGenerationActive) return;
     runtime.mainGenerationActive = false;
     const latest = latestAssistantMessageId(getContext());
     if (Number.isInteger(latest)) scheduleTtsDecorate(latest, { delay: 400 });
+  };
+  bindEvent(eventTypes.GENERATION_ENDED, () => {
+    // 酒馆助手's generate() ends by giving the host's send buttons back, which announces this while the
+    // host's own reply may still be streaming; that is not this reply's end, and the host's own end then
+    // says nothing (its stop button is already hidden). The stream is watched to its end instead.
+    const streaming = getContext().streamingProcessor;
+    if (streaming && !streaming.isFinished && !streaming.isStopped) {
+      watchStreamEnd(streaming, generationEnded);
+      return;
+    }
+    generationEnded();
   });
   bindEvent(eventTypes.MESSAGE_SWIPED, messageId => {
     // A swipe past the last alternative is a reply about to be generated: the text on the floor is still
@@ -13296,10 +13500,32 @@ function registerRuntimeEvents() {
       if (lore && Array.isArray(lore.globalLore)) runtime.wiEntries = lore;
     });
   }
-  bindEvent(eventTypes.CHAT_CHANGED, () => {
-    runtime.mainGenerationActive = false;
-    runtime.stoppedGeneration = null;
-    cancelPendingWork();
+  bindEvent(eventTypes.CHAT_CHANGED, chatId => {
+    // The same chat announced again was only redrawn (酒馆助手's regex refresh, a reload of the chat):
+    // what runs in it keeps running, and the reply being generated is still owed its translation.
+    const now = String(chatId ?? getCurrentChatId() ?? '');
+    // No id (a chat closed, a temporary one) is never the same chat.
+    const sameChat = now !== '' && runtime.chatSeen !== null && now === runtime.chatSeen;
+    runtime.chatSeen = now;
+    if (!sameChat) {
+      runtime.mainGenerationActive = false;
+      runtime.stoppedGeneration = null;
+      runtime.generationBase = null;
+      runtime.generationEnded = false;
+      runtime.consumedFloor = null;
+      runtime.lateReply = null;
+      cancelPendingWork();
+    } else {
+      // Reloaded, the chat has new message objects, and a slash command may have put a floor in before a
+      // floor being translated: a translation whose floor is not the message it began on is called off.
+      const chat = getContext().chat ?? [];
+      for (const [key, entry] of [...runtime.inflight]) {
+        if (entry.message && chat[entry.messageId] !== entry.message) {
+          entry.controller.abort();
+          runtime.inflight.delete(key);
+        }
+      }
+    }
     scheduleEntries();
     // The speaker palette is per character card, so a different chat may need a different sheet.
     syncSpeakerStylesheet(runtime.settings);
@@ -13309,6 +13535,18 @@ function registerRuntimeEvents() {
       refreshCurrentCard(runtime.panel.controller.root);
       // The voice table may be per chat; the page shows the one that belongs to the chat just opened.
       syncTtsFields(runtime.panel.controller.root, runtime.settings);
+    }
+    // The page was redrawn: the buttons go back on the new floors; a reading goes on while its floor still
+    // reads the same where it was.
+    if (sameChat) {
+      void ttsReadingStands().then(stands => {
+        if (!stands) stopTts();
+      });
+      runtime.tts.ranges.clear();
+      runtime.tts.floors.clear();
+      runtime.tts.mesSeen.clear();
+      scheduleTtsDecorateAll();
+      return;
     }
     // Message ids restart in another chat; nothing playing or pending can carry over.
     stopTts();
@@ -13321,6 +13559,7 @@ function registerRuntimeEvents() {
     runtime.tts.inspect = null;
     runtime.tts.mesSeen.clear();
     runtime.tts.fresh.clear();
+    runtime.tts.awaiting.clear();
     scheduleTtsDecorateAll();
   });
 }
@@ -13329,6 +13568,12 @@ function cleanupRuntime() {
   runtime.processingRevision += 1;
   runtime.epoch += 1;
   cancelPendingWork();
+  runtime.generationBase = null;
+  runtime.generationEnded = false;
+  runtime.consumedFloor = null;
+  runtime.lateReply = null;
+  runtime.chatSeen = null;
+  runtime.tts.awaiting.clear();
   for (const binding of runtime.eventBindings.splice(0)) {
     binding.source.removeListener(binding.eventType, binding.handler);
   }

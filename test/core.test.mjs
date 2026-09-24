@@ -1401,3 +1401,13 @@ test('a record is told to be a floor’s by what the floor holds, never by the s
   const continued = `${stripGeneratedTranslationLines(mirror, meta)}\n桜井が振り返った。`;
   assert.deepEqual(state({ mes: continued, swipe_id: 0, extra: { [MESSAGE_META_KEY]: { ...meta, mirror: spaced, swipe_id: 0 } } }), { stripped: false, diverged: false, mirror: false });
 });
+
+test('the gate takes the newest reply only, and a render with no type only after a start with none', () => {
+  const gate = createGenerationGate();
+  assert.equal(gate.begin('c', 'regenerate'), true);
+  assert.equal(gate.consume('c', 'regenerate', { newest: false }), false, 'the floor that stood there before');
+  assert.equal(gate.consume('c', undefined), false, 'a script redrawing a floor names no type');
+  assert.equal(gate.consume('c', 'regenerate'), true);
+  gate.begin('c', undefined);
+  assert.equal(gate.consume('c', undefined), true, 'a start with no type is answered by a render with none');
+});
