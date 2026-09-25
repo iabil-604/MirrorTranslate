@@ -303,6 +303,10 @@ test('a deep line that fails the word-for-word check falls back to its opening t
   assert.match(notes[0].message, /第 2 句/);
   assert.equal(notes[0].details.mismatches[0].id, 2);
   assert.equal(notes[0].details.mismatches[0].sentence, '我快要热坏了！');
+  assert.equal(notes[0].details.mismatches[0].at, 6, 'the 0-based offset itself is unchanged: the mismatch sits at index 6');
+  // The message shown to the reader counts from 1 — the 7th character (啊) is the one that first
+  // does not agree, not the 6th (index 6 counted from 0, as `at` itself is stored).
+  assert.match(notes[0].message, /从第 7 个字起不一样/);
 });
 
 test('the deep reading ignores the translation\'s marks and reads the text it will speak', async t => {

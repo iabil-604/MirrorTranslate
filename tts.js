@@ -368,7 +368,17 @@ export function annotationReading(utterances, annotations) {
     const mark = annotations.get(lineId);
     if (!mark) continue;
     const placed = placeQuoteMarks(quoted.map(utterance => utterance.text), mark, matchKey);
+    // A quoted run whose whole text is one of this line's own move names (design: a 『』-marked name is
+    // never a line of dialogue) is the narrator's, whatever placeQuoteMarks made of it — a name right
+    // after a full stop, or one on its own at the head of a sentence, looks exactly like a line someone
+    // just opened, and placeQuoteMarks has no way to tell the two apart on its own.
+    const moveNames = new Set((Array.isArray(mark.moves) ? mark.moves : [])
+      .map(move => String(move?.name ?? '').trim()).filter(Boolean));
     quoted.forEach((utterance, index) => {
+      if (moveNames.has(utterance.text.trim())) {
+        labels.set(utterance.id, { type: 'narration' });
+        return;
+      }
       const source = placed[index];
       if (!source) return;
       // A run the translation said nobody speaks, a sign or a title, is the narrator's.

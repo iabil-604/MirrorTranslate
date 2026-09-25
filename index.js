@@ -443,7 +443,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位，不翻译，也不朗读（比如生图插件的 &lt;image&gt;）。镜译自己的 <code>&lt;say&gt;</code> 说话人标记不用加在这里：翻译时自动去掉，显示时自动隐藏，朗读时自动读取。</p></div>
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 只要这一行里有匹配就算（要整行匹配请写 ^…$）。纯边框、纯符号、标签行和只有图片的行自动保留。</p></details>
-<details class="jy-advanced"><summary>歌词行</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="lyricLineRules" spellcheck="false" placeholder="prefix:作词&#10;/^\s*[-—]\s*作曲/"></textarea></label><p class="jy-muted">写法和上面的保留白名单一样（文字、prefix:、/正则/）。命中的行按歌词单独翻译：一行进一行出，原位排成「原文 (译文)」，不跟前后的正文并成一段；已经是中文的歌词行不翻译。默认不读，朗读面板里可以单独开。</p>
+<details class="jy-advanced"><summary>歌词行</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="lyricLineRules" spellcheck="false" placeholder="星が降る夜に&#10;/^もう一度/"></textarea></label><p class="jy-muted">写法和上面的保留白名单一样（文字、prefix:、/正则/），写的是歌词本身的文字或规律，不是「作词」「作曲」这类署名行。命中的行按歌词单独翻译：一行进一行出，不跟前后的正文并成一段；双语和只留译文模式下原位排成「原文 (译文)」，替换模式下只显示译文；已经是中文的歌词行不翻译。默认不朗读。</p>
 <label class="jy-check"><input type="checkbox" data-jy-field="musicCardRules">音乐卡片</label><p class="jy-muted">手动开启，默认关闭。开启后，正文里以 <code>&lt;br&gt;</code> 分隔的卡片行按行拆开处理：NOW PLAYING 这类固定文案、已经写成「原文 (中文)」的行自动保留；命中上面歌词规则或排除在保留规则之外的其余 <code>&lt;br&gt;</code> 行按歌词处理。只按这一种卡片的样子写的，遇到别的卡片格式效果不对时，把歌名、歌手这类行加进「原样保留白名单」。</p></details>
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层里的朗读按钮</span><select data-jy-field="floorButtons"><option value="line">每段一个（默认，手机也有）</option><option value="sentence">每段一个，再加每句一个</option><option value="off">不显示，只在悬浮窗里点</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
@@ -3758,7 +3758,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     // where it first stopped matching.
     if (depth === 'deep' && parsed.mismatches?.length) {
       recordDiagnostic('warn', 'tts.analysis-deep-line', `深度分析有 ${parsed.mismatches.length} 句 line 跟正文对不上，只保留了句首的标签：${parsed.mismatches.slice(0, 3)
-        .map(item => `第 ${item.id} 句「${item.sentence.slice(0, 16)}${item.sentence.length > 16 ? '…' : ''}」从第 ${item.at} 个字起不一样`).join('；')}${parsed.mismatches.length > 3 ? '…' : ''}`, {
+        .map(item => `第 ${item.id} 句「${item.sentence.slice(0, 16)}${item.sentence.length > 16 ? '…' : ''}」从第 ${item.at + 1} 个字起不一样`).join('；')}${parsed.mismatches.length > 3 ? '…' : ''}`, {
         floor: floor.floorId, depth, mismatches: parsed.mismatches,
       }, '', { floor: floor.messageId });
     }
@@ -6238,8 +6238,11 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
     const primary = reads[0];
     const primaryReady = primary === 'source' || translated || carries || !translating;
     // A translation was asked for and none was written: the translation side has nothing to read, and
-    // the reader is told rather than left waiting for a voice.
-    const untranslated = primary === 'translation' && !translated && !carries && !translating && Boolean(automatic);
+    // the reader is told rather than left waiting for a voice. 对白读原文 depends on the translation
+    // exactly as much as 读译文 does (collectTtsFloor returns no floor at all for it without one), so it
+    // is held to the same check — left out, a failed auto-translation under this side used to autoRead
+    // silently past a floor with nothing to read, with no toast and no diagnostic either.
+    const untranslated = ['translation', 'dialogue_source'].includes(primary) && !translated && !carries && !translating && Boolean(automatic);
     const autoRead = current.autoRead && runtime.tts.fresh.has(id) && primaryReady && !(primary === 'translation' && busy) && !untranslated;
     if (current.autoRead && untranslated && runtime.tts.fresh.has(id)) {
       runtime.tts.fresh.delete(id);
@@ -10493,7 +10496,10 @@ function createControlCenter(rootDocument = document) {
         saveSettings(collectSettings(root));
         await startTranslation(null, { force: false });
       } else if (action === 'clear-floor') {
-        await clearFloorTranslation(null, { ask: text => typeof globalThis.confirm !== 'function' || globalThis.confirm(text) });
+        const cleared = await clearFloorTranslation(null, { ask: text => typeof globalThis.confirm !== 'function' || globalThis.confirm(text) });
+        // The card's own state chip (「翻译完成 | 已翻译」and the like) is drawn from the last card scan,
+        // not re-read on its own — the same reason the 「刷新楼层」 button next to it calls this.
+        if (cleared.cleared) await refreshCurrentCard(root);
       } else if (action === 'test-api') {
         saveSettings(collectSettings(root));
         // The connection being edited is the one tested, whoever uses it.
@@ -11073,7 +11079,7 @@ function createControlCenter(rootDocument = document) {
       const group = event.target.closest('.jy-wi-book');
       if (group) updateWorldInfoBookCount(group);
     }
-    if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringAutoSpeakers"], [data-jy-field="coloringContrast"]')) {
+    if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEffects"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringAutoSpeakers"], [data-jy-field="coloringContrast"]')) {
       saveSettings(collectSettings(root));
       syncColoringFields(root, runtime.settings);
     }

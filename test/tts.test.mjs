@@ -892,6 +892,27 @@ test('per-quote annotations tell the runs of one line apart, by the characters t
   assert.deepEqual([...labelsFromAnnotations(utterances, annotations).keys()], [...labels.keys()]);
 });
 
+test('a 『』-marked move name is the narrator\'s, never a line of dialogue, even when it sits right where a quote of dialogue would', () => {
+  // 『红莲拳』 stands right after a full stop with a lone speaker mark on the line and no `quotes` of
+  // its own to say otherwise — exactly the shape placeQuoteMarks reads as "the line's one speaker says
+  // its one quote". The move name in `mark.moves` is what has to override that reading.
+  const utterances = splitUtterances([{ lineId: 1, text: '炎退后一步。『红莲拳』——火焰从拳头喷涌而出。' }]);
+  const move = utterances.find(item => item.text === '红莲拳');
+  assert.ok(move, 'the move name is its own quoted utterance, not folded into the narration around it');
+  const mark = { speaker: '炎', moves: [{ name: '红莲拳', element: '火焰', tier: 1 }] };
+  const { labels } = annotationReading(utterances, new Map([[1, mark]]));
+  assert.deepEqual(labels.get(move.id), { type: 'narration' });
+});
+
+test('a quoted run merely containing a move name — not equal to it — still reads as dialogue, the mark\'s ordinary way', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '「红莲拳，燃烧吧！」' }]);
+  const quote = utterances.find(item => item.kind === 'quoted');
+  const mark = { speaker: '太郎', moves: [{ name: '红莲拳', element: '火焰', tier: 1 }] };
+  const { labels } = annotationReading(utterances, new Map([[1, mark]]));
+  assert.equal(labels.get(quote.id)?.type, 'dialogue');
+  assert.equal(labels.get(quote.id)?.speaker, '太郎');
+});
+
 test('a tone named outright is a cue of its own and beats what the volume would imply', () => {
   const voice = normalizeVoice({ emotion: 'sad', tone: 'Whispering', volume: 'loud' }, '走吧。');
   assert.equal(voice.tone, 'whispering');
