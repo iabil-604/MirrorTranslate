@@ -171,7 +171,7 @@ import {
   promptOptionLabel,
 } from './prompts.js?v=0.36.1';
 import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.36.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.36.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.36.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -265,6 +265,10 @@ const runtime = {
   diagnosticSubscribers: new Set(),
   update: { status: 'idle', installType: null, details: null },
   inflight: new Map(),
+  // `${chatId}|${messageId}|${swipeId}` → the hash of the plain original 「清除这一楼的译文」 left there,
+  // so a later automatic pass (autoSwipe flipping back to it, say) knows to leave it alone until the
+  // text itself moves on — a new reply, a hand edit, or 「翻译这一楼」. See autoTranslateSuppressed.
+  clearedFloors: new Map(),
   generationGate: createGenerationGate(),
   eventBindings: [],
   wiEntries: null,
@@ -369,7 +373,7 @@ const CONTROL_CENTER_MARKUP = `
    <div class="jy-thinking-body" id="jy-thinking-body" data-jy-thinking-body hidden><pre data-jy-thinking-text></pre></div>
   </section>
   <dl class="jy-desk-facts"><div><dt>当前楼层</dt><dd data-jy-floor>—</dd></div><div><dt>滑动页</dt><dd data-jy-swipe>—</dd></div><div><dt>正文规模</dt><dd data-jy-segments>—</dd></div><div><dt>目标语言</dt><dd data-jy-desk-target>—</dd></div></dl>
-  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button></div>
+  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button><button type="button" class="jy-button" data-jy-action="clear-floor">清除这一楼的译文</button></div>
  </div>
  <aside class="jy-desk-side">
   <div class="jy-brief"><span class="jy-overline">翻译方案</span><h3 data-jy-active-profile>待读取</h3><button type="button" class="jy-button" data-jy-action="open-prompt">编辑规则 →</button></div>
@@ -2878,6 +2882,67 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
   recordDiagnostic('info', 'translation.originals-restored', `本聊天放回了 ${restores} 处原文。`, { restored: restores, floors: plan.length, edited });
   toast('success', `已放回 ${restores} 处原文。${runtime.settings.translationOnly ? '「只留译文」还开着，之后新翻译的楼层照样只留译文。' : ''}`);
   return { restored: restores, edited };
+}
+
+/**
+ * Removes one floor's translation and puts the plain original back — the same swipe shown, whatever
+ * mode wrote it: a 只留译文 floor is read from its mirror, a bilingual or replace-tag floor has the
+ * translation stripped out of the text it already holds. The floor's metadata record for this swipe
+ * (annotations included, since they only ever lived inside it) goes with it, so the floor reads as
+ * never translated. `ask` is the confirmation; declining leaves everything untouched.
+ */
+async function clearFloorTranslation(messageId = null, { ask = () => true } = {}) {
+  if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再清除译文。');
+  const snapshot = await readMessageSnapshot(messageId, runtime.settings, { quiet: true });
+  const { context, message, messageId: id, swipeId, chatId } = snapshot;
+  const lockKey = `${chatId}|${id}|${swipeId}`;
+  if (runtime.inflight.has(lockKey)) throw new Error('这一楼正在翻译，等它写完再清除译文。');
+  if (snapshot.diverged) {
+    throw new Error(`第 ${id} 楼只留了译文，后来又被改过，镜译认不出它的翻译记录，没法清除；要清除请先在总控页点「恢复本聊天的原文」。`);
+  }
+  const floor = readFloor(message);
+  const metadata = floor.metadata ?? message.extra?.[MESSAGE_META_KEY];
+  const original = stripGeneratedTranslationLines(upgradeLegacyBilingual(floor.text, metadata), metadata);
+  if (original === floor.text) {
+    toast('info', `第 ${id} 楼还没有翻译，不用清除。`);
+    return { cleared: false, messageId: id };
+  }
+  if (!ask(`清除第 ${id} 楼的译文？正文会恢复成原文，这一楼镜译记下的翻译状态和标注都会丢，要再看到译文得重新翻译。`)) {
+    return { cleared: false, cancelled: true, messageId: id };
+  }
+  const previous = {
+    mes: message.mes,
+    extra: message.extra,
+    swipe: Array.isArray(message.swipes) ? message.swipes[swipeId] : undefined,
+    swipeInfoExtra: Array.isArray(message.swipe_info) ? message.swipe_info[swipeId]?.extra : undefined,
+  };
+  const nextExtra = { ...(message.extra || {}) };
+  delete nextExtra[MESSAGE_META_KEY];
+  message.mes = original;
+  message.extra = nextExtra;
+  if (Array.isArray(message.swipes) && swipeId >= 0 && swipeId < message.swipes.length) message.swipes[swipeId] = original;
+  if (Array.isArray(message.swipe_info) && message.swipe_info[swipeId]?.extra && MESSAGE_META_KEY in message.swipe_info[swipeId].extra) {
+    const infoExtra = { ...message.swipe_info[swipeId].extra };
+    delete infoExtra[MESSAGE_META_KEY];
+    message.swipe_info[swipeId] = { ...message.swipe_info[swipeId], extra: infoExtra };
+  }
+  try {
+    await context.saveChat();
+  } catch (error) {
+    message.mes = previous.mes;
+    message.extra = previous.extra;
+    if (Array.isArray(message.swipes) && swipeId >= 0 && swipeId < message.swipes.length) message.swipes[swipeId] = previous.swipe;
+    if (Array.isArray(message.swipe_info) && message.swipe_info[swipeId]) message.swipe_info[swipeId].extra = previous.swipeInfoExtra;
+    context.updateMessageBlock?.(id, message);
+    throw error;
+  }
+  context.updateMessageBlock?.(id, message);
+  // Guards the next automatic pass against redoing this straight away; see autoTranslateSuppressed.
+  runtime.clearedFloors.set(lockKey, hashTextSync(original));
+  scheduleTtsDecorate(id, { force: true });
+  recordDiagnostic('info', 'translation.floor-cleared', `第 ${id} 楼的译文已清除，正文恢复成原文。`, { floor: id, swipe: swipeId });
+  toast('success', `第 ${id} 楼的译文已清除，恢复成原文了。`);
+  return { cleared: true, messageId: id };
 }
 
 /**
@@ -10144,6 +10209,8 @@ function createControlCenter(rootDocument = document) {
         // Seeds with whatever is already written back, so only the gaps go to the API.
         saveSettings(collectSettings(root));
         await startTranslation(null, { force: false });
+      } else if (action === 'clear-floor') {
+        await clearFloorTranslation(null, { ask: text => typeof globalThis.confirm !== 'function' || globalThis.confirm(text) });
       } else if (action === 'test-api') {
         saveSettings(collectSettings(root));
         // The connection being edited is the one tested, whoever uses it.
@@ -11472,6 +11539,7 @@ async function openMiniWindow() {
       <button type="button" class="jy-button jy-mini-danger" data-jy-action="mini-stop" hidden>停止</button>
       <button type="button" class="jy-button" data-jy-action="mini-repair" hidden>补译</button>
       <button type="button" class="jy-button" data-jy-action="mini-retranslate" hidden>重翻</button>
+      <button type="button" class="jy-button jy-mini-danger" data-jy-action="mini-clear-floor" hidden title="清除这一楼的译文，正文恢复成原文">清除译文</button>
       <button type="button" class="jy-button jy-mini-auto" data-jy-action="mini-auto" aria-pressed="true" title="新楼生成完自动翻译">自动 开</button>
       <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false" title="翻译模型、方案、全翻、随手翻">更多</button>
     </div>
@@ -11806,6 +11874,19 @@ async function openMiniWindow() {
     }
     rowsList.hidden = !viewRows.length;
   };
+  // Segment jump lands here once the floor it asked for is on screen: the row scrolls into view and
+  // flashes once, DESIGN.md §8.3/§9.7 (jump highlight) — a one-shot cue, not a state, so the class
+  // is removed again once its animation ends rather than left sitting on the row.
+  const focusRow = id => {
+    const row = rowsList.querySelector(`[data-id="${id}"]`);
+    if (!row) return;
+    const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+    row.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+    row.classList.remove('jy-mini-row-jump');
+    void row.offsetWidth;
+    row.classList.add('jy-mini-row-jump');
+    row.addEventListener('animationend', () => row.classList.remove('jy-mini-row-jump'), { once: true });
+  };
   const renderFloorActions = () => {
     const running = viewRunning;
     const show = (action, visible) => {
@@ -11816,6 +11897,7 @@ async function openMiniWindow() {
     renderBriefActions();
     show('mini-retranslate', !running && ['done', 'missing'].includes(viewState.key));
     show('mini-repair', !running && viewState.key === 'missing');
+    show('mini-clear-floor', !running && ['done', 'missing'].includes(viewState.key));
     const untranslated = untranslatedFloors(getContext().chat, { limit: 50 }).filter(id => id !== viewFloor);
     const all = win.querySelector('[data-jy-mini-untranslated]');
     if (all) {
@@ -13242,6 +13324,11 @@ async function openMiniWindow() {
       } else if (action === 'mini-retranslate') {
         if (!Number.isInteger(viewFloor)) throw new Error('当前聊天里还没有 AI 楼层。');
         await startTranslation(viewFloor, { force: true });
+      } else if (action === 'mini-clear-floor') {
+        if (!Number.isInteger(viewFloor)) throw new Error('当前聊天里还没有 AI 楼层。');
+        button.textContent = '清除中…';
+        const result = await clearFloorTranslation(viewFloor, { ask: text => typeof globalThis.confirm !== 'function' || globalThis.confirm(text) });
+        if (result.cancelled) return;
       } else if (action === 'mini-stop') {
         for (const entry of runtime.inflight.values()) entry.controller.abort();
         toast('info', '已请求停止当前翻译。');
@@ -13302,7 +13389,7 @@ async function openMiniWindow() {
           runtime.inflight.delete(key);
         }
       }
-      if (['mini-translate', 'mini-repair', 'mini-retranslate', 'mini-stop', 'mini-translate-all', 'row-fix', 'row-retry', 'row-write', 'log-repair'].includes(action)) await renderFloor();
+      if (['mini-translate', 'mini-repair', 'mini-retranslate', 'mini-clear-floor', 'mini-stop', 'mini-translate-all', 'row-fix', 'row-retry', 'row-write', 'log-repair'].includes(action)) await renderFloor();
     } catch (error) {
       if (!isAbortError(error)) toast('error', safeError(error));
       if (['row-fix', 'row-retry', 'row-write'].includes(action)) await renderFloor();
@@ -13372,10 +13459,14 @@ async function openMiniWindow() {
     close,
     syncQuickPickers: () => { syncQuickPickers(); void renderFloor(); },
     showReading,
-    showFloor: messageId => {
+    showFloor: (messageId, { segmentId } = {}) => {
       if (Number.isInteger(messageId)) viewFloor = messageId;
       selectMiniTab('translate');
-      void renderFloor();
+      // The segment list is not on screen in the small-window overview; a jump needs it open to land
+      // anywhere. The size picked stays unremembered — this is the jump's doing, not the reader's.
+      if (Number.isInteger(segmentId) && win.dataset.size === 'compact') setSize('card', { remember: false });
+      if (Number.isInteger(segmentId)) void renderFloor().then(() => focusRow(segmentId));
+      else void renderFloor();
     },
     refresh: () => { void renderFloor(); },
     // A new reply: the window moves onto it, unless something is being read or the reader chose a floor.
@@ -13407,6 +13498,21 @@ async function openTtsPanel(messageId, utteranceId = null, side = null) {
   }
 }
 
+// 片段跳转: the floating window, on the floor's translate page, with the segment the reader clicked
+// in the chat scrolled into view and briefly highlighted. Opens the window first if it was closed.
+async function openSegmentInMini(messageId, segmentId) {
+  if (runtime.miniOpening) return;
+  runtime.miniOpening = true;
+  try {
+    const mini = await openMiniWindow();
+    mini.showFloor?.(messageId, { segmentId });
+  } catch (error) {
+    toast('error', safeError(error));
+  } finally {
+    runtime.miniOpening = false;
+  }
+}
+
 function toggleMiniWindow() {
   // The stylesheet load makes opening async, so a second click must not race the first one open.
   if (runtime.miniOpening) return;
@@ -13418,6 +13524,92 @@ function toggleMiniWindow() {
   openMiniWindow()
     .catch(error => toast('error', safeError(error)))
     .finally(() => { runtime.miniOpening = false; });
+}
+
+// ---------------------------------------------------------------------------------------------
+// 片段跳转: a plain click on a segment's text in the chat opens or focuses the floating window on
+// that segment's row. Independent of the reading feature (segments exist whether or not TTS is on),
+// so this binds whenever the extension is initialized, not only while `ttsSettings().enabled`.
+// ---------------------------------------------------------------------------------------------
+
+// Cross-browser hit test for the exact text position under a click: Chromium/Safari have
+// `caretRangeFromPoint`, Firefox has `caretPositionFromPoint`. Neither exists off a real pointer
+// event, and that is fine — no fallback is attempted, the click is simply not a jump.
+function segmentJumpCaretPoint(event) {
+  if (typeof document.caretRangeFromPoint === 'function') {
+    const range = document.caretRangeFromPoint(event.clientX, event.clientY);
+    return range ? { node: range.startContainer, offset: range.startOffset } : null;
+  }
+  if (typeof document.caretPositionFromPoint === 'function') {
+    const position = document.caretPositionFromPoint(event.clientX, event.clientY);
+    return position ? { node: position.offsetNode, offset: position.offset } : null;
+  }
+  return null;
+}
+
+/**
+ * Which segment, if any, the point under a click falls inside — matched against the floor's current
+ * translations and originals the same way the reading locates its utterances (`locateAnchors`), just
+ * at the paragraph/line grain `editTranslationSegment` and the floating window's row list use. Beauty
+ * styles, folds and replace regions all fall out of this for free: it only ever looks at what actually
+ * rendered, never at how it got there.
+ */
+async function resolveSegmentAtPoint(messageId, root, point) {
+  let snapshot;
+  try {
+    snapshot = await readMessageSnapshot(messageId, runtime.settings, { quiet: true });
+  } catch {
+    return null;
+  }
+  if (snapshot.messageId !== messageId || !snapshot.segments.length || !root.isConnected) return null;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: node => (node.parentElement?.closest('.jy-tts-bar, .jy-tts-play, .jy-tts-edit, .jy-tts-line, script, style') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const pointIndex = nodes.indexOf(point.node);
+  if (pointIndex < 0) return null;
+  const nodeTexts = nodes.map(node => node.data);
+  const anchors = segmentAnchors(snapshot);
+  const translationHits = locateAnchors(nodeTexts, [], anchors.translation);
+  const sourceHits = locateAnchors(nodeTexts, [], anchors.source);
+  return segmentAtPosition({ node: pointIndex, offset: point.offset }, translationHits, sourceHits);
+}
+
+/**
+ * Never hijacks a click that means something else: a link, a button, an input, the floor's own
+ * reading controls (`.jy-tts-bar` and everything in it), a real text selection, or the host's own
+ * edit textarea open on this floor. Everything else on a floor's rendered text is fair game.
+ */
+async function handleSegmentJumpClick(event) {
+  if (typeof document === 'undefined' || event.button !== 0) return;
+  const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+  if (!target) return;
+  const mes = target.closest?.('#chat .mes[mesid]');
+  if (!mes) return;
+  if (target.closest('a, button, input, textarea, select, [contenteditable="true"], .jy-tts-bar')) return;
+  const messageId = Number(mes.getAttribute('mesid'));
+  if (!Number.isInteger(messageId)) return;
+  const root = ttsMessageText(messageId);
+  if (!root || root.querySelector('textarea') || !root.contains(target)) return;
+  const selection = globalThis.getSelection?.();
+  if (selection && !selection.isCollapsed && String(selection)) return;
+  const point = segmentJumpCaretPoint(event);
+  if (!point || !root.contains(point.node)) return;
+  const segmentId = await resolveSegmentAtPoint(messageId, root, point);
+  if (Number.isInteger(segmentId)) void openSegmentInMini(messageId, segmentId);
+}
+
+function bindSegmentJumpDom() {
+  if (typeof document === 'undefined' || !runtime.initialized || runtime.segmentJumpCleanup) return;
+  const onClick = event => { void handleSegmentJumpClick(event); };
+  document.addEventListener('click', onClick);
+  runtime.segmentJumpCleanup = () => document.removeEventListener('click', onClick);
+}
+
+function unbindSegmentJumpDom() {
+  runtime.segmentJumpCleanup?.();
+  runtime.segmentJumpCleanup = null;
 }
 
 function syncFloatingButton() {
@@ -13434,6 +13626,7 @@ function scheduleEntries() {
       ensureFloatingButton();
       // #chat may not exist yet at activation; binding is idempotent and retried with the entries.
       bindTtsDom();
+      bindSegmentJumpDom();
     }, delay);
     runtime.timers.add(timer);
   }
@@ -13479,6 +13672,30 @@ const AUTO_SKIP_REASONS = Object.freeze({
   diverged: '这一楼只留了译文，后来又被改过，不再自动翻译（要重译先在总控页点「恢复本聊天的原文」）',
 });
 
+/**
+ * A floor whose translation was just cleared by hand (`clearFloorTranslation`) keeps its plain
+ * original until someone actually asks for it again — a new reply, a hand edit, or 「翻译这一楼」 —
+ * rather than the next automatic pass (autoSwipe flipping back to this swipe, say) quietly translating
+ * it right back. The guard is the text's own hash, not a flag on the floor: the moment its text
+ * changes for any reason, there is nothing left for the guard to recognise and it steps out of the way
+ * on its own, and a manual 「翻译这一楼」 never goes through this function at all.
+ */
+function autoTranslateSuppressed(messageId) {
+  if (!runtime.clearedFloors.size) return false;
+  const context = getContext();
+  const message = context.chat?.[messageId];
+  if (!message) return false;
+  const key = `${getCurrentChatId(context)}|${messageId}|${Number(message.swipe_id ?? 0)}`;
+  const hash = runtime.clearedFloors.get(key);
+  if (!hash) return false;
+  if (hashTextSync(String(message.mes ?? '')) === hash) {
+    recordDiagnostic('info', 'translation.auto-skip', `第 ${messageId} 楼刚清除过译文，没有自动翻译（要翻的时候点「翻译本楼」或「翻译当前回复」）。`, { floor: messageId });
+    return true;
+  }
+  runtime.clearedFloors.delete(key);
+  return false;
+}
+
 function scheduleAuto(messageId, reason) {
   const timer = globalThis.setTimeout(async () => {
     runtime.autoTimers.delete(timer);
@@ -13492,6 +13709,7 @@ function scheduleAuto(messageId, reason) {
       if (reason === 'generation' && !settings.autoGeneration) return;
       if (reason === 'swipe' && !settings.autoSwipe) return;
       if (reason === 'edit' && !settings.autoEdit) return;
+      if (autoTranslateSuppressed(id)) return;
       runtime.tts.awaiting.set(id, { since: Date.now(), token });
       recordDiagnostic('info', 'translation.auto', `第 ${messageId} 楼${reason === 'generation' ? '生成结束' : reason === 'swipe' ? '划动了' : '编辑过'}，自动翻译开始。`, { floor: id, reason });
       const result = await startTranslation(id, { force: reason === 'edit', quiet: true });
@@ -13886,6 +14104,7 @@ function registerRuntimeEvents() {
       runtime.generationEnded = false;
       runtime.consumedFloor = null;
       runtime.lateReply = null;
+      runtime.clearedFloors.clear();
       cancelPendingWork();
     } else {
       // Reloaded, the chat has new message objects, and a slash command may have put a floor in before a
@@ -13960,6 +14179,8 @@ function cleanupRuntime() {
   closeControlCenter();
   closeMiniWindow();
   cleanupTts();
+  unbindSegmentJumpDom();
+  runtime.clearedFloors.clear();
   clearSpeechPrompt();
   if (typeof document !== 'undefined') document.getElementById(SPEAKER_STYLE_ID)?.remove();
   runtime.subscribers.clear();
@@ -14444,6 +14665,8 @@ export const __testing = Object.freeze({
   readMessageSnapshot,
   restyleCurrentChat,
   restoreChatOriginals,
+  clearFloorTranslation,
+  autoTranslateSuppressed,
   renumberSwipeRecords,
   initializeSettings,
   configureForTest,
