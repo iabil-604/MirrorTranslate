@@ -922,6 +922,61 @@ export function resolvePageForMode(pageId, mode) {
   return pageExistsInMode(pageId, mode) ? pageId : 'main';
 }
 
+// -------------------------------------------------------------------------------------------
+// DESIGN.md §15.4 折叠组: "收起时同一行写当前值摘要". Each of these is the pure half of one collapsed
+// fold's summary line on the 正文处理 / 朗读 advanced pages — given the settings already on the page, no
+// DOM. The DOM-facing sync functions in index.js call these and write the result into that fold's
+// `[data-jy-fold-summary]` span.
+// -------------------------------------------------------------------------------------------
+
+/** "N 条" for a rule list with content, "空" for none — 原样保留白名单 and 歌词行 share this reading. */
+export function preserveLineRuleCountLabel(value) {
+  const { rules } = parsePreserveLineRulesWithErrors(value);
+  return rules.length ? `${rules.length} 条` : '空';
+}
+
+function affixPairLabel(prefix, suffix) {
+  return prefix || suffix ? `${prefix || ''} ${suffix || ''}`.trim() : '无';
+}
+
+/** "原文 无 · 译文 { }" — the 段落前后缀 fold's summary. */
+export function segmentAffixSummary(settings = {}) {
+  return `原文 ${affixPairLabel(settings.segmentPrefix, settings.segmentSuffix)} · 译文 ${affixPairLabel(settings.translationPrefix, settings.translationSuffix)}`;
+}
+
+/** "情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸" — 颜色细节 fold's summary. */
+export function coloringDetailFoldSummary(coloring = {}) {
+  const contrast = Number.isFinite(coloring.minContrast) ? coloring.minContrast : DEFAULT_COLORING.minContrast;
+  const vividness = Number.isFinite(coloring.vividness) ? coloring.vividness : DEFAULT_COLORING.vividness;
+  return `情绪起伏 · 名单外自动取色 · 对比度目标 ${contrast} · 彩度 ${vividness.toFixed(2)} · 读取当前主题与壁纸`;
+}
+
+/** "「」 『』 · （）" — 对白符号 · 跳过符号 fold's summary, empty skip pairs shown as "空". */
+export function quoteSymbolFoldSummary(tts = {}) {
+  const quotes = formatPairList(tts.quotePairs ?? DEFAULT_QUOTE_PAIRS);
+  const skips = formatPairList(tts.skipPairs ?? DEFAULT_SKIP_PAIRS);
+  return `${quotes || '空'} · ${skips || '空'}`;
+}
+
+/** "mp3 · 语速 1.0 · 同时生成 2 段" — Fish 参数 fold's summary. */
+export function fishParamsFoldSummary(fish = {}) {
+  return `${fish.format} · 语速 ${fish.speed} · 同时生成 ${fish.concurrency} 段`;
+}
+
+/** "AI 判断 · 标点情绪标签 3 条" (or "N 项已设定" once a slider leaves the middle) — 默认调音台 fold's summary. */
+export function consoleFoldSummary(value = {}) {
+  const overridden = CONSOLE_KEYS.filter(key => Number(value[key]) !== DEFAULT_CONSOLE[key]).length;
+  const tuning = overridden ? `${overridden} 项已设定` : 'AI 判断';
+  const marks = Array.isArray(value.marks) ? value.marks.length : 0;
+  return `${tuning} · 标点情绪标签 ${marks} 条`;
+}
+
+/** "N 个音色" for a non-empty library, "空" for none — 音色库 fold's summary, nested inside 音色's card. */
+export function voiceLibraryFoldSummary(voiceLibrary) {
+  const list = normalizeVoiceLibrary(voiceLibrary);
+  return list.length ? `${list.length} 个音色` : '空';
+}
+
 export function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
