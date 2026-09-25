@@ -290,3 +290,59 @@ test('a move\'s colour wins only on its own characters inside a speaker-painted 
   const move = pieces.find(piece => piece.text === '红莲拳');
   assert.ok(move, '招式片段被切了出来，即使外层已经是说话人色');
 });
+
+// ---------------------------------------------------------------------------------------------
+// buildSegmentStyler: 特效字 is a sub-switch of 说话人着色 (normalizeColoring's own comment says every
+// reader checks `speakers && effects`) — moves, carried runs and the per-quote wrapper must not act on
+// a floor whose reader has never turned 特效字 on, even though segmentSource computes that data (and an
+// old translation's stored annotations may still carry it) regardless of the setting.
+// ---------------------------------------------------------------------------------------------
+
+test('a move stays uncoloured while 特效字 is off, even though its annotation is right there in the floor', () => {
+  mockHost([]);
+  const band = computeSafeBand(['#ffffff']);
+  const settings = { coloring: { speakers: true, emotions: true, effects: false, band } };
+  const annotations = new Map([[1, { speaker: '太郎', moves: [{ name: '红莲拳', element: '火焰', tier: 1 }] }]]);
+  const styleFor = __testing.buildSegmentStyler(settings, annotations);
+  // A narrated line with nobody's speech in it and no emotion of its own: with 特效字 off, there is
+  // nothing left for this floor to be styled by, so the decorator itself is nothing to build.
+  assert.equal(styleFor([1], ['他打出了红莲拳，震碎了地面。']), null, '特效字 关闭时，招式不再是这一行需要装饰的理由');
+});
+
+test('a move stops being coloured the moment 特效字 is turned back off, on the very same annotation', () => {
+  mockHost([]);
+  const band = computeSafeBand(['#ffffff']);
+  const annotations = new Map([[1, { moves: [{ name: '红莲拳', element: '火焰', tier: 1 }] }]]);
+  const on = __testing.buildSegmentStyler({ coloring: { speakers: true, emotions: true, effects: true, band } }, annotations);
+  assert.ok(on([1], ['他打出了红莲拳，震碎了地面。']).emphasis, '开着的时候，招式确实会被上色（对照组）');
+  const off = __testing.buildSegmentStyler({ coloring: { speakers: true, emotions: true, effects: false, band } }, annotations);
+  assert.equal(off([1], ['他打出了红莲拳，震碎了地面。']), null, '同一份标注，关掉开关后这一行不再建出装饰');
+});
+
+test('a carried per-quote wrapper (layer 2) does not act while 特效字 is off, even with 说话人着色 and carryFormatting both on', () => {
+  mockHost([]);
+  const band = computeSafeBand(['#ffffff']);
+  const settings = { coloring: { speakers: true, emotions: false, effects: false, band } };
+  const annotations = new Map([[1, { speaker: '太郎' }]]);
+  const styleFor = __testing.buildSegmentStyler(settings, annotations);
+  const quoteFormatsByIndex = [[{ open: '<b>', close: '</b>' }]];
+  const decoration = styleFor([1], ['太郎说：「危险」'], quoteFormatsByIndex, []);
+  assert.ok(decoration, '说话人色本身不受 特效字 影响，装饰器仍然建得出来');
+  // The quote is still painted the speaker's colour (层一说话人着色, unaffected by 特效字), but with
+  // 特效字 off nothing carries the <b> that quoteFormats offered around it.
+  const pieces = decoration.emphasis('太郎说：「危险」', 1);
+  assert.ok(pieces, '有说话人色时仍然逐段拆开');
+  assert.equal(pieces.some(piece => piece.rawOpen === '<b>'), false, '特效字 关闭时，逐引号的搬运包装不生效');
+});
+
+test('the same per-quote wrapper does act once 特效字 is turned on, on the very same input', () => {
+  mockHost([]);
+  const band = computeSafeBand(['#ffffff']);
+  const annotations = new Map([[1, { speaker: '太郎' }]]);
+  const quoteFormatsByIndex = [[{ open: '<b>', close: '</b>' }]];
+  const styleFor = __testing.buildSegmentStyler({ coloring: { speakers: true, emotions: false, effects: true, band } }, annotations);
+  const decoration = styleFor([1], ['太郎说：「危险」'], quoteFormatsByIndex, []);
+  assert.ok(decoration.emphasis, '特效字 开着时，同样的 quoteFormats 确实会生效（对照组）');
+  const pieces = decoration.emphasis('太郎说：「危险」', 1);
+  assert.ok(pieces.some(piece => piece.rawOpen === '<b>'), '引号内的搬运包装被套上了');
+});

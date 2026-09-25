@@ -420,6 +420,41 @@ test('the translation counts every quote, says where a sound may go and what a l
   assert.doesNotMatch(colouring, /台词只有嗯、啊/);
 });
 
+// segmentSource attaches `fragments` to a segment whenever the original line has one, whether or not
+// 特效字 (or colouring at all) is on — buildTranslationMessages is where that has to be gated back out,
+// the same place `input.annotate.runs` already decides whether the translator was even told what a
+// `fragments` field would mean.
+test('a segment\'s own `fragments` field never reaches the request unless 特效字 is on and this batch actually has one', () => {
+  const segments = [{ id: 1, text: '他压低声音：这半句特别轻，其余照常。', fragments: ['特别轻'] }];
+
+  // Colouring off entirely: no annotation section, and no unexplained field either.
+  const plain = JSON.parse(buildTranslationMessages(segments, mergeSettings({}), {}, 'primary', {}).find(message => message.role === 'user').content);
+  assert.equal('fragments' in plain.segments[0], false, '着色全关时，segments 里不该带着一个没人解释过的字段');
+
+  // Speaker colouring on, 特效字 off: still nothing to carry.
+  const speakersOnly = JSON.parse(buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true, effects: false } }), {}, 'primary', { hasFragments: true })
+    .find(message => message.role === 'user').content);
+  assert.equal('fragments' in speakersOnly.segments[0], false, '特效字 关闭时，segments 里同样不该带 fragments');
+
+  // 特效字 on, but this particular request has nothing carryable in it (hasFragments not passed):
+  // still nothing sent, even though the segment object itself happens to carry the field.
+  const effectsButNoFragments = JSON.parse(buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true, effects: true } }), {}, 'primary', {})
+    .find(message => message.role === 'user').content);
+  assert.equal('fragments' in effectsButNoFragments.segments[0], false);
+
+  // 特效字 on and this batch does have a fragment: now it goes out, and the prompt explains it (`runs`).
+  const effectsOn = buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true, effects: true } }), {}, 'primary', { hasFragments: true });
+  const input = JSON.parse(effectsOn.find(message => message.role === 'user').content);
+  assert.deepEqual(input.segments[0].fragments, ['特别轻']);
+  assert.equal(input.annotate.runs, true, 'the field is only ever sent alongside the instruction for what it means');
+
+  // A segment with nothing to carry is untouched either way — never an empty `fragments: []`.
+  const bare = { id: 2, text: '她点了点头。' };
+  const untouched = JSON.parse(buildTranslationMessages([bare], mergeSettings({ coloring: { speakers: true, emotions: true, effects: true } }), {}, 'primary', { hasFragments: true })
+    .find(message => message.role === 'user').content);
+  assert.deepEqual(untouched.segments[0], bare);
+});
+
 test('every stand-in the annotation example shows is thrown away when a model copies it back', async () => {
   const { readAnnotationFields, EXAMPLE_STAND_INS } = await import('../core.js');
   const sections = [

@@ -1519,11 +1519,15 @@ function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new M
   const hasAnnotations = reportedAnnotations instanceof Map && reportedAnnotations.size > 0;
   if (!band || (!coloring.speakers && !coloring.emotions) || !hasAnnotations) return null;
   const annotations = canonicalAnnotations(settings, reportedAnnotations);
-  // 特效字 sub-switch: moves and carried runs are only ever present on `annotations` when the request
-  // asked for them (prompts.js `composeAnnotationSection`), so this alone gates every move/run branch
-  // below without a separate settings read.
-  const moveElements = resolveMoveElementIndex(annotations, chatMoveIndex);
-  const moveTiers = capMoveTiersForFloor(annotations);
+  // 特效字 sub-switch: moves, carried runs and the per-quote wrapper (layers 2 and 3) apply only while
+  // both 说话人着色 and 特效字 are on — normalizeColoring's own comment already says every reader checks
+  // `speakers && effects`, so this is the one place that actually has to. Without it, a reader who has
+  // never turned 特效字 on sees their floor's typography change the moment the translator's answer
+  // happens to include a quote-format or a run (segmentSource computes those unconditionally), which is
+  // not a 特效字 reader's floor to begin with.
+  const effectsOn = coloring.speakers && coloring.effects === true;
+  const moveElements = effectsOn ? resolveMoveElementIndex(annotations, chatMoveIndex) : new Map();
+  const moveTiers = effectsOn ? capMoveTiersForFloor(annotations) : new Map();
   const moveStyleFor = (move, id, position) => {
     const element = moveElements.get(move.name)?.element || move.element;
     const tier = moveTiers.get(`${id}:${position}`) ?? move.tier;
@@ -1599,14 +1603,17 @@ function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new M
       const mark = annotations.get(id) ?? null;
       const parts = splitSpeechParts(text);
       const placed = placeQuoteMarks(parts.filter(part => part.spoken).map(part => part.text), mark);
-      const fragments = fragmentsByIndex?.[index] ?? [];
-      const moveRuns = (Array.isArray(mark?.moves) ? mark.moves : [])
-        .map((move, position) => moveStyleFor(move, id, position)).filter(Boolean);
-      const carriedRuns = carriedRunsFor(mark, fragments);
+      // quoteFormatsByIndex and fragmentsByIndex are the request's layer-2/3 data, carried all the way
+      // from segmentSource regardless of any setting; effectsOn is what actually decides whether this
+      // reader's floor is styled by them.
+      const fragments = effectsOn ? (fragmentsByIndex?.[index] ?? []) : [];
+      const moveRuns = effectsOn ? (Array.isArray(mark?.moves) ? mark.moves : [])
+        .map((move, position) => moveStyleFor(move, id, position)).filter(Boolean) : [];
+      const carriedRuns = effectsOn ? carriedRunsFor(mark, fragments) : [];
       return {
         id, text, mark, parts,
         paints: placed.map(runPaint),
-        quoteFormats: quoteFormatsByIndex?.[index] ?? [],
+        quoteFormats: effectsOn ? (quoteFormatsByIndex?.[index] ?? []) : [],
         allRuns: [...moveRuns, ...carriedRuns],
       };
     });

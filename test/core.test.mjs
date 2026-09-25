@@ -1895,6 +1895,23 @@ test('a lyric line restores its own <br> after the closing parenthesis, bilingua
   assert.doesNotMatch(restored, /[()]/);
 });
 
+test('a lyric row still untranslated (a partial write) keeps its own trailing <br>, and strips back to the exact original', () => {
+  // Two lyric rows; only the second (もう一つの行, the last row, no <br> of its own to lose) has come
+  // back so far — a real streaming frame's first frame naming only one id, or a row withoutUntranslated
+  // dropped. The first row (そらにひびけ) is the one with a <br> to lose if renderLyricPair forgets it.
+  const card = 'NOW PLAYING<br>そらにひびけ<br>もう一つの行';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(card, options);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらにひびけ', 'もう一つの行']);
+  const translations = new Map([[segmented.segments[1].id, '另一行译文']]);
+  const rendered = assembleBilingual(segmented.layout, translations, { ...options, allowMissing: true });
+  const visible = rendered.replace(/[​‌⁠-⁤]/g, '');
+  assert.match(visible, /そらにひびけ<br>/, 'the untranslated row\'s own <br> is not lost');
+  assert.doesNotMatch(visible, /そらにひびけ \(/, 'no dangling " (" with nothing to close it');
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, card, 'a partial write strips back to exactly the original card, both rows and both <br>s intact');
+});
+
 test('a lyric line in 只留译文 mode also pairs inline, plain text, no markers needed', () => {
   const source = '第一行叙述。\nそらにひびけ\n第二行叙述。';
   const options = { lyricLineRules: ['そらにひびけ'] };

@@ -3649,10 +3649,15 @@ const LYRIC_CLOSE_AFFIX = markedAffix(')');
 function renderLyricPair(part, translation, options = {}) {
   const trailingBr = String(part?.sourceText ?? '').match(TRAILING_BR_RE);
   const bareSource = trailingBr ? part.sourceText.slice(0, trailingBr.index) : String(part?.sourceText ?? '');
+  const trailer = trailingBr ? trailingBr[1] : '';
+  // No translation yet (a partial write, mid-stream, or a row withoutUntranslated dropped): the row's
+  // own trailing <br> has to go back exactly where it came from, and without a translation there is no
+  // " (" to open — writing it here would leave a dangling affix with nothing to close it, and the very
+  // next line's <br> gone with it.
+  if (!translation) return `${SOURCE_START}${bareSource}${SOURCE_END}${trailer}`;
   const sourceBlock = `${SOURCE_START}${bareSource}${LYRIC_OPEN_AFFIX}${SOURCE_END}`;
-  if (!translation) return sourceBlock;
   const translationBlock = `${TRANSLATION_START}${String(translation)}${TRANSLATION_END}`;
-  return `${sourceBlock}${translationBlock}${LYRIC_CLOSE_AFFIX}${trailingBr ? trailingBr[1] : ''}`;
+  return `${sourceBlock}${translationBlock}${LYRIC_CLOSE_AFFIX}${trailer}`;
 }
 
 /**

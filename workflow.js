@@ -172,6 +172,18 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
   if (annotate) {
     messages.push({ role: 'system', content: composeAnnotationSection(annotate) });
   }
+  // segmentSource attaches `fragments` to a segment whenever the original line has one, regardless of
+  // any setting (index.js reads it for the reading's own stripHiddenRuns, and the display side reads it
+  // back off `fragmentsById`, not off this array) — so it has to be stripped back out here, the same
+  // place `input.annotate.runs` below decides whether the translator was even told what it means. Sent
+  // unconditionally, every reader — colouring off, 特效字 never turned on — got an unexplained field in
+  // their request the moment an original line happened to carry inline formatting.
+  const includeFragments = Boolean(annotate?.effects && annotate?.hasFragments);
+  const outputSegments = includeFragments || !Array.isArray(segments) ? segments : segments.map(segment => {
+    if (!segment || !Object.hasOwn(segment, 'fragments')) return segment;
+    const { fragments, ...rest } = segment;
+    return rest;
+  });
   // Attached only when this batch actually has a lyric-marked segment in it (index.js works this out
   // from segmentSource's own `lyricIds` before it ever calls this), the same way the annotation
   // section above is only ever sent to a request that has something for it to annotate.
@@ -189,7 +201,7 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
       worldbook: packet.worldbook || '',
       recent: packet.recent || '',
     },
-    segments,
+    segments: outputSegments,
   };
   if (annotate) {
     input.annotate = {
