@@ -402,7 +402,7 @@ const CONTROL_CENTER_MARKUP = `
  <section class="jy-card">
   <h2>自动</h2>
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>自动接续翻译</h3><p class="jy-muted">主回复完成后，自动补上译文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label></div>
-  <div class="jy-card-row"><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label></div>
+  <div class="jy-card-row jy-card-row-dependent"><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label></div>
   <div class="jy-card-row jy-card-row-dependent" data-jy-stream-row><label class="jy-check"><input type="checkbox" data-jy-field="streamingWriteback">流式写回（beta）</label><p class="jy-muted" data-jy-stream-reason>只在独立连接下生效；跟随酒馆时自动回退整包。</p></div>
   <div class="jy-card-row"><span class="jy-label">翻译失败后自动重试</span><span class="jy-card-row-field"><input type="number" data-jy-field="retries" min="0" max="5" step="1" aria-label="翻译失败后自动重试"><span class="jy-muted">次</span></span></div>
  </section>
@@ -411,7 +411,7 @@ const CONTROL_CENTER_MARKUP = `
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>翻译方案</h3><p class="jy-muted" data-jy-active-profile>待读取</p></div><button type="button" class="jy-text-button" data-jy-action="open-prompt">编辑规则 →</button></div>
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>翻译用哪条连接</h3><p class="jy-muted" data-jy-channel-summary></p></div><label class="jy-sr-only" for="jy-desk-channel">翻译用哪条连接</label><select id="jy-desk-channel" data-jy-translation-channel></select></div>
   <div class="jy-card-row"><p class="jy-muted">连接的地址、密钥、模型在「模型连接」页管理；朗读分析、深度分析用哪条各自在「朗读」页选，互不牵连。</p><button type="button" class="jy-text-button" data-jy-action="open-settings">管理连接 →</button></div>
-  <div class="jy-card-row"><div class="jy-card-row-text"><h3>参考资料</h3><p class="jy-muted" data-jy-context-summary></p></div></div>
+  <div class="jy-card-row"><div class="jy-card-row-text"><h3>参考资料</h3><p class="jy-muted" data-jy-context-summary></p></div><button type="button" class="jy-text-button" data-jy-action="open-prompt">改 →</button></div>
  </section>
 </div>
 <section class="jy-card" data-jy-translation-only>
@@ -450,7 +450,7 @@ const CONTROL_CENTER_MARKUP = `
  </section>
 </div>
 <div class="jy-editor-stage" data-jy-editor-stage><div class="jy-editor-placeholder" data-jy-editor-placeholder><span aria-hidden="true">Aa</span><h2>点开一项规则来改</h2><p>文风、译名与措辞，都由你决定。</p></div></div>
-<section class="jy-card"><h2>参考资料与上下文</h2><div class="jy-reference-body"><label class="jy-check"><input type="checkbox" data-jy-field="includeWorldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-field="includeCharacterCard">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-field="includeRecentContext">近期对话</label><label><span class="jy-label">近期对话条数</span><input type="number" data-jy-field="contextMessages" min="1" max="20" step="1"></label></div></section>
+<section class="jy-card"><details class="jy-fold" data-jy-prompt-reference-fold><summary><h2>参考资料与上下文</h2><span class="jy-fold-summary" data-jy-prompt-reference-summary></span></summary><div class="jy-reference-body jy-form-body"><label class="jy-check"><input type="checkbox" data-jy-field="includeWorldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-field="includeCharacterCard">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-field="includeRecentContext">近期对话</label><label><span class="jy-label">近期对话条数</span><input type="number" data-jy-field="contextMessages" min="1" max="20" step="1"></label></div></details></section>
 <section class="jy-card">
  <h2>方案管理</h2>
  <div class="jy-actions">
@@ -8435,7 +8435,6 @@ function editingChannelId(settings = runtime.settings) {
   return channels.some(channel => channel.id === translation) ? translation : (channels[0]?.id ?? '');
 }
 
-/** The strip at the top of the connection page: who uses what, each with the way to where it is chosen. */
 /** One 用在 checkbox — checked when `use` currently resolves to `choice` ('follow' or a channel id). */
 function makeChannelUseCheckbox(doc, settings, use, choice) {
   const label = doc.createElement('label');
@@ -8558,7 +8557,6 @@ function updateSummary(root, settings) {
   const channel = getActiveChannel(settings);
   const promptProfile = getActivePromptProfile(settings);
   const independent = settings.apiMode === 'independent';
-  setText(root, '[data-jy-channel-mode]', independent ? '保存的连接' : '酒馆当前连接');
   setText(
     root,
     '[data-jy-channel-summary]',
@@ -8574,6 +8572,17 @@ function updateSummary(root, settings) {
     promptProfile.glossary.trim() && '姓名与术语',
   ].filter(Boolean);
   setText(root, '[data-jy-context-summary]', sources.length ? `当前启用：${sources.join('、')}。` : '当前没有启用额外参考资料。');
+  // DESIGN §15.4 折叠组: the fold header's own one-line summary, covering only the three checkboxes
+  // this fold actually holds — 当前角色 and 姓名与术语 above are not toggles inside it.
+  setText(
+    root,
+    '[data-jy-prompt-reference-summary]',
+    [
+      settings.includeWorldbook && '世界书',
+      settings.includeCharacterCard && '角色卡设定',
+      settings.includeRecentContext && `近期对话 ${settings.contextMessages} 条`,
+    ].filter(Boolean).join(' · ') || '未启用',
+  );
   // DESIGN §15.4 依赖缩进变灰: 流式写回 only takes effect on an independent connection; on 跟随酒馆 it
   // silently falls back to a whole-floor write, so the row says so and its switch is greyed out.
   const streamRow = root.querySelector('[data-jy-stream-row]');
