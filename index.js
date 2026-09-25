@@ -12084,11 +12084,18 @@ function createControlCenter(rootDocument = document) {
     // and target language, each standard item's textarea/select, a custom section's own fields, and
     // 近期对话条数 — saves itself once the field settles, the same way the switches above already do.
     if (event.target.matches('[data-jy-profile-field], [data-jy-custom-field], [data-jy-prompt-profile-name], [data-jy-field="contextMessages"]')) {
+      let saved = true;
       try {
         saveSettings(collectSettings(root));
       } catch (error) {
+        // Resyncing here regardless of the outcome used to let an unrelated invalid field elsewhere
+        // on the page (排除标签 left as '<<<', say) fail collectSettings on every later attempt too,
+        // and each failure still replaced this field's own now-unsaved edit with the last good
+        // settings — losing it exactly as if it had never been typed (review finding index.js:11889).
+        saved = false;
         toast('error', safeError(error));
       }
+      if (!saved) return;
       // Deferred, not immediate: syncFields (via renderStandardPromptItems/renderCustomPromptItems)
       // replaces the very editor panel this field sits in, including whatever button the reader's
       // mouse is already headed for (「恢复此项默认」、术语表旁的「移除」…). A browser only synthesizes
@@ -12126,7 +12133,11 @@ function createControlCenter(rootDocument = document) {
       try {
         saveSettings(collectSettings(root));
       } catch (error) {
+        // collectSettings reads every page at once, so an invalid field elsewhere (排除标签, say)
+        // fails this save too; resyncing anyway would reset this field to its last-saved value for
+        // an error that has nothing to do with it (review finding index.js:11889).
         toast('error', safeError(error));
+        return;
       }
       syncFields(root, runtime.settings);
       return;
@@ -12171,7 +12182,11 @@ function createControlCenter(rootDocument = document) {
       try {
         saveSettings(collectSettings(root));
       } catch (error) {
+        // Same reasoning as 翻译规则's autosave (review finding index.js:11889): collectSettings
+        // reads every page, so resyncing after an unrelated field's error would reset this one's
+        // freshly typed address/key/model to its last-saved value too.
         toast('error', safeError(error));
+        return;
       }
       // renderChannelCards (inside syncFields) rebuilds this card; withFocusPreserved keeps Tab
       // between 地址/密钥/模型 working the same way the desk card's own equivalent field does
