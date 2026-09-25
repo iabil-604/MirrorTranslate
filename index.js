@@ -12101,6 +12101,12 @@ async function openMiniWindow() {
     return button;
   };
   const renderRows = () => {
+    // A re-render while a row is open for editing — a segment jump elsewhere in the same floor, a
+    // background refresh — must not throw away what the reader is mid-typing there. The box resets to
+    // the stored translation only when the row was actually closed first (row-write, row-fix/retry,
+    // toggleRow closing it, a floor change): all of those already set editingRow to null or to a
+    // different id before calling this, so there is nothing here to mistake a deliberate reset for.
+    const pendingEdit = editingRow !== null ? rowsList.querySelector(`[data-jy-row-field="${editingRow}"]`)?.value : undefined;
     rowsList.replaceChildren();
     const reading = ttsSettings().enabled;
     for (const row of viewRows.slice(0, MINI_ROW_LIMIT)) {
@@ -12126,7 +12132,7 @@ async function openMiniWindow() {
         field.rows = 3;
         field.spellcheck = false;
         field.dataset.jyRowField = String(row.id);
-        field.value = row.translation;
+        field.value = pendingEdit !== undefined ? pendingEdit : row.translation;
         field.placeholder = row.state === 'done' ? '' : '这一段还没有译文，可以直接写一段。';
         body.appendChild(field);
         const actions = document.createElement('div');
@@ -13743,6 +13749,9 @@ async function openMiniWindow() {
     syncQuickPickers: () => { syncQuickPickers(); void renderFloor(); },
     showReading,
     showFloor: (messageId, { segmentId } = {}) => {
+      // A different floor may have a row of the same number already open for editing on this one —
+      // moveFloor already clears editingRow on a floor change for exactly this reason; a jump has to.
+      if (Number.isInteger(messageId) && messageId !== viewFloor) editingRow = null;
       if (Number.isInteger(messageId)) viewFloor = messageId;
       selectMiniTab('translate');
       // The segment list is not on screen in the small-window overview; a jump needs it open to land
@@ -13859,18 +13868,39 @@ async function resolveSegmentAtPoint(messageId, root, point) {
   return segmentAtPosition({ node: pointIndex, offset: point.offset }, translationHits, sourceHits);
 }
 
+// Whether the host's own delete-message mode is active: a checkbox on the message (only shown then)
+// or its confirmation bar at the bottom of the chat. Clicking a message in that mode selects it for
+// deletion; the click is the host's to answer for, not this feature's to hijack.
+function chatInDeleteMode() {
+  const checkbox = document.querySelector('.del_checkbox');
+  if (checkbox && checkbox.offsetParent !== null) return true;
+  const bar = document.getElementById('dialogue_del_mes');
+  return Boolean(bar && bar.offsetParent !== null);
+}
+
 /**
- * Never hijacks a click that means something else: a link, a button, an input, the floor's own
- * reading controls (`.jy-tts-bar` and everything in it), a real text selection, or the host's own
- * edit textarea open on this floor. Everything else on a floor's rendered text is fair game.
+ * Never hijacks a click that means something else: a link, a button, an input, a `<summary>` or
+ * anything else with an interactive role, the floor's own reading controls (`.jy-tts-bar` and
+ * everything in it), a real text selection, the host's own edit textarea open on this floor, or the
+ * host's delete-message mode. Everything else on a floor's rendered text is fair game.
+ *
+ * A double- or triple-click's first click is a click too, and selecting a word is the point of it — so
+ * the jump is not decided on that first click alone. It is scheduled a short moment out instead, and
+ * every further click (the second click of the same double-click included) cancels whatever the click
+ * before it scheduled; what runs after the wait checks the selection once more; a selection a
+ * double-click leaves behind reads exactly like any other one already excluded above.
  */
 async function handleSegmentJumpClick(event) {
   if (typeof document === 'undefined' || event.button !== 0) return;
+  const token = {};
+  runtime.segmentJumpPending = token;
+  if (event.detail > 1) return;
   const target = event.target instanceof Element ? event.target : event.target?.parentElement;
   if (!target) return;
   const mes = target.closest?.('#chat .mes[mesid]');
   if (!mes) return;
-  if (target.closest('a, button, input, textarea, select, [contenteditable="true"], .jy-tts-bar')) return;
+  if (target.closest('a, button, input, textarea, select, summary, label, [contenteditable="true"], [role="button"], [onclick], .jy-tts-bar')) return;
+  if (chatInDeleteMode()) return;
   const messageId = Number(mes.getAttribute('mesid'));
   if (!Number.isInteger(messageId)) return;
   const root = ttsMessageText(messageId);
@@ -13879,6 +13909,10 @@ async function handleSegmentJumpClick(event) {
   if (selection && !selection.isCollapsed && String(selection)) return;
   const point = segmentJumpCaretPoint(event);
   if (!point || !root.contains(point.node)) return;
+  await new Promise(resolve => globalThis.setTimeout(resolve, 250));
+  if (runtime.segmentJumpPending !== token) return;
+  const settled = globalThis.getSelection?.();
+  if (settled && !settled.isCollapsed && String(settled)) return;
   const segmentId = await resolveSegmentAtPoint(messageId, root, point);
   if (Number.isInteger(segmentId)) void openSegmentInMini(messageId, segmentId);
 }
@@ -14951,6 +14985,8 @@ export const __testing = Object.freeze({
   stripHiddenRuns,
   ttsUtterances,
   locateDialogueSourceAnchors,
+  chatInDeleteMode,
+  handleSegmentJumpClick,
   latestAssistantMessageId,
   readMessageSnapshot,
   restyleCurrentChat,

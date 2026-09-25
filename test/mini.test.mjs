@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { MESSAGE_META_KEY } from '../core.js';
 import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from '../mini.js';
+import { __testing } from '../index.js';
 
 test('a floor becomes rows with a state each: done, running, missing, or never asked', () => {
   const snapshot = {
@@ -101,4 +102,28 @@ test('片段跳转: a click lands on whichever segment its point falls inside, t
   assert.equal(segmentAtPosition({ node: 1, offset: 2 }, translationHits, sourceHits), 4, 'falls through to the original when nothing in the translation matches');
   assert.equal(segmentAtPosition({ node: 9, offset: 0 }, translationHits, sourceHits), null, 'a null hit (locateAnchors could not find that segment) is never a match');
   assert.equal(segmentAtPosition({ node: 0, offset: 0 }, null, null), null, 'missing maps do not throw');
+});
+
+test('片段跳转: the host\'s own delete-message mode is recognised, checkbox and confirmation bar alike', () => {
+  const hidden = { offsetParent: null };
+  const visible = { offsetParent: {} };
+  const fakeDocument = (checkbox, bar) => ({
+    querySelector: selector => (selector === '.del_checkbox' ? checkbox : null),
+    getElementById: id => (id === 'dialogue_del_mes' ? bar : null),
+  });
+  const before = globalThis.document;
+  try {
+    globalThis.document = fakeDocument(null, null);
+    assert.equal(__testing.chatInDeleteMode(), false, '既没有勾选框也没有确认栏时不是删除模式');
+    globalThis.document = fakeDocument(hidden, null);
+    assert.equal(__testing.chatInDeleteMode(), false, '勾选框存在但不可见（offsetParent 为 null）不算删除模式');
+    globalThis.document = fakeDocument(visible, null);
+    assert.equal(__testing.chatInDeleteMode(), true, '勾选框可见即为删除模式');
+    globalThis.document = fakeDocument(null, hidden);
+    assert.equal(__testing.chatInDeleteMode(), false, '确认栏存在但隐藏不算删除模式');
+    globalThis.document = fakeDocument(null, visible);
+    assert.equal(__testing.chatInDeleteMode(), true, '确认栏显示中同样是删除模式');
+  } finally {
+    globalThis.document = before;
+  }
 });
