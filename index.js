@@ -87,7 +87,24 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
+  UI_MODES,
+  CONSOLE_PRESET_IDS,
+  pagesForMode,
+  pageExistsInMode,
+  resolvePageForMode,
+  CONNECTION_USES,
+  connectionUseChoice,
+  setConnectionUse,
+  channelUsesPointingAt,
+  reassignConnectionUsesOnDelete,
+  PRESET_MANAGED_FIELDS,
+  PRESET_LABELS,
+  PRESET_TIER_LABELS,
+  presetContent,
+  applyPreset,
+  presetDrift,
 } from './core.js?v=0.37.1';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.37.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -356,6 +373,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-studio" data-jy-root>
 <aside class="jy-rail">
   <div class="jy-identity"><span class="jy-monogram" aria-hidden="true">镜</span><div><strong>镜译</strong><small>正文翻译器</small></div></div>
+  <div class="jy-mode-switch" role="group" aria-label="界面模式"><button type="button" data-jy-action="set-ui-mode" data-jy-ui-mode="normal" aria-pressed="true">正常模式</button><button type="button" data-jy-action="set-ui-mode" data-jy-ui-mode="advanced" aria-pressed="false">高级模式</button></div>
   <nav class="jy-navigation" role="tablist" aria-label="工作区">
   <button type="button" role="tab" aria-selected="true" data-jy-tab="main"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg></span>翻译台</button><button type="button" role="tab" aria-selected="false" data-jy-tab="prompt"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg></span>翻译规则</button><button type="button" role="tab" aria-selected="false" data-jy-tab="settings"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg></span>模型连接</button><button type="button" role="tab" aria-selected="false" data-jy-tab="processing"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg></span>正文处理</button><button type="button" role="tab" aria-selected="false" data-jy-tab="tts"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6"/><path d="M18.3 6.2a8.2 8.2 0 0 1 0 11.6"/></svg></span>朗读</button><button type="button" role="tab" aria-selected="false" data-jy-tab="logs"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg></span>运行记录</button>
   </nav>
@@ -5292,6 +5310,56 @@ function ttsDialogShell(shadow, card, onDismiss) {
   return { shell, modal };
 }
 
+/**
+ * A yes/no `.jy-ask` confirm (§9.6) for a destructive control-center action, saying what will be
+ * lost before it goes: 恢复原样、删除、清空. Built the same way askTtsChoice/askTtsRefine already build
+ * their own — a fresh shadow host on top of everything — so no new dialog machinery, just a new
+ * question asked through the one this extension already has. `title` and `message` are set with
+ * `.textContent`, never spliced into the markup, so a connection or profile name a reader typed
+ * cannot break the dialog's own structure.
+ */
+async function confirmDestructive({ title, message, confirmLabel = '确定' }) {
+  const css = await loadPanelCss();
+  return new Promise(resolve => {
+    document.getElementById(`${MODULE_ID}-confirm`)?.remove();
+    const host = document.createElement('div');
+    host.id = `${MODULE_ID}-confirm`;
+    host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147483000;`;
+    keepTypingInside(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = css;
+    const card = document.createElement('div');
+    card.innerHTML = '<div class="jy-ask" role="dialog" aria-modal="true"><h3></h3><p></p><div class="jy-ask-actions">'
+      + '<button type="button" class="is-primary" data-jy-confirm="yes"></button>'
+      + '<button type="button" data-jy-confirm="no">取消</button></div></div>';
+    card.querySelector('[role="dialog"]').setAttribute('aria-label', title);
+    card.querySelector('h3').textContent = title;
+    card.querySelector('p').textContent = message;
+    card.querySelector('[data-jy-confirm="yes"]').textContent = confirmLabel;
+    shadow.append(style);
+    let done = false;
+    const finish = value => {
+      if (done) return;
+      done = true;
+      host.remove();
+      document.removeEventListener('keydown', onKey, true);
+      resolve(value);
+    };
+    const onKey = event => {
+      if (event.key === 'Escape') { event.preventDefault(); finish(false); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(host);
+    const { shell } = ttsDialogShell(shadow, card, () => finish(false));
+    shell.addEventListener('click', event => {
+      const button = event.target.closest('[data-jy-confirm]');
+      if (button) finish(button.dataset.jyConfirm === 'yes');
+    });
+    shadow.querySelector('[data-jy-confirm="no"]')?.focus();
+  });
+}
+
 async function askTtsChoice(floor) {
   const css = await loadPanelCss();
   return new Promise(resolve => {
@@ -8236,14 +8304,17 @@ function applyTranslationChoice(settings, choice) {
   return settings;
 }
 
+// core.js CONNECTION_USES ids, named the way the page already names them — kept here rather than in
+// core.js because it is display text, not settings logic.
+const CONNECTION_USE_LABELS = Object.freeze({ translation: '翻译', analysis: '朗读分析', deep: '深度分析' });
+
 /** Which connection each feature uses right now, and where that is chosen. */
 function channelUsers(settings = runtime.settings) {
   const tts = ttsSettings(settings);
-  const analysis = resolveFeatureChannel(tts.analysisChannelId, settings);
   return [
-    { feature: '翻译', choice: translationChannelChoice(settings), action: 'open-main', where: '翻译台' },
-    { feature: '朗读分析', choice: analysis, action: 'open-tts', where: '朗读页', note: tts.enabled ? '' : '朗读没开，眼下不会用到' },
-    { feature: '深度分析', choice: tts.deepChannelId || analysis, action: 'open-tts', where: '朗读页', note: tts.deepChannelId ? '' : '和朗读分析同一条' },
+    { feature: CONNECTION_USE_LABELS.translation, choice: connectionUseChoice(settings, 'translation'), action: 'open-main', where: '翻译台' },
+    { feature: CONNECTION_USE_LABELS.analysis, choice: connectionUseChoice(settings, 'analysis'), action: 'open-tts', where: '朗读页', note: tts.enabled ? '' : '朗读没开，眼下不会用到' },
+    { feature: CONNECTION_USE_LABELS.deep, choice: connectionUseChoice(settings, 'deep'), action: 'open-tts', where: '朗读页', note: tts.deepChannelId ? '' : '和朗读分析同一条' },
   ];
 }
 
@@ -10444,6 +10515,27 @@ function createControlCenter(rootDocument = document) {
     if (target === 'tts' && ttsSettings().enabled) void renderTtsUsage(root);
   };
 
+  /**
+   * DESIGN §15.1 模式切换: only changes what the rail shows. Hides the tabs that do not exist in the
+   * new mode (`finetune`/微调 has no page yet, so it simply has no button to hide or show — a page
+   * agent adding one needs no change here), moves off a page that no longer exists to 翻译台, and
+   * otherwise leaves syncTtsFeatureVisibility's own finer rule (朗读's tab hides further still when
+   * the feature itself is off) to apply on top of the mode's list.
+   */
+  const applyUiMode = mode => {
+    for (const button of root.querySelectorAll('[data-jy-action="set-ui-mode"]')) {
+      button.setAttribute('aria-pressed', String(button.dataset.jyUiMode === mode));
+    }
+    for (const tabButton of root.querySelectorAll('[data-jy-tab]')) {
+      tabButton.hidden = !pageExistsInMode(tabButton.dataset.jyTab, mode);
+    }
+    const current = root.querySelector('[data-jy-tab][aria-selected="true"]')?.dataset.jyTab || 'main';
+    const resolved = resolvePageForMode(current, mode);
+    if (resolved !== current) selectTab(resolved);
+    else syncTtsFeatureVisibility(root);
+  };
+  applyUiMode(runtime.settings.uiMode);
+
   const onClick = async event => {
     const tab = event.target.closest('[data-jy-tab]');
     if (tab) {
@@ -10464,6 +10556,12 @@ function createControlCenter(rootDocument = document) {
       saveSettings(next);
       for (const choice of root.querySelectorAll('[data-jy-theme]')) choice.setAttribute('aria-pressed', String(choice.dataset.jyTheme === runtime.settings.theme));
       button.closest('details').open = false;
+      return;
+    }
+    if (action === 'set-ui-mode') {
+      const mode = button.dataset.jyUiMode;
+      if (mode !== runtime.settings.uiMode) saveSettings({ ...mergeSettings(runtime.settings), uiMode: mode });
+      applyUiMode(mode);
       return;
     }
     if (action === 'export-profile') {
@@ -10507,6 +10605,12 @@ function createControlCenter(rootDocument = document) {
         const next = collectSettings(root);
         if (next.processingProfiles.length <= 1) throw new Error('至少保留一个正文方案。');
         const removed = next.selectedProcessingProfileId;
+        const removedProfile = next.processingProfiles.find(item => item.id === removed);
+        if (!await confirmDestructive({
+          title: '删除正文方案',
+          message: `「${removedProfile?.name || '这个方案'}」连同绑定的正则一起删除，不能撤销。真的要删除吗？`,
+          confirmLabel: '删除方案',
+        })) return;
         const selected = selectProcessingProfile(next, next.processingProfiles.find(item => item.id !== removed).id);
         selected.processingProfiles = selected.processingProfiles.filter(item => item.id !== removed);
         await persistProcessing(root, selected);
@@ -10614,6 +10718,12 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'delete-prompt-profile') {
         const next = collectSettings(root);
         if (next.promptProfiles.length <= 1) throw new Error('至少保留一个翻译方案。');
+        const active = getActivePromptProfile(next);
+        if (!await confirmDestructive({
+          title: '删除当前方案',
+          message: `「${active.name}」的术语表和自定义规则一起删除，不能撤销。真的要删除吗？`,
+          confirmLabel: '删除方案',
+        })) return;
         next.promptProfiles = next.promptProfiles.filter(profile => profile.id !== next.selectedPromptProfileId);
         next.selectedPromptProfileId = next.promptProfiles[0].id;
         saveSettings(next);
@@ -10622,6 +10732,11 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'reset-prompt-profile') {
         const next = collectSettings(root);
         const active = getActivePromptProfile(next);
+        if (!await confirmDestructive({
+          title: '恢复当前方案',
+          message: `「${active.name}」的术语表和自定义规则会恢复成默认，改过的内容不能撤销。真的要恢复原样吗？`,
+          confirmLabel: '恢复原样',
+        })) return;
         const reset = normalizePromptProfile({ ...DEFAULT_PROMPT_PROFILE, id: active.id, name: active.name }, active.id);
         const index = next.promptProfiles.findIndex(profile => profile.id === active.id);
         next.promptProfiles[index] = reset;
@@ -10674,19 +10789,26 @@ function createControlCenter(rootDocument = document) {
         const next = collectSettings(root);
         const id = root.dataset.jyEditingChannelId || editingChannelId(next);
         if (next.channels.length <= 1) throw new Error('至少保留一条连接。');
-        // A connection in use is not taken away from under the feature using it: which connection a
-        // feature falls back to is the reader's decision, made where that feature is set up.
-        const users = channelUsers(next).filter(user => user.choice === id);
-        if (users.length) {
-          throw new Error(`${users.map(user => user.feature).join('、')}正在用这条连接。先在${[...new Set(users.map(user => user.where))].join('和')}给${users.length > 1 ? '它们' : '它'}换一条，再回来删。`);
-        }
-        next.channels = next.channels.filter(channel => channel.id !== id);
+        const channel = next.channels.find(item => item.id === id);
+        // A connection in use is not just quietly taken away from the feature using it: deleting it
+        // moves that use to 跟随酒馆 instead, and the confirm below says so before it happens.
+        const usingFeatures = channelUsesPointingAt(next, id).map(use => CONNECTION_USE_LABELS[use]);
+        const usingNote = usingFeatures.length ? `${usingFeatures.join('、')}正在用这条连接，删除后会自动切换到跟随酒馆。` : '';
+        if (!await confirmDestructive({
+          title: '删除这条连接',
+          message: `${usingNote}「${channel?.name || '这条连接'}」连同填写的地址和密钥一起删除，不能撤销。真的要删除吗？`,
+          confirmLabel: '删除连接',
+        })) return;
+        const { settings: reassigned, moved } = reassignConnectionUsesOnDelete(next, id);
+        reassigned.channels = reassigned.channels.filter(item => item.id !== id);
         // The translation follows the host and only remembers this one; what it remembers must exist.
-        if (next.selectedChannelId === id) next.selectedChannelId = next.channels[0].id;
+        if (reassigned.selectedChannelId === id) reassigned.selectedChannelId = reassigned.channels[0].id;
         runtime.editingChannelId = null;
-        saveSettings(next);
+        saveSettings(reassigned);
         syncFields(root, runtime.settings);
-        toast('success', '这条连接已删除。');
+        toast('success', moved.length
+          ? `这条连接已删除。${moved.map(use => CONNECTION_USE_LABELS[use]).join('、')}已经切换到跟随酒馆。`
+          : '这条连接已删除。');
       } else if (action === 'fetch-models') {
         saveSettings(collectSettings(root));
         const id = root.dataset.jyEditingChannelId || editingChannelId();
@@ -10974,6 +11096,11 @@ function createControlCenter(rootDocument = document) {
         await copyText(JSON.stringify(toStandardDocument(runtime.tts.preview.segments), null, 2));
         toast('success', '朗读结构 JSON 已复制。');
       } else if (action === 'tts-clear-chat') {
+        if (!await confirmDestructive({
+          title: '清空本聊天的朗读缓存',
+          message: '这个聊天里已经生成的朗读音频全部删除，不能撤销，之后播放会重新生成。真的要清空吗？',
+          confirmLabel: '清空缓存',
+        })) return;
         stopTts();
         const removed = await ttsStore().clearChat(getCurrentChatId());
         runtime.tts.analysis.clear();
@@ -10983,6 +11110,11 @@ function createControlCenter(rootDocument = document) {
         await renderTtsUsage(root);
         toast('success', `已清掉本聊天的 ${removed} 条朗读缓存。`);
       } else if (action === 'tts-clear-all') {
+        if (!await confirmDestructive({
+          title: '清空全部朗读缓存',
+          message: '每个聊天已经生成的朗读音频全部删除，不能撤销，之后播放会重新生成。真的要全部清空吗？',
+          confirmLabel: '清空全部',
+        })) return;
         stopTts();
         await ttsStore().clear();
         runtime.tts.analysis.clear();
@@ -10998,6 +11130,11 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'refresh-logs') {
         renderDiagnosticLog(root);
       } else if (action === 'clear-logs') {
+        if (!await confirmDestructive({
+          title: '清空运行记录',
+          message: '本机保存的诊断日志全部删除，不能撤销。真的要清空吗？',
+          confirmLabel: '清空',
+        })) return;
         clearDiagnostics();
         renderDiagnosticLog(root, []);
         toast('success', '本机诊断日志已清空。');

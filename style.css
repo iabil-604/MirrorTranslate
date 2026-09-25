@@ -55,7 +55,11 @@ label { min-width: 0; }
 .jy-close:hover { background: #e9eade; color: var(--jy-text); }
 .jy-studio { display: grid; grid-template-columns: 190px minmax(0,1fr); height: 100%; min-width: 0; }
 .jy-rail { display: flex; flex-direction: column; background: var(--jy-rail); color: #cfe0d5; padding: 24px 12px 16px; }
-.jy-identity { display: flex; align-items: center; gap: 10px; padding: 0 8px 28px; }
+.jy-identity { display: flex; align-items: center; gap: 10px; padding: 0 8px 14px; }
+/* DESIGN §15.1 模式切换: two-segment 正常模式 / 高级模式 under the brand, shown in both modes. */
+.jy-mode-switch { display: flex; gap: 2px; margin: 0 8px 18px; padding: 2px; border-radius: 9px; background: #0f2c24; }
+.jy-mode-switch button { flex: 1 1 0; min-height: 34px; padding: 0 4px; border: 0; border-radius: 7px; background: transparent; color: #a9c0b2; font-size: 12px; font-weight: 650; cursor: pointer; transition: background var(--jy-hover), color var(--jy-hover); }
+.jy-mode-switch button[aria-pressed="true"] { background: #f2f7f0; color: var(--jy-rail); }
 .jy-monogram { display: grid; place-items: center; width: 34px; height: 38px; border: 1px solid #91ad9680; border-radius: 4px 11px 4px 4px; font: 21px Georgia, "Songti SC", serif; color: #e2cf9c; flex: 0 0 auto; }
 .jy-identity strong { display: block; font-size: 17px; font-weight: 700; letter-spacing: .16em; color: #f2f7f0; }
 .jy-identity small { font-size: 9px; letter-spacing: .1em; color: #8fab99; }
@@ -206,6 +210,8 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-footer { display: flex; justify-content: space-between; gap: 16px; align-items: center; position: sticky; bottom: 0; z-index: 4; padding: 12px 10px 16px 0; margin-top: 14px; border-top: 1px solid var(--jy-line); background: var(--jy-paper); }
 .jy-save-note { color: var(--jy-muted); font-size: 11px; }
 .jy-save-note[data-jy-dirty="true"] { color: var(--jy-focus); font-weight: 600; }
+/* DESIGN §15.4 「改了就存」: the label a page's header shows once save-on-change replaces its save button. */
+.jy-autosave-indicator { font-size: 11px; color: var(--jy-ok); flex: none; }
 .jy-connection-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .jy-connection-choice label { position: relative; cursor: pointer; }
 .jy-connection-choice input { position: absolute; opacity: 0; }
@@ -367,6 +373,9 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-monogram { width: 27px; height: 29px; font-size: 18px; }
   .jy-identity strong { font-size: 15px; display: inline; }
   .jy-identity small { display: none; }
+  /* DESIGN §15.1/§15.5: touch target ≥44, still the full row under the title. */
+  .jy-mode-switch { margin: 0 0 8px; }
+  .jy-mode-switch button { min-height: 44px; font-size: 12.5px; }
   /* Columns follow the tabs actually shown: 朗读 is hidden in ordinary mode, and a fixed count would
      leave an empty slot at the end of the row. */
   .jy-navigation { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); gap: 3px; }

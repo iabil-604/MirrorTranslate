@@ -63,6 +63,25 @@ import {
   stripGeneratedTranslationLines,
   matchesPreserveLine,
   SEGMENTATION_RULES_VERSION,
+  UI_MODES,
+  CONSOLE_PRESET_IDS,
+  CONTROL_CENTER_PAGES,
+  pagesForMode,
+  pageExistsInMode,
+  resolvePageForMode,
+  CONNECTION_USES,
+  connectionUseChoice,
+  setConnectionUse,
+  channelUsesPointingAt,
+  reassignConnectionUsesOnDelete,
+  PRESET_MANAGED_FIELDS,
+  PRESET_LABELS,
+  PRESET_TIER_LABELS,
+  presetContent,
+  applyPreset,
+  presetDrift,
+  translationChannelChoice,
+  resolveFeatureChannel,
 } from '../core.js';
 import {
   addDiagnostic,
@@ -96,6 +115,8 @@ test('default settings use story_scene and migrate the legacy single tag', () =>
   assert.equal(DEFAULT_SETTINGS.streamingWriteback, false);
   assert.equal(DEFAULT_SETTINGS.contextMessages, 2);
   assert.equal(DEFAULT_SETTINGS.preserveLineRules, '');
+  assert.equal(DEFAULT_SETTINGS.uiMode, 'normal');
+  assert.equal(DEFAULT_SETTINGS.preset, '');
 });
 
 test('legacy single-channel settings migrate into a saved channel', () => {
@@ -114,7 +135,7 @@ test('legacy single-channel settings migrate into a saved channel', () => {
   assert.equal(channel.key, 'secret');
   assert.equal(channel.model, 'model-x');
   assert.equal(channel.timeoutSec, 600);
-  assert.equal(independent.schemaVersion, 12);
+  assert.equal(independent.schemaVersion, 13);
 });
 
 test('channel output budget scales with the raised default and no longer flattens above 32768', () => {
@@ -2005,4 +2026,162 @@ test('with the music-card group off, a <br>-joined card is read exactly as v0.36
     ['NOW PLAYING\n今日の空\n作词：陽炎'],
     'musicCardRules defaults off, so an existing floor segments exactly as it always has',
   );
+});
+
+// -------------------------------------------------------------------------------------------
+// 控制中心 foundation (DESIGN §15): uiMode / preset settings, the rail's page list per mode, the
+// one-click packages, and the connection-use helpers behind 「用在」.
+// -------------------------------------------------------------------------------------------
+
+test('uiMode migration: fresh install is normal, anything schemaVersion<=12 or missing uiMode is advanced, a current save keeps its own choice', () => {
+  assert.equal(mergeSettings({}).uiMode, 'normal');
+  assert.equal(mergeSettings(undefined).uiMode, 'normal');
+  assert.equal(mergeSettings({ schemaVersion: 12, apiMode: 'follow' }).uiMode, 'advanced');
+  assert.equal(mergeSettings({ schemaVersion: 5 }).uiMode, 'advanced');
+  assert.equal(mergeSettings({ schemaVersion: 13 }).uiMode, 'advanced', 'schemaVersion 13 but no uiMode at all still reads as an old save');
+  assert.equal(mergeSettings({ schemaVersion: 13, uiMode: 'normal' }).uiMode, 'normal');
+  assert.equal(mergeSettings({ schemaVersion: 13, uiMode: 'advanced' }).uiMode, 'advanced');
+  assert.equal(mergeSettings({ schemaVersion: 13, uiMode: 'bogus' }).uiMode, 'advanced');
+  assert.equal(mergeSettings({}).schemaVersion, 13);
+});
+
+test('preset remembers the last applied package id, and drops anything unrecognised', () => {
+  assert.equal(mergeSettings({}).preset, '');
+  for (const id of CONSOLE_PRESET_IDS) assert.equal(mergeSettings({ preset: id }).preset, id);
+  assert.equal(mergeSettings({ preset: 'made-up' }).preset, '');
+});
+
+test('pagesForMode lists the rail per DESIGN §15.1, and resolvePageForMode falls back to 翻译台', () => {
+  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'logs']);
+  assert.deepEqual(pagesForMode('advanced'), ['main', 'prompt', 'settings', 'processing', 'tts', 'logs']);
+  assert.deepEqual(pagesForMode('bogus'), pagesForMode('advanced'));
+  assert.equal(pageExistsInMode('tts', 'normal'), false);
+  assert.equal(pageExistsInMode('tts', 'advanced'), true);
+  assert.equal(pageExistsInMode('main', 'normal'), true);
+  assert.equal(resolvePageForMode('tts', 'normal'), 'main', 'a page not in the new mode returns to 翻译台');
+  assert.equal(resolvePageForMode('tts', 'advanced'), 'tts', 'a page that still exists stays put');
+  assert.equal(resolvePageForMode('logs', 'normal'), 'logs');
+  assert.deepEqual(Object.keys(CONTROL_CENTER_PAGES).sort(), [...UI_MODES].sort());
+});
+
+test('connection uses: translation and analysis resolve directly, deep defers to analysis until it has its own choice', () => {
+  const settings = mergeSettings({
+    apiMode: 'independent',
+    channels: [
+      { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+      { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+    ],
+    selectedChannelId: 'c1',
+    tts: { analysisChannelId: 'c2', deepChannelId: '' },
+  });
+  assert.equal(connectionUseChoice(settings, 'translation'), 'c1');
+  assert.equal(connectionUseChoice(settings, 'analysis'), 'c2');
+  assert.equal(connectionUseChoice(settings, 'deep'), 'c2', 'empty deepChannelId defers to analysis');
+
+  const pinned = setConnectionUse(settings, 'deep', 'c1');
+  assert.equal(pinned.tts.deepChannelId, 'c1');
+  assert.equal(connectionUseChoice(pinned, 'deep'), 'c1');
+
+  const followingAgain = setConnectionUse(pinned, 'deep', '');
+  assert.equal(followingAgain.tts.deepChannelId, '', "setting deep back to '' returns it to following analysis");
+  assert.equal(connectionUseChoice(followingAgain, 'deep'), 'c2');
+
+  const movedTranslation = setConnectionUse(settings, 'translation', 'follow');
+  assert.equal(movedTranslation.apiMode, 'follow');
+  assert.equal(connectionUseChoice(movedTranslation, 'translation'), 'follow');
+
+  const movedAnalysis = setConnectionUse(settings, 'analysis', 'c1');
+  assert.equal(movedAnalysis.tts.analysisChannelId, 'c1');
+
+  assert.deepEqual(CONNECTION_USES, ['translation', 'analysis', 'deep']);
+  assert.throws(() => connectionUseChoice(settings, 'bogus'));
+  assert.throws(() => setConnectionUse(settings, 'bogus', 'c1'));
+});
+
+test('channelUsesPointingAt lists every use resolving to a connection, deep included when it only defers there', () => {
+  const settings = mergeSettings({
+    apiMode: 'independent',
+    channels: [{ id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' }],
+    selectedChannelId: 'c1',
+    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+  });
+  assert.deepEqual(channelUsesPointingAt(settings, 'c1'), ['translation', 'analysis', 'deep']);
+  assert.deepEqual(channelUsesPointingAt(settings, 'follow'), []);
+});
+
+test('reassignConnectionUsesOnDelete moves every use a deleted connection served to 跟随酒馆, leaving a deferring deep still deferring', () => {
+  const twoChannels = [
+    { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+    { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+  ];
+  const settings = mergeSettings({
+    apiMode: 'independent',
+    channels: twoChannels,
+    selectedChannelId: 'c1',
+    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+  });
+  const result = reassignConnectionUsesOnDelete(settings, 'c1');
+  assert.deepEqual(result.moved, ['translation', 'analysis', 'deep']);
+  assert.equal(result.settings.apiMode, 'follow');
+  assert.equal(result.settings.tts.analysisChannelId, 'follow');
+  assert.equal(result.settings.tts.deepChannelId, '', 'deep never had its own choice, so its field is left untouched');
+  assert.equal(connectionUseChoice(result.settings, 'deep'), 'follow');
+
+  const pinnedSettings = mergeSettings({
+    apiMode: 'independent',
+    channels: twoChannels,
+    selectedChannelId: 'c2',
+    tts: { analysisChannelId: 'c2', deepChannelId: 'c1' },
+  });
+  const pinnedResult = reassignConnectionUsesOnDelete(pinnedSettings, 'c1');
+  assert.deepEqual(pinnedResult.moved, ['deep']);
+  assert.equal(pinnedResult.settings.tts.deepChannelId, 'follow');
+  assert.equal(pinnedResult.settings.apiMode, 'independent', 'translation used c2, untouched by deleting c1');
+
+  const untouched = reassignConnectionUsesOnDelete(settings, 'not-a-real-id');
+  assert.deepEqual(untouched.moved, []);
+  assert.equal(untouched.settings, settings, 'nothing to move returns the very same settings object');
+});
+
+test('preset content covers exactly the nine managed fields named in DESIGN §15.2 and nothing else', () => {
+  assert.equal(PRESET_MANAGED_FIELDS.length, 9);
+  for (const id of CONSOLE_PRESET_IDS) {
+    const content = presetContent(id);
+    assert.ok(content, `${id} 缺少套餐内容`);
+    assert.deepEqual(Object.keys(content).sort(), PRESET_MANAGED_FIELDS.map(field => field.key).sort());
+  }
+  assert.equal(presetContent(''), null);
+  assert.equal(presetContent('not-a-package'), null);
+  assert.deepEqual(Object.keys(PRESET_LABELS).sort(), [...CONSOLE_PRESET_IDS].sort());
+  for (const id of Object.keys(PRESET_TIER_LABELS)) assert.ok(CONSOLE_PRESET_IDS.includes(id));
+  assert.equal(CONSOLE_PRESET_IDS.includes('audiobook') && !Object.hasOwn(PRESET_TIER_LABELS, 'audiobook'), true, '有声小说 carries no 最省/推荐/最费 pill');
+});
+
+test('applyPreset writes only the managed fields and remembers the package id; presetDrift reports what a hand edit changed', () => {
+  const base = mergeSettings({});
+  const audiobook = applyPreset(base, 'audiobook');
+  assert.equal(audiobook.preset, 'audiobook');
+  assert.equal(audiobook.tts.enabled, true);
+  assert.equal(audiobook.tts.mode, 'simple');
+  assert.equal(audiobook.tts.autoRead, true);
+  assert.equal(audiobook.coloring.speakers, true);
+  // DESIGN §15.2's explicit 「套餐不碰」 list: none of these move.
+  assert.equal(audiobook.translationOnly, base.translationOnly);
+  assert.equal(audiobook.streamingWriteback, base.streamingWriteback);
+  assert.equal(audiobook.theme, base.theme);
+  assert.deepEqual(audiobook.channels, base.channels);
+
+  assert.deepEqual(presetDrift(audiobook), []);
+  const handEdited = { ...audiobook, coloring: { ...audiobook.coloring, speakers: false } };
+  const drift = presetDrift(handEdited);
+  assert.equal(drift.length, 1);
+  assert.equal(drift[0].key, 'coloringSpeakers');
+  assert.equal(drift[0].label, '说话人着色');
+
+  const restored = applyPreset(handEdited, handEdited.preset);
+  assert.deepEqual(presetDrift(restored), []);
+  assert.equal(restored.coloring.speakers, true);
+
+  assert.deepEqual(presetDrift(mergeSettings({})), [], 'no package remembered means nothing to report as drifted');
+  assert.throws(() => applyPreset(base, 'not-a-package'));
 });

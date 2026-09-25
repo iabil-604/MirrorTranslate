@@ -827,7 +827,15 @@ export const DEFAULT_TTS = Object.freeze({
 });
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  schemaVersion: 12,
+  schemaVersion: 13,
+  // The control center rail: 'normal' shows the small three-page layout (翻译台 · 微调 · 运行记录),
+  // 'advanced' the full six pages that used to be the only layout. See UI_MODES / mergeSettings below
+  // for who gets which on first load.
+  uiMode: 'normal',
+  // The last one-click package applied from 正常模式 · 翻译台, so its card stays highlighted and a
+  // hand-changed managed field can say what it drifted from. '' once nothing has been applied yet, or
+  // after 「恢复原样」 leaves a set of choices that matches no package by construction (it does).
+  preset: '',
   coloring: DEFAULT_COLORING,
   speakerPalette: {},
   tts: DEFAULT_TTS,
@@ -887,6 +895,32 @@ export const FLOOR_BUTTON_MODES = Object.freeze(['line', 'sentence', 'off']);
 // What the two older names meant: 'auto' was per-sentence on a desktop and nothing on a phone, which
 // the paragraph buttons replace; 'on' was per-sentence everywhere, which is now the fuller mode.
 const FLOOR_BUTTON_LEGACY = Object.freeze({ auto: 'line', on: 'sentence' });
+
+export const UI_MODES = Object.freeze(['normal', 'advanced']);
+export const CONSOLE_PRESET_IDS = Object.freeze(['light', 'comfort', 'audiobook', 'everything']);
+
+// DESIGN §15.1: which rail pages exist in which mode. 'main' (翻译台) and 'logs' (运行记录) are in
+// both; 'finetune' (微调) is normal-mode only and has no page markup yet — a rail built against this
+// table already leaves room for it and needs no further change once one lands. The other four are
+// unchanged advanced-mode pages.
+export const CONTROL_CENTER_PAGES = Object.freeze({
+  normal: Object.freeze(['main', 'finetune', 'logs']),
+  advanced: Object.freeze(['main', 'prompt', 'settings', 'processing', 'tts', 'logs']),
+});
+
+/** The page ids shown in a mode's rail, advanced's list for anything that is not a known mode. */
+export function pagesForMode(mode) {
+  return CONTROL_CENTER_PAGES[UI_MODES.includes(mode) ? mode : 'advanced'];
+}
+
+export function pageExistsInMode(pageId, mode) {
+  return pagesForMode(mode).includes(pageId);
+}
+
+/** Which page should be showing after a mode switch: the current one if it still exists there, else 翻译台. */
+export function resolvePageForMode(pageId, mode) {
+  return pageExistsInMode(pageId, mode) ? pageId : 'main';
+}
 
 export function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -1053,6 +1087,176 @@ export function resolveFeatureChannel(value, settings) {
 export function getActiveChannel(settings) {
   const channels = Array.isArray(settings?.channels) ? settings.channels : [];
   return channels.find(channel => channel.id === settings?.selectedChannelId) || channels[0] || normalizeChannel();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Connection uses: the three places a saved connection (or the host's own) can be put to work,
+// named the way the control center names them rather than by the settings fields underneath —
+// 'translation' is apiMode + selectedChannelId, 'analysis' is tts.analysisChannelId, 'deep' is
+// tts.deepChannelId. Each use holds exactly one choice at a time; the pages that used to have three
+// separate pickers for this (翻译用哪条连接 / 朗读分析用的连接 / 深度分析用的连接) become one checkbox
+// per connection per use, and these helpers are what that checkbox reads and writes.
+// ---------------------------------------------------------------------------------------------
+
+export const CONNECTION_USES = Object.freeze(['translation', 'analysis', 'deep']);
+
+/**
+ * What a use points at right now, resolved to something real: 'follow' for the host's own connection,
+ * or a saved connection's id. 深度分析's own empty value — 「和朗读分析用同一条」 — resolves through to
+ * whatever 朗读分析 resolves to, so all three uses are always directly comparable to a connection id.
+ */
+export function connectionUseChoice(settings, use) {
+  if (use === 'translation') return translationChannelChoice(settings);
+  if (use === 'analysis') return resolveFeatureChannel(settings?.tts?.analysisChannelId, settings);
+  if (use === 'deep') {
+    const own = String(settings?.tts?.deepChannelId ?? '').trim();
+    return own ? resolveFeatureChannel(own, settings) : connectionUseChoice(settings, 'analysis');
+  }
+  throw new Error(`未知用途：${use}`);
+}
+
+/**
+ * Points a use at a connection — 'follow' for the host's own, a saved connection's id, or (深度分析
+ * only) '' for 「和朗读分析用同一条」. A use holds exactly one choice, so pointing it here is what moves
+ * it away from wherever it pointed before; nothing else needs writing.
+ */
+export function setConnectionUse(settings, use, choice) {
+  const value = String(choice ?? '').trim();
+  if (use === 'translation') {
+    return value && value !== 'follow'
+      ? { ...settings, apiMode: 'independent', selectedChannelId: value }
+      : { ...settings, apiMode: 'follow' };
+  }
+  if (use === 'analysis') return { ...settings, tts: { ...settings.tts, analysisChannelId: value || 'follow' } };
+  if (use === 'deep') return { ...settings, tts: { ...settings.tts, deepChannelId: value } };
+  throw new Error(`未知用途：${use}`);
+}
+
+/** Which uses currently resolve to this connection id — for saying who is using a connection. */
+export function channelUsesPointingAt(settings, channelId) {
+  return CONNECTION_USES.filter(use => connectionUseChoice(settings, use) === channelId);
+}
+
+/**
+ * Deleting a connection cannot leave a use pointing at nothing still in the list, so every use it
+ * served moves to 跟随酒馆 first. 深度分析 is left to defer (its field stays '') when it was only
+ * following 朗读分析 to this connection — moving 朗读分析 already carries it along, and leaving the
+ * field empty means it keeps deferring afterwards instead of being pinned to today's fallback.
+ * Returns the adjusted settings and which uses moved, for whoever deletes the connection to say so.
+ */
+export function reassignConnectionUsesOnDelete(settings, channelId) {
+  const moved = [];
+  let next = settings;
+  if (connectionUseChoice(next, 'translation') === channelId) {
+    next = setConnectionUse(next, 'translation', 'follow');
+    moved.push('translation');
+  }
+  const deepOwnChoice = String(next?.tts?.deepChannelId ?? '').trim();
+  const analysisPointedHere = connectionUseChoice(next, 'analysis') === channelId;
+  if (analysisPointedHere) {
+    next = setConnectionUse(next, 'analysis', 'follow');
+    moved.push('analysis');
+  }
+  if (deepOwnChoice && deepOwnChoice === channelId) {
+    next = setConnectionUse(next, 'deep', 'follow');
+    moved.push('deep');
+  } else if (!deepOwnChoice && analysisPointedHere) {
+    moved.push('deep');
+  }
+  return { settings: next, moved };
+}
+
+// ---------------------------------------------------------------------------------------------
+// 正常模式 · 翻译台 one-click packages (DESIGN §15.2 方案 C): 只看翻译 / 看得舒服 / 有声小说 / 全都要.
+// Each sets exactly the nine fields below and nothing else — 只留译文、流式写回、全部连接与密钥、提取标
+// 签、翻译规则文字、音色、主题 are never touched by a package, per the same section.
+//
+// The four packages' actual field values are a proposal — 镜译 has never shipped a package system
+// before this branch — chosen to read as a cost ladder (translation only → + display → + simple
+// reading → + deep reading, the priciest pass). They are pending 常夜灯's sign-off before a page ships
+// them; presetContent is the one place to change once that lands.
+// ---------------------------------------------------------------------------------------------
+
+export const PRESET_MANAGED_FIELDS = Object.freeze([
+  { key: 'autoGeneration', label: '自动接续翻译', path: Object.freeze(['autoGeneration']) },
+  { key: 'autoSwipe', label: '切换滑动页时补译', path: Object.freeze(['autoSwipe']) },
+  { key: 'coloringSpeakers', label: '说话人着色', path: Object.freeze(['coloring', 'speakers']) },
+  { key: 'coloringEmotions', label: '情绪排版', path: Object.freeze(['coloring', 'emotions']) },
+  { key: 'coloringEffects', label: '特效字', path: Object.freeze(['coloring', 'effects']) },
+  { key: 'ttsEnabled', label: '朗读功能', path: Object.freeze(['tts', 'enabled']) },
+  { key: 'ttsMode', label: '分析模式', path: Object.freeze(['tts', 'mode']) },
+  { key: 'ttsAutoRead', label: '新回复自动朗读', path: Object.freeze(['tts', 'autoRead']) },
+  { key: 'ttsPlayAfterGenerate', label: '点播放后做完直接播', path: Object.freeze(['tts', 'playAfterGenerate']) },
+]);
+
+export const PRESET_LABELS = Object.freeze({
+  light: '只看翻译',
+  comfort: '看得舒服',
+  audiobook: '有声小说',
+  everything: '全都要',
+});
+
+// The 药丸 pills DESIGN §15.2 names for three of the four cards; 有声小说 carries none.
+export const PRESET_TIER_LABELS = Object.freeze({ light: '最省', comfort: '推荐', everything: '最费' });
+
+const CONSOLE_PRESET_CONTENT = Object.freeze({
+  light: Object.freeze({
+    autoGeneration: true, autoSwipe: true,
+    coloringSpeakers: false, coloringEmotions: false, coloringEffects: false,
+    ttsEnabled: false, ttsMode: 'off', ttsAutoRead: false, ttsPlayAfterGenerate: true,
+  }),
+  comfort: Object.freeze({
+    autoGeneration: true, autoSwipe: true,
+    coloringSpeakers: true, coloringEmotions: true, coloringEffects: true,
+    ttsEnabled: false, ttsMode: 'off', ttsAutoRead: false, ttsPlayAfterGenerate: true,
+  }),
+  audiobook: Object.freeze({
+    autoGeneration: true, autoSwipe: true,
+    coloringSpeakers: true, coloringEmotions: true, coloringEffects: true,
+    ttsEnabled: true, ttsMode: 'simple', ttsAutoRead: true, ttsPlayAfterGenerate: true,
+  }),
+  everything: Object.freeze({
+    autoGeneration: true, autoSwipe: true,
+    coloringSpeakers: true, coloringEmotions: true, coloringEffects: true,
+    ttsEnabled: true, ttsMode: 'deep', ttsAutoRead: true, ttsPlayAfterGenerate: true,
+  }),
+});
+
+function pathGet(object, path) {
+  return path.reduce((node, key) => (node === undefined || node === null ? undefined : node[key]), object);
+}
+
+function pathSet(object, path, value) {
+  const [head, ...rest] = path;
+  if (!rest.length) return { ...object, [head]: value };
+  return { ...object, [head]: pathSet((object && typeof object === 'object' ? object[head] : undefined) ?? {}, rest, value) };
+}
+
+/** A package's content by field key, or null for an id that names no package (including ''). */
+export function presetContent(id) {
+  return CONSOLE_PRESET_CONTENT[id] ?? null;
+}
+
+/** Settings with one package's fields written and `preset` remembering which package that was. */
+export function applyPreset(settings, id) {
+  const content = presetContent(id);
+  if (!content) throw new Error(`没有这个套餐：${id}`);
+  let next = settings;
+  for (const field of PRESET_MANAGED_FIELDS) next = pathSet(next, field.path, content[field.key]);
+  return { ...next, preset: id };
+}
+
+/**
+ * The gap between what `settings.preset` last set and what the managed fields hold now: each field
+ * that no longer matches, with its label — the list 「看改了什么」 shows and `.length` is 「改过 N 项」.
+ * Empty when no package is remembered (`preset` is '') or every managed field still matches it.
+ */
+export function presetDrift(settings) {
+  const content = presetContent(settings?.preset);
+  if (!content) return [];
+  return PRESET_MANAGED_FIELDS
+    .filter(field => pathGet(settings, field.path) !== content[field.key])
+    .map(field => ({ key: field.key, label: field.label }));
 }
 
 function normalizePromptSection(value = {}, fallbackId = 'section-1') {
@@ -1439,7 +1643,17 @@ export function mergeSettings(value = {}) {
   const source = value && typeof value === 'object' ? value : {};
   const merged = { ...deepClone(DEFAULT_SETTINGS), ...source };
   const sourceSchemaVersion = clampInteger(source.schemaVersion, 0, 999, 0);
-  merged.schemaVersion = 12;
+  // A reader who has never saved anything here gets the small normal-mode rail; anything saved by
+  // schemaVersion 12 or earlier (or missing uiMode outright, which only an old save can do) lands in
+  // advanced mode instead, so every control it already relied on is still where it was. A round trip
+  // through this schemaVersion keeps whatever the reader picked.
+  merged.uiMode = Object.keys(source).length === 0
+    ? 'normal'
+    : (sourceSchemaVersion <= 12 || typeof source.uiMode !== 'string')
+      ? 'advanced'
+      : (UI_MODES.includes(source.uiMode) ? source.uiMode : 'advanced');
+  merged.preset = CONSOLE_PRESET_IDS.includes(source.preset) ? source.preset : '';
+  merged.schemaVersion = 13;
   merged.theme = ['day', 'night', 'fresh', 'vampire', 'glass'].includes(source.theme) ? source.theme : 'day';
   delete merged.chunkChars;
   delete merged.chunkSegments;
