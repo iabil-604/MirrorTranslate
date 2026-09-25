@@ -1,11 +1,12 @@
 import {
   DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END,
-  deepClone, mergeSettings, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors,
+  deepClone, mergeSettings, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors, parseLyricLineRulesWithErrors,
 } from './core.js?v=0.36.1';
 
 export const PROCESSING_FIELDS = Object.freeze([
   'bodyTags', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
   'translationPrefix', 'translationSuffix', 'autoEdit', 'showFloatingButton', 'floatingStyle',
+  'lyricLineRules', 'musicCardRules',
 ]);
 export const VISUAL_FIELDS = Object.freeze(['segmentPrefix', 'segmentSuffix', 'translationPrefix', 'translationSuffix']);
 export const PROCESSING_FORMAT = 'jingyi-processing-profile';
@@ -38,6 +39,8 @@ function normalizeProcessingValues(value = {}, strict = false) {
   if (strict) {
     const errors = parsePreserveLineRulesWithErrors(values.preserveLineRules).errors;
     if (errors.length) throw new Error(errors.join(' '));
+    const lyricErrors = parseLyricLineRulesWithErrors(values.lyricLineRules).errors;
+    if (lyricErrors.length) throw new Error(lyricErrors.join(' '));
     if (values.floatingStyle && !['auto', 'ring', 'pill', 'edge'].includes(values.floatingStyle)) throw new Error('悬浮入口形态无效。');
   }
   return processingSnapshot(mergeSettings({ ...DEFAULT_SETTINGS, ...values }));

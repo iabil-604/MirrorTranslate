@@ -684,6 +684,23 @@ export function findForbiddenPhraseHits(translations, profile) {
   return hits;
 }
 
+/**
+ * The lyric lines' own translation rules — attached as one more system message, and only on a batch
+ * that actually has a lyric-marked segment in it (see workflow.js's `hasLyrics`). Everything else about
+ * a lyric segment (its id, its "one line in, one line out" shape) already comes through the ordinary
+ * segment contract; this section only adds what a lyric line needs on top of it.
+ */
+export function composeLyricsSection() {
+  return [
+    '# 歌词行',
+    '本次 segments 里有几段是歌词行，翻译时额外遵守：',
+    '- 一行进一行出：一段输入只对应一行译文，不拆成多行，也不把几段合并成一行；不在 text 里换行。',
+    '- 意象优先：按这行歌词的意境和画面翻，读起来要像能唱出来的词，不必逐字直译。',
+    '- 同一句歌词在本次输入中重复出现时，每次都用同一种译法，不因为位置不同就换一种说法。',
+    '- 人名、曲名、专辑名这类专名照抄原文，不翻译、不音译。',
+  ].join('\n');
+}
+
 // The palette's moods as a reader tells them apart. A bare English word leaves the model to guess where
 // fear ends and serious begins; two of them are ways of saying a line, not moods at all, and are asked
 // for only where the text says so (see quietWords below).

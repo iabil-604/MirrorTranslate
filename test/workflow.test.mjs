@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { DEFAULT_SETTINGS, INVISIBLE_MARKER, mergeSettings } from '../core.js';
-import { DEFAULT_PROMPT_PROFILE } from '../prompts.js';
+import { DEFAULT_PROMPT_PROFILE, composeLyricsSection } from '../prompts.js';
 import { buildTranslationMessages, collectTranslationContext } from '../workflow.js';
 import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOUND_CUES, TONE_CUES } from '../tts.js';
 
@@ -432,4 +432,24 @@ test('every stand-in the annotation example shows is thrown away when a model co
     assert.ok(EXAMPLE_STAND_INS.includes(standIn), standIn);
     assert.equal(readAnnotationFields({ speaker: `<${standIn}>`, emotion: `<${standIn}>`, tone: `<${standIn}>` }), null, standIn);
   }
+});
+
+test('the lyrics section is attached only when this batch actually has a lyric segment in it', () => {
+  const settings = mergeSettings({});
+  const segments = [{ id: 1, text: '第一行叙述。' }, { id: 2, text: 'そらにひびけ' }];
+  const withLyrics = buildTranslationMessages(segments, settings, {}, 'primary', { hasLyrics: true });
+  const lyricsMessage = withLyrics.find(message => message.content === composeLyricsSection());
+  assert.ok(lyricsMessage, 'the lyrics section rides as its own system message');
+  assert.equal(lyricsMessage.role, 'system');
+  const without = buildTranslationMessages(segments, settings, {}, 'primary', { hasLyrics: false });
+  assert.ok(!without.some(message => message.content === composeLyricsSection()));
+  const unset = buildTranslationMessages(segments, settings, {}, 'primary', {});
+  assert.ok(!unset.some(message => message.content === composeLyricsSection()));
+});
+
+test('the lyrics section states the one-line-in-one-line-out rule and leaves names untouched', () => {
+  const section = composeLyricsSection();
+  assert.match(section, /一行进一行出/);
+  assert.match(section, /不在 text 里换行/);
+  assert.match(section, /人名、曲名、专辑名/);
 });

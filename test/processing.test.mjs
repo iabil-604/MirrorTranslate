@@ -123,6 +123,19 @@ test('a shared processing profile carries native regex bodies, ordering and flag
   assert.throws(() => importNativeRegex({ scriptName: 'Broken', findRegex: '/(/', replaceString: '', placement: [2] }), /无效/);
 });
 
+test('a processing profile carries lyricLineRules and musicCardRules like any other per-profile field', () => {
+  const settings = normalizeProcessingSettings({ ...DEFAULT_SETTINGS, lyricLineRules: 'prefix:作词', musicCardRules: true });
+  const active = getActiveProcessingProfile(settings);
+  assert.equal(active.settings.lyricLineRules, 'prefix:作词');
+  assert.equal(active.settings.musicCardRules, true);
+  const exported = exportProcessingProfile(active);
+  const imported = importProcessingProfile(JSON.parse(JSON.stringify(exported)));
+  assert.equal(imported.settings.lyricLineRules, 'prefix:作词');
+  assert.equal(imported.settings.musicCardRules, true);
+  const bad = { ...exported, profile: { ...exported.profile, settings: { ...exported.profile.settings, lyricLineRules: '/[/' } } };
+  assert.throws(() => importProcessingProfile(JSON.parse(JSON.stringify(bad))), /正则无效/);
+});
+
 test('native registration is isolated, stable across saves and switches, and reads native edits back', () => {
   const settings = normalizeProcessingSettings();
   const cute = makeBuiltinReadingProfile(settings, 'cute');

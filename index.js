@@ -54,6 +54,7 @@ import {
   parseModelListResponse,
   parseTagNames,
   parsePreserveLineRulesWithErrors,
+  parseLyricLineRulesWithErrors,
   parseTagNamesWithErrors,
   recoverStructuredTranslations,
   rebuildTaggedRegions,
@@ -433,6 +434,8 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-text-scope"><span class="jy-overline">保留原样</span><h2>保留原样</h2><label><span class="jy-label">排除标签</span><textarea rows="4" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位，不翻译，也不朗读（比如生图插件的 &lt;image&gt;）。镜译自己的 <code>&lt;say&gt;</code> 说话人标记不用加在这里：翻译时自动去掉，显示时自动隐藏，朗读时自动读取。</p></div>
 </div>
 <details class="jy-advanced"><summary>原样保留白名单</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 只要这一行里有匹配就算（要整行匹配请写 ^…$）。纯边框、纯符号、标签行和只有图片的行自动保留。</p></details>
+<details class="jy-advanced"><summary>歌词行</summary><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="lyricLineRules" spellcheck="false" placeholder="prefix:作词&#10;/^\s*[-—]\s*作曲/"></textarea></label><p class="jy-muted">写法和上面的保留白名单一样（文字、prefix:、/正则/）。命中的行按歌词单独翻译：一行进一行出，原位排成「原文 (译文)」，不跟前后的正文并成一段；已经是中文的歌词行不翻译。默认不读，朗读面板里可以单独开。</p>
+<label class="jy-check"><input type="checkbox" data-jy-field="musicCardRules">音乐卡片</label><p class="jy-muted">手动开启，默认关闭。开启后，正文里以 <code>&lt;br&gt;</code> 分隔的卡片行按行拆开处理：NOW PLAYING 这类固定文案、已经写成「原文 (中文)」的行自动保留；命中上面歌词规则或排除在保留规则之外的其余 <code>&lt;br&gt;</code> 行按歌词处理。只按这一种卡片的样子写的，遇到别的卡片格式效果不对时，把歌名、歌手这类行加进「原样保留白名单」。</p></details>
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层里的朗读按钮</span><select data-jy-field="floorButtons"><option value="line">每段一个（默认，手机也有）</option><option value="sentence">每段一个，再加每句一个</option><option value="off">不显示，只在悬浮窗里点</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
@@ -963,6 +966,8 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     paragraphPerLine: metadata?.paragraph_per_line ?? settings.paragraphPerLine,
     excludedTags: settings.excludedTags,
     preserveLineRules: settings.preserveLineRules,
+    lyricLineRules: settings.lyricLineRules,
+    musicCardRules: settings.musicCardRules,
     segmentationVersion,
   };
   const segments = [];
@@ -971,6 +976,8 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   // Segment id → the same segment read aloud instead of translated, only where it differs; see
   // segmentSource's own `reading`.
   const reading = new Map();
+  // Every lyric segment's id, across every region; collectTtsFloor reads this to skip them by default.
+  const lyricIds = new Set();
   let paragraphs = 0;
   let nextId = 1;
   for (const region of extraction.regions) {
@@ -981,6 +988,7 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     segments.push(...segmented.segments);
     for (const [id, marked] of segmented.speech ?? []) speech.set(id, marked);
     for (const [id, text] of segmented.reading ?? []) reading.set(id, text);
+    for (const id of segmented.lyricIds ?? []) lyricIds.add(id);
     paragraphs += segmented.paragraphs;
     nextId += segmented.segments.length;
   }
@@ -1026,6 +1034,7 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     segments,
     speech,
     reading,
+    lyricIds,
     paragraphs,
     // Whatever rules built `segments` above; a write carries this straight back onto the floor's
     // metadata so the next read agrees with it again. See segmentOptions.segmentationVersion.
@@ -1956,7 +1965,7 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
         signal,
         packet,
         phase,
-        { roster: state.roster ?? [], styles: state.styles ?? [] },
+        { roster: state.roster ?? [], styles: state.styles ?? [], hasLyrics: pending.some(segment => state.lyricIds?.has(segment.id)) },
       );
       for (const [id, text] of recovered.translations) translations.set(id, text);
       for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
@@ -2055,7 +2064,7 @@ async function runInLanes(items, lanes, work) {
   return results;
 }
 
-async function invokeWithRetries(segments, settings, signal, packet = {}, seedTranslations = new Map(), retryBudget = null, seedAnnotations = new Map()) {
+async function invokeWithRetries(segments, settings, signal, packet = {}, seedTranslations = new Map(), retryBudget = null, seedAnnotations = new Map(), lyricIds = null) {
   const budget = retryBudget || { remaining: settings.retries };
   const translations = new Map(seedTranslations);
   const annotations = new Map(seedAnnotations);
@@ -2066,7 +2075,7 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
   const batches = planTranslationBatches(needed, { maxChars: translationCharBudget(channel.maxTokens), parallel: lanes });
   // `seeded` is fixed here rather than read off the map later: with lanes running side by side, a
   // batch starting after another one finished would otherwise take itself for a repair.
-  const state = { requests: 0, roster: annotationRoster(settings), styles: translationStyles(settings), seeded: translations.size > 0 };
+  const state = { requests: 0, roster: annotationRoster(settings), styles: translationStyles(settings), seeded: translations.size > 0, lyricIds };
   let lastError;
   recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
     segments: needed.length,
@@ -2340,9 +2349,9 @@ async function translateMessage(messageId = null, { force = false, quiet = false
       if (only) {
         const requested = snapshot.segments.filter(segment => only.has(segment.id));
         if (!requested.length) throw new Error('这一段已经变了，刷新后再试。');
-        result = await invokeWithRetries(requested, settings, controller.signal, packet, seedTranslations, retryBudget, seedAnnotations);
+        result = await invokeWithRetries(requested, settings, controller.signal, packet, seedTranslations, retryBudget, seedAnnotations, snapshot.lyricIds);
       } else {
-        result = await invokeWithRetries(snapshot.segments, settings, controller.signal, packet, seedTranslations, retryBudget, seedAnnotations);
+        result = await invokeWithRetries(snapshot.segments, settings, controller.signal, packet, seedTranslations, retryBudget, seedAnnotations, snapshot.lyricIds);
       }
       await repairForbiddenPhrases(snapshot.segments, result.translations, settings, controller.signal, packet);
 
@@ -2667,7 +2676,8 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       const pending = batch.filter(segment => !translations.has(segment.id));
       if (!pending.length) return;
       const phase = seeded ? 'repair' : 'primary';
-      const messages = buildTranslationMessages(pending, settings, packet, phase, { roster, styles });
+      const hasLyrics = pending.some(segment => snapshot.lyricIds?.has(segment.id));
+      const messages = buildTranslationMessages(pending, settings, packet, phase, { roster, styles, hasLyrics });
       // Each batch thinks afresh; carrying the previous batch's thinking into this one would read as
       // the model having already written what it has not started.
       if (lanes === 1) {
@@ -2684,7 +2694,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
           segments: pending.length,
           error: safeError(error),
         });
-        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles });
+        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, hasLyrics });
         for (const [id, value] of recovered.translations) translations.set(id, value);
         for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
         updateTask({
@@ -2732,7 +2742,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       });
       updateTask({ status: 'running', message: `正在补译缺失的 ${gaps.length} 段…` });
       try {
-        const repaired = await invokeWithRetries(gaps, settings, controller.signal, packet, translations, null, annotations);
+        const repaired = await invokeWithRetries(gaps, settings, controller.signal, packet, translations, null, annotations, snapshot.lyricIds);
         for (const [id, value] of repaired.translations) translations.set(id, value);
         for (const [id, mark] of repaired.annotations ?? []) annotations.set(id, mark);
       } catch (error) {
@@ -3170,14 +3180,19 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
         const read = readSpeechLine(marked, { quotePairs });
         return read.spans.length ? { lineId: segment.id, text: read.text, speech: read.spans } : { lineId: segment.id, text: read.text };
       };
+      // 歌词行 default out of the reading (design §2 「朗读怎么处理」): each keeps its own id, so it is
+      // dropped here rather than never having become a segment, the way a preserved line already is.
+      const lyricIds = snapshot.lyricIds;
       if (side === 'source') {
-        lines = snapshot.segments.map(originalLine).filter(line => line.text);
+        lines = snapshot.segments
+          .filter(segment => !lyricIds?.has(segment.id))
+          .map(originalLine).filter(line => line.text);
         references = new Map([...snapshot.existingTranslations].map(([lineId, text]) => [lineId, plainLineText(text)]));
         source = 'source';
         offPage = snapshot.stripped === true;
       } else {
         lines = snapshot.segments
-          .filter(segment => snapshot.existingTranslations.has(segment.id))
+          .filter(segment => snapshot.existingTranslations.has(segment.id) && !lyricIds?.has(segment.id))
           .map(segment => ({ lineId: segment.id, text: plainLineText(snapshot.existingTranslations.get(segment.id)) }))
           .filter(line => line.text);
         sources = new Map(snapshot.segments.map(segment => [segment.id, plainLineText(segment.text)]));
@@ -7963,11 +7978,12 @@ function collectSettings(root) {
     'includeWorldbook',
     'includeCharacterCard',
     'includeRecentContext',
+    'musicCardRules',
   ]) {
     const element = root.querySelector(`[data-jy-field="${name}"]`);
     if (element) current[name] = element.checked;
   }
-  for (const name of ['segmentPrefix', 'segmentSuffix', 'translationPrefix', 'translationSuffix', 'preserveLineRules', 'floatingStyle', 'floorButtons']) {
+  for (const name of ['segmentPrefix', 'segmentSuffix', 'translationPrefix', 'translationSuffix', 'preserveLineRules', 'lyricLineRules', 'floatingStyle', 'floorButtons']) {
     const element = root.querySelector(`[data-jy-field="${name}"]`);
     if (element) current[name] = element.value;
   }
@@ -7992,6 +8008,8 @@ function collectSettings(root) {
   }
   const preserveRules = parsePreserveLineRulesWithErrors(current.preserveLineRules);
   if (preserveRules.errors.length) throw new Error(preserveRules.errors.join(' '));
+  const lyricRules = parseLyricLineRulesWithErrors(current.lyricLineRules);
+  if (lyricRules.errors.length) throw new Error(lyricRules.errors.join(' '));
   for (const name of ['contextMessages', 'retries']) {
     const element = root.querySelector(`[data-jy-field="${name}"]`);
     if (element) current[name] = Number(element.value);
@@ -9861,6 +9879,8 @@ async function inspectCurrentFloor(root) {
       segmentPrefix: settings.segmentPrefix,
       segmentSuffix: settings.segmentSuffix,
       preserveLineRules: settings.preserveLineRules,
+      lyricLineRules: settings.lyricLineRules,
+      musicCardRules: settings.musicCardRules,
       paragraphPerLine: settings.paragraphPerLine,
       replaceTags: settings.replaceTags,
       segmentationVersion,
@@ -9880,6 +9900,9 @@ async function inspectCurrentFloor(root) {
   for (const item of report.excludedTags) lines.push(`  <${item.tag}>：${item.count} 组`);
   lines.push(`可翻译内容：${report.paragraphs} 个空行段落，${report.translationUnits} 个实际翻译行`);
   lines.push(`原样保留：白名单 ${report.customPreservedLines} 行，内置结构规则 ${report.builtinPreservedLines} 行`);
+  if (settings.musicCardRules || report.lyricLines || report.cardPreservedLines) {
+    lines.push(`歌词行 ${report.lyricLines} 行，音乐卡片保留 ${report.cardPreservedLines} 行`);
+  }
   lines.push(`透明结构标签：${report.structuralTags.length ? report.structuralTags.map(tag => `<${tag}>`).join('、') : '未发现'}`);
   if (report.errors.length) {
     lines.push('发现问题：');
