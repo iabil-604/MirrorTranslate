@@ -109,6 +109,7 @@ import {
   linesFromTaggedText,
   locateAnchors,
   mergeWavBuffers,
+  mixDialogueFromSource,
   encodeWav,
   parseTtsAnalysis,
   parseVoiceAnalysis,
@@ -459,13 +460,13 @@ const CONTROL_CENTER_MARKUP = `
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-form-grid jy-form-grid-tight"><label title="简单分析、「分析这一楼」、按意见改、从角色卡和世界书识别角色，都走这条。和翻译用哪条互不相干。"><span class="jy-label">朗读分析用的连接</span><select data-jy-tts-field="analysisChannelId"><option value="follow">跟随酒馆（酒馆当前的连接和模型）</option></select></label></div>
 <p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译在「翻译台」选，朗读在这里选，深度分析还能在「05 深度分析」里再单挑一条。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）存在「模型连接」页——那一页只是个架子，在那里点开哪条都不改变这里的选择。</p>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文（旁白读译文，台词按角色写的语言读原文）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoRead">新回复自动朗读（只读最新一楼，写完才读；正在读别的楼时只提醒、不打断）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">点播放后，做完直接播（关掉就只生成，再点一次才播）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
 <p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读」时才请求，整楼一次，走上面选的朗读分析连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
 <label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label>
-<p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>两种模式都给每句写一句中文配音指令：谁在说、基础情绪、情绪怎么变、语气、语速、停顿重读、要不要笑声叹气喘息。S2 系列模型直接读方括号里的中文指令，句内还会插 [重读]、[停顿]、[长停顿] 和声音词，语速音量走 Fish 的参数；S1 读不懂自由文本，退回它认得的英文固定标签。台词本身不经过模型，一个字不改。分析按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮或悬浮窗的改句面板能看到分析结果和最终发给 Fish 的内容，可以改。</p>
+<p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>对白读原文：旁白读译文，每一句台词按正文里写的语言读原文——同一楼里日本人的台词读日语、英国人的台词读英语，说话人和情绪仍然取自译文的标注，句内的停顿重读带不过去。不用另外选语言配的音色：Fish 的 S2 系列按每句自己的语言发音，「03 音色」给角色配的「多国语言」音色也是按这句话自己的语言选的，没配就还是这个角色的默认音色。<br>以上几种模式都给每句写一句中文配音指令：谁在说、基础情绪、情绪怎么变、语气、语速、停顿重读、要不要笑声叹气喘息。S2 系列模型直接读方括号里的中文指令，句内还会插 [重读]、[停顿]、[长停顿] 和声音词，语速音量走 Fish 的参数；S1 读不懂自由文本，退回它认得的英文固定标签。台词本身不经过模型，一个字不改。分析按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮或悬浮窗的改句面板能看到分析结果和最终发给 Fish 的内容，可以改。</p>
 </div></details>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-fish"><summary class="jy-section-title"><span>02</span><h2>Fish Audio</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <label><span class="jy-label">API Key</span><input type="password" data-jy-tts-fish="key" placeholder="sk-…" autocomplete="new-password" spellcheck="false"></label>
@@ -3156,7 +3157,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
   let offPage = false;
   // The original is readable on any floor whose body tags extract, translated or not; the translation
   // only on a floor this extension wrote, or through the literal source tags below.
-  if (side === 'source' || message.extra?.[MESSAGE_META_KEY]) {
+  if (side === 'source' || side === 'dialogue_source' || message.extra?.[MESSAGE_META_KEY]) {
     try {
       const snapshot = await readMessageSnapshot(id, settings, { quiet: true });
       annotations = canonicalAnnotations(settings, snapshot.existingAnnotations);
@@ -3164,6 +3165,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
       // A line the story marked with <say> is read off its marks: the words as every line is cleaned,
       // and which run each mark names. A line without marks is taken exactly as it always was.
       const quotePairs = ttsSettings(settings).quotePairs;
+      const skipPairs = ttsSettings(settings).skipPairs;
       const originalLine = segment => {
         const marked = snapshot.speech?.get(segment.id);
         if (!marked) return { lineId: segment.id, text: plainLineText(snapshot.reading?.get(segment.id) ?? segment.text) };
@@ -3175,6 +3177,23 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
         references = new Map([...snapshot.existingTranslations].map(([lineId, text]) => [lineId, plainLineText(text)]));
         source = 'source';
         offPage = snapshot.stripped === true;
+      } else if (side === 'dialogue_source') {
+        // The narration keeps the translation's own words; every quoted run is swapped for the run the
+        // original wrote at the same position, so it reads in whatever language the character speaks.
+        // Who says it and in what mood still come off the translation's marks (prepareTtsSegments reads
+        // this floor through the translation as its primary and derives labels with deriveLabelsForSide,
+        // the same path 'both' already uses for its secondary side) — nothing extra is stored here.
+        lines = snapshot.segments
+          .filter(segment => snapshot.existingTranslations.has(segment.id))
+          .map(segment => {
+            const translationText = plainLineText(snapshot.existingTranslations.get(segment.id));
+            if (!translationText) return null;
+            const mixed = mixDialogueFromSource(translationText, originalLine(segment).text, { quotePairs, skipPairs });
+            return mixed ? { lineId: segment.id, text: mixed } : null;
+          })
+          .filter(Boolean);
+        sources = new Map(snapshot.segments.map(segment => [segment.id, plainLineText(segment.text)]));
+        source = 'dialogue_source';
       } else {
         lines = snapshot.segments
           .filter(segment => snapshot.existingTranslations.has(segment.id))
@@ -3489,6 +3508,14 @@ const TTS_BATCH_DEFAULT = 12;
 // is named the way the voices are registered; the original only when there is no translation.
 async function ttsPrimaryFloor(floor, settings) {
   const tts = ttsSettings(settings);
+  // 对白读原文 always follows the translation, at any depth: its narration is the translation's own
+  // words already, and every quoted run takes its speaker and mood from the translation's marks by the
+  // same deriveLabelsForSide path 'both' uses for its secondary side.
+  if (tts.side === 'dialogue_source') {
+    if (floor.side !== 'dialogue_source') return null;
+    const translation = await collectTtsFloor(floor.messageId, settings, 'translation');
+    return translation && translation.source !== 'tags' ? translation : null;
+  }
   // The deep reading is made on the text that is heard: its pauses and stresses name words of that
   // text. Only when both languages are read does one side follow the other, and then the original
   // leads, because that is the text the floor closed on.
@@ -4079,7 +4106,7 @@ function reportTtsFish(floor) {
   const tally = runtime.tts.fish.get(floor.floorId);
   if (!tally || !(tally.requests || tally.reused)) return;
   runtime.tts.fish.delete(floor.floorId);
-  recordDiagnostic(tally.failed ? 'warn' : 'info', 'tts.recording', `第 ${floor.messageId} 楼${floor.side === 'source' ? '原文' : '译文'}这次朗读向 Fish 发了 ${tally.requests} 次请求，${tally.reused} 段直接用了已有音频${tally.failed ? `，${tally.failed} 段没生成成功` : ''}。`, {
+  recordDiagnostic(tally.failed ? 'warn' : 'info', 'tts.recording', `第 ${floor.messageId} 楼${floor.side === 'source' ? '原文' : floor.side === 'dialogue_source' ? '对白读原文' : '译文'}这次朗读向 Fish 发了 ${tally.requests} 次请求，${tally.reused} 段直接用了已有音频${tally.failed ? `，${tally.failed} 段没生成成功` : ''}。`, {
     floor: floor.floorId, requests: tally.requests, reused: tally.reused, failed: tally.failed,
   }, '', { floor: floor.messageId });
 }
@@ -5129,7 +5156,7 @@ async function createTtsTransport(messageId, { single = false, paragraph = false
   runtime.tts.transport = transport;
   setTransport(transport, {});
   const floor = await collectTtsFloor(messageId, settings, transport.side);
-  if (!floor) throw new Error(transport.side === 'source' ? '这一楼没有可朗读的原文。' : '这一楼没有可朗读的译文。');
+  if (!floor) throw new Error(transport.side === 'source' ? '这一楼没有可朗读的原文。' : transport.side === 'dialogue_source' ? '这一楼还没有译文，对白读原文要先翻译过。' : '这一楼没有可朗读的译文。');
   transport.floor = floor;
   beginTtsProgress(floor, tts);
   // Whole-floor reading: the first batch of a long reading is enough to start on; the rest keeps
@@ -5783,7 +5810,7 @@ async function pregenerateTtsBody(floor, messageId, settings, tts, quiet) {
       setTtsStatus(messageId, made ? '音频已生成，未播放' : '', 'idle');
     }
     if (made) {
-      recordDiagnostic('info', 'tts.recording', `第 ${messageId} 楼${floor.side === 'source' ? '原文' : '译文'}的音频已生成：${units.length} 段里新做了 ${made} 段，${items.length} 句。`, {
+      recordDiagnostic('info', 'tts.recording', `第 ${messageId} 楼${floor.side === 'source' ? '原文' : floor.side === 'dialogue_source' ? '对白读原文' : '译文'}的音频已生成：${units.length} 段里新做了 ${made} 段，${items.length} 句。`, {
         floor: floor.floorId, made, units: units.length, sentences: items.length, model: tts.fish.model, format: tts.fish.format,
       }, '', { floor: messageId });
     }
@@ -6223,7 +6250,7 @@ async function ttsPrepared(messageId, side = null, { fresh = false } = {}) {
   const known = runtime.tts.floors.get(key);
   if (known && !fresh && known.settings === settings) return known;
   const floor = await collectTtsFloor(messageId, settings, which);
-  if (!floor) throw new Error(which === 'source' ? '这一楼没有可朗读的原文。' : '这一楼没有可朗读的译文。');
+  if (!floor) throw new Error(which === 'source' ? '这一楼没有可朗读的原文。' : which === 'dialogue_source' ? '这一楼还没有译文，对白读原文要先翻译过。' : '这一楼没有可朗读的译文。');
   // A look at the floor never asks the model: the list, the inspector and the overrides show what is
   // known so far; the reading itself is what analyses, and it drops this entry when it lands.
   const { segments, depth, passive } = await prepareTtsSegments(floor, settings, { onStep: (id, patch) => ttsStep(floor, id, patch), passive: true });
@@ -6253,7 +6280,7 @@ async function ttsInspect(messageId, utteranceId, side = null) {
     voiceId: item.voiceId,
     voice: segment.voice,
     summary: voiceSummary(segment.voice ?? (segment.emotion ? { emotion: segment.emotion, intensity: segment.intensity } : null)),
-    original: prepared.floor.side === 'translation' ? (prepared.floor.sources?.get(segment.lineId) ?? null) : (prepared.floor.references?.get(segment.lineId) ?? null),
+    original: prepared.floor.side === 'translation' || prepared.floor.side === 'dialogue_source' ? (prepared.floor.sources?.get(segment.lineId) ?? null) : (prepared.floor.references?.get(segment.lineId) ?? null),
     depth: analysis?.depth ?? prepared.depth ?? null,
     derived: analysis?.derived === true,
     text: provider.sentenceText(automatic, tts),
@@ -6334,7 +6361,7 @@ async function autoReadTtsFloor(messageId, side) {
     recordDiagnostic('info', 'tts.auto-read', `第 ${messageId} 楼写完时页面在后台，没有自动朗读。`, { floor: messageId, side });
     return;
   }
-  recordDiagnostic('info', 'tts.auto-read', `第 ${messageId} 楼自动朗读${side === 'source' ? '原文' : '译文'}。`, { floor: messageId, side });
+  recordDiagnostic('info', 'tts.auto-read', `第 ${messageId} 楼自动朗读${side === 'source' ? '原文' : side === 'dialogue_source' ? '（对白读原文）' : '译文'}。`, { floor: messageId, side });
   try {
     const transport = await createTtsTransport(messageId, { single: false, side });
     if (transport) await runTtsTransport(transport);
@@ -6940,7 +6967,7 @@ function makeTtsBar(messageId, tts, count, readingStyle = '', sides = [tts.side]
   // other paragraph, stop and saving live in the floating window.
   const plays = sides.map(side => {
     const button = control('play-floor', 'jy-tts-bar-play', ttsBarLabel('idle', both ? side : null), false, side);
-    button.title = `${side === 'source' ? '读原文' : '读译文'} · ${TTS_MODE_LABELS[tts.mode]}模式 · ${TTS_RANGE_LABELS[tts.range]} · ${count} 句`;
+    button.title = `${side === 'source' ? '读原文' : side === 'dialogue_source' ? '对白读原文' : '读译文'} · ${TTS_MODE_LABELS[tts.mode]}模式 · ${TTS_RANGE_LABELS[tts.range]} · ${count} 句`;
     return button;
   });
   // Choosing happens here rather than in the floating window: reading the original, the window's list
@@ -7069,9 +7096,15 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     }
     // A paragraph hangs its buttons off whichever of its sentences ends last in the rendered floor,
     // which is not always the last one in reading order once a beautify has moved things around.
+    // 对白读原文 is the one floor whose sentences are not all on the same side of the page: its
+    // dialogue sits wherever the (possibly folded) original does, which a beautify may place after the
+    // translation in the document. Its paragraph button stays on the translation's own text regardless
+    // — the narration segment of the line — never chasing a quoted run onto the original's block.
+    const typeById = floor.side === 'dialogue_source' ? new Map(visible.map(item => [item.id, item.type])) : null;
     for (const line of planTtsLineButtons(visible)) {
       let last = null;
-      for (const id of line.ids) {
+      const narrationIds = typeById ? line.ids.filter(id => typeById.get(id) === 'narration') : null;
+      for (const id of narrationIds?.length ? narrationIds : line.ids) {
         const range = ranges.get(`${floor.side}:${id}`);
         if (range && (!last || range.compareBoundaryPoints(Range.END_TO_END, last) > 0)) last = range;
       }
@@ -8865,7 +8898,7 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
   const owned = voices.filter(row => row.voiceId || Object.keys(row.voices ?? {}).length).length;
   const library = normalizeVoiceLibrary(settings?.voiceLibrary);
   const summaries = {
-    'tts-read': `${tts.side === 'source' ? '读原文' : '读译文'} · ${TTS_RANGE_LABELS[tts.range]} · ${TTS_MODE_LABELS[tts.mode]}模式`,
+    'tts-read': `${tts.side === 'source' ? '读原文' : tts.side === 'dialogue_source' ? '对白读原文' : '读译文'} · ${TTS_RANGE_LABELS[tts.range]} · ${TTS_MODE_LABELS[tts.mode]}模式`,
     'tts-fish': `${tts.fish.key ? `已填 Key · ${tts.fish.model}` : '还没填 API Key'} · ${{ floor: '整楼一次', line: '每段一次', sentence: '每句一次' }[tts.requestUnit] ?? '每段一次'}`,
     'tts-voices': `旁白${tts.narratorVoice ? '已设' : '未设'} · 对白默认${tts.dialogueVoice ? '已设' : '未设'} · ${voices.length} 个角色（${owned} 个专属）${tts.voiceScope === 'chat' ? ' · 每个聊天一份' : ''}`,
     'tts-library': library.length ? `${library.length} 个音色` : '空',
@@ -9504,7 +9537,7 @@ function renderTtsPreview(root) {
   const inRange = new Set(audibleSegments(preview.segments, tts.range, ttsVoiceConfig(settings)).map(segment => segment.id));
   const head = doc.createElement('p');
   head.className = 'jy-muted';
-  head.textContent = `第 ${preview.messageId} 楼 · ${preview.segments.length} 句 · ${preview.source === 'translation' ? '读的是镜译译文' : preview.source === 'source' ? '读的是原文' : '读的是来源标签里的文字'} · 标注来自${preview.analyzed === 'deep' ? '副模型深度分析' : preview.analyzed === 'simple' ? '副模型简单分析' : preview.analyzed === 'pending' ? '还没分析' : '翻译时的骨架与引号'}`;
+  head.textContent = `第 ${preview.messageId} 楼 · ${preview.segments.length} 句 · ${preview.source === 'translation' ? '读的是镜译译文' : preview.source === 'source' ? '读的是原文' : preview.source === 'dialogue_source' ? '读的是对白原文（旁白是译文）' : '读的是来源标签里的文字'} · 标注来自${preview.analyzed === 'deep' ? '副模型深度分析' : preview.analyzed === 'simple' ? '副模型简单分析' : preview.analyzed === 'pending' ? '还没分析' : '翻译时的骨架与引号'}`;
   target.appendChild(head);
   const table = doc.createElement('div');
   table.className = 'jy-tts-preview-table';
@@ -12087,7 +12120,7 @@ async function openMiniWindow() {
     setText(win, '[data-jy-tts-text]', segment.text);
     const sourceLine = win.querySelector('[data-jy-tts-source]');
     if (sourceLine) {
-      const showOriginal = ttsSettings().side === 'both' && data.original && data.original !== segment.text;
+      const showOriginal = ['both', 'dialogue_source'].includes(ttsSettings().side) && data.original && data.original !== segment.text;
       sourceLine.hidden = !showOriginal;
       sourceLine.textContent = showOriginal ? `原文：${data.original}` : '';
     }
