@@ -18,7 +18,7 @@ import {
   SPEECH_MOODS,
   FISH_EMOTIONS,
 } from '../tts.js';
-import { castNameOccurs, refineCast, resolveSpeakers } from '../tts-speakers.js';
+import { castNameOccurs, discoverSpeakerAliases, refineCast, resolveSpeakers } from '../tts-speakers.js';
 
 // One source line as the reading gets it: marks turned into runs, the utterances cut, the marks read on.
 function readLine(source, options = {}) {
@@ -112,6 +112,37 @@ test('the reader\'s own word still outranks a mark; a mark outranks everything t
   assert.deepEqual([byMark.get(2).speaker, byMark.get(2).source], ['樱井', 'tag'], 'the author named her; 「泰罗说」 beside it does not move that');
   const byReader = resolveSpeakers(utterances, { cast, tagged, manual: new Map([[2, '泰罗']]) });
   assert.deepEqual([byReader.get(2).speaker, byReader.get(2).source], ['泰罗', 'manual']);
+});
+
+test('a mark nobody in the cast has falls through to the translation\'s own, already-resolved word for the same line', () => {
+  // The body writes the character's Japanese name; the cast (and the translation) know him as 真嗣.
+  const { utterances } = readLine('<say who="碇シンジ" mood="无奈">「……仕方ないよ。」</say>');
+  const cast = [{ name: '真嗣', aliases: [] }];
+  const tagged = new Map([[1, '碇シンジ']]);
+  const hints = new Map([[1, '真嗣']]);
+  // The tag alone: unmatched, so it is not read as if it had named somebody.
+  const tagOnly = resolveSpeakers(utterances, { cast, tagged, infer: false });
+  assert.equal(tagOnly.get(1).speaker, null, 'a spelling nobody in the cast has is not silently accepted as a new speaker');
+  // The tag and the translation's hint together: the hint is reached, and wins, exactly because the
+  // tag could not be matched to anybody — this is the fall-through R2 asks for.
+  const both = resolveSpeakers(utterances, { cast, tagged, hints, infer: false });
+  assert.deepEqual([both.get(1).speaker, both.get(1).source], ['真嗣', 'hint']);
+});
+
+test('discoverSpeakerAliases learns a mark\'s spelling for a line the translation already gave to somebody in the cast', () => {
+  const { utterances } = readLine('<say who="碇シンジ" mood="无奈">「……仕方ないよ。」</say>');
+  const cast = [{ name: '真嗣', aliases: [] }];
+  const tagged = new Map([[1, '碇シンジ']]);
+  const hints = new Map([[1, '真嗣']]);
+  assert.deepEqual([...discoverSpeakerAliases(utterances, { cast, hints, tagged })], [['碇シンジ', '真嗣']]);
+  // Nothing to learn without a translation hint to confirm it against.
+  assert.equal(discoverSpeakerAliases(utterances, { cast, tagged }).size, 0);
+  // Nothing to learn once the spelling is already one of the cast's own.
+  const known = [{ name: '真嗣', aliases: ['碇シンジ'] }];
+  assert.equal(discoverSpeakerAliases(utterances, { cast: known, hints, tagged }).size, 0);
+  // A mark the cast already recognises under its own name is not "discovered" again.
+  const already = new Map([[1, '真嗣']]);
+  assert.equal(discoverSpeakerAliases(utterances, { cast, hints, tagged: already }).size, 0);
 });
 
 test('a name counts as written only where it is written: whole words for Latin names, any run for the rest', () => {

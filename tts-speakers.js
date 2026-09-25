@@ -106,11 +106,21 @@ function buildLookup(cast) {
   return { lookup, names, spellings };
 }
 
+/**
+ * The cast's own name for a spelling, or '' when nobody in the cast is a match.
+ *
+ * `unifySpeakerNames` always hands back *some* string for a name it was asked about — it falls back to
+ * the spelling it was given when nothing matches, so a loop unifying several reported names together
+ * never loses one. That is the wrong fallback here: a caller asking "is this spelling somebody I
+ * know" needs a real "no" to tell an unresolved mark from a resolved one, not its own question handed
+ * back as if it were the answer.
+ */
 function canonical(value, { lookup, names }) {
   const wanted = String(value ?? '').trim();
   if (!wanted) return '';
   if (lookup.has(wanted)) return lookup.get(wanted);
-  return unifySpeakerNames([wanted], names).get(wanted) ?? wanted;
+  const matched = unifySpeakerNames([wanted], names).get(wanted);
+  return matched && names.includes(matched) ? matched : '';
 }
 
 /**
@@ -374,6 +384,31 @@ export function speakerHints(labels) {
   const hints = new Map();
   for (const [id, label] of labels instanceof Map ? labels : []) if (label?.speaker) hints.set(id, label.speaker);
   return hints;
+}
+
+/**
+ * Alias candidates a floor points out on its own: a `<say who>` spelling that matches nobody in the
+ * cast, on a line whose translation hint resolves to somebody the cast already knows. A body written
+ * in another language than the cast's names is exactly this case — the story's own mark names the
+ * character in its own language, the translation already carries the cast's spelling for the same
+ * line, and the mark's spelling is in all likelihood just one more way that same person gets written,
+ * not somebody new. Manual and reader-picked names are not looked at; a reader who set a speaker by
+ * hand is not the story guessing at a spelling.
+ *
+ * Returns a map from the mark's own spelling to the cast name it most likely belongs to.
+ */
+export function discoverSpeakerAliases(utterances, { cast = [], hints = null, tagged = null } = {}) {
+  const found = new Map();
+  if (!(tagged instanceof Map) || !tagged.size) return found;
+  const people = buildLookup(cast);
+  for (const utterance of Array.isArray(utterances) ? utterances : []) {
+    if (utterance.kind !== 'quoted') continue;
+    const raw = String(tagged.get(utterance.id) ?? '').trim();
+    if (!raw || found.has(raw) || canonical(raw, people)) continue;
+    const resolvedHint = hints instanceof Map ? canonical(hints.get(utterance.id), people) : '';
+    if (resolvedHint) found.set(raw, resolvedHint);
+  }
+  return found;
 }
 
 /**

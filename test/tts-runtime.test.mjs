@@ -2270,6 +2270,49 @@ test('reading the translation of a marked floor: the original\'s marks carry ove
   assert.deepEqual([segments[0].text, segments[0].speaker, segments[0].speakerSource, segments[0].emotion], ['……谢谢你。', '樱井', 'tag', 'shy']);
 });
 
+test('a mark the cast does not know falls back to the translation\'s own speaker, and its spelling is learned for next time', async t => {
+  restoreGlobals(t);
+  let requests = 0;
+  const { context } = mockHost('tts-say-unknown-mark', {
+    async processRequest() {
+      requests += 1;
+      return { content: '{}' };
+    },
+  });
+  // A card of its own: the alias learned below must not reach any other test's 「taro.png」 table.
+  context.characters = [{ name: '真嗣', avatar: 'shinji.png', description: '', personality: '', scenario: '' }];
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'off', side: 'translation', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'shinji.png': [{ name: '真嗣', voiceId: 'voice-shinji' }] },
+    },
+  });
+  // The body marks the line with the character's Japanese name; the cast, and the translation's own
+  // annotation, know him only as 真嗣 — R2's exact case.
+  context.chat.push(await translatedFloor(
+    '<say who="碇シンジ" mood="无奈">「……仕方ないよ。」</say>',
+    [[1, '「……没办法啊。」']],
+    settings,
+    { 1: { speaker: '真嗣', emotion: 'sad' } },
+  ));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests, 0);
+  // The spelling is corrected to the one the cast (and the translation) know him by; the mark still
+  // named the line, so it still counts as a mark, not a weaker hint.
+  assert.deepEqual([segments[0].speaker, segments[0].speakerSource], ['真嗣', 'tag'], 'the mark\'s own spelling could not be matched, so the translation\'s already-resolved word for the same line is used instead');
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.deepEqual(items.map(item => item.voiceId), ['voice-shinji'], '真嗣\'s own bound voice is found, not the default fallback');
+
+  // The same spelling on a later, untranslated floor is recognised on its own from here on — the
+  // alias was learned from the floor above, without anybody touching the voice table.
+  context.chat.push({ mes: '<story_scene><say who="碇シンジ" mood="平静">「うん。」</say></story_scene>', swipe_id: 0, extra: {} });
+  const plain = await __testing.collectTtsFloor(1, settings, 'source');
+  const again = await __testing.prepareTtsSegments(plain, settings);
+  assert.deepEqual([again.segments[0].speaker, again.segments[0].speakerSource], ['真嗣', 'tag']);
+});
+
 test('with the switch on, every reply asks for speaker marks at depth 0 as the system, in the story\'s own quotation marks', async t => {
   restoreGlobals(t);
   const { context } = mockHost('tts-say-prompt');

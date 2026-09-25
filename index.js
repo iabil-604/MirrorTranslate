@@ -147,7 +147,7 @@ import {
   settledSpans,
 } from './tts.js?v=0.37.1';
 import { createTtsStore } from './tts-store.js?v=0.37.1';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.37.1';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.37.1';
 import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis } from './tts-deep.js?v=0.37.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
@@ -267,6 +267,10 @@ const runtime = {
   // Every auto-coloured name seen this session, per character card or group chat, so the generated
   // stylesheet covers them and the next floor's roster knows them. One cast never reaches another's roster.
   autoSpeakerNames: new Map(),
+  // Spellings a floor's own <say who> marks turned out to be one more way of writing somebody the
+  // translation already named, per character card or group chat: never written to the voice table
+  // itself (see `noteAutoSpeakerAliases`), only remembered for the reading this session.
+  autoSpeakerAliases: new Map(),
   subscribers: new Set(),
   diagnosticSubscribers: new Set(),
   update: { status: 'idle', installType: null, details: null },
@@ -1302,6 +1306,37 @@ function autoSpeakerNames() {
   const key = context.groupId !== null && context.groupId !== undefined ? `group:${context.groupId}` : worldInfoCharacterKey();
   if (!runtime.autoSpeakerNames.has(key)) runtime.autoSpeakerNames.set(key, new Set());
   return runtime.autoSpeakerNames.get(key);
+}
+
+/** The aliases this card's own marks have turned out to mean this session; a group chat is one cast. */
+function autoSpeakerAliases() {
+  const context = getContext();
+  const key = context.groupId !== null && context.groupId !== undefined ? `group:${context.groupId}` : worldInfoCharacterKey();
+  if (!runtime.autoSpeakerAliases.has(key)) runtime.autoSpeakerAliases.set(key, new Map());
+  return runtime.autoSpeakerAliases.get(key);
+}
+
+/**
+ * Learns the alias candidates `discoverSpeakerAliases` found on a floor: a `<say who>` spelling that
+ * matched nobody in the cast, on a line whose translation named somebody the cast already knows. Kept
+ * for this session alone, the way an auto-coloured name is (`autoSpeakerNames`) — never written into
+ * the voice table itself, so the reader's own table is never rewritten without them looking at it; a
+ * spelling worth keeping for good is still the reader's own to add, in the character's own alias field.
+ */
+function noteAutoSpeakerAliases(discovered, messageId = null) {
+  if (!(discovered instanceof Map) || !discovered.size) return;
+  const store = autoSpeakerAliases();
+  const added = [];
+  for (const [alias, name] of discovered) {
+    if (!alias || !name || alias === name || store.has(alias)) continue;
+    store.set(alias, name);
+    added.push([alias, name]);
+  }
+  if (added.length) {
+    recordDiagnostic('info', 'tts.speaker-alias', `正文里的说话人标记用了和译名不同的写法，这一楼按同一个人处理：${added.map(([alias, name]) => `${alias} = ${name}`).join('、')}。角色表没有改动，这个对应只在这次会话里记得；要长期生效，去角色表把它加进对应角色的别名。`, {
+      aliases: added.map(([alias, name]) => ({ alias, name })), floor: messageId,
+    }, '', Number.isInteger(messageId) ? { floor: messageId } : {});
+  }
 }
 
 // A card or a persona named for more than one person: 「卡米拉 & 露娜」, 「Rin & Sakura」, 「A·B」.
@@ -3399,6 +3434,12 @@ function ttsCast(settings = runtime.settings) {
   add(context.name2);
   add(context.name1);
   for (const name of autoSpeakerNames()) add(name);
+  // A mark's own spelling, once a floor has shown it means somebody already on this list: from here on
+  // the reading recognises it on its own, translation or not.
+  for (const [alias, name] of autoSpeakerAliases()) {
+    const entry = cast.find(item => item.name === name);
+    if (entry && !entry.aliases.includes(alias)) entry.aliases.push(alias);
+  }
   return cast;
 }
 
@@ -3929,12 +3970,28 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   // What the translation already said about every quoted run: who, in what mood, in Fish's own words.
   const reading = annotationReading(utterances, floor.annotations);
   const annotated = reading.labels.size > 0;
-  // What the story marked itself with <say>: its author's word on who says each line and how. It is
-  // laid over the translation's, and costs nothing.
+  // The translation's own word on who speaks, read here before the story's own mark is folded into
+  // `reading.labels` below — `discoverSpeakerAliases` weighs the two as separate candidates.
+  const translationSpeakers = speakerHints(reading.labels);
+  // What the story marked itself with <say>: its author's word on who says each line and how.
   const tagged = ttsTagReading(floor, utterances, tts);
-  for (const [id, label] of tagged.labels) reading.labels.set(id, { ...(reading.labels.get(id) ?? {}), ...label });
+  const rawTagSpeakers = speakerHints(tagged.labels);
+  const cast = ttsCast(settings);
+  // A mark whose spelling nobody in the cast has, on a line the translation already gave to somebody
+  // in it: very likely one more spelling of that same person (the body's own language, a nickname),
+  // not somebody new — learned for later floors (see `noteAutoSpeakerAliases`), and, right here, used
+  // to correct the mark's own spelling before it is laid over the translation's, so the correction
+  // holds everywhere a resolved speaker is used below, not only where a fresh resolve happens to ask
+  // for the translation's hint.
+  const discoveredAliases = discoverSpeakerAliases(utterances, { cast, hints: translationSpeakers, tagged: rawTagSpeakers });
+  noteAutoSpeakerAliases(discoveredAliases, floor.messageId);
+  const tagLabels = discoveredAliases.size
+    ? new Map([...tagged.labels].map(([id, label]) => [id, discoveredAliases.has(label.speaker) ? { ...label, speaker: discoveredAliases.get(label.speaker), speakerSource: 'hint' } : label]))
+    : tagged.labels;
+  // It is laid over the translation's, and costs nothing.
+  for (const [id, label] of tagLabels) reading.labels.set(id, { ...(reading.labels.get(id) ?? {}), ...label });
   for (const [id, voice] of tagged.voices) reading.voices.set(id, { ...(reading.voices.get(id) ?? {}), ...voice });
-  const tagSpeakers = speakerHints(tagged.labels);
+  const tagSpeakers = speakerHints(tagLabels);
   // Every line of dialogue marked: nobody needs to be asked who speaks it, or how.
   const fullyTagged = tagged.labels.size > 0 && utterances.every(item => item.kind !== 'quoted' || tagged.labels.has(item.id));
   const marksFrom = annotated && tagged.labels.size ? '翻译时的标注和正文里的说话人标记' : annotated ? '翻译时的标注' : '正文里的说话人标记';
@@ -3946,7 +4003,6 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   // The reader's word on who speaks holds in every reading. The text's own reading of it belongs to
   // the plain reading alone; the analysed readings name their speakers themselves.
   const manual = await ttsManualSpeakers(floor);
-  const cast = ttsCast(settings);
   const host = getContext();
   const protagonists = { character: host.name2 ?? '', user: host.name1 ?? '' };
   let resolved = resolveSpeakers(utterances, { cast, manual, tagged: tagSpeakers, infer: false });
@@ -6335,7 +6391,15 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
           // The translation's own side is made once the translation is there to read.
           if (each === 'translation' && (translating || busy)) continue;
           if (autoRead && each === primary) continue;
-          made += (await pregenerateTtsFloor(id, { quiet: true, side: each, once: true })) ?? 0;
+          // Each side's audio is made on its own: a Fish failure on one side (a bad network moment, a
+          // rate limit) is no reason to leave the other, independent side unmade too — without this a
+          // single failed side used to abort the whole loop and the rest were never even tried.
+          try {
+            made += (await pregenerateTtsFloor(id, { quiet: true, side: each, once: true })) ?? 0;
+          } catch (error) {
+            if (isAbortError(error)) throw error;
+            recordDiagnostic('warn', 'tts.auto', `第 ${id} 楼${each === 'source' ? '原文' : each === 'dialogue_source' ? '对白读原文' : '译文'}正文闭合后的自动生成失败：${safeError(error)}`, { floor: id, side: each });
+          }
         }
         // Made in the background with nobody listening: say so, the way a floor made on request does.
         if (made && !autoRead && !current.autoRead) notifyTtsReady(id);
@@ -9803,18 +9867,30 @@ const SPEECH_PROMPT_KEY = `${MODULE_ID}-speech-marks`;
 const SPEECH_PROMPT_IN_CHAT = 1;
 const SPEECH_PROMPT_SYSTEM = 0;
 
-/** The names the entry asks the story to mark its dialogue with: the voice table, the palette, the cards. */
+/**
+ * The people the entry asks the story to mark its dialogue with, each under the one spelling that is
+ * asked for and whatever else this cast is known by: the voice table's rows, the palette, the cards.
+ * The aliases ride along so the request can tell the model that a name the body itself uses for
+ * someone (a nickname, the original-language spelling) is still that same listed person — not so the
+ * model may write the alias instead, but so it knows to write the listed name even when the body's own
+ * words for that line are the alias.
+ */
 function speechRoster(settings = runtime.settings) {
   const context = getContext();
-  const names = [];
-  const add = name => {
+  const people = [];
+  const claimed = new Set();
+  const add = (name, aliases = []) => {
     const clean = String(name ?? '').trim();
-    if (clean && clean !== context.name1 && !names.includes(clean)) names.push(clean);
+    if (!clean || clean === context.name1 || claimed.has(clean)) return;
+    claimed.add(clean);
+    const extra = [...new Set((Array.isArray(aliases) ? aliases : []).map(alias => String(alias ?? '').trim()).filter(alias => alias && alias !== clean && !claimed.has(alias)))];
+    for (const alias of extra) claimed.add(alias);
+    people.push({ name: clean, aliases: extra });
   };
-  for (const row of ttsVoicesFor(settings)) add(row.name);
-  for (const speaker of speakerPaletteFor(settings)) add(speaker.name);
+  for (const row of ttsVoicesFor(settings)) add(row.name, row.aliases);
+  for (const speaker of speakerPaletteFor(settings)) add(speaker.name, speaker.aliases);
   for (const card of castCards(context)) add(card?.name);
-  return names.slice(0, 40);
+  return people.slice(0, 40);
 }
 
 /**
@@ -9842,7 +9918,9 @@ function storyQuotePair(context, settings = runtime.settings) {
 
 /** The request's words: this cast's names, the story's own quotation marks, the moods the reading understands. */
 function speechPromptContent(settings = runtime.settings, context = getContext()) {
-  const names = speechRoster(settings);
+  const roster = speechRoster(settings);
+  const names = roster.map(person => person.name);
+  const aliased = roster.filter(person => person.aliases.length);
   const quote = storyQuotePair(context, settings);
   const moods = [...new Set(SPEECH_MOODS.map(([word]) => word))].join('、');
   const tones = SPEECH_TONES.map(([word]) => word).join('、');
@@ -9851,13 +9929,20 @@ function speechPromptContent(settings = runtime.settings, context = getContext()
   const attributeQuotes = quote.open === '"' || quote.close === '"'
     ? ''
     : 'who="" 和 mood="" 里的英文双引号 " 只属于标签，绝不能拿来给台词收尾。';
+  // The point is who= stays on the one spelling the reading knows, whatever language or nickname the
+  // body's own prose is using for that person right there — a body in another language is exactly the
+  // case this exists for, not an excuse to fall back to rule 2's second half (which is for people the
+  // list has never heard of at all).
+  const nameRule = names.length
+    ? `名单里的这些人，不管正文这一句当时用哪种语言、哪种称呼喊他们，都写名单上的这个写法，不要跟着正文换成别的名字或语言：${names.join('、')}。${aliased.length ? `名单里这些人正文中也可能会被叫别的名字，同样按名单写：${aliased.map(person => `${person.name}（也可能写成 ${person.aliases.join('、')}）`).join('；')}。` : ''}`
+    : '';
   return [
     SPEECH_ENTRY_HEAD,
     '这是输出格式要求，写这一轮回复时必须遵守。',
     '正文里角色说出口的每一句台词，都连同它的引号一起放进 <say> 标签，标明是谁说的、带什么情绪。格式固定为：',
     `<say who="说话人" mood="情绪">${quote.open}台词${quote.close}</say>`,
     `1. 引号必须成对：这个故事的台词用 ${quote.open}${quote.close}。标签里以 ${quote.open} 开头、以 ${quote.close} 结尾，${quote.close} 后面紧跟 </say>。${attributeQuotes}`,
-    `2. who 写说话人的名字。${names.length ? `这些人照抄这个写法：${names.join('、')}。` : ''}名单外的人写正文里对他的称呼。`,
+    `2. who 写说话人的名字。${nameRule}名单外的人写正文里对他的称呼。`,
     `3. mood 从这些词里选一个最贴切的：${moods}。要表现音量或语速，可以再加一个：${tones}，用顿号隔开，比如 mood="生气、大喊"。拿不准就写「平静」。`,
     '4. 只包说出口的台词。旁白、动作、心理描写不包；几个人轮流说话，每一句各包各的；同一个人的话被旁白隔开，前后两截各包各的。',
     '5. 标签只是给朗读程序的记号：不要在正文里提到它，不要因为它改变文风、引号的写法或者台词的多少。',
@@ -9889,7 +9974,7 @@ function syncSpeechPrompt(type = null) {
   // Written down when what goes out changes — switched on, a name added, other quotation marks — and
   // not on every reply.
   if (content && content !== runtime.speechPromptSent) {
-    recordDiagnostic('info', 'tts.speech-prompt', '说话人标记要求已放进主模型的请求（深度 0，系统消息）。', { names: speechRoster(runtime.settings) }, content);
+    recordDiagnostic('info', 'tts.speech-prompt', '说话人标记要求已放进主模型的请求（深度 0，系统消息）。', { names: speechRoster(runtime.settings).map(person => person.name) }, content);
   }
   if (!side) runtime.speechPromptSent = content;
   return Boolean(content);
