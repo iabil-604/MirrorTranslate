@@ -143,8 +143,12 @@ label { min-width: 0; }
 .jy-desk-side { display: flex; flex-direction: column; gap: 12px; }
 .jy-brief { padding: 14px 16px; margin: 0; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
 .jy-brief h3 { margin: 5px 0 0; font-size: 14px; overflow-wrap: anywhere; }
-.jy-brief .jy-button { margin-top: 10px; border: 0; border-radius: 0; padding: 0; min-height: 24px; color: var(--jy-accent); background: transparent; }
-.jy-brief .jy-button:hover { background: transparent; text-decoration: underline; }
+/* Only a .jy-button that is .jy-brief's OWN direct child (the pre-existing "编辑规则 →" / "管理连接…→"
+   link-out pattern) turns borderless; §15.2/§15.3's desk cards (.jy-desk-card, also a .jy-brief) nest
+   their real .jy-button action buttons — 测试连接、＋ 添加连接、测试这条连接 — inside a wrapper div, so
+   a plain descendant selector here would have stripped their border and background too. */
+.jy-brief > .jy-button { margin-top: 10px; border: 0; border-radius: 0; padding: 0; min-height: 24px; color: var(--jy-accent); background: transparent; }
+.jy-brief > .jy-button:hover { background: transparent; text-decoration: underline; }
 .jy-automation { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 22px; padding: 16px 20px; background: var(--jy-band); border: 1px solid var(--jy-band-line); border-radius: var(--jy-radius); }
 .jy-automation > div:first-child { margin-right: auto; }
 .jy-automation .jy-muted { margin-top: 3px; }
@@ -215,13 +219,16 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-connection-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .jy-connection-choice label { position: relative; cursor: pointer; }
 .jy-connection-choice input { position: absolute; opacity: 0; }
-.jy-connection-choice span { display: block; border: 1px solid var(--jy-line); background: var(--jy-surface); padding: 13px 16px; border-radius: 9px; transition: background var(--jy-hover), border-color var(--jy-hover); }
+/* input + span (not the bare descendant ".jy-connection-choice span") so the card's own box styling
+   never falls on a <span> nested further in — DESIGN §15.2's preset cards (the same component) nest a
+   .jy-mini-pill span for 最省/推荐/最费, and that one keeps its own small pill styling untouched. */
+.jy-connection-choice input + span { display: block; border: 1px solid var(--jy-line); background: var(--jy-surface); padding: 13px 16px; border-radius: 9px; transition: background var(--jy-hover), border-color var(--jy-hover); }
 .jy-connection-choice strong { display: block; font-size: 13px; font-weight: 650; }
 .jy-connection-choice small { color: var(--jy-muted-soft); font-size: 11px; }
 .jy-connection-choice input:checked + span { border-color: var(--jy-accent); background: var(--jy-accent-tint); }
 .jy-connection-choice input:checked + span small { color: var(--jy-accent-ink); }
-.jy-connection-choice span h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-size: 13px; font-weight: 650; }
-.jy-connection-choice span p { margin: 0; color: var(--jy-muted-soft); font-size: 11px; }
+.jy-connection-choice input + span h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-size: 13px; font-weight: 650; }
+.jy-connection-choice input + span p { margin: 0; color: var(--jy-muted-soft); font-size: 11px; }
 .jy-connection-choice input:checked + span p { color: var(--jy-accent-ink); }
 
 /* DESIGN §15.2/§15.3 正常模式 · 翻译台与微调: card primitives shared by both pages. */
@@ -456,7 +463,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-prompt-item-editor textarea { min-height: 240px; }
   .jy-form-section { grid-template-columns: 1fr; gap: 18px; }
   .jy-connection-choice { gap: 8px; }
-  .jy-connection-choice span { padding: 13px; }
+  .jy-connection-choice input + span { padding: 13px; }
   .jy-connection-choice strong { font-size: 12px; }
   .jy-connection-choice small { font-size: 10px; }
   .jy-channel-uses { grid-template-columns: 1fr; gap: 6px; }
@@ -473,7 +480,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-footer { padding-bottom: max(14px,env(safe-area-inset-bottom)); }
   /* DESIGN §15.5: 套餐卡单列四张，每张 ≥ 64；正常模式其余卡片单列。 */
   .jy-preset-grid { grid-template-columns: 1fr; }
-  .jy-preset-grid span { min-height: 64px; display: flex; flex-direction: column; justify-content: center; }
+  .jy-preset-grid input + span { min-height: 64px; display: flex; flex-direction: column; justify-content: center; }
   .jy-desk-columns { grid-template-columns: 1fr; }
   .jy-summary-select { flex-wrap: wrap; }
   .jy-summary-select select { min-width: 0; width: 100%; }

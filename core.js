@@ -900,9 +900,7 @@ export const UI_MODES = Object.freeze(['normal', 'advanced']);
 export const CONSOLE_PRESET_IDS = Object.freeze(['light', 'comfort', 'audiobook', 'everything']);
 
 // DESIGN §15.1: which rail pages exist in which mode. 'main' (翻译台) and 'logs' (运行记录) are in
-// both; 'finetune' (微调) is normal-mode only and has no page markup yet — a rail built against this
-// table already leaves room for it and needs no further change once one lands. The other four are
-// unchanged advanced-mode pages.
+// both; 'finetune' (微调) is normal-mode only. The other four are unchanged advanced-mode pages.
 export const CONTROL_CENTER_PAGES = Object.freeze({
   normal: Object.freeze(['main', 'finetune', 'logs']),
   advanced: Object.freeze(['main', 'prompt', 'settings', 'processing', 'tts', 'logs']),
