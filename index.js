@@ -153,7 +153,7 @@ import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSetting
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
 import {
-  VISUAL_FIELDS, REGEX_OWNER_KEY,
+  VISUAL_FIELDS, isJingyiRegex,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
@@ -452,7 +452,7 @@ const CONTROL_CENTER_MARKUP = `
 <label class="jy-check"><input type="checkbox" data-jy-field="musicCardRules">音乐卡片</label><p class="jy-muted">手动开启，默认关闭。开启后，正文里以 <code>&lt;br&gt;</code> 分隔的卡片行按行拆开处理：NOW PLAYING 这类固定文案、已经写成「原文 (中文)」的行自动保留；命中上面歌词规则或排除在保留规则之外的其余 <code>&lt;br&gt;</code> 行按歌词处理。只按这一种卡片的样子写的，遇到别的卡片格式效果不对时，把歌名、歌手这类行加进「原样保留白名单」。</p></details>
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层里的朗读按钮</span><select data-jy-field="floorButtons"><option value="line">每段一个（默认，手机也有）</option><option value="sentence">每段一个，再加每句一个</option><option value="off">不显示，只在悬浮窗里点</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
-<details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
+<details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button><button type="button" class="jy-text-button" data-jy-action="dedupe-processing-regex">删除多余正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
 <details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
 <p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。</p>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEffects">特效字（招式上色、搬运原文排版）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringRhythm">情绪起伏（句内轻重变化）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringAutoSpeakers">名单外的说话人按名字自动取色</label></div>
@@ -778,9 +778,13 @@ function initializeSettings() {
   const context = getContext();
   runtime.settings = normalizeProcessingSettings(context.extensionSettings[MODULE_ID]);
   const profile = getActiveProcessingProfile(runtime.settings);
-  if (context.extensionSettings.regex?.some(rule => rule?.[REGEX_OWNER_KEY]?.profileId === profile.id && rule[REGEX_OWNER_KEY].owner === MODULE_ID)) {
-    profile.regexScripts = readNativeRegexEdits(context.extensionSettings.regex, profile);
-  }
+  // Only overwrite what is already stored once native edits are actually found: before 镜译's rules
+  // have ever been synced into 酒馆's list (first run, or the extension was off), nothing matches and
+  // the profile's own regexScripts must stay untouched rather than being wiped to nothing. Recognising
+  // a match is readNativeRegexEdits' own job -- see processing.js' isJingyiRegex for why the marker
+  // alone is not enough.
+  const nativeEdits = readNativeRegexEdits(context.extensionSettings.regex, profile);
+  if (nativeEdits.length) profile.regexScripts = nativeEdits;
   context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, profile);
   runtime.nativeRegexInstalled = true;
   context.extensionSettings[MODULE_ID] = runtime.settings;
@@ -10619,6 +10623,25 @@ function createControlCenter(rootDocument = document) {
         selected.processingProfiles = selected.processingProfiles.filter(item => item.id !== removed);
         await persistProcessing(root, selected);
         toast('success', '正文方案已删除。');
+      } else if (action === 'dedupe-processing-regex') {
+        // Opening any of our rules in 酒馆's own regex editor and clicking Save, even with nothing
+        // changed, strips the marker we hang identity on (the editor rebuilds the object from its own
+        // form fields); 镜译 no longer recognises that copy and installs a fresh one beside it on the
+        // next sync, leaving the old one behind for good. This button does exactly what a normal save
+        // already does (collapse back to the one copy each rule in the active profile needs), just on
+        // demand and with a count instead of waiting for some other change to trigger it. isJingyiRegex
+        // only matches our own id prefix, so a reader's own rules are never touched. Destructive, so it
+        // asks first, same as the other bulk-remove buttons on this page.
+        const currentRegex = getContext().extensionSettings.regex ?? [];
+        const before = currentRegex.filter(isJingyiRegex).length;
+        const next = collectSettings(root);
+        const after = syncNativeRegex(currentRegex, getActiveProcessingProfile(next)).filter(isJingyiRegex).length;
+        const removed = before - after;
+        if (!removed) throw new Error('没有发现多余的镜译正则。');
+        if (typeof globalThis.confirm === 'function'
+          && !globalThis.confirm(`删除 ${removed} 条多余的镜译正则，只留当前方案需要的 ${after} 条？其他正则不受影响。`)) return;
+        saveSettings(next);
+        toast('success', `已删除 ${removed} 条多余的镜译正则，当前方案需要的 ${after} 条都还在。`);
       } else if (action === 'adopt-speakers') {
         // Every reported name the palette has not got yet, with no colour of its own. The hue each
         // one already has is name-derived, so nothing on screen moves until a real hair colour is

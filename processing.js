@@ -147,6 +147,36 @@ export function importProcessingProfile(data) {
   return normalizeProcessingProfile(data.profile, { newId: true, strict: true });
 }
 
+// SillyTavern's own regex editor rebuilds a script from its own form fields whenever the reader
+// opens one of ours and presses Save, even with nothing changed, and that rebuilt object carries
+// none of our unknown fields -- jingyi_managed included (SillyTavern 1.18.0, extensions/regex/
+// index.js: the editor's popup builds `newRegexScript` from scratch off the form, and
+// saveRegexScript's `array[existingScriptIndex] = regexScript` swaps in the whole new object). The
+// id is the one part of that swap the host keeps: the editor reuses `existingId` for a script it
+// already knows, so a rule that lost its marker this way still carries the id we minted for it. A
+// rule recognised only by the marker, then, is one crash away (any host rewrite that drops unknown
+// fields) from being mistaken for the reader's own on the very next sync and getting a second copy
+// installed beside it -- which is how "镜译 · 可爱风 2 · 可爱风" ends up six deep in a real global
+// list: six times the reader opened it in 酒馆's own editor and saved, six orphaned copies stayed
+// behind, unrecognisable, while a fresh one grew beside each. The id prefix is checked first for
+// that reason: nothing else could carry it, so it is trusted even where the marker is gone.
+function hasManagedRegexId(id) {
+  return typeof id === 'string' && id.startsWith(`${MODULE_ID}:`);
+}
+export function isJingyiRegex(rule) {
+  return Boolean(rule) && (rule?.[REGEX_OWNER_KEY]?.owner === MODULE_ID || hasManagedRegexId(rule.id));
+}
+// A managed rule's id is `${MODULE_ID}:${profileId}:${ruleId}`; a fixed rule's is `${MODULE_ID}:`
+// plus one bare word with no colon in it (see the ids below and in speechQuoteRules/speechMarkRule/
+// PROMPT_GUARD_RULES). Kept purely as a fallback for readNativeRegexEdits when the marker carrying
+// the same pair is gone.
+function parseManagedRegexId(id) {
+  if (!hasManagedRegexId(id)) return null;
+  const rest = id.slice(MODULE_ID.length + 1);
+  const sep = rest.indexOf(':');
+  return sep < 0 ? null : { profileId: rest.slice(0, sep), ruleId: rest.slice(sep + 1) };
+}
+
 export function syncNativeRegex(existing, profile) {
   const originals = Array.isArray(existing) ? existing : [];
   const managed = profile ? profile.regexScripts.map(rule => ({
@@ -155,11 +185,7 @@ export function syncNativeRegex(existing, profile) {
     scriptName: `镜译 · ${profile.name} · ${rule.scriptName}`,
     [REGEX_OWNER_KEY]: { owner: MODULE_ID, profileId: profile.id, ruleId: rule.id },
   })) : [];
-  const first = originals.findIndex(rule => rule?.[REGEX_OWNER_KEY]?.owner === MODULE_ID && !rule[REGEX_OWNER_KEY].internal);
-  const kept = originals.filter(rule => rule?.[REGEX_OWNER_KEY]?.owner !== MODULE_ID);
-  const insertion = first < 0 ? kept.length : originals.slice(0, first).filter(rule => rule?.[REGEX_OWNER_KEY]?.owner !== MODULE_ID).length;
-  kept.splice(insertion, 0, ...managed);
-  if (profile) kept.unshift({
+  const fixed = profile ? [{
     id: `${MODULE_ID}:display-boundaries`, scriptName: '镜译 · 显示边界清理',
     findRegex: `/${[SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END].join('|')}/g`,
     replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
@@ -172,7 +198,14 @@ export function syncNativeRegex(existing, profile) {
     replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
     runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
     [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
-  }, ...speechQuoteRules(), speechMarkRule(), ...PROMPT_GUARD_RULES);
+  }, ...speechQuoteRules(), speechMarkRule(), ...PROMPT_GUARD_RULES] : [];
+  const fixedIds = new Set(fixed.map(rule => rule.id));
+  const isFixed = rule => fixedIds.has(rule?.id) || Boolean(rule?.[REGEX_OWNER_KEY]?.internal);
+  const first = originals.findIndex(rule => isJingyiRegex(rule) && !isFixed(rule));
+  const kept = originals.filter(rule => !isJingyiRegex(rule));
+  const insertion = first < 0 ? kept.length : originals.slice(0, first).filter(rule => !isJingyiRegex(rule)).length;
+  kept.splice(insertion, 0, ...managed);
+  kept.unshift(...fixed);
   return kept;
 }
 
@@ -252,13 +285,33 @@ const PROMPT_GUARD_RULES = Object.freeze([
 ]);
 
 export function readNativeRegexEdits(existing, profile) {
-  return (Array.isArray(existing) ? existing : [])
-    .filter(rule => rule?.[REGEX_OWNER_KEY]?.owner === MODULE_ID && rule[REGEX_OWNER_KEY].profileId === profile.id)
+  const matches = (Array.isArray(existing) ? existing : [])
     .map(rule => {
-      const namePrefix = `镜译 · ${profile.name} · `;
-      return normalizeNativeRegex({ ...rule, id: rule[REGEX_OWNER_KEY].ruleId,
-        scriptName: rule.scriptName.startsWith(namePrefix) ? rule.scriptName.slice(namePrefix.length) : rule.scriptName });
-    });
+      // The marker is read first since a still-marked rule already carries this pair; the id is only
+      // parsed when the marker is gone, so an edit the reader made in 酒馆's own editor right before
+      // it silently stripped the marker is still picked up instead of quietly lost.
+      const marked = rule?.[REGEX_OWNER_KEY]?.owner === MODULE_ID;
+      const pair = marked ? rule[REGEX_OWNER_KEY] : parseManagedRegexId(rule?.id);
+      return pair && pair.profileId === profile.id ? { rule, ruleId: pair.ruleId, marked } : null;
+    })
+    .filter(Boolean);
+  // A reader who is only now upgrading past the marker-loss bug (see isJingyiRegex above) still has
+  // every orphan the old code left behind sitting in the native list, all sharing one deterministic id
+  // with the one live copy -- so more than one match above can carry the very same ruleId. Folding all
+  // of them into the profile as if they were distinct rules would bake the duplication permanently into
+  // 镜译's own saved data instead of just the native mirror, which no later sync could ever clean up
+  // again (syncNativeRegex would keep regenerating one native copy per profile entry). Kept to one
+  // match per ruleId here, before it ever reaches the profile; the still-marked copy wins when there is
+  // one, since that is the one 酒馆 currently treats as live, otherwise the first orphan encountered.
+  const byRuleId = new Map();
+  for (const item of matches) {
+    const current = byRuleId.get(item.ruleId);
+    if (!current || (item.marked && !current.marked)) byRuleId.set(item.ruleId, item);
+  }
+  const namePrefix = `镜译 · ${profile.name} · `;
+  return [...byRuleId.values()].map(({ rule, ruleId }) =>
+    normalizeNativeRegex({ ...rule, id: ruleId,
+      scriptName: rule.scriptName.startsWith(namePrefix) ? rule.scriptName.slice(namePrefix.length) : rule.scriptName }));
 }
 
 // Every block container a card template plausibly uses — the same range the reading's own BREAK_RE

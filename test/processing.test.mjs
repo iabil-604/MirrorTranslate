@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DEFAULT_SETTINGS, INVISIBLE_MARKER, MESSAGE_META_KEY, SOURCE_START,
+  DEFAULT_SETTINGS, INVISIBLE_MARKER, MESSAGE_META_KEY, SOURCE_START, MODULE_ID,
   assembleBilingual, segmentSource, stripGeneratedTranslationLines, interceptGenerationChat,
   extractGeneratedTranslations, restyleBilingual, mergeSettings,
 } from '../core.js';
 import {
   normalizeProcessingSettings, normalizeProcessingProfile, processingSnapshot, getActiveProcessingProfile, makeBuiltinReadingProfile,
   selectProcessingProfile, captureProcessingProfile, exportProcessingProfile, importProcessingProfile,
-  importNativeRegex, syncNativeRegex, readNativeRegexEdits, compileNativeRegex,
+  importNativeRegex, syncNativeRegex, readNativeRegexEdits, compileNativeRegex, isJingyiRegex, REGEX_OWNER_KEY,
 } from '../processing.js';
 import { __testing } from '../index.js';
 
@@ -286,4 +286,199 @@ test('a picture on a line of its own is left as it is, shown once, and the text 
   assert.equal(segmentSource(`${picture}她推开门。`, {}).segments.length, 1, 'a picture beside words is still translated');
   assert.equal(segmentSource('[点这里](/a.html)', {}).segments.length, 1, 'a plain link is words');
   assert.equal(segmentSource(String.raw`\![x](y)`, {}).segments.length, 1, 'an escaped picture is words');
+});
+
+// SillyTavern's own regex editor (extensions/regex/index.js), opened on an existing rule and saved
+// with nothing changed, rebuilds a whole new object from the form fields and replaces the array entry
+// with it outright (saveRegexScript: array[existingScriptIndex] = regexScript); the new object only
+// carries fields the editor's own form knows about, so jingyi_managed is gone, wholesale. The id
+// survives, since the editor keeps the same existingId for a script it already knows. The fixtures
+// below replay exactly that replacement, with the same field set the editor actually builds.
+function simulateNativeEditorSave(script) {
+  return {
+    id: script.id, scriptName: script.scriptName, findRegex: script.findRegex, replaceString: script.replaceString,
+    trimStrings: script.trimStrings ?? [], placement: script.placement ?? [], disabled: script.disabled ?? false,
+    markdownOnly: script.markdownOnly ?? false, promptOnly: script.promptOnly ?? false, runOnEdit: script.runOnEdit ?? false,
+    substituteRegex: script.substituteRegex ?? 0,
+    minDepth: Number.isFinite(script.minDepth) ? script.minDepth : null,
+    maxDepth: Number.isFinite(script.maxDepth) ? script.maxDepth : null,
+  };
+}
+
+test('a rule that lost its marker exactly the way 酒馆\'s own editor strips it is still recognised by id, so the next sync mends it instead of installing a second copy', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  let list = syncNativeRegex([], profile);
+  const nameFor = () => `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  const index = list.findIndex(rule => rule.scriptName === nameFor());
+  assert.ok(index >= 0);
+
+  // The reader opens that rule in 酒馆's editor, changes nothing, clicks Save.
+  const stripped = simulateNativeEditorSave(list[index]);
+  assert.equal(Object.hasOwn(stripped, 'jingyi_managed'), false, 'the marker is gone, exactly as the host leaves it');
+  assert.equal(isJingyiRegex(stripped), true, 'but the id 镜译 minted for it is still there, and is enough on its own');
+  list = [...list.slice(0, index), stripped, ...list.slice(index + 1)];
+
+  // Any later 镜译 sync (a settings save, a chat change, a profile switch) must mend it in place, not
+  // duplicate it: before the fix this left the stripped copy behind, unrecognised, and installed a
+  // second one beside it.
+  list = syncNativeRegex(list, profile);
+  assert.equal(list.filter(rule => rule.scriptName === nameFor()).length, 1, 'still exactly one copy');
+  const mended = list.find(rule => rule.scriptName === nameFor());
+  assert.equal(mended.jingyi_managed?.owner, 'jingyi-translator', 'the marker is restored');
+
+  // Uninstalling now removes it cleanly too -- nothing orphaned is left behind for a host disable/clean
+  // sweep to miss.
+  assert.deepEqual(syncNativeRegex(list, null), []);
+});
+
+test('six "open in 酒馆\'s editor, click Save with nothing changed" cycles reproduce the reported six-fold duplicate, and the fix collapses them back to one', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  const nameFor = () => `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  let list = syncNativeRegex([], profile);
+
+  // Six edit-and-save cycles in 酒馆's own regex panel, exactly as a reader idly checking what a rule
+  // does would produce -- the report's own count.
+  for (let i = 0; i < 6; i++) {
+    const index = list.findIndex(rule => rule.scriptName === nameFor() && isJingyiRegex(rule));
+    list[index] = simulateNativeEditorSave(list[index]);
+    list = syncNativeRegex(list, profile);
+  }
+  assert.equal(list.filter(rule => rule.scriptName === nameFor()).length, 1,
+    'the fix keeps this at one throughout, unlike the pre-fix code this reproduces against (see the investigation notes)');
+
+  // Simulate the same six cycles against the OLD, marker-only ownership rule to document what the
+  // reader actually saw: this is the regression the id-based recognition above closes.
+  const legacyIsOwned = rule => rule?.jingyi_managed?.owner === 'jingyi-translator';
+  function legacySync(existing, activeProfile) {
+    const originals = Array.isArray(existing) ? existing : [];
+    const managed = activeProfile ? activeProfile.regexScripts.map(rule => ({
+      ...structuredClone(rule), id: `jingyi-translator:${activeProfile.id}:${rule.id}`,
+      scriptName: `镜译 · ${activeProfile.name} · ${rule.scriptName}`,
+      jingyi_managed: { owner: 'jingyi-translator', profileId: activeProfile.id, ruleId: rule.id },
+    })) : [];
+    const kept = originals.filter(rule => !legacyIsOwned(rule));
+    kept.push(...managed);
+    return kept;
+  }
+  let legacyList = legacySync([], profile);
+  for (let i = 0; i < 6; i++) {
+    const index = legacyList.findIndex(rule => rule.scriptName === nameFor() && legacyIsOwned(rule));
+    legacyList[index] = simulateNativeEditorSave(legacyList[index]);
+    legacyList = legacySync(legacyList, profile);
+  }
+  assert.equal(legacyList.filter(rule => rule.scriptName === nameFor()).length, 7, 'six orphans plus one live copy: the bug as reported');
+});
+
+test('an edit made in 酒馆\'s own editor is still read back into the profile even after that same save wiped the marker', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  let list = syncNativeRegex([], profile);
+  const index = list.findIndex(rule => isJingyiRegex(rule) && !rule.jingyi_managed?.internal);
+  const edited = simulateNativeEditorSave({ ...list[index], replaceString: '<p>改过，编辑器保存时标记也丢了</p>' });
+  list = [...list.slice(0, index), edited, ...list.slice(index + 1)];
+  const edits = readNativeRegexEdits(list, profile);
+  assert.equal(edits.length, 1);
+  assert.equal(edits[0].replaceString, '<p>改过，编辑器保存时标记也丢了</p>');
+});
+
+test('isJingyiRegex never matches a rule that is not 镜译\'s own, even one with a similar name or stray fields', () => {
+  assert.equal(isJingyiRegex({ id: 'user-rule-1', scriptName: '镜译 · 可爱风 · 可爱风', findRegex: 'x', replaceString: 'y' }), false,
+    'a user\'s own rule that merely happens to share the name is left alone');
+  assert.equal(isJingyiRegex({ id: 'some-other-extensions-id', scriptName: '随便什么', jingyi_managed: 'not an object' }), false);
+  assert.equal(isJingyiRegex({ id: 'jingyi-translator-but-not-quite:abc', scriptName: '不是我们的' }), false,
+    'the prefix must be followed by the separator colon, not just start with the same letters');
+  assert.equal(isJingyiRegex(null), false);
+  assert.equal(isJingyiRegex(undefined), false);
+});
+
+test('a reader upgrading straight out of the bug, whose native list already holds six stale orphans plus the one live copy, is healed on the very first sync -- readNativeRegexEdits does not fold the stale duplicates into the profile as if they were distinct rules', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  const nameFor = () => `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+
+  // Build up exactly the polluted list a reader who has been on the old, unfixed build for a while
+  // already has sitting in their extension_settings.regex, using the OLD marker-only sync so the
+  // fixture does not depend on the very code under test.
+  const legacyIsOwned = rule => rule?.jingyi_managed?.owner === MODULE_ID;
+  function legacySync(existing, activeProfile) {
+    const originals = Array.isArray(existing) ? existing : [];
+    const managed = activeProfile ? activeProfile.regexScripts.map(rule => ({
+      ...structuredClone(rule), id: `${MODULE_ID}:${activeProfile.id}:${rule.id}`,
+      scriptName: `镜译 · ${activeProfile.name} · ${rule.scriptName}`,
+      jingyi_managed: { owner: MODULE_ID, profileId: activeProfile.id, ruleId: rule.id },
+    })) : [];
+    const kept = originals.filter(rule => !legacyIsOwned(rule));
+    kept.push(...managed);
+    return kept;
+  }
+  let stale = legacySync([], profile);
+  for (let i = 0; i < 6; i++) {
+    const index = stale.findIndex(rule => rule.scriptName === nameFor() && legacyIsOwned(rule));
+    stale[index] = simulateNativeEditorSave(stale[index]);
+    stale = legacySync(stale, profile);
+  }
+  assert.equal(stale.filter(rule => rule.scriptName === nameFor()).length, 7, 'the fixture reproduces the reported pollution');
+
+  // This is what index.js' initializeSettings actually does on load: read back any native edits first,
+  // and only then sync. All seven stale copies decode to the very same profileId/ruleId pair (the id
+  // 镜译 mints is deterministic), so without dedup this would hand the profile seven "edits" for what
+  // is really one rule -- baking the duplication permanently into 镜译's own saved data, which no later
+  // sync could ever clean up again (syncNativeRegex would keep regenerating one native copy per profile
+  // entry, forever).
+  const nativeEdits = readNativeRegexEdits(stale, profile);
+  assert.equal(nativeEdits.length, 1, 'seven native copies of one rule read back as exactly one edit, not seven');
+  const healedProfile = { ...profile, regexScripts: nativeEdits };
+  const firstSync = syncNativeRegex(stale, healedProfile);
+  assert.equal(firstSync.filter(rule => rule.scriptName === nameFor()).length, 1, 'healed on the very first sync after upgrading');
+  const secondSync = syncNativeRegex(firstSync, healedProfile);
+  assert.equal(secondSync.filter(rule => rule.scriptName === nameFor()).length, 1, 'stays healed -- idempotent');
+});
+
+test('sync collapses a list mixing 镜译 duplicates, a rule from a since-deleted profile, a disabled duplicate, a reader\'s own rule with a look-alike name, and another extension\'s rule -- touching only what is certainly 镜译\'s own, and settles idempotently', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  const ruleId = profile.regexScripts[0].id;
+  const ourName = `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  const shared = {
+    findRegex: profile.regexScripts[0].findRegex, replaceString: profile.regexScripts[0].replaceString,
+    trimStrings: [], placement: [2], markdownOnly: true, promptOnly: false, runOnEdit: true,
+    substituteRegex: 0, minDepth: null, maxDepth: null,
+  };
+
+  // Two duplicate copies of the same managed rule, as the marker-loss bug leaves behind: one still
+  // enabled, one the reader happened to disable directly in 酒馆's own panel.
+  const dup1 = { ...shared, id: `${MODULE_ID}:${profile.id}:${ruleId}`, scriptName: ourName, disabled: false };
+  const dup2 = { ...shared, id: `${MODULE_ID}:${profile.id}:${ruleId}`, scriptName: ourName, disabled: true };
+
+  // A rule 镜译 made for a processing profile the reader has since deleted: the marker is intact, so
+  // it is unambiguously ours, but no profile with that id exists in this settings object any more.
+  const orphanedProfileRule = {
+    ...shared, id: `${MODULE_ID}:profile-that-no-longer-exists:some-rule`, scriptName: '镜译 · 已删除的方案 · 旧规则', disabled: false,
+    [REGEX_OWNER_KEY]: { owner: MODULE_ID, profileId: 'profile-that-no-longer-exists', ruleId: 'some-rule' },
+  };
+
+  // The reader's own rule, named so it merely looks like ours -- no marker, no 镜译 id prefix.
+  const lookalike = { ...shared, id: 'user-own-rule-42', scriptName: ourName, findRegex: '/自己写的/g', disabled: false };
+
+  // Another extension's own rule, unrelated in every way.
+  const foreign = { ...shared, id: 'some-other-extension:abc', scriptName: '别的扩展的规则', findRegex: '/z/g', disabled: false };
+
+  const mixed = [foreign, lookalike, dup1, orphanedProfileRule, dup2];
+  const cleaned = syncNativeRegex(mixed, profile);
+
+  // Filtered by isJingyiRegex, not just by name: the look-alike below shares this exact scriptName on
+  // purpose, and must not be counted as one of 镜译's own copies.
+  assert.equal(cleaned.filter(rule => rule.scriptName === ourName && isJingyiRegex(rule)).length, 1, 'the duplicate managed copies collapse to one');
+  assert.equal(cleaned.some(rule => rule.id === orphanedProfileRule.id), false, 'the deleted profile\'s rule is gone -- nothing asks for it any more');
+  assert.deepEqual(cleaned.find(rule => rule.id === 'user-own-rule-42'), lookalike, 'the look-alike user rule is untouched, byte for byte');
+  assert.deepEqual(cleaned.find(rule => rule.id === 'some-other-extension:abc'), foreign, 'the other extension\'s rule is untouched, byte for byte');
+  // Order: the foreign rules keep their relative order, and the one surviving managed copy lands where
+  // the first duplicate it replaced was, among them -- not shoved to the very end of the list.
+  const order = cleaned.map(rule => rule.id).filter(id => ['some-other-extension:abc', 'user-own-rule-42', dup1.id].includes(id));
+  assert.deepEqual(order, ['some-other-extension:abc', 'user-own-rule-42', dup1.id]);
+
+  const again = syncNativeRegex(cleaned, profile);
+  assert.deepEqual(again, cleaned, 'idempotent: syncing an already-clean list changes nothing further');
 });
