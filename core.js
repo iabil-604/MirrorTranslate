@@ -2526,11 +2526,32 @@ function sayShellInner(line) {
  * Returns one entry per quoted run of the line, in order — `null` for a run with nothing to carry —
  * so the caller can zip it directly against `splitSpeechParts` run for run.
  */
+// A quote mark used to delimit an attribute (`name="甲"`, `style="color:#c00"`) is not one of the
+// story's own quote marks; masked here, with a space in its place, so splitSpeechParts's count of
+// quotes on the line is not thrown off by it. Only characters inside a tag's own `<…>` span are
+// touched — never the length of the line, so every other position on it is unmoved.
+const SPEECH_MARK_CHARS = new Set([...SPEECH_OPENERS.keys(), ...SPEECH_OPENERS.values()]);
+function maskTagAttributeQuotes(text) {
+  return String(text ?? '').replace(/<[^<>]*>/g, tag => [...tag].map(character => SPEECH_MARK_CHARS.has(character) ? ' ' : character).join(''));
+}
+
 export function lineQuoteFormats(line) {
   const body = sayShellInner(line);
-  return splitSpeechParts(body)
-    .filter(part => part.spoken)
-    .map(part => extractCarryableWrap(part.text.slice(1, -1)));
+  // Quote boundaries are found on the masked copy, so an attribute's own quote marks never pair off
+  // against a real one; splitSpeechParts consumes every character of what it is given into some part
+  // or other, in order, so summing each part's own length walks the same offsets in `body` — and the
+  // *content* extractCarryableWrap sees is read back from `body` itself, attributes and all, rather
+  // than from the masked copy, so a carried tag's own real attributes are never the ones blanked out.
+  const masked = maskTagAttributeQuotes(body);
+  const wraps = [];
+  let offset = 0;
+  for (const part of splitSpeechParts(masked)) {
+    const start = offset;
+    offset += part.text.length;
+    if (!part.spoken) continue;
+    wraps.push(extractCarryableWrap(body.slice(start, offset).slice(1, -1)));
+  }
+  return wraps;
 }
 
 // A tag this run's own wrapper carried in the original that means the words were not actually said
@@ -2563,6 +2584,13 @@ const INLINE_FORMAT_OPEN_RE = /<([A-Za-z][A-Za-z0-9]*)((?:\s[^<>]*)?)>/g;
  */
 export function inlineFormatRuns(line) {
   const body = sayShellInner(line);
+  // `lineFormatting` (layer 1) unwraps the speech quotes too, before it looks for a whole-line
+  // wrapper — so on `<say>…「<big><b>…</b></big>」…</say>`, its own carryable-wrap span sits one
+  // character in from where this scan sees it (`sayShellInner` keeps the quotes on, on purpose, so
+  // `lineQuoteFormats` can still see every quote on the line). Comparing only against `body.trim()`
+  // therefore never matches for the single-quote-with-a-carried-wrapper shape, and the wrapper this
+  // scan found was carried a second time, nested inside the one layer 1 already carries.
+  const unwrapped = String(unwrapLineForFormatting(line) ?? '').trim();
   const runs = [];
   INLINE_FORMAT_OPEN_RE.lastIndex = 0;
   let match;
@@ -2573,8 +2601,10 @@ export function inlineFormatRuns(line) {
     const from = match.index + openTag.length;
     const closed = wrapperClosesAtEndAnywhere(body, from, tag);
     if (!closed) continue;
-    // The whole body, trimmed: `lineFormatting` already carries this one, as the whole line.
-    if (body.slice(match.index, closed.end) === body.trim()) {
+    const span = body.slice(match.index, closed.end);
+    // The whole body, trimmed, or the whole body with its speech quotes peeled off the same way layer
+    // 1 peels them: either way `lineFormatting` already carries this one, as the whole line.
+    if (span === body.trim() || span === unwrapped) {
       INLINE_FORMAT_OPEN_RE.lastIndex = closed.end;
       continue;
     }

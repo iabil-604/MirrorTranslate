@@ -102,6 +102,25 @@ test('two quotes on one line: the wrapped one keeps its wrapper, the plain one i
   assert.equal(formats[1], null);
 });
 
+test('a straight quote inside a tag\'s own attribute (name="甲") is not counted as one of the line\'s speech marks, so the pairing does not shift', () => {
+  // Two <say> shells on one line, each with a quoted `name` attribute: the straight quotes around 甲
+  // and 乙 are not the story's own quote marks — only the two 「」 pairs are — so this must still read
+  // as two quotes, wrapper on the first, nothing on the second, not four quotes with the wrapper
+  // landing on 乙's line instead of 甲's.
+  const line = '<say name="甲">「<b>行こう</b>」</say><say name="乙">「行かない」</say>';
+  const formats = lineQuoteFormats(line);
+  assert.equal(formats.length, 2, '两个 「」，不是被属性引号拆成的四个');
+  assert.deepEqual(formats[0], { open: '<b>', close: '</b>' }, '包装落在甲说的那一句上');
+  assert.equal(formats[1], null, '乙说的那一句没有自己的包装');
+});
+
+test('a quoted style attribute inside the quote itself survives untouched, attribute quotes and all', () => {
+  const line = '「<span style="color:#c00">危险</span>」';
+  const formats = lineQuoteFormats(line);
+  assert.equal(formats.length, 1);
+  assert.deepEqual(formats[0], { open: '<span style="color:#c00">', close: '</span>' }, '引号内自带的属性引号不会被抹掉');
+});
+
 test('an inline fragment mid-line is found without swallowing the rest of the line', () => {
   const line = '他冷冷地说：这半句<b>特别加重</b>，其余照常。';
   const runs = inlineFormatRuns(line);
@@ -122,6 +141,22 @@ test('a struck-through fragment is reported as hidden; an ordinary one is not', 
 test('an inline fragment spanning the whole line is left for layer 1, not reported twice', () => {
   const line = '<b>这一整行都在标签里</b>';
   assert.equal(inlineFormatRuns(line).length, 0, '整行的搬运是 lineFormatting 的职责');
+});
+
+test('a whole quote wrapped in a tag inside a <say> shell is also left for layer 1, not carried a second time nested inside itself', () => {
+  // sayShellInner keeps the speech quotes on (lineQuoteFormats needs to see every quote), so the tag's
+  // own span in `body` sits one character in from the whole unwrapped-line span lineFormatting sees —
+  // comparing only against body.trim() never matched this shape, and <big><b> was carried twice.
+  const line = '<say name="林浅">「<big><b>来るな！</b></big>」</say>';
+  assert.ok(lineFormatting(line), '整行确实是一个可搬运的包装（层一）');
+  assert.equal(inlineFormatRuns(line).length, 0, '层三不该再报同一段');
+});
+
+test('an inline fragment that is genuinely only part of the line — not the whole quote — is still reported', () => {
+  const line = '<say name="林浅">「你看，<big>那边</big>有光！」</say>';
+  const runs = inlineFormatRuns(line);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].text, '那边');
 });
 
 test('segmentSource carries quoteFormats and fragments on the layout, and fragment text on the segment itself', () => {
