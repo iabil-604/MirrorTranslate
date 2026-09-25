@@ -241,6 +241,28 @@ export function splitUtterances(lines, { quotePairs = DEFAULT_QUOTE_PAIRS, skipP
   return utterances;
 }
 
+/**
+ * One line for the 对白读原文 reading: the translation's narration kept as it is, each of its quoted
+ * runs swapped for the original's run at the same position — quote marks and all, so the run is found
+ * again on the (possibly folded) original block the same way any other anchor is. The line still comes
+ * out with the translation's own count and order of quoted runs, so a mark placed on the translation
+ * (placeQuoteMarks, deriveLabelsForSide) keeps landing where it always did; only the words inside those
+ * runs change language. A line whose original has fewer quoted runs than the translation — the
+ * translator split one line of dialogue into two, or joined two into one — keeps the translation's own
+ * words for the runs past the shorter list, rather than guessing which original run they belong to.
+ */
+export function mixDialogueFromSource(translationText, sourceText, { quotePairs = DEFAULT_QUOTE_PAIRS, skipPairs = [] } = {}) {
+  const target = splitByPairs(translationText, { quotePairs, skipPairs });
+  const sourceRuns = splitByPairs(sourceText ?? '', { quotePairs, skipPairs }).filter(part => part.kind === 'quoted');
+  let index = 0;
+  return target.map(part => {
+    if (part.kind !== 'quoted') return part.text;
+    const run = sourceRuns[index];
+    index += 1;
+    return run ? run.text : part.text;
+  }).join('');
+}
+
 // Which language a sentence is written in, by script alone. Latin script says 'en' because the
 // scripts of English, German and French are one and the same; the analysis names those apart.
 export function detectLanguage(text) {

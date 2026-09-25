@@ -491,9 +491,11 @@ export function normalizeMarks(value) {
   return result;
 }
 export const TTS_RANGES = Object.freeze(['all', 'dialogue', 'narration']);
-// Which language is read: the translation, the original the floor was written in, or both — each
-// made on its own, every line getting a button in either language.
-export const TTS_SIDES = Object.freeze(['translation', 'source', 'both']);
+// Which language is read: the translation, the original the floor was written in, both — each made on
+// its own, every line getting a button in either language — or dialogue_source, one reading where the
+// narration is the translation and every quoted run is the original, in whatever language it was
+// written in.
+export const TTS_SIDES = Object.freeze(['translation', 'source', 'both', 'dialogue_source']);
 // What one request of the stream carries: a paragraph, or a single sentence.
 export const TTS_STREAM_UNITS = Object.freeze(['line', 'sentence']);
 // What one request to the voice provider carries: the whole floor with every speaker in it, one
