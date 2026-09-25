@@ -1510,3 +1510,133 @@ test('on a host with no record per swipe, another swipe\'s record never puts its
     assert.match(text, new RegExp(`\n${prefix}下雨了。${suffix}\n`), `after ${prefix}${suffix}`);
   }
 });
+
+// ---------------------------------------------------------------------------------------------
+// A reply with nothing to translate (a gasp, a stammer, a short onomatopoeia) used to be echoed back
+// unchanged, read as still-Japanese, dropped, sent to repair, echoed again, and left missing forever —
+// 补译缺失段落 then repeated the same failure. See core.js's looksUntranslated/isShortExactEcho and
+// index.js's withoutUntranslated/translateOneBatch.
+// ---------------------------------------------------------------------------------------------
+
+test('four lines with nothing but a gasp or a stammer in them translate on the first request, never sent to repair', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  // The model hands every one of these back exactly as it received them, there is nothing in any of
+  // them to translate, so the mock simply echoes whatever it was asked for.
+  let segments;
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify(segments.map(item => ({ id: item.id, text: item.text }))));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  const lines = ['「……っ」', '「……え？」', '「ッ！」', '「……うん。」'];
+  const source = lines.join('\n\n');
+  segments = segmentSource(source, settings).segments;
+  assert.equal(segments.length, 4, 'four separate paragraphs, one per reported line');
+  context.chat.push({ mes: `<story_scene>\n${source}\n</story_scene>`, swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(asked.length, 1, 'the model handing every line back unchanged settles it on the first request, no repair');
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'the floor is written back complete');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+  for (const line of lines) {
+    const seg = segments.find(item => item.text === line);
+    assert.equal(snapshot.existingTranslations.get(seg.id), line, `"${line}" is kept as its own translation`);
+  }
+});
+
+test('a short katakana onomatopoeia echoed unchanged twice in a row is accepted, not repaired a third time', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([{ id: 1, text: 'ドキドキ' }]));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  context.chat.push({ mes: '<story_scene>\nドキドキ\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  // Primary request, then one repair: the repair's answer matches the primary's, and that second match
+  // is what accepts it, never a third request.
+  assert.equal(asked.length, 2);
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'the floor is written back complete, not left partial');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+  assert.equal(snapshot.existingTranslations.get(1), 'ドキドキ');
+});
+
+test('a long segment echoed unchanged twice in a row stays missing, never silently accepted', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const longLine = '雨が降っていて、風も強くなってきた。';
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([
+        { id: 1, text: '天气晴朗。' },
+        { id: 2, text: longLine },
+      ]));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  context.chat.push({ mes: `<story_scene>\n天気がいい。\n\n${longLine}\n</story_scene>`, swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  // Primary request, then the one repair the retry budget allows; over the 8-letter ceiling, a second
+  // matching echo is never enough to accept it.
+  assert.equal(asked.length, 2);
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, true, 'never silently accepted: the floor is written back partial');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, false);
+  assert.equal(snapshot.existingTranslations.has(2), false, 'the long segment is not written down as if it were a translation');
+  assert.equal(snapshot.existingTranslations.get(1), '天气晴朗。', 'the ordinary paragraph beside it still translated normally');
+});
+
+test('补译缺失段落 completes a floor left partial on an echoed interjection, without a second failing request', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([{ id: 2, text: '「……っ」' }]));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  const source = '雨が降っている。\n\n「……っ」';
+  const segmented = segmentSource(source, settings);
+  // What a floor left behind before this fix: the ordinary line translated, the echoed interjection
+  // dropped by the old untranslated-echo check and never recovered, so the write-back was partial.
+  const partial = assembleBilingual(segmented.layout, new Map([[1, '下雨了。']]), { ...settings, allowMissing: true });
+  const inner = `\n${partial}\n`;
+  context.chat.push({
+    mes: `<story_scene>${inner}</story_scene>`,
+    swipe_id: 0,
+    extra: {
+      [MESSAGE_META_KEY]: {
+        schema_version: 4, swipe_id: 0, complete: false, missing_ids: [2],
+        source_hash: await hashText(createTranslationSignature([{ tagName: 'story_scene', segments: segmentSource(inner, settings).segments }])),
+        segment_prefix: settings.segmentPrefix ?? '', segment_suffix: settings.segmentSuffix ?? '',
+        translation_prefix: settings.translationPrefix ?? '{', translation_suffix: settings.translationSuffix ?? '}',
+        paragraph_per_line: false,
+      },
+    },
+  });
+  // The button itself asks for nothing more than a normal, unforced translate: readMessageSnapshot's
+  // own seeding already sends only what has no translation yet (see the "补译 asks only" test above).
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(asked.length, 1, 'accepted on this one request, no second, failing repair request follows');
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'the floor now reports complete');
+  assert.match(context.chat[0].mes, /「……っ」/);
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+});

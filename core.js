@@ -372,6 +372,45 @@ export function unifySpeakerNames(reported, knownNames = []) {
 const KANA_RE = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF]/gu;
 const KANA_OR_HAN_RE = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF\p{Script=Han}]/gu;
 
+// What a line still says once every mark around it is gone: whitespace, punctuation, symbols and quote
+// marks stripped away along with this extension's own invisible block markers (SOURCE_START and the
+// others just above — all Unicode "format" characters, category \p{Cf}). Kept the other way around
+// instead — only \p{L}/\p{N} survive — so nothing has to be enumerated by hand except the drawn-out
+// sound mark's fullwidth spelling, which Unicode itself files under "symbol" rather than "letter" the
+// way it files ー (U+30FC, a modifier letter, \p{L} already). A segment sent for translation that
+// reduces to nothing here was already caught by segmentSource's own isBuiltinPreservedLine and never
+// sent at all; this is for the ones a stray kana still let through.
+const RESIDUE_LETTER_RE = /[\p{L}\p{N}]|[～〜]/u;
+
+// Small kana that only decorate a gasp or a stammer, the moraic ん/ン, the drawn-out sound marks and the
+// five bare vowels: what a Japanese interjection is still made of once everything else is stripped away.
+const INTERJECTION_KANA = new Set('ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮーんン～〜あいうえおアイウエオ');
+
+function residueLetters(text) {
+  return [...String(text ?? '')].filter(ch => RESIDUE_LETTER_RE.test(ch));
+}
+
+// A source with nothing in it worth translating beyond a gasp or a stammer: at most two letters left
+// once every mark is stripped, every one of them an interjection kana (design: a repair request over
+// 「……っ」 or 「ッ！」 only ever gets the same unchanged answer back, forever).
+function isTrivialInterjectionSource(source) {
+  const letters = residueLetters(source);
+  return letters.length > 0 && letters.length <= 2 && letters.every(ch => INTERJECTION_KANA.has(ch));
+}
+
+// An answer to a trivial interjection source is accepted whole (an unchanged echo) or with some/all of
+// its filler kana dropped — never with anything in it the source did not already have.
+function isAcceptedInterjectionEcho(text, source) {
+  if (!isTrivialInterjectionSource(source)) return false;
+  const remaining = residueLetters(source);
+  for (const letter of residueLetters(text)) {
+    const at = remaining.indexOf(letter);
+    if (at === -1) return false;
+    remaining.splice(at, 1);
+  }
+  return true;
+}
+
 /**
  * Whether a returned "translation" is still, in substance, the source language.
  *
@@ -379,14 +418,37 @@ const KANA_OR_HAN_RE = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u3
  * Japanese. That passes every structural check — the id is right, the text is not empty — and lands
  * on the floor looking like a translation. Kana are the tell: Chinese text carries none, so a line in
  * which they make up a real share of the script goes back for another attempt instead.
+ *
+ * The one exception is an echo of a source that had nothing to translate in the first place — see
+ * isAcceptedInterjectionEcho above. There the unchanged answer is not a failure to flag; it is the
+ * only correct one.
  */
 export function looksUntranslated(text, source = '') {
   const value = String(text ?? '');
   const kana = value.match(KANA_RE)?.length ?? 0;
   if (!kana) return false;
+  if (source && isAcceptedInterjectionEcho(value, source)) return false;
   if (source && value.replace(/\s+/g, '') === String(source).replace(/\s+/g, '')) return true;
   const script = value.match(KANA_OR_HAN_RE)?.length ?? 0;
   return kana >= 3 && kana / script >= 0.3;
+}
+
+/**
+ * Whether `text` is a short, exact echo of `source` — the same content (whitespace aside), at most 8
+ * letters once punctuation, symbols, quote marks and this extension's own markers are stripped away.
+ *
+ * A short segment the model hands back unchanged twice in a row — once on the first request, once on
+ * the repair that followed — is treated as the model saying it needs no translation, rather than being
+ * asked a third time forever (see withoutUntranslated / translateOneBatch in index.js, which are the
+ * only callers: this never overrides looksUntranslated's own verdict by itself, only what a caller does
+ * once that verdict, and a second matching one, have already been reached).
+ */
+export function isShortExactEcho(text, source) {
+  if (!source) return false;
+  const value = String(text ?? '');
+  if (value.replace(/\s+/g, '') !== String(source).replace(/\s+/g, '')) return false;
+  const letters = residueLetters(source);
+  return letters.length > 0 && letters.length <= 8;
 }
 
 // SillyTavern rewrites message class names with a custom- prefix when it renders, and an edited

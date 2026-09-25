@@ -1380,6 +1380,39 @@ test('a line handed back in the source language is recognised as untranslated', 
   assert.equal(looksUntranslated('エリスは泣きながら私の袖を掴んだ。'), true);
 });
 
+test('an echo of a source with nothing but a gasp or a stammer in it is not flagged as untranslated', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // The four reported lines: quote marks, ellipses and full stops stripped away, each leaves at most
+  // two letters and every one of them an interjection kana — there was nothing here to translate.
+  assert.equal(looksUntranslated('「……っ」', '「……っ」'), false);
+  assert.equal(looksUntranslated('「……え？」', '「……え？」'), false);
+  assert.equal(looksUntranslated('「ッ！」', '「ッ！」'), false);
+  assert.equal(looksUntranslated('「……うん。」', '「……うん。」'), false);
+  // Dropping the untranslatable kana instead of copying it is accepted the same way.
+  assert.equal(looksUntranslated('っ', 'あっ'), false);
+  // A pure-punctuation source never reaches this at all (segmentSource keeps it out), but a source
+  // with a real word beside the gasp still goes back for translation as it always did.
+  assert.equal(looksUntranslated('「……っ、待って」', '「……っ、待って」'), true);
+  // Three or more interjection kana is no longer "a gasp or a stammer" by this rule's own two-letter
+  // ceiling, so an echo of one still counts as untranslated.
+  assert.equal(looksUntranslated('あああ', 'あああ'), true);
+});
+
+test('isShortExactEcho tells a short unchanged answer apart from a long one', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // A short katakana onomatopoeia, more than the two-letter interjection ceiling but still short
+  // enough that a model insisting on it twice is believed rather than asked a third time.
+  assert.equal(isShortExactEcho('ドキドキ', 'ドキドキ'), true);
+  // Whitespace-only differences still count as the same answer.
+  assert.equal(isShortExactEcho(' ドキドキ ', 'ドキドキ'), true);
+  // A real sentence echoed back is long enough (over 8 letters once punctuation is stripped) that it
+  // stays a genuine failure instead of ever being tolerated twice.
+  assert.equal(isShortExactEcho('雨が降っていて、風も強くなってきた。', '雨が降っていて、風も強くなってきた。'), false);
+  // Not an echo at all: no exact match, so this is never in play.
+  assert.equal(isShortExactEcho('キラキラ', 'ドキドキ'), false);
+  assert.equal(isShortExactEcho('下雨了。', '雨が降っている。'), false);
+});
+
 test('a floor that fits one batch is spread evenly across parallel lanes', () => {
   const segments = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
   assert.equal(planTranslationBatches(segments, { maxChars: 48000 }).length, 1);

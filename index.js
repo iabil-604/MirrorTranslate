@@ -28,6 +28,7 @@ import {
   splitSpeechParts,
   unifySpeakerNames,
   looksUntranslated,
+  isShortExactEcho,
   MAX_CHANNEL_CONCURRENCY,
   createGenerationGate,
   createIndependentRequest,
@@ -1977,6 +1978,11 @@ function toggleWorldInfoBook(box) {
  * Only when the target is Chinese and names are not deliberately kept in Japanese: both of those put
  * kana into a correct translation. A dropped line goes back through the same repair path as a line the
  * model never returned at all, instead of being written down looking like a translation.
+ *
+ * A dropped line short enough to be `isShortExactEcho` of its source is also recorded on `recovered.
+ * echoes` (id → the echoed text) before it is deleted. translateOneBatch is the one reader of it: a
+ * segment the model hands back unchanged there twice running, once here and once on the repair this
+ * drop sends out, is accepted instead of being asked a third time — see its own comment.
  */
 function withoutUntranslated(recovered, segments, settings, { quiet = false } = {}) {
   const profile = getActivePromptProfile(settings);
@@ -1987,7 +1993,10 @@ function withoutUntranslated(recovered, segments, settings, { quiet = false } = 
     .filter(([id, text]) => looksUntranslated(text, sources.get(Number(id))))
     .map(([id]) => id);
   if (!dropped.length) return recovered;
+  recovered.echoes = new Map();
   for (const id of dropped) {
+    const text = recovered.translations.get(id);
+    if (isShortExactEcho(text, sources.get(Number(id)))) recovered.echoes.set(id, text);
     recovered.translations.delete(id);
     recovered.annotations?.delete(id);
   }
@@ -2144,6 +2153,25 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
       );
       for (const [id, text] of recovered.translations) translations.set(id, text);
       for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
+      // A short segment withoutUntranslated dropped as an exact echo of its source: seen unchanged
+      // once before (the request this dropped id's own repair answers), it is accepted as the model
+      // saying it needs no translation, rather than asked a third time forever — see isShortExactEcho.
+      const acceptedEchoes = [];
+      for (const [id, text] of recovered.echoes ?? []) {
+        const normalized = String(text).replace(/\s+/g, '');
+        if (state.echoSeen.get(id) === normalized) {
+          translations.set(id, text);
+          state.echoSeen.delete(id);
+          acceptedEchoes.push(id);
+        } else {
+          state.echoSeen.set(id, normalized);
+        }
+      }
+      if (acceptedEchoes.length) {
+        recordDiagnostic('warn', 'translation.echo-accepted', '副 API 两次都原样返回这一段，按不用翻处理。', {
+          ids: acceptedEchoes,
+        });
+      }
       const progressed = translations.size > before;
       pending = pending.filter(segment => !translations.has(segment.id));
       recordDiagnostic(pending.length ? 'warn' : 'info', 'translation.response', pending.length ? '本批返回不完整，准备补译。' : '本批译文返回完整。', {
@@ -2250,7 +2278,10 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
   const batches = planTranslationBatches(needed, { maxChars: translationCharBudget(channel.maxTokens), parallel: lanes });
   // `seeded` is fixed here rather than read off the map later: with lanes running side by side, a
   // batch starting after another one finished would otherwise take itself for a repair.
-  const state = { requests: 0, roster: annotationRoster(settings), styles: translationStyles(settings), seeded: translations.size > 0, lyricIds };
+  // `echoSeen` (id → its normalized text) remembers a short exact echo across the primary/repair
+  // attempts translateOneBatch makes within this one call, so the second matching echo can be
+  // told apart from the first — see translateOneBatch and core.js's isShortExactEcho.
+  const state = { requests: 0, roster: annotationRoster(settings), styles: translationStyles(settings), seeded: translations.size > 0, lyricIds, echoSeen: new Map() };
   let lastError;
   recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
     segments: needed.length,
