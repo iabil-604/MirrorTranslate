@@ -228,6 +228,29 @@ test('a deep reply: a sign in quotes is the narrator\'s, a spoken line carries i
   assert.equal(lean(segments.find(item => item.id === 6)), '走吧。');
 });
 
+test('a deep reply\'s secondary emotion is held to the same interjection check as its first, so it cannot ride a line of nothing but 嗯', () => {
+  // The deep reading's own rule 8 lets a second, different emotion word ride at the head of the line
+  // (voice.secondary, see classifyAndApply); groundVoice already drops the first one on an interjection
+  // — this checks the second is not left to reach Fish just because it stood second.
+  const utterances = splitUtterances([{ lineId: 1, text: '「嗯……」' }]);
+  const parsed = parseDeepAnalysis(JSON.stringify({ voices: [
+    { id: 1, speaker: '林浅', emotion: 'shy', line: '[shy] [tender] 嗯……' },
+  ] }), utterances);
+  assert.deepEqual(parsed.voices.get(1), { emotion: 'shy', secondary: 'tender' }, 'both tags parsed off the reply, before grounding');
+  const segments = buildSegments(utterances, parsed.labels, { voices: parsed.voices });
+  const segment = segments.find(item => item.id === 1);
+  assert.equal(segment.voice?.secondary, undefined, 'the second soft mood does not survive grounding on an interjection-only line, any more than the first');
+  assert.equal(segment.emotion, null, 'shy was already dropped as the interjection itself');
+  assert.equal(compileVoiceCues(segment, { lean: true }).cues.join(''), '', 'nothing rides on the sound of 嗯 itself');
+});
+
+test('a free-form secondary word (not one Fish\'s own vocabulary knows) is left alone by grounding, the same as `why` or `breath`', () => {
+  const voice = { emotion: 'frustrated', secondary: 'relieved and flirty' };
+  const held = groundVoice(voice, { text: '热死了，我才不想喝。' });
+  assert.equal(held.changed, false);
+  assert.equal(held.voice, voice, 'the very same object: an unrecognised secondary word is not this check\'s business');
+});
+
 test('a line the reader or the story gave to somebody stays spoken, whatever a model made of the quote', () => {
   const labels = new Map([[2, { type: 'narration' }], [3, { type: 'narration' }]]);
   const resolved = new Map([

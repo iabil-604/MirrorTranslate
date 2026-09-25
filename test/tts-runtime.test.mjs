@@ -1481,6 +1481,83 @@ test('the plain reading can ask for one simple analysis of a floor by hand, and 
   assert.equal(requests, 1);
 });
 
+// 对白读原文 always reads through a primary floor (the translation, see ttsPrimaryFloor), even in 不分析
+// mode. Asking for one simple analysis by hand recurses into prepareTtsSegments for that primary floor,
+// and `analyze` has to survive the recursion or the request never goes out at all.
+test('对白读原文 can ask for one simple analysis by hand too, the same as reading the translation already can', async t => {
+  restoreGlobals(t);
+  let requests = 0;
+  const { context } = mockHost('tts-dialogue-source-asks', {
+    async processRequest() {
+      requests += 1;
+      return { content: JSON.stringify({ voices: [
+        { id: 1, type: 'narration' },
+        { id: 2, type: 'dialogue', speaker: '樱井', emotion: 'surprised' },
+      ] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'off', side: 'dialogue_source', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro' }, { name: '樱井', voiceId: 'voice-sakurai' }] },
+    },
+  });
+  context.chat.push(await translatedFloor('泰羅が入ってきた。「来たの？」', [[1, '泰罗推门进来。「你来了？」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const plain = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests, 0, 'the plain reading of dialogue_source asks nothing, same as any other side');
+  assert.equal(plain.depth, 'off');
+
+  await __testing.reanalyzeTtsFloor(0);
+  assert.equal(requests, 1, '「分析这一楼」 sends exactly one request in 不分析 mode');
+  const analysed = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(analysed.depth, 'simple');
+  assert.equal(analysed.segments[1].speaker, '樱井');
+  assert.equal(analysed.segments[1].emotion, 'surprised');
+  assert.equal(requests, 1, 'the analysis is kept; reading the floor again asks nothing more');
+});
+
+// refineTtsAnalysis writes its correction to the dialogue_source floor's own key. Every ordinary read of
+// that floor recurses through its primary (the translation) and used to re-derive fresh labels from it
+// unconditionally, overwriting the correction right back — so 改句面板's "改了 1 句" never actually stuck.
+test('a correction made through 改句面板 on 对白读原文 survives the next ordinary read of the floor', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-dialogue-source-refine', {
+    async processRequest(payload) {
+      requests.push(payload);
+      const input = JSON.parse(payload.messages.at(-1).content);
+      if (input.task === 'refine_voices_for_audiobook') {
+        return { content: JSON.stringify({ voices: [{ id: 2, type: 'dialogue', speaker: '泰罗', emotion: 'angry' }] }) };
+      }
+      return { content: JSON.stringify({ voices: [{ id: 1, type: 'narration' }, { id: 2, type: 'dialogue', speaker: '樱井', emotion: 'happy' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'simple', side: 'dialogue_source', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro' }, { name: '樱井', voiceId: 'voice-sakurai' }] },
+    },
+  });
+  context.chat.push(await translatedFloor('泰羅がドアを開けた。「もう帰るの？」', [[1, '泰罗推开门。「你要走了？」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const before = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(before.segments[1].speaker, '樱井');
+  assert.equal(requests.length, 1);
+
+  const result = await __testing.refineTtsAnalysis(0, { side: 'dialogue_source', utteranceId: 2, feedback: '这句是泰罗说的，而且在生气' });
+  assert.equal(result.changed, 1);
+  assert.equal(requests.length, 2);
+
+  // Reading the floor again, the ordinary way (not through refine), must not lose the correction.
+  const after = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(after.segments[1].speaker, '泰罗');
+  assert.equal(after.segments[1].emotion, 'angry');
+  assert.equal(requests.length, 2, 'reading the corrected floor again asks nothing new');
+});
+
 test('regenerating one sentence asks for that sentence alone; the paragraph keeps the rest, and asking twice gives two takes', async t => {
   restoreGlobals(t);
   const { context } = mockHost('tts-regen-sentence');

@@ -178,3 +178,82 @@ test('an analysis stored in the old, structured shape still compiles exactly as 
 test('the analysis cache key is not moved by this change: the shape a stored deep reading keeps is the shape it always kept', () => {
   assert.equal(TTS_ANALYSIS_VERSION, 4);
 });
+
+test('a line that legitimately opens with punctuation utterance.text already lost — an ellipsis, a lead the utterance itself trimmed — is still checked against the sentence, not against the untrimmed anchor the model was shown', () => {
+  // splitUtterances trims utterance.text's own leading EDGE_PUNCTUATION_RE run; the model was shown
+  // utterance.anchor instead, which still has it, and rule 10 has it copy that lead back verbatim.
+  const { utterances, quote } = quoteOf('...没事，你先走吧。');
+  assert.equal(quote.text, '没事，你先走吧。', 'the lead is already gone from what this line is checked against');
+  const line = '...没事， [pause] 你先走吧。';
+  const { voices, mismatches } = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id, emotion: 'sad', line }] }), utterances);
+  assert.deepEqual(mismatches, [], 'the two sides agree once the same lead is trimmed from both');
+  assert.deepEqual(voices.get(quote.id).pauses, [{ after: '，', length: 'short' }]);
+  assert.equal(fishOf(utterances, new Map([[quote.id, { type: 'dialogue' }]]), voices, quote.id), '[sad] 没事， [pause] 你先走吧。');
+});
+
+test('lang, offered by the deep prompt\'s own {{lang_rule}}, is read onto the label the same way every other reading reads it', () => {
+  const { utterances, quote } = quoteOf('Na gut, gehen wir.');
+  const { labels } = parseDeepAnalysis(JSON.stringify({ voices: [
+    { id: quote.id, speaker: 'Karl', emotion: 'neutral', lang: 'de', line: 'Na gut, gehen wir.' },
+  ] }), utterances);
+  assert.equal(labels.get(quote.id).lang, 'de');
+});
+
+test('the console\'s own field names (speed, intensity — the ones its rules actually say to write) are read the same as pace and emotion', () => {
+  const { utterances, quote } = quoteOf('慢慢说，不着急。');
+  const { voices } = parseDeepAnalysis(JSON.stringify({ voices: [
+    { id: quote.id, speaker: '甲', emotion: 'calm', speed: 'slow', intensity: 0, line: '慢慢说，不着急。' },
+  ] }), utterances);
+  assert.equal(voices.get(quote.id).speed, 'slow', 'speed is read the same as pace when pace itself is absent');
+  assert.equal(voices.get(quote.id).intensity, 0, 'intensity is read even though it is not part of the new schema\'s own example');
+});
+
+test('pace still wins over speed when a reply somehow carries both', () => {
+  const { utterances, quote } = quoteOf('慢慢说，不着急。');
+  const { voices } = parseDeepAnalysis(JSON.stringify({ voices: [
+    { id: quote.id, emotion: 'calm', pace: 'fast', speed: 'slow', line: '慢慢说，不着急。' },
+  ] }), utterances);
+  assert.equal(voices.get(quote.id).speed, 'fast', 'this reading\'s own field is read first');
+});
+
+test('a reply built for a reader\'s old, pre-v0.37 custom deep prompt — the structured fields, no line — still reads exactly as the simple reading already reads that shape', () => {
+  const { utterances, quote } = quoteOf('我没事，你先回去吧。');
+  const oldItem = {
+    id: quote.id, speaker: '林浅', emotion: 'resigned', intensity: 2,
+    tone: 'soft tone', pauses: [{ after: '我没事' }], stress: ['先'],
+  };
+  const { labels, voices } = parseDeepAnalysis(JSON.stringify({ voices: [oldItem] }), utterances);
+  assert.equal(labels.get(quote.id).speaker, '林浅');
+  assert.deepEqual(voices.get(quote.id), {
+    emotion: 'resigned', intensity: 2, tone: 'soft tone',
+    pauses: [{ after: '我没事', length: 'short' }], stress: ['先'],
+  });
+});
+
+test('a reply with neither a line nor any of the old structured fields is still nothing said, exactly as before', () => {
+  const { utterances, quote } = quoteOf('走吧。');
+  const { labels } = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id }] }), utterances);
+  assert.equal(labels.has(quote.id), false);
+});
+
+test('the reader\'s own configured quote pair, not only the four default ones, is taken off the edge of a reproduced line', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '【你好，我到了】' }], { quotePairs: ['【】'] });
+  const quote = utterances.find(item => item.kind === 'quoted');
+  const line = '【你好， [pause] 我到了】';
+  // Proof the bug is real: without telling the parser which pairs are configured, the reproduced 【】
+  // is read as part of the sentence, and the whole line — including the pause — fails the check.
+  const naive = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id, emotion: 'happy', line }] }), utterances);
+  assert.equal(naive.mismatches.length, 1);
+
+  const fixed = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id, emotion: 'happy', line }] }), utterances, { quotePairs: ['【】'] });
+  assert.deepEqual(fixed.mismatches, []);
+  assert.deepEqual(fixed.voices.get(quote.id).pauses, [{ after: '，', length: 'short' }]);
+});
+
+test('a bracketed run the sentence itself was written with (a status line, a system message) is not mistaken for one of this reading\'s own tags', () => {
+  const { utterances, quote } = quoteOf('[警告]能量不足，所有人立刻撤离');
+  const line = '[警告]能量不足， [pause] 所有人立刻撤离';
+  const { voices, mismatches } = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id, emotion: 'urgent', line }] }), utterances);
+  assert.deepEqual(mismatches, [], 'the sentence\'s own [警告] is text, not a tag to strip out from under it');
+  assert.deepEqual(voices.get(quote.id).pauses, [{ after: '，', length: 'short' }]);
+});

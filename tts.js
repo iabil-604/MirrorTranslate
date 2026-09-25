@@ -108,7 +108,12 @@ export function linesFromTaggedText(text, tags = [], { excludedTags = [] } = {})
 
 const SENTENCE_STOP_RE = /[。！？!?]/u;
 const SENTENCE_TAIL_RE = /[。！？!?…～~」』”’"'）)\]】》]/u;
-const EDGE_PUNCTUATION_RE = /^[\s，,、；;：:。．.！!？?）)\]】》」』”’]+/u;
+// Exported for the deep reading (tts-deep.js): a reply's `line` is checked against `utterance.text`,
+// which already had this same lead trimmed off when the utterance was cut, and the model was shown the
+// untrimmed `anchor` instead — so the same trim has to run on the reply's own line before the two are
+// compared character for character, or a line that legitimately opens on one of these marks (an
+// ellipsis, an em dash) never passes the check no matter how faithfully it was copied.
+export const EDGE_PUNCTUATION_RE = /^[\s，,、；;：:。．.！!？?）)\]】》」』”’]+/u;
 const SPEAKABLE_RE = /[\p{L}\p{N}]/u;
 
 export function splitNarrationSentences(text) {
@@ -247,13 +252,30 @@ export function splitUtterances(lines, { quotePairs = DEFAULT_QUOTE_PAIRS, skipP
  * again on the (possibly folded) original block the same way any other anchor is. The line still comes
  * out with the translation's own count and order of quoted runs, so a mark placed on the translation
  * (placeQuoteMarks, deriveLabelsForSide) keeps landing where it always did; only the words inside those
- * runs change language. A line whose original has fewer quoted runs than the translation — the
- * translator split one line of dialogue into two, or joined two into one — keeps the translation's own
- * words for the runs past the shorter list, rather than guessing which original run they belong to.
+ * runs change language.
+ *
+ * Both sides are folded with foldEmbeddedQuotes first (the same fold splitUtterances applies), so a
+ * name or title quoted inside a sentence — 『星の約束』, a shop sign — reads as narration on whichever
+ * side it fell on, and is never treated as a line of dialogue to pair up.
+ *
+ * A one-to-one pairing only makes sense when both sides agree on how many runs are actually spoken:
+ * the translator split one line of dialogue into two, joined two into one, or used a quote style the
+ * original didn't. Guessing a pairing across a mismatch either repeats a run (the tail keeps pairing
+ * forward past where the split happened) or drops one, so a mismatch instead keeps the translation's
+ * line exactly as it already reads — never invented, never doubled — and reports itself through
+ * `onMismatch`, so the caller can leave a diagnostic.
  */
-export function mixDialogueFromSource(translationText, sourceText, { quotePairs = DEFAULT_QUOTE_PAIRS, skipPairs = [] } = {}) {
-  const target = splitByPairs(translationText, { quotePairs, skipPairs });
-  const sourceRuns = splitByPairs(sourceText ?? '', { quotePairs, skipPairs }).filter(part => part.kind === 'quoted');
+export function mixDialogueFromSource(translationText, sourceText, { quotePairs = DEFAULT_QUOTE_PAIRS, skipPairs = [], onMismatch } = {}) {
+  const quotes = pairsOf(quotePairs, DEFAULT_QUOTE_PAIRS);
+  const unquoteWith = run => unquote(run, quotes);
+  const target = foldEmbeddedQuotes(splitByPairs(translationText, { quotePairs: quotes, skipPairs }), unquoteWith);
+  const sourceRuns = foldEmbeddedQuotes(splitByPairs(sourceText ?? '', { quotePairs: quotes, skipPairs }), unquoteWith)
+    .filter(part => part.kind === 'quoted');
+  const targetCount = target.filter(part => part.kind === 'quoted').length;
+  if (targetCount !== sourceRuns.length) {
+    if (typeof onMismatch === 'function') onMismatch({ targetCount, sourceCount: sourceRuns.length });
+    return translationText;
+  }
   let index = 0;
   return target.map(part => {
     if (part.kind !== 'quoted') return part.text;
@@ -1368,6 +1390,19 @@ export function groundVoice(voice, { text = '', evidence = '', sources = null } 
       out.emotion = word;
       if (step !== null && out.intensity === undefined) out.intensity = step;
       rewritten = true;
+    }
+  }
+  // A second, softer emotion word (the deep reading's own secondary tag) is not checked as strictly as
+  // `emotion` — a free-form phrase in it is left alone, the same as `why` or `breath`, since it only
+  // ever reaches Fish through emotionCue, which already says nothing for a word it does not know. But a
+  // sentence of nothing but 嗯 and 啊 is the soft mood itself, so a *recognised* soft or quiet word here
+  // is still the one thing worth catching: left unchecked it is exactly the kind of word emotionCue does
+  // know, and it would be sent for a line whose only content is the interjection already carrying it.
+  if (out.secondary !== undefined && !size.core) {
+    const word = spokenEmotion(out.secondary);
+    if (word && (SOFT_FOLDS.has(normalizeEmotion(word)) || quietWord(word))) {
+      drop('secondary', out.secondary, 'interjection');
+      delete out.secondary;
     }
   }
   if (!size.core) {

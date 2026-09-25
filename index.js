@@ -3442,15 +3442,28 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
         // Who says it and in what mood still come off the translation's marks (prepareTtsSegments reads
         // this floor through the translation as its primary and derives labels with deriveLabelsForSide,
         // the same path 'both' already uses for its secondary side) — nothing extra is stored here.
+        const mismatchedLines = [];
         lines = snapshot.segments
           .filter(segment => snapshot.existingTranslations.has(segment.id) && !lyricIds?.has(segment.id))
           .map(segment => {
-            const translationText = plainLineText(snapshot.existingTranslations.get(segment.id));
+            const rawTranslation = plainLineText(snapshot.existingTranslations.get(segment.id));
+            if (!rawTranslation) return null;
+            // 特效字 layer 3: dropped the same way the plain 读译文 branch below drops it, so a struck-
+            // through or painted-invisible run of the original is not read out here either.
+            const fragments = snapshot.fragmentsById?.get(segment.id);
+            const runs = annotations.get(segment.id)?.runs;
+            const translationText = stripHiddenRuns(rawTranslation, fragments, runs);
             if (!translationText) return null;
-            const mixed = mixDialogueFromSource(translationText, originalLine(segment).text, { quotePairs, skipPairs });
+            const mixed = mixDialogueFromSource(translationText, originalLine(segment).text, {
+              quotePairs, skipPairs,
+              onMismatch: () => mismatchedLines.push(segment.id),
+            });
             return mixed ? { lineId: segment.id, text: mixed } : null;
           })
           .filter(Boolean);
+        if (mismatchedLines.length) {
+          recordDiagnostic('warn', 'tts.dialogue-source-mismatch', '对白读原文：以下段落原文与译文的引号段数量不一致，这些段落按译文整句朗读。', { messageId: id, lineIds: mismatchedLines });
+        }
         sources = new Map(snapshot.segments.map(segment => [segment.id, plainLineText(segment.text)]));
         source = 'dialogue_source';
       } else {
@@ -3669,7 +3682,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       const braces = (String(text).match(/}/g) ?? []).length;
       if (braces <= closed) return;
       closed = braces;
-      const partial = depth === 'deep' ? parseDeepAnalysis(text, utterances) : parseVoiceAnalysis(text, utterances);
+      const partial = depth === 'deep' ? parseDeepAnalysis(text, utterances, { quotePairs: tts.quotePairs }) : parseVoiceAnalysis(text, utterances);
       let ready = 0;
       const readyIds = new Set();
       for (const line of paragraphs) {
@@ -3716,7 +3729,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       }
       throw error;
     }
-    const parsed = depth === 'deep' ? parseDeepAnalysis(raw, utterances) : parseVoiceAnalysis(raw, utterances);
+    const parsed = depth === 'deep' ? parseDeepAnalysis(raw, utterances, { quotePairs: tts.quotePairs }) : parseVoiceAnalysis(raw, utterances);
     parsed.labels = stampLabels(parsed.labels, askedAt);
     const seconds = Number(((Date.now() - started) / 1000).toFixed(1));
     recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.analysis', parsed.labels.size
@@ -3891,13 +3904,25 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   const primary = await ttsPrimaryFloor(floor, settings);
   if (!primary && depth === 'off' && !plainKept && !asked) asked = await stored('simple', { thisFloor: true });
   if (primary) {
-    const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep, passive });
-    const derived = deriveLabelsForSide(read.utterances, read.labels, read.voices, utterances);
-    for (const [id, label] of derived.labels) labels.set(id, { ...(labels.get(id) ?? {}), ...label });
-    voices = derived.voices;
-    depth = read.depth ?? depth;
     const key = ttsLabelKey(floor);
-    runtime.tts.analysis.set(key, { labels, voices, depth, derived: true });
+    // A correction asked for on this very floor (refineTtsAnalysis, 改句面板「再问一次」) writes straight
+    // to this key without a `derived` flag. Re-deriving from primary on every call, unconditionally,
+    // clobbered that correction right back the next time the floor was read — so a stored entry that is
+    // not itself derived wins here, the same way the plain-reading branches below prefer a stored answer
+    // over asking again.
+    const corrected = !force ? runtime.tts.analysis.get(key) : null;
+    if (corrected?.labels?.size && corrected.derived !== true) {
+      labels = corrected.labels;
+      voices = corrected.voices ?? null;
+      depth = corrected.depth ?? depth;
+    } else {
+      const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep, passive, analyze });
+      const derived = deriveLabelsForSide(read.utterances, read.labels, read.voices, utterances);
+      for (const [id, label] of derived.labels) labels.set(id, { ...(labels.get(id) ?? {}), ...label });
+      voices = derived.voices;
+      depth = read.depth ?? depth;
+      runtime.tts.analysis.set(key, { labels, voices, depth, derived: true });
+    }
   } else if (asked?.labels?.size) {
     labels = asked.labels;
     voices = asked.voices ?? null;
@@ -7272,6 +7297,29 @@ function ttsBarLabel(state, side = null) {
 }
 
 /**
+ * Locates 对白读原文's utterances on the page in two passes instead of one.
+ *
+ * Its narration lives in the translation block; its quoted runs are the original's own words, which
+ * live wherever the (possibly folded) original sits — a beautify may place that block before or after
+ * the translation. A single locateAnchors call searching floor.lines (the mixed text) end to end cannot
+ * find a quoted run once the anchor before it was found later in the document than the original block:
+ * the search only ever moves forward. Searching narration against the translation's own lines and each
+ * quoted run against the original line it came from lets either be found wherever it actually sits.
+ */
+function locateDialogueSourceAnchors(nodeTexts, floor, utterances) {
+  const found = new Map();
+  const narrationAnchors = utterances.filter(item => item.kind !== 'quoted').map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor }));
+  for (const [id, hit] of locateAnchors(nodeTexts, floor.lines, narrationAnchors)) found.set(id, hit);
+  const quotedUtterances = utterances.filter(item => item.kind === 'quoted');
+  if (quotedUtterances.length) {
+    const sourceLines = [...(floor.sources ?? [])].map(([lineId, text]) => ({ lineId, text }));
+    const quotedAnchors = quotedUtterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor }));
+    for (const [id, hit] of locateAnchors(nodeTexts, sourceLines, quotedAnchors)) found.set(id, hit);
+  }
+  return found;
+}
+
+/**
  * Puts a play button after every readable utterance of one rendered floor, and a bar under it.
  *
  * Buttons are placed from the stored text, found again in the rendered one, so what is clicked is
@@ -7357,7 +7405,9 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     visibleTotal += visible.length;
     // Nothing of it is on the page to hang a button on; the reading is started from the bar.
     if (floor.offPage) return;
-    const found = locateAnchors(nodeTexts, floor.lines, utterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
+    const found = floor.side === 'dialogue_source'
+      ? locateDialogueSourceAnchors(nodeTexts, floor, utterances)
+      : locateAnchors(nodeTexts, floor.lines, utterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
     for (const utterance of utterances) {
       const hit = found.get(utterance.id);
       if (!hit) continue;
@@ -14892,6 +14942,8 @@ export const __testing = Object.freeze({
   capMoveTiersForFloor,
   resolveMoveElementIndex,
   stripHiddenRuns,
+  ttsUtterances,
+  locateDialogueSourceAnchors,
   latestAssistantMessageId,
   readMessageSnapshot,
   restyleCurrentChat,

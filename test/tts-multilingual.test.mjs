@@ -9,8 +9,9 @@ import {
   normalizeChannel,
   segmentSource,
 } from '../core.js';
-import { mixDialogueFromSource, splitByPairs } from '../tts.js';
+import { locateAnchors, mixDialogueFromSource, splitByPairs, splitUtterances } from '../tts.js';
 import { __testing } from '../index.js';
+import { readDiagnostics } from '../diagnostics.js';
 
 // ---------------------------------------------------------------------------------------------
 // mixDialogueFromSource: the pure text-composition step behind 对白读原文 — narration keeps the
@@ -35,18 +36,60 @@ test('mixDialogueFromSource keeps a straight-quoted English run as the original 
   assert.equal(mixed, '汤姆笑着点了点头，用英语回答。"Indeed it is."');
 });
 
-test('mixDialogueFromSource falls back to the translation\'s own words where the original has fewer quoted runs', () => {
-  // The translator split one line of dialogue into two; the original only has the first.
-  const mixed = mixDialogueFromSource('她转过身。「走吧」她又说：「别回头」', '她转过身。「行了，走吧，别回头」');
-  const parts = splitByPairs(mixed).filter(part => part.kind === 'quoted');
-  assert.equal(parts.length, 2);
-  assert.equal(parts[0].text, '「行了，走吧，别回头」', 'the one original run goes to the first quoted run');
-  assert.equal(parts[1].text, '「别回头」', 'past the shorter list, the translation keeps its own words rather than guessing');
+test('mixDialogueFromSource keeps the translation\'s own line, whole, when the original split or joined the quoted runs differently', () => {
+  // The translator split one line of dialogue into two; the original only has one quoted run. Pairing
+  // by position would repeat 别回头 — once inside the one original run, once again from the
+  // translation's own second run — so the whole line is kept as the translation wrote it instead.
+  const mixed = mixDialogueFromSource('她转过身。「走吧。」她停了一下，又说：「别回头。」', '彼女は振り返った。「行こう、振り返るな」');
+  assert.equal(mixed, '她转过身。「走吧。」她停了一下，又说：「别回头。」');
+});
+
+test('mixDialogueFromSource reports the mismatch it falls back on', () => {
+  let report = null;
+  mixDialogueFromSource('她转过身。「走吧。」她停了一下，又说：「别回头。」', '彼女は振り返った。「行こう、振り返るな」', {
+    onMismatch: info => { report = info; },
+  });
+  assert.deepEqual(report, { targetCount: 2, sourceCount: 1 });
+});
+
+test('mixDialogueFromSource does not report a mismatch, and does not call onMismatch, when the counts agree', () => {
+  let called = false;
+  mixDialogueFromSource('樱井抬头看着天空，觉得有点晒。「今天真热啊」', '桜井は空を見上げた。「今日は暑いね」', {
+    onMismatch: () => { called = true; },
+  });
+  assert.equal(called, false);
+});
+
+test('mixDialogueFromSource folds a title quoted mid-sentence into narration on both sides, rather than pairing it as a line of dialogue', () => {
+  // The original quotes a book title with 『』 (the default quote pair) inside the sentence; the
+  // translation writes the same title with 《》, which is not a registered quote pair, so on the
+  // translation's side it was never a quoted run to begin with. Folding the original's 『星の約束』
+  // back into its own narration is what keeps the counts (1 or each side) in agreement, so the real
+  // line of dialogue — 「第一章，出发。」 — is the one swapped, not the title.
+  const mixed = mixDialogueFromSource(
+    '她翻开《星之约》，轻声念道：「第一章，出发。」',
+    '彼女は『星の約束』を開き、静かに言った：「第一章、旅立ち」',
+  );
+  assert.equal(mixed, '她翻开《星之约》，轻声念道：「第一章、旅立ち」');
 });
 
 test('mixDialogueFromSource keeps every quoted run when the original has no text at all', () => {
   const mixed = mixDialogueFromSource('她说：「你好」', '');
   assert.equal(mixed, '她说：「你好」');
+});
+
+test('mixDialogueFromSource folds an embedded quote — a shop sign, a title — on the narration side, so it is never read as dialogue in the wrong language', () => {
+  // Both sides have one genuine line of dialogue and one embedded quote (a shop sign). Without
+  // folding, splitByPairs alone would find two quoted runs on each side and pair them positionally,
+  // handing the sign's foreign text to the narrator; folding first keeps the sign as narration text —
+  // the translation's own words — on both sides, so its language is never even in question.
+  const mixed = mixDialogueFromSource(
+    '店门口那块“营业中”的牌子在风里晃着。“欢迎光临。”',
+    '店の前の「オープン」の札が風に揺れていた。「いらっしゃい」',
+  );
+  // The swapped run keeps the source's own bracket style — it is the original's words, read as they
+  // were written — while the folded sign keeps the translation's own curly quotes untouched.
+  assert.equal(mixed, '店门口那块“营业中”的牌子在风里晃着。「いらっしゃい」');
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -176,6 +219,60 @@ test('对白读原文: narration reads the translation, each quoted run reads th
   assert.match(inspected.original ?? '', /桜井は空を見上げた/);
 });
 
+// A translated floor's hidden runs (特效字 layer 3: a struck-through or painted-invisible span of the
+// original, carried over as the translation's own `runs`) are dropped from what 读译文 hears already;
+// 对白读原文's narration is derived from the same translation text and must drop the same words,
+// rather than reading back something the reader can see was crossed out.
+test('对白读原文 drops a hidden run from its narration, the same as 读译文 already does', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-dialogue-source-hidden-run');
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'off', side: 'dialogue_source', fish: FISH },
+    },
+  });
+  const source = '桜井は<s>本当は怖かった</s>空を見上げた。「今日は暑いね」';
+  const translations = [[1, '樱井其实很害怕，抬头看着天空。「今天真热啊」']];
+  const annotations = { 1: { speaker: '樱井', runs: ['其实很害怕'] } };
+  context.chat.push(await translatedFloor(source, translations, settings, annotations));
+
+  const dialogueFloor = await __testing.collectTtsFloor(0, settings);
+  assert.doesNotMatch(dialogueFloor.lines[0].text, /其实很害怕/);
+
+  // The ordinary 读译文 reading already drops it the same way (leaving the same leftover comma,
+  // stripHiddenRuns's own known quirk — not what this test is about); both sides now agree.
+  const translationFloor = await __testing.collectTtsFloor(0, settings, 'translation');
+  assert.doesNotMatch(translationFloor.lines[0].text, /其实很害怕/);
+  assert.equal(dialogueFloor.lines[0].text, '樱井，抬头看着天空。「今日は暑いね」');
+  assert.equal(translationFloor.lines[0].text, '樱井，抬头看着天空。「今天真热啊」');
+});
+
+// A mismatch (mixDialogueFromSource keeping the translation's line whole, see tts.js) is not silent:
+// collectTtsFloor leaves a diagnostic naming which lines fell back, so a report of "台词念错了" has
+// something to point at.
+test('对白读原文 records a diagnostic for a line whose quoted-run counts do not match', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-dialogue-source-mismatch-diagnostic');
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'off', side: 'dialogue_source', fish: FISH },
+    },
+  });
+  const source = '彼女は振り返った。「行こう、振り返るな」';
+  const translations = [[1, '她转过身。「走吧。」她停了一下，又说：「别回头。」']];
+  context.chat.push(await translatedFloor(source, translations, settings));
+
+  const floor = await __testing.collectTtsFloor(0, settings);
+  // Kept whole, exactly as the translation wrote it — never a repeated or dropped line.
+  assert.equal(floor.lines[0].text, '她转过身。「走吧。」她停了一下，又说：「别回头。」');
+
+  const entry = readDiagnostics().filter(item => item.scope === 'tts.dialogue-source-mismatch').at(-1);
+  assert.ok(entry, 'a diagnostic was recorded');
+  assert.deepEqual(entry.details?.lineIds, [1]);
+});
+
 test('对白读原文 has no floor before the message is translated', async t => {
   restoreGlobals(t);
   const { context } = mockHost('tts-dialogue-source-untranslated');
@@ -213,4 +310,65 @@ test('对白读原文 skips a lyric line, the same as plain and 读原文 readin
     { lineId: 1, text: '樱井抬头看着天空，觉得有点晒。「今日は暑いね」' },
     { lineId: 3, text: '汤姆笑着点了点头，用英语回答。"Indeed it is."' },
   ]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// locateDialogueSourceAnchors: 对白读原文's own two-pass anchor search, for placing buttons and the
+// reading highlight on the rendered floor (decorateTtsMessage). Its narration and its quoted runs live
+// on two different blocks of the page, which the ordinary single-pass locateAnchors (built for a floor
+// whose lines are the block it searches) cannot always reach both halves of.
+// ---------------------------------------------------------------------------------------------
+
+test('locateDialogueSourceAnchors finds a quoted run in the original block that sits before the translation block that already matched', () => {
+  // The default bilingual layout: the original paragraph, then the translation paragraph, one pair
+  // after another — the shape assembleBilingual actually renders (verified separately). The
+  // translation shows its own quote marks as it always did; only mixDialogueFromSource's own line.text
+  // (what gets read, not what is shown) has the original's words spliced in.
+  const nodeTexts = [
+    '桜井は空を見上げた。', '「今日は暑いね」',     // 0,1: original, paragraph 1
+    '樱井抬头看着天空，觉得有点晒。', '「今天真热啊」', // 2,3: translation, paragraph 1 (its own quote)
+    '汤姆笑着点头。', '"Indeed it is."',           // 4,5: original, paragraph 2
+    '汤姆笑着点了点头，用英语回答。', '「的确如此。」', // 6,7: translation, paragraph 2 (its own quote)
+  ];
+  const floor = {
+    lines: [
+      { lineId: 1, text: '樱井抬头看着天空，觉得有点晒。「今日は暑いね」' },
+      { lineId: 2, text: '汤姆笑着点了点头，用英语回答。"Indeed it is."' },
+    ],
+    sources: new Map([
+      [1, '桜井は空を見上げた。「今日は暑いね」'],
+      [2, '汤姆笑着点头。"Indeed it is."'],
+    ]),
+  };
+  const utterances = splitUtterances(floor.lines);
+  assert.deepEqual(utterances.map(item => item.kind), ['narration', 'quoted', 'narration', 'quoted']);
+
+  // Proof the bug is real: the ordinary single-pass search (what decorateTtsMessage called before this
+  // fix — searching floor.lines, the mixed text, for every anchor in one pass) finds both narration
+  // sentences but neither quoted run, because the second narration match moves the forward-only cursor
+  // past the original block the first quoted run is sitting in.
+  const naive = locateAnchors(nodeTexts, floor.lines, utterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
+  assert.ok(naive.get(1), 'narration 1 is still found the old way');
+  assert.equal(naive.get(2), null, 'the old single-pass search cannot reach back into the original block for the quoted run');
+  assert.ok(naive.get(3), 'narration 2 is still found the old way');
+  assert.equal(naive.get(4), null, 'nor for the second quoted run');
+
+  const found = __testing.locateDialogueSourceAnchors(nodeTexts, floor, utterances);
+  assert.equal(found.size, 4);
+  for (const utterance of utterances) assert.ok(found.get(utterance.id), `utterance ${utterance.id} (${utterance.kind}) was located`);
+  // The narration lands in the translation block (node 2 and 6); the quoted runs land in the original
+  // block (node 1 and 5) — each on its own side of the page, not chasing the other's cursor.
+  assert.equal(found.get(1).start.node, 2);
+  assert.equal(found.get(2).start.node, 1, 'the quoted run is found in the original block, which sits before the translation block already matched for narration');
+  assert.equal(found.get(3).start.node, 6);
+  assert.equal(found.get(4).start.node, 5);
+});
+
+test('locateDialogueSourceAnchors still finds narration when a floor has no quoted runs at all', () => {
+  const nodeTexts = ['外面下着雨。', '外面下着雨。'];
+  const floor = { lines: [{ lineId: 1, text: '外面下着雨。' }], sources: new Map([[1, '外は雨が降っている。']]) };
+  const utterances = splitUtterances(floor.lines);
+  const found = __testing.locateDialogueSourceAnchors(nodeTexts, floor, utterances);
+  assert.equal(found.size, 1);
+  assert.ok(found.get(1));
 });

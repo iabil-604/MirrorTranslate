@@ -1,5 +1,6 @@
-import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeTts, parseJsonCandidates } from './core.js?v=0.36.1';
+import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.36.1';
 import {
+  EDGE_PUNCTUATION_RE,
   FISH_EMOTIONS,
   FISH_TONES,
   SOFT_MOODS,
@@ -10,6 +11,7 @@ import {
   fillPrompt,
   floorTextWithMarks,
   mixedScripts,
+  normalizeVoice,
   referenceLines,
   rosterList,
   styleEntries,
@@ -170,6 +172,11 @@ function classifyTagWord(raw) {
  * this reading's own prompt asks for — is the tag's own padding and goes with it; a run of two tags
  * back to back therefore still meets at the same offset, which is what makes them both count as the
  * sentence's own opening.
+ *
+ * Only a `[...]` this reading actually offers (classifyTagWord's three vocabularies and the three
+ * fixed markers) is lifted out. A `[...]` the sentence itself was written with — a system message, a
+ * status line, anything RP commonly puts in brackets — is not one of this reading's own words, so it
+ * is left standing as part of the sentence rather than mistaken for a tag and cut out from under it.
  */
 function stripInlineTags(line) {
   const source = String(line ?? '');
@@ -181,13 +188,15 @@ function stripInlineTags(line) {
       const close = source.indexOf(']', index + 1);
       if (close > index) {
         const word = source.slice(index + 1, close).trim();
-        // The tag's own leading space, if the model left one, goes with it — trimmed before the
-        // offset is taken, so the offset lands where the words meet rather than one past it.
-        if (text.endsWith(' ')) text = text.slice(0, -1);
-        if (word) tags.push({ word, offset: text.length });
-        index = close + 1;
-        if (source[index] === ' ') index += 1;
-        continue;
+        if (classifyTagWord(word).kind !== 'unknown') {
+          // The tag's own leading space, if the model left one, goes with it — trimmed before the
+          // offset is taken, so the offset lands where the words meet rather than one past it.
+          if (text.endsWith(' ')) text = text.slice(0, -1);
+          if (word) tags.push({ word, offset: text.length });
+          index = close + 1;
+          if (source[index] === ' ') index += 1;
+          continue;
+        }
       }
     }
     text += source[index];
@@ -198,16 +207,31 @@ function stripInlineTags(line) {
 
 // The quotation marks this reading's own prompt shows the model around a marked run, taken off both
 // ends together when a model reproduced them — the utterance itself never carries them (core's
-// splitUtterances already took them off) — with every tag's offset moved down to match.
-const EDGE_QUOTE_PAIRS = Object.freeze(DEFAULT_QUOTE_PAIRS.map(pair => [pair[0], pair[1]]));
+// splitUtterances already took them off) — with every tag's offset moved down to match. The reader's
+// own configured pairs are used when given (a line may be split on a pair other than the four default
+// ones, and the model was shown the anchor with whichever pair actually wrapped it); the default pairs
+// are the fallback, not the only ones.
+function edgeQuotePairs(quotePairs) {
+  const list = Array.isArray(quotePairs) && quotePairs.length ? quotePairs : DEFAULT_QUOTE_PAIRS;
+  return list.map(pair => [pair[0], pair[1]]);
+}
 
-function stripEdgeQuote(text, tags) {
-  for (const [open, close] of EDGE_QUOTE_PAIRS) {
+function stripEdgeQuote(text, tags, quotePairs) {
+  for (const [open, close] of edgeQuotePairs(quotePairs)) {
     if (text.length < open.length + close.length || !text.startsWith(open) || !text.endsWith(close)) continue;
     const trimmed = text.slice(open.length, text.length - close.length);
     return { text: trimmed, tags: tags.map(tag => ({ ...tag, offset: Math.min(trimmed.length, Math.max(0, tag.offset - open.length)) })) };
   }
   return { text, tags };
+}
+
+// The same lead splitUtterances trimmed off `utterance.text` (EDGE_PUNCTUATION_RE) is trimmed off the
+// reply's own line before the two are compared, so a sentence that legitimately opens on an ellipsis or
+// a comma is not failed by the check for a lead that was never part of what the model was held to.
+function trimEdgePunctuation(text) {
+  const match = text.match(EDGE_PUNCTUATION_RE);
+  const cut = match ? match[0].length : 0;
+  return { text: text.slice(cut), cut };
 }
 
 /**
@@ -366,8 +390,26 @@ function deepItemsOf(candidate) {
  *
  * Nothing here calls `groundVoice`: every voice this reading returns still passes through it exactly
  * once, in buildSegments, the one place any reading's voice is held to the text.
+ *
+ * `quotePairs` is the reader's own configured set (falling back to the four default pairs), used to
+ * take a reproduced quote mark off the edge of `line` the same way it was taken off `utterance.anchor`
+ * in the first place. An item with no `line` but one of the old structured fields (`tone`, `pauses`,
+ * `stress`, `sounds`, `shifts`, `intensity` and the rest) is a reply to a reader's own custom deep
+ * prompt still written in the format this reading carried before v0.37 — its performance is read the
+ * same way the simple reading already reads that shape (`normalizeVoice`) rather than silently dropped
+ * because this reading now expects `line` instead.
  */
-export function parseDeepAnalysis(raw, utterances) {
+const LEGACY_VOICE_KEYS = Object.freeze([
+  'tone', 'pauses', 'stress', 'sounds', 'shifts', 'shift', 'intensity', 'subtext', 'why', 'reason',
+  'direction', 'instruction', 'speed', 'volume', 'breath', 'restraint', 'tension', 'rasp', 'hesitation',
+]);
+
+function levelOf(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(2, Math.max(0, Math.round(number))) : null;
+}
+
+export function parseDeepAnalysis(raw, utterances, { quotePairs = null } = {}) {
   const byId = new Map((Array.isArray(utterances) ? utterances : []).map(item => [item.id, item]));
   const labels = new Map();
   const voices = new Map();
@@ -388,29 +430,42 @@ export function parseDeepAnalysis(raw, utterances) {
       const topEmotion = cueLike(item?.emotion);
       const rawLine = item?.line;
       const hasLine = typeof rawLine === 'string' && rawLine.trim();
-      const hasPace = VOICE_LEVELS.has(item?.pace) && item.pace !== 'normal';
+      // pace is this reading's own field; a reply built for an old custom prompt (see LEGACY_VOICE_KEYS
+      // below) may instead carry the simple reading's `speed`, read here as the same thing.
+      const paceValue = VOICE_LEVELS.has(item?.pace) ? item.pace : VOICE_LEVELS.has(item?.speed) ? item.speed : null;
+      const hasPace = paceValue !== null && paceValue !== 'normal';
+      const hasLegacyVoice = !hasLine && LEGACY_VOICE_KEYS.some(key => item?.[key] !== undefined);
       // An id with nothing beside it — no speaker, no mood, no pace, no line — is not an answer: the
       // model did not address this sentence, and it is left exactly as unlabelled as one it never
       // named at all, rather than turned into a bare dialogue line by the mere fact of appearing.
-      if (!(speaker && !isPlaceholderSpeaker(speaker)) && !paletteEmotion && !hasLine && !hasPace) continue;
+      if (!(speaker && !isPlaceholderSpeaker(speaker)) && !paletteEmotion && !hasLine && !hasPace && !hasLegacyVoice) continue;
       const label = { type: 'dialogue' };
       if (speaker && !isPlaceholderSpeaker(speaker)) label.speaker = speaker;
       if (paletteEmotion) label.emotion = paletteEmotion;
+      const lang = normalizeLanguageCode(item?.lang ?? item?.language);
+      if (lang) label.lang = lang;
       labels.set(id, label);
       const voice = {};
       if (topEmotion && topEmotion !== 'neutral') voice.emotion = topEmotion;
-      if (hasPace) voice.speed = item.pace;
+      if (hasPace) voice.speed = paceValue;
+      const intensity = levelOf(item?.intensity);
+      if (intensity !== null) voice.intensity = intensity;
       if (hasLine) {
         const { text: untagged, tags: rawTags } = stripInlineTags(rawLine);
-        const { text: unquoted, tags: edgeTags } = stripEdgeQuote(untagged, rawTags);
+        const { text: unquoted, tags: edgeTags } = stripEdgeQuote(untagged, rawTags, quotePairs);
+        const { text: leadTrimmed, cut } = trimEdgePunctuation(unquoted);
+        const shiftedTags = cut ? edgeTags.map(tag => ({ ...tag, offset: Math.max(0, tag.offset - cut) })) : edgeTags;
         const source = String(utterance.text ?? '');
-        const { map, at } = alignToSource(unquoted, source);
+        const { map, at } = alignToSource(leadTrimmed, source);
         if (map) {
-          classifyAndApply(voice, edgeTags.map(tag => ({ word: tag.word, offset: map[tag.offset] })), source, { full: true });
+          classifyAndApply(voice, shiftedTags.map(tag => ({ word: tag.word, offset: map[tag.offset] })), source, { full: true });
         } else {
-          classifyAndApply(voice, edgeTags, source, { full: false });
+          classifyAndApply(voice, shiftedTags, source, { full: false });
           mismatches.push({ id, at, sentence: source });
         }
+      } else if (hasLegacyVoice) {
+        const legacy = normalizeVoice(item, String(utterance.text ?? ''));
+        if (legacy) Object.assign(voice, legacy);
       }
       if (Object.keys(voice).length) voices.set(id, voice);
     }
