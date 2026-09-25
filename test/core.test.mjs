@@ -63,6 +63,33 @@ import {
   stripGeneratedTranslationLines,
   matchesPreserveLine,
   SEGMENTATION_RULES_VERSION,
+  UI_MODES,
+  CONSOLE_PRESET_IDS,
+  CONTROL_CENTER_PAGES,
+  pagesForMode,
+  pageExistsInMode,
+  resolvePageForMode,
+  CONNECTION_USES,
+  connectionUseChoice,
+  setConnectionUse,
+  channelUsesPointingAt,
+  reassignConnectionUsesOnDelete,
+  PRESET_MANAGED_FIELDS,
+  PRESET_LABELS,
+  PRESET_TIER_LABELS,
+  presetContent,
+  applyPreset,
+  presetDrift,
+  translationChannelChoice,
+  resolveFeatureChannel,
+  preserveLineRuleCountLabel,
+  segmentAffixSummary,
+  coloringDetailFoldSummary,
+  quoteSymbolFoldSummary,
+  fishParamsFoldSummary,
+  consoleFoldSummary,
+  voiceLibraryFoldSummary,
+  DEFAULT_CONSOLE,
 } from '../core.js';
 import {
   addDiagnostic,
@@ -96,6 +123,8 @@ test('default settings use story_scene and migrate the legacy single tag', () =>
   assert.equal(DEFAULT_SETTINGS.streamingWriteback, false);
   assert.equal(DEFAULT_SETTINGS.contextMessages, 2);
   assert.equal(DEFAULT_SETTINGS.preserveLineRules, '');
+  assert.equal(DEFAULT_SETTINGS.uiMode, 'normal');
+  assert.equal(DEFAULT_SETTINGS.preset, '');
 });
 
 test('legacy single-channel settings migrate into a saved channel', () => {
@@ -114,7 +143,7 @@ test('legacy single-channel settings migrate into a saved channel', () => {
   assert.equal(channel.key, 'secret');
   assert.equal(channel.model, 'model-x');
   assert.equal(channel.timeoutSec, 600);
-  assert.equal(independent.schemaVersion, 12);
+  assert.equal(independent.schemaVersion, 13);
 });
 
 test('channel output budget scales with the raised default and no longer flattens above 32768', () => {
@@ -842,7 +871,7 @@ test('manifest and entry describe a native extension without TavernHelper calls'
 // 「绑定正则」组里唯一的破坏性操作，是这一条实际适用的地方（§9.1 的 .jy-text-button 本身只是 --jy-accent）。
 test('the "删除多余正则" button is a red text button at the end of its own group, per DESIGN.md §9.1/§15.4', () => {
   const entry = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
-  const group = entry.match(/<details class="jy-advanced"><summary>绑定正则[\s\S]*?<\/details>/)?.[0];
+  const group = entry.match(/<div class="jy-form-section"><span class="jy-label">绑定正则[\s\S]*?<\/details>/)?.[0];
   assert.ok(group, '找到「绑定正则」这一组的标记');
   const button = group.match(/<button[^>]*data-jy-action="dedupe-processing-regex"[^>]*>删除多余正则<\/button>/)?.[0];
   assert.ok(button, '找到「删除多余正则」按钮本身');
@@ -2024,5 +2053,260 @@ test('with the music-card group off, a <br>-joined card is read exactly as v0.36
     segmentSource(card).segments.map(item => item.text),
     ['NOW PLAYING\n今日の空\n作词：陽炎'],
     'musicCardRules defaults off, so an existing floor segments exactly as it always has',
+  );
+});
+
+// -------------------------------------------------------------------------------------------
+// 控制中心 foundation (DESIGN §15): uiMode / preset settings, the rail's page list per mode, the
+// one-click packages, and the connection-use helpers behind 「用在」.
+// -------------------------------------------------------------------------------------------
+
+test('uiMode migration: fresh install is normal, anything schemaVersion<=12 or missing uiMode is advanced, a current save keeps its own choice', () => {
+  assert.equal(mergeSettings({}).uiMode, 'normal');
+  assert.equal(mergeSettings(undefined).uiMode, 'normal');
+  assert.equal(mergeSettings({ schemaVersion: 12, apiMode: 'follow' }).uiMode, 'advanced');
+  assert.equal(mergeSettings({ schemaVersion: 5 }).uiMode, 'advanced');
+  assert.equal(mergeSettings({ schemaVersion: 13 }).uiMode, 'advanced', 'schemaVersion 13 but no uiMode at all still reads as an old save');
+  assert.equal(mergeSettings({ schemaVersion: 13, uiMode: 'normal' }).uiMode, 'normal');
+  assert.equal(mergeSettings({ schemaVersion: 13, uiMode: 'advanced' }).uiMode, 'advanced');
+  assert.equal(mergeSettings({ schemaVersion: 13, uiMode: 'bogus' }).uiMode, 'advanced');
+  assert.equal(mergeSettings({}).schemaVersion, 13);
+});
+
+test('preset remembers the last applied package id, and drops anything unrecognised', () => {
+  assert.equal(mergeSettings({}).preset, '');
+  for (const id of CONSOLE_PRESET_IDS) assert.equal(mergeSettings({ preset: id }).preset, id);
+  assert.equal(mergeSettings({ preset: 'made-up' }).preset, '');
+});
+
+test('pagesForMode lists the rail per DESIGN §15.1, and resolvePageForMode falls back to 翻译台', () => {
+  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'logs']);
+  assert.deepEqual(pagesForMode('advanced'), ['main', 'prompt', 'settings', 'processing', 'tts', 'logs']);
+  assert.deepEqual(pagesForMode('bogus'), pagesForMode('advanced'));
+  assert.equal(pageExistsInMode('tts', 'normal'), false);
+  assert.equal(pageExistsInMode('tts', 'advanced'), true);
+  assert.equal(pageExistsInMode('main', 'normal'), true);
+  assert.equal(resolvePageForMode('tts', 'normal'), 'main', 'a page not in the new mode returns to 翻译台');
+  assert.equal(resolvePageForMode('tts', 'advanced'), 'tts', 'a page that still exists stays put');
+  assert.equal(resolvePageForMode('logs', 'normal'), 'logs');
+  assert.deepEqual(Object.keys(CONTROL_CENTER_PAGES).sort(), [...UI_MODES].sort());
+});
+
+test('connection uses: translation and analysis resolve directly, deep defers to analysis until it has its own choice', () => {
+  const settings = mergeSettings({
+    apiMode: 'independent',
+    channels: [
+      { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+      { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+    ],
+    selectedChannelId: 'c1',
+    tts: { analysisChannelId: 'c2', deepChannelId: '' },
+  });
+  assert.equal(connectionUseChoice(settings, 'translation'), 'c1');
+  assert.equal(connectionUseChoice(settings, 'analysis'), 'c2');
+  assert.equal(connectionUseChoice(settings, 'deep'), 'c2', 'empty deepChannelId defers to analysis');
+
+  const pinned = setConnectionUse(settings, 'deep', 'c1');
+  assert.equal(pinned.tts.deepChannelId, 'c1');
+  assert.equal(connectionUseChoice(pinned, 'deep'), 'c1');
+
+  const followingAgain = setConnectionUse(pinned, 'deep', '');
+  assert.equal(followingAgain.tts.deepChannelId, '', "setting deep back to '' returns it to following analysis");
+  assert.equal(connectionUseChoice(followingAgain, 'deep'), 'c2');
+
+  const movedTranslation = setConnectionUse(settings, 'translation', 'follow');
+  assert.equal(movedTranslation.apiMode, 'follow');
+  assert.equal(connectionUseChoice(movedTranslation, 'translation'), 'follow');
+
+  const movedAnalysis = setConnectionUse(settings, 'analysis', 'c1');
+  assert.equal(movedAnalysis.tts.analysisChannelId, 'c1');
+
+  assert.deepEqual(CONNECTION_USES, ['translation', 'analysis', 'deep']);
+  assert.throws(() => connectionUseChoice(settings, 'bogus'));
+  assert.throws(() => setConnectionUse(settings, 'bogus', 'c1'));
+});
+
+test('channelUsesPointingAt lists every use resolving to a connection, deep included when it only defers there', () => {
+  const settings = mergeSettings({
+    apiMode: 'independent',
+    channels: [{ id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' }],
+    selectedChannelId: 'c1',
+    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+  });
+  assert.deepEqual(channelUsesPointingAt(settings, 'c1'), ['translation', 'analysis', 'deep']);
+  assert.deepEqual(channelUsesPointingAt(settings, 'follow'), []);
+});
+
+test('reassignConnectionUsesOnDelete moves every use a deleted connection served to 跟随酒馆, leaving a deferring deep still deferring', () => {
+  const twoChannels = [
+    { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+    { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+  ];
+  const settings = mergeSettings({
+    apiMode: 'independent',
+    channels: twoChannels,
+    selectedChannelId: 'c1',
+    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+  });
+  const result = reassignConnectionUsesOnDelete(settings, 'c1');
+  assert.deepEqual(result.moved, ['translation', 'analysis', 'deep']);
+  assert.equal(result.settings.apiMode, 'follow');
+  assert.equal(result.settings.tts.analysisChannelId, 'follow');
+  assert.equal(result.settings.tts.deepChannelId, '', 'deep never had its own choice, so its field is left untouched');
+  assert.equal(connectionUseChoice(result.settings, 'deep'), 'follow');
+
+  const pinnedSettings = mergeSettings({
+    apiMode: 'independent',
+    channels: twoChannels,
+    selectedChannelId: 'c2',
+    tts: { analysisChannelId: 'c2', deepChannelId: 'c1' },
+  });
+  const pinnedResult = reassignConnectionUsesOnDelete(pinnedSettings, 'c1');
+  assert.deepEqual(pinnedResult.moved, ['deep']);
+  assert.equal(pinnedResult.settings.tts.deepChannelId, 'follow');
+  assert.equal(pinnedResult.settings.apiMode, 'independent', 'translation used c2, untouched by deleting c1');
+
+  const untouched = reassignConnectionUsesOnDelete(settings, 'not-a-real-id');
+  assert.deepEqual(untouched.moved, []);
+  assert.equal(untouched.settings, settings, 'nothing to move returns the very same settings object');
+});
+
+test('preset content covers exactly the nine managed fields named in DESIGN §15.2 and nothing else', () => {
+  assert.equal(PRESET_MANAGED_FIELDS.length, 9);
+  for (const id of CONSOLE_PRESET_IDS) {
+    const content = presetContent(id);
+    assert.ok(content, `${id} 缺少套餐内容`);
+    assert.deepEqual(Object.keys(content).sort(), PRESET_MANAGED_FIELDS.map(field => field.key).sort());
+  }
+  assert.equal(presetContent(''), null);
+  assert.equal(presetContent('not-a-package'), null);
+  assert.deepEqual(Object.keys(PRESET_LABELS).sort(), [...CONSOLE_PRESET_IDS].sort());
+  for (const id of Object.keys(PRESET_TIER_LABELS)) assert.ok(CONSOLE_PRESET_IDS.includes(id));
+  assert.equal(CONSOLE_PRESET_IDS.includes('audiobook') && !Object.hasOwn(PRESET_TIER_LABELS, 'audiobook'), true, '有声小说 carries no 最省/推荐/最费 pill');
+});
+
+test('applyPreset writes only the managed fields and remembers the package id; presetDrift reports what a hand edit changed', () => {
+  const base = mergeSettings({});
+  const audiobook = applyPreset(base, 'audiobook');
+  assert.equal(audiobook.preset, 'audiobook');
+  assert.equal(audiobook.tts.enabled, true);
+  assert.equal(audiobook.tts.mode, 'simple');
+  assert.equal(audiobook.tts.autoRead, true);
+  assert.equal(audiobook.coloring.speakers, true);
+  assert.equal(audiobook.coloring.effects, false, '特效字 only comes with 全都要');
+  assert.equal(applyPreset(base, 'comfort').coloring.effects, false);
+  assert.equal(applyPreset(base, 'everything').coloring.effects, true);
+  // DESIGN §15.2's explicit 「套餐不碰」 list: none of these move.
+  assert.equal(audiobook.translationOnly, base.translationOnly);
+  assert.equal(audiobook.streamingWriteback, base.streamingWriteback);
+  assert.equal(audiobook.theme, base.theme);
+  assert.deepEqual(audiobook.channels, base.channels);
+
+  assert.deepEqual(presetDrift(audiobook), []);
+  const handEdited = { ...audiobook, coloring: { ...audiobook.coloring, speakers: false } };
+  const drift = presetDrift(handEdited);
+  assert.equal(drift.length, 1);
+  assert.equal(drift[0].key, 'coloringSpeakers');
+  assert.equal(drift[0].label, '说话人着色');
+
+  const restored = applyPreset(handEdited, handEdited.preset);
+  assert.deepEqual(presetDrift(restored), []);
+  assert.equal(restored.coloring.speakers, true);
+
+  assert.deepEqual(presetDrift(mergeSettings({})), [], 'no package remembered means nothing to report as drifted');
+  assert.throws(() => applyPreset(base, 'not-a-package'));
+});
+
+// DESIGN §15.4 折叠组: "收起时同一行写当前值摘要" — the pure half of each collapsed fold's summary line
+// on the 正文处理 / 朗读 advanced pages.
+test('preserveLineRuleCountLabel counts usable rules and reads "空" for none', () => {
+  assert.equal(preserveLineRuleCountLabel(''), '空');
+  assert.equal(preserveLineRuleCountLabel('   \n  '), '空');
+  assert.equal(preserveLineRuleCountLabel('此时彼刻'), '1 条');
+  assert.equal(preserveLineRuleCountLabel('此时彼刻\nprefix:【系统记录】\n/^foo/'), '3 条');
+  // A line that fails to parse (an unterminated /regex/) contributes no rule, not a crash.
+  assert.equal(preserveLineRuleCountLabel('/unterminated'), '空');
+});
+
+test('segmentAffixSummary reads the default 译文 { } / 原文 无 pair and any custom prefix-suffix pair', () => {
+  assert.equal(segmentAffixSummary({ translationPrefix: '{', translationSuffix: '}' }), '原文 无 · 译文 { }');
+  assert.equal(segmentAffixSummary({}), '原文 无 · 译文 无');
+  assert.equal(
+    segmentAffixSummary({ segmentPrefix: '【', segmentSuffix: '】', translationPrefix: '(', translationSuffix: ')' }),
+    '原文 【 】 · 译文 ( )',
+  );
+  // A lone prefix or suffix (no matching other half) still reads as something, not "无".
+  assert.equal(segmentAffixSummary({ segmentPrefix: '«' }), '原文 « · 译文 无');
+});
+
+test('coloringDetailFoldSummary reports the numbers actually set, falling back to DEFAULT_COLORING for a bare object', () => {
+  assert.equal(
+    coloringDetailFoldSummary({ minContrast: 4.5, vividness: 0.65 }),
+    '对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({}),
+    '对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ minContrast: 7, vividness: 1 }),
+    '对比度目标 7 · 彩度 1.00 · 读取当前主题与壁纸',
+  );
+});
+
+// A collapsed fold used to claim 情绪起伏/名单外自动取色 were on no matter what the switches actually
+// said (review finding core.js:946) — each token now only shows up when its own setting is on.
+test('coloringDetailFoldSummary only lists 情绪起伏/名单外自动取色 when those switches are actually on', () => {
+  assert.equal(
+    coloringDetailFoldSummary({ rhythm: true, minContrast: 4.5, vividness: 0.65 }),
+    '情绪起伏 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ autoSpeakers: true, minContrast: 4.5, vividness: 0.65 }),
+    '名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ rhythm: true, autoSpeakers: true, minContrast: 4.5, vividness: 0.65 }),
+    '情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ rhythm: false, autoSpeakers: false, minContrast: 4.5, vividness: 0.65 }),
+    '对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+});
+
+test('quoteSymbolFoldSummary reads the default quote/skip pairs and any custom ones, "空" for no skip pairs', () => {
+  assert.equal(quoteSymbolFoldSummary({}), '「」, 『』, “”, "" · 空');
+  assert.equal(
+    quoteSymbolFoldSummary({ quotePairs: '“”', skipPairs: '** **, （）' }),
+    '“” · ** **, （）',
+  );
+});
+
+test('fishParamsFoldSummary reads format, speed and concurrency', () => {
+  assert.equal(fishParamsFoldSummary({ format: 'mp3', speed: 1, concurrency: 2 }), 'mp3 · 语速 1 · 同时生成 2 段');
+  assert.equal(fishParamsFoldSummary({ format: 'wav', speed: 0.8, concurrency: 1 }), 'wav · 语速 0.8 · 同时生成 1 段');
+});
+
+test('consoleFoldSummary reads "AI 判断" until a slider leaves 50, then counts what moved, plus the mark count', () => {
+  assert.equal(consoleFoldSummary(DEFAULT_CONSOLE), 'AI 判断 · 标点情绪标签 0 条');
+  assert.equal(consoleFoldSummary({ ...DEFAULT_CONSOLE, pause: 75 }), '1 项已设定 · 标点情绪标签 0 条');
+  assert.equal(
+    consoleFoldSummary({ ...DEFAULT_CONSOLE, pause: 75, speed: 0, marks: [{ punct: '！！', tag: '加大音量', at: 'head' }] }),
+    '2 项已设定 · 标点情绪标签 1 条',
+  );
+});
+
+test('voiceLibraryFoldSummary counts voices with a usable id and reads "空" for none', () => {
+  assert.equal(voiceLibraryFoldSummary(undefined), '空');
+  assert.equal(voiceLibraryFoldSummary([]), '空');
+  assert.equal(voiceLibraryFoldSummary([{ id: 'a', name: '少女', voiceId: '' }]), '空');
+  assert.equal(voiceLibraryFoldSummary([{ id: 'a', name: '少女', voiceId: 'voice-a' }]), '1 个音色');
+  assert.equal(
+    voiceLibraryFoldSummary([
+      { id: 'a', name: '少女', voiceId: 'voice-a' },
+      { id: 'b', name: '老人', voiceId: 'voice-b' },
+    ]),
+    '2 个音色',
   );
 });

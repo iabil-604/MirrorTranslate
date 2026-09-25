@@ -9,7 +9,7 @@ import {
   normalizeProcessingSettings, normalizeProcessingProfile, processingSnapshot, getActiveProcessingProfile, makeBuiltinReadingProfile,
   selectProcessingProfile, captureProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, syncNativeRegex, readNativeRegexEdits, compileNativeRegex, isJingyiRegex, REGEX_OWNER_KEY,
-  dedupeManagedRegexScripts, planRegexCleanup,
+  dedupeManagedRegexScripts, planRegexCleanup, detectBuiltinReadingStyle,
 } from '../processing.js';
 import { __testing, onDisable } from '../index.js';
 
@@ -204,6 +204,36 @@ test('built-in styles preserve extraction settings and use display-only native r
     assert.ok(display.includes('Original.') && display.includes('译文。'));
     if (id === 'fold') { assert.match(display, /<details class=/); assert.doesNotMatch(display, /<details[^>]*\bopen\b/); }
   }
+});
+
+// 微调's 内置美化 picker used to always show 可爱风 and could not be told to reselect the style already
+// active (review finding index.js:11796/491) — detectBuiltinReadingStyle is the reverse lookup that
+// fixes both.
+test('detectBuiltinReadingStyle recognises each built-in style makeBuiltinReadingProfile produced, and nothing else', () => {
+  const settings = normalizeProcessingSettings();
+  for (const id of ['cute', 'minimal', 'fold']) {
+    assert.equal(detectBuiltinReadingStyle(makeBuiltinReadingProfile(settings, id)), id);
+  }
+  assert.equal(detectBuiltinReadingStyle(getActiveProcessingProfile(settings)), null, 'the plain 默认 profile matches none of them');
+  assert.equal(detectBuiltinReadingStyle(null), null);
+  assert.equal(detectBuiltinReadingStyle(undefined), null);
+  // A profile with the right prefixes but a hand-edited rule (or none at all) is not mistaken for a
+  // style the reader never actually chose from the picker.
+  const renamed = makeBuiltinReadingProfile(settings, 'cute');
+  renamed.regexScripts[0].replaceString = renamed.regexScripts[0].replaceString.replace('jy-reading-cute', 'jy-reading-cute-mine');
+  assert.equal(detectBuiltinReadingStyle(renamed), null);
+  const noRule = makeBuiltinReadingProfile(settings, 'cute');
+  noRule.regexScripts = [];
+  assert.equal(detectBuiltinReadingStyle(noRule), null);
+  // Prefixes alone, without the matching rule, are not enough either (a hand-made profile that
+  // happens to reuse the same segment markers for its own purposes).
+  const active = getActiveProcessingProfile(settings);
+  const prefixOnly = {
+    ...active,
+    settings: { ...active.settings, segmentPrefix: '<jy-source>', segmentSuffix: '</jy-source>', translationPrefix: '<jy-translation>', translationSuffix: '</jy-translation>' },
+    regexScripts: [],
+  };
+  assert.equal(detectBuiltinReadingStyle(prefixOnly), null);
 });
 
 test('the built-in beautify never wraps a source block whose own block tags are not balanced', () => {
