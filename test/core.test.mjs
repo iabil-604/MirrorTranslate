@@ -82,6 +82,13 @@ import {
   presetDrift,
   translationChannelChoice,
   resolveFeatureChannel,
+  preserveLineRuleCountLabel,
+  segmentAffixSummary,
+  coloringDetailFoldSummary,
+  quoteSymbolFoldSummary,
+  fishParamsFoldSummary,
+  consoleFoldSummary,
+  DEFAULT_CONSOLE,
 } from '../core.js';
 import {
   addDiagnostic,
@@ -2184,4 +2191,63 @@ test('applyPreset writes only the managed fields and remembers the package id; p
 
   assert.deepEqual(presetDrift(mergeSettings({})), [], 'no package remembered means nothing to report as drifted');
   assert.throws(() => applyPreset(base, 'not-a-package'));
+});
+
+// DESIGN §15.4 折叠组: "收起时同一行写当前值摘要" — the pure half of each collapsed fold's summary line
+// on the 正文处理 / 朗读 advanced pages.
+test('preserveLineRuleCountLabel counts usable rules and reads "空" for none', () => {
+  assert.equal(preserveLineRuleCountLabel(''), '空');
+  assert.equal(preserveLineRuleCountLabel('   \n  '), '空');
+  assert.equal(preserveLineRuleCountLabel('此时彼刻'), '1 条');
+  assert.equal(preserveLineRuleCountLabel('此时彼刻\nprefix:【系统记录】\n/^foo/'), '3 条');
+  // A line that fails to parse (an unterminated /regex/) contributes no rule, not a crash.
+  assert.equal(preserveLineRuleCountLabel('/unterminated'), '空');
+});
+
+test('segmentAffixSummary reads the default 译文 { } / 原文 无 pair and any custom prefix-suffix pair', () => {
+  assert.equal(segmentAffixSummary({ translationPrefix: '{', translationSuffix: '}' }), '原文 无 · 译文 { }');
+  assert.equal(segmentAffixSummary({}), '原文 无 · 译文 无');
+  assert.equal(
+    segmentAffixSummary({ segmentPrefix: '【', segmentSuffix: '】', translationPrefix: '(', translationSuffix: ')' }),
+    '原文 【 】 · 译文 ( )',
+  );
+  // A lone prefix or suffix (no matching other half) still reads as something, not "无".
+  assert.equal(segmentAffixSummary({ segmentPrefix: '«' }), '原文 « · 译文 无');
+});
+
+test('coloringDetailFoldSummary reports the numbers actually set, falling back to DEFAULT_COLORING for a bare object', () => {
+  assert.equal(
+    coloringDetailFoldSummary({ minContrast: 4.5, vividness: 0.65 }),
+    '情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({}),
+    '情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ minContrast: 7, vividness: 1 }),
+    '情绪起伏 · 名单外自动取色 · 对比度目标 7 · 彩度 1.00 · 读取当前主题与壁纸',
+  );
+});
+
+test('quoteSymbolFoldSummary reads the default quote/skip pairs and any custom ones, "空" for no skip pairs', () => {
+  assert.equal(quoteSymbolFoldSummary({}), '「」, 『』, “”, "" · 空');
+  assert.equal(
+    quoteSymbolFoldSummary({ quotePairs: '“”', skipPairs: '** **, （）' }),
+    '“” · ** **, （）',
+  );
+});
+
+test('fishParamsFoldSummary reads format, speed and concurrency', () => {
+  assert.equal(fishParamsFoldSummary({ format: 'mp3', speed: 1, concurrency: 2 }), 'mp3 · 语速 1 · 同时生成 2 段');
+  assert.equal(fishParamsFoldSummary({ format: 'wav', speed: 0.8, concurrency: 1 }), 'wav · 语速 0.8 · 同时生成 1 段');
+});
+
+test('consoleFoldSummary reads "AI 判断" until a slider leaves 50, then counts what moved, plus the mark count', () => {
+  assert.equal(consoleFoldSummary(DEFAULT_CONSOLE), 'AI 判断 · 标点情绪标签 0 条');
+  assert.equal(consoleFoldSummary({ ...DEFAULT_CONSOLE, pause: 75 }), '1 项已设定 · 标点情绪标签 0 条');
+  assert.equal(
+    consoleFoldSummary({ ...DEFAULT_CONSOLE, pause: 75, speed: 0, marks: [{ punct: '！！', tag: '加大音量', at: 'head' }] }),
+    '2 项已设定 · 标点情绪标签 1 条',
+  );
 });

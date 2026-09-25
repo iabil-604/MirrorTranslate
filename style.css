@@ -101,6 +101,8 @@ label { min-width: 0; }
 .jy-button-primary:hover { background: var(--jy-accent); color: var(--jy-on-accent); filter: brightness(.94); }
 .jy-text-button { border: 0; background: transparent; color: var(--jy-accent); padding: 8px 4px; font-size: 12px; text-align: left; }
 .jy-text-button:hover { text-decoration: underline; }
+/* DESIGN §15.4 危险操作: red text, placed at the end of its group, confirmed before it acts. */
+.jy-text-button-danger { color: var(--jy-error); }
 .jy-icon-button { display: inline-grid; place-items: center; height: 30px; min-width: 30px; border: 1px solid var(--jy-line); border-radius: var(--jy-radius-sm); color: var(--jy-accent); background: transparent; font-size: 16px; transition: background var(--jy-hover), border-color var(--jy-hover); }
 .jy-badge { display: inline-block; max-width: 100%; border: 1px solid var(--jy-line); border-radius: 4px; background: var(--jy-accent-soft); color: var(--jy-muted); font-size: 10px; line-height: 1.5; padding: 3px 7px; overflow-wrap: anywhere; }
 .jy-desk { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(0,1fr); gap: 20px; padding-bottom: 18px; }
@@ -716,6 +718,20 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-fold-summary { margin-left: auto; color: var(--jy-muted); font-size: 11px; font-weight: 500; text-align: right; overflow-wrap: anywhere; }
 .jy-fold[open] > summary .jy-fold-summary { display: none; }
 .jy-fold > .jy-form-body { padding-top: 16px; }
+/* DESIGN §15.4 折叠组 nested inside a card (正文处理/朗读's always-open cards): a hairline separates it
+   from the row above, matching the card's own row rhythm. */
+.jy-text-scope > .jy-fold { padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--jy-line-soft); }
+/* DESIGN §15.4 依赖: a child field 28px in from its parent switch; grayed with a reason line once the
+   parent is off (JS toggles `[data-jy-dependent-off]` — see syncColoringFields in index.js). */
+.jy-dependent { margin-left: 28px; }
+.jy-dependent-reason { display: none; margin: 2px 0 0; font-size: 11px; }
+.jy-dependent[data-jy-dependent-off="true"] .jy-check { color: var(--jy-muted-soft); }
+.jy-dependent[data-jy-dependent-off="true"] .jy-dependent-reason { display: block; }
+/* DESIGN §15.4 更多 (朗读 page): a labelled card holding several individually-folded groups. */
+.jy-more-group { margin-top: 4px; }
+.jy-more-group > h2 { margin: 0 0 10px; font-size: 14px; font-weight: 650; }
+.jy-fold-list { display: flex; flex-direction: column; gap: 8px; }
+.jy-fold-list > .jy-fold { padding: 12px 14px; background: var(--jy-band); border: 1px solid var(--jy-band-line); border-radius: var(--jy-radius-sm); }
 .jy-tts-voice-row { display: block; padding: 0; border-bottom: 1px solid var(--jy-line-soft); }
 .jy-tts-voice-row > summary { display: flex; align-items: center; gap: 8px; padding: 9px 0; cursor: pointer; list-style: none; font-size: 12.5px; }
 .jy-tts-voice-row > summary::-webkit-details-marker { display: none; }
