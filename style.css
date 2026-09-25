@@ -805,6 +805,9 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-row, .jy-mini-sentence { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 8px 4px; border-top: 1px solid var(--jy-line-soft); border-radius: 6px; cursor: pointer; }
 .jy-mini-row:hover, .jy-mini-sentence:hover { background: var(--jy-band); }
 .jy-mini-row[data-editing="true"] { background: var(--jy-accent-soft); cursor: default; }
+/* 片段跳转: the row a chat click landed on, flashed once so the reader can find it. */
+.jy-mini-row-jump { animation: jy-mini-row-jump 1100ms ease-out; will-change: background-color; }
+@keyframes jy-mini-row-jump { 0% { background: var(--jy-accent-soft); } 100% { background: transparent; } }
 .jy-mini-sentence[data-current="true"] { background: var(--jy-accent-soft); }
 .jy-mini-row-mark, .jy-mini-sentence-mark { font-size: 12px; line-height: 1.6; color: var(--jy-muted); text-align: center; }
 .jy-mini-row[data-state="done"] .jy-mini-row-mark, .jy-mini-sentence[data-ready="true"] .jy-mini-sentence-mark { color: var(--jy-ok); }

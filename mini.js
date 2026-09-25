@@ -112,6 +112,48 @@ export function describeLog(entry) {
 }
 
 /**
+ * A floor's segments as two lists of anchors for `locateAnchors` to find on the rendered page: one
+ * for each segment's translation (only the ones that have one), one for its original (only the ones
+ * with any text). Segment jump reads both — a bilingual floor is clickable on either line, a 只留译文
+ * floor only has the translation on the page, and a plain untranslated floor only has the original.
+ */
+export function segmentAnchors(snapshot) {
+  const segments = Array.isArray(snapshot?.segments) ? snapshot.segments : [];
+  const translations = snapshot?.existingTranslations instanceof Map ? snapshot.existingTranslations : new Map();
+  const translation = [];
+  const source = [];
+  for (const segment of segments) {
+    const wording = translations.get(segment.id);
+    if (typeof wording === 'string' && wording.trim()) translation.push({ id: segment.id, lineId: segment.id, text: wording });
+    const original = String(segment?.text ?? '');
+    if (original.trim()) source.push({ id: segment.id, lineId: segment.id, text: original });
+  }
+  return { translation, source };
+}
+
+// Document order for the `{node, offset}` pairs `locateAnchors` returns: `node` is an index into the
+// same ordered list of text nodes for every anchor, so comparing the two fields in turn is exactly
+// the ordering `Range.comparePoint` would give, without needing a real Range or a DOM.
+function compareNodePosition(a, b) {
+  if (a.node !== b.node) return a.node < b.node ? -1 : 1;
+  if (a.offset !== b.offset) return a.offset < b.offset ? -1 : 1;
+  return 0;
+}
+
+/**
+ * Which segment a point in the rendered floor contains, given the hits `locateAnchors` found for its
+ * translations and for its originals (translation checked first — the reading the two share when a
+ * word of one lands inside the other's punctuation). Neither map is trusted beyond its own `null`s: a
+ * segment `locateAnchors` could not find on the page is simply not a candidate here.
+ */
+export function segmentAtPosition(point, translationHits, sourceHits) {
+  const within = hit => hit && compareNodePosition(point, hit.start) >= 0 && compareNodePosition(point, hit.end) <= 0;
+  for (const [id, hit] of translationHits instanceof Map ? translationHits : []) if (within(hit)) return id;
+  for (const [id, hit] of sourceHits instanceof Map ? sourceHits : []) if (within(hit)) return id;
+  return null;
+}
+
+/**
  * The assistant floors of a chat that have no finished translation on them, newest first. Read off
  * the stored metadata only, so a long chat costs nothing to scan.
  */

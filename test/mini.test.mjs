@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { MESSAGE_META_KEY } from '../core.js';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from '../mini.js';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from '../mini.js';
 
 test('a floor becomes rows with a state each: done, running, missing, or never asked', () => {
   const snapshot = {
@@ -77,4 +77,28 @@ test('the untranslated floors are read off the stored metadata, newest first, us
   assert.deepEqual(untranslatedFloors(chat), [4, 3, 2]);
   assert.deepEqual(untranslatedFloors(chat, { limit: 2 }), [4, 3]);
   assert.deepEqual(untranslatedFloors(null), []);
+});
+
+test('片段跳转: a floor becomes two anchor lists, translation and original, empty text left out of both', () => {
+  const snapshot = {
+    segments: [{ id: 1, text: '雨。' }, { id: 2, text: '「来た」' }, { id: 3, text: '' }],
+    existingTranslations: new Map([[1, '下雨了。'], [2, '   ']]),
+  };
+  const anchors = segmentAnchors(snapshot);
+  assert.deepEqual(anchors.translation, [{ id: 1, lineId: 1, text: '下雨了。' }], 'blank translations do not count as one');
+  assert.deepEqual(anchors.source, [{ id: 1, lineId: 1, text: '雨。' }, { id: 2, lineId: 2, text: '「来た」' }], 'the blank-text segment has nothing to search for');
+  assert.deepEqual(segmentAnchors(null), { translation: [], source: [] });
+});
+
+test('片段跳转: a click lands on whichever segment its point falls inside, translation checked before original', () => {
+  const hit = (startNode, startOffset, endNode, endOffset) => ({ start: { node: startNode, offset: startOffset }, end: { node: endNode, offset: endOffset } });
+  const translationHits = new Map([[1, hit(0, 0, 0, 3)], [2, hit(0, 3, 0, 6)], [3, null]]);
+  const sourceHits = new Map([[4, hit(1, 0, 1, 4)]]);
+  assert.equal(segmentAtPosition({ node: 0, offset: 1 }, translationHits, sourceHits), 1, 'inside the first translation');
+  assert.equal(segmentAtPosition({ node: 0, offset: 3 }, translationHits, sourceHits), 1, 'a shared boundary is inclusive on both sides; the earlier hit is checked first');
+  assert.equal(segmentAtPosition({ node: 0, offset: 6 }, translationHits, sourceHits), 2, 'inclusive of its own end');
+  assert.equal(segmentAtPosition({ node: 0, offset: 7 }, translationHits, sourceHits), null, 'past every translation hit and no source hit on that node');
+  assert.equal(segmentAtPosition({ node: 1, offset: 2 }, translationHits, sourceHits), 4, 'falls through to the original when nothing in the translation matches');
+  assert.equal(segmentAtPosition({ node: 9, offset: 0 }, translationHits, sourceHits), null, 'a null hit (locateAnchors could not find that segment) is never a match');
+  assert.equal(segmentAtPosition({ node: 0, offset: 0 }, null, null), null, 'missing maps do not throw');
 });
