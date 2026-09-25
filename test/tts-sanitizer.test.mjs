@@ -17,6 +17,61 @@ test('the voice gets the words of a styled line, never its tags, attributes or e
   assert.equal(sanitizeForTts(null), '');
 });
 
+test('struck-through, redacted, arrow and mathematical-alphabet text is never read as written', () => {
+  assert.equal(sanitizeForTts('看得见<s>看不见</s>的字'), '看得见的字', 'struck through, with its words');
+  assert.equal(sanitizeForTts('看得见<del>看不见</del><strike>也看不见</strike>的字'), '看得见的字');
+  assert.equal(
+    sanitizeForTts('前面<span style="background-color:currentColor;color:currentColor">涂黑的字</span>后面'),
+    '前面后面',
+    'painted the same colour as its own background, with the words it hides',
+  );
+  assert.equal(
+    sanitizeForTts("前面<span style='background: currentcolor'>涂黑</span>后面"),
+    '前面后面',
+    'the shorthand property and single quotes are read the same way',
+  );
+  assert.equal(
+    sanitizeForTts('<span style="color:red">红字不涂黑</span>'),
+    '红字不涂黑',
+    'a style with no matching background is an ordinary span',
+  );
+  assert.equal(sanitizeForTts('语气上扬↗然后下降↘还有⤴⤵和〰'), '语气上扬然后下降还有和', 'tone arrows carry no word of their own');
+  const bold = String.fromCodePoint(0x1d400, 0x1d401); // MATHEMATICAL BOLD CAPITAL A, B
+  const fraktur = String.fromCodePoint(0x1d504, 0x1d505); // MATHEMATICAL FRAKTUR CAPITAL A, B
+  assert.equal(sanitizeForTts(bold), 'AB', 'bold letters fold to the plain letters a voice knows');
+  assert.equal(sanitizeForTts(fraktur), 'AB', 'fraktur folds the same way');
+  // Letterlike Symbols: script, black-letter and double-struck capitals the Mathematical Alphanumeric
+  // block never assigned a slot to, so they live at their own, much older code points.
+  const letterlike = String.fromCodePoint(0x210c, 0x211c, 0x2124, 0x2102, 0x2115); // black-letter H, R, double-struck Z, C, N
+  assert.equal(sanitizeForTts(letterlike), 'HRZCN', 'a letter with no slot in the math block still folds, from Letterlike Symbols');
+  const planck = String.fromCodePoint(0x210f); // PLANCK CONSTANT OVER TWO PI
+  assert.notEqual(sanitizeForTts(planck), 'h', 'a symbol that folds to a letter with a stroke through it is left alone, not mistaken for h');
+});
+
+test('a redaction or strike-through nested inside a same-named tag is removed whole, not truncated at the first closer', () => {
+  assert.equal(
+    sanitizeForTts('前面<span style="background-color:currentColor;color:currentColor">秘密<span style="font-weight:bold">名字</span>后半</span>后面'),
+    '前面后面',
+    'the words after the inner </span> are still inside the redaction and must not survive',
+  );
+  assert.equal(
+    sanitizeForTts('前面<span style="background:currentColor"><span>整段</span>藏起来</span>后面'),
+    '前面后面',
+    'an unstyled span nested first is still inside the outer redaction',
+  );
+  assert.equal(sanitizeForTts('<s>第一<s>第二</s>第三</s>之后'), '之后', 'nested <s> of the same name is not mistaken for the outer one\'s own closer');
+  assert.equal(sanitizeForTts('看得见<s>永远划不掉的字'), '看得见永远划不掉的字', 'a strike never closed is left exactly as it was, nothing guessed');
+});
+
+test('a redacted or struck-through block element leaves the line break it stood for, not a glued line', () => {
+  assert.equal(
+    sanitizeForTts('第一行<div style="background:currentColor">秘密</div>第二行'),
+    '第一行\n第二行',
+    'removed whole, the block still separates the text on either side of it',
+  );
+  assert.equal(sanitizeForTts('看得见<s>划掉的字</s>还看得见'), '看得见还看得见', 'an inline strike is not a line break, nothing is inserted for it');
+});
+
 test('markup detection and entity decoding stand on their own', () => {
   assert.equal(looksLikeMarkup('plain'), false);
   assert.equal(looksLikeMarkup('<b>x</b>'), true);

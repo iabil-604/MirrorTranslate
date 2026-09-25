@@ -60,6 +60,8 @@ import {
   segmentSource,
   restyleBilingual,
   stripGeneratedTranslationLines,
+  matchesPreserveLine,
+  SEGMENTATION_RULES_VERSION,
 } from '../core.js';
 import {
   addDiagnostic,
@@ -431,6 +433,144 @@ test('preserve whitelist supports exact, prefix and regular-expression rules', (
   assert.ok(output.indexOf('VIEW: KEEP') < output.indexOf('西蒙斯视角'));
   assert.throws(() => segmentSource('本文。', { preserveLineRules: '/[/' }), /第 1 行正则无效/);
   assert.throws(() => segmentSource('本文。', { preserveLineRules: 'prefix:' }), /prefix 不能为空/);
+});
+
+test('a <br> or block edge inside one physical line is a line break, not glue, when sent to be translated', () => {
+  // No real newline between them — the three card lines are one physical line, joined only by <br>.
+  const card = 'NOW PLAYING<br>今日の空<br>作词：陽炎';
+  assert.deepEqual(
+    segmentSource(card).segments.map(item => item.text),
+    ['NOW PLAYING\n今日の空\n作词：陽炎'],
+    'the words on either side of a <br> are not run together',
+  );
+  assert.deepEqual(
+    segmentSource(card, { segmentationVersion: 1 }).segments.map(item => item.text),
+    ['NOW PLAYING今日の空作词：陽炎'],
+    'a floor already segmented under v0.36.0 or older is re-derived exactly as it read then, glue and all',
+  );
+  // A block edge behaves the same way as <br>.
+  assert.deepEqual(segmentSource('<div>甲</div><div>乙</div>').segments.map(item => item.text), ['甲\n\n乙']);
+});
+
+test('two adjacent inline elements with nothing of their own between them keep a separating space, on new floors only', () => {
+  const line = '<span>NOW PLAYING</span><span>Evening Glass</span>';
+  assert.deepEqual(segmentSource(line).segments.map(item => item.text), ['NOW PLAYING Evening Glass']);
+  assert.deepEqual(
+    segmentSource(line, { segmentationVersion: 1 }).segments.map(item => item.text),
+    ['NOW PLAYINGEvening Glass'],
+    'a floor already segmented under v0.36.0 or older keeps reading glued, exactly as it did then',
+  );
+  // Nesting deeper (an opener followed by markup) and unwinding a nest (two closers in a row) need
+  // nothing: there is no run of text on that side for the space to separate anything from.
+  assert.deepEqual(segmentSource('<span><b>加粗</b>文字</span>').segments.map(item => item.text), ['加粗文字']);
+  assert.deepEqual(segmentSource('<span><b>加粗文字</b></span>').segments.map(item => item.text), ['加粗文字']);
+  // A tag next to real text on either side already has that text to stand on its own; no space is added.
+  assert.deepEqual(segmentSource('前面<b>加粗</b>后面').segments.map(item => item.text), ['前面加粗后面']);
+  // Three siblings in a row: a space at each of the two junctions, never doubled.
+  assert.deepEqual(segmentSource('<span>甲</span><span>乙</span><span>丙</span>').segments.map(item => item.text), ['甲 乙 丙']);
+});
+
+test('a preserve rule matches past a line-level <say> shell and its indentation, on new floors only', () => {
+  const rules = ['NOW PLAYING'];
+  const line = '  <say who="旁白">NOW PLAYING</say>';
+  const modern = segmentSource(line, { preserveLineRules: rules });
+  assert.equal(modern.segments.length, 0, 'an indented, speaker-marked line still hits an exact rule written for the bare text');
+  assert.equal(modern.customPreservedLines, 1);
+  const legacy = segmentSource(line, { preserveLineRules: rules, segmentationVersion: 1 });
+  assert.equal(legacy.segments.length, 1, 'a floor already segmented under v0.36.0 or older is matched exactly as it read then: shell and all, so the rule misses and the line stays translated');
+  assert.equal(legacy.customPreservedLines, 0);
+  assert.equal(matchesPreserveLine('<say who="A">走开</say>', [{ type: 'exact', text: '走开' }], { modern: true }), true);
+  assert.equal(matchesPreserveLine('<say who="A">走开</say>', [{ type: 'exact', text: '走开' }]), false, 'options.modern defaults off, matching every version through v0.36.0');
+});
+
+test('looking past a <say> shell only adds matches on new floors, it never takes away what v0.36.0 already matched', () => {
+  // An indentation-anchored regex: it can only ever see the untrimmed original, shell or not, so
+  // stripping the shell to test a trimmed subject instead would make it miss every line it used to hit.
+  const indentRule = [{ type: 'regex', source: '/^\\s{4}/', regex: /^\s{4}/ }];
+  assert.equal(matchesPreserveLine('    indented code-like line', indentRule, { modern: true }), true);
+  assert.equal(matchesPreserveLine('    <say who="A">indented</say>', indentRule, { modern: true }), true, 'the shell sits after the indentation the rule anchors on');
+  // A prefix or exact rule written to include the <say> shell itself: v0.36.0 tested these against the
+  // trimmed line, shell and all, so a shell-stripped-only subject must not stop that from matching too.
+  const prefixRule = [{ type: 'prefix', text: '<say who="System">' }];
+  assert.equal(matchesPreserveLine('<say who="System">Signal lost.</say>', prefixRule, { modern: true }), true);
+  const exactRule = [{ type: 'exact', text: '<say who="DJ">NOW PLAYING</say>' }];
+  assert.equal(matchesPreserveLine('<say who="DJ">NOW PLAYING</say>', exactRule, { modern: true }), true);
+  // End to end: a floor whose preserve rules were written against v0.36.0's own matching keeps matching
+  // exactly the same lines once segmentSource runs under the modern rules.
+  const body = [
+    '    indented code-like line',
+    '<say who="System">Signal lost.</say>',
+    '',
+    'Plain prose here.',
+  ].join('\n');
+  const rules = ['/^\\s{4}/', '/^<say who="System">/'];
+  assert.deepEqual(segmentSource(body, { preserveLineRules: rules }).segments.map(item => item.text), ['Plain prose here.']);
+  const prefixRules = ['prefix:<say who="System">', '<say who="DJ">NOW PLAYING</say>'];
+  const prefixBody = [
+    '<say who="DJ">NOW PLAYING</say>',
+    '<say who="System">Signal lost.</say>',
+    '',
+    'Plain prose here.',
+  ].join('\n');
+  assert.deepEqual(segmentSource(prefixBody, { preserveLineRules: prefixRules }).segments.map(item => item.text), ['Plain prose here.']);
+});
+
+test('a play-time readout or a pseudo waveform line is preserved on new floors, translated as before on old ones', () => {
+  const card = ['00:42 / 03:15', 'llllIIIIll', '普通句子。'].join('\n\n');
+  const modern = segmentSource(card);
+  assert.deepEqual(modern.segments.map(item => item.text), ['普通句子。']);
+  assert.equal(modern.builtinPreservedLines, 2);
+  const legacy = segmentSource(card, { segmentationVersion: 1 });
+  assert.deepEqual(
+    legacy.segments.map(item => item.text),
+    ['00:42 / 03:15', 'llllIIIIll', '普通句子。'],
+    'v0.36.0 had no rule for either shape and sent both off to be translated',
+  );
+  assert.equal(legacy.builtinPreservedLines, 0);
+  assert.deepEqual(segmentSource('▶ 00:42 / 03:15 ◀').segments, [], 'decorations around the two clocks do not stop the rule');
+  // Under six characters is too short to be confident it is a waveform rather than a short word.
+  assert.equal(segmentSource('IIIII').segments.length, 1);
+  // A sentence that happens to end in one clock reading is not two clocks, so it stays prose.
+  assert.equal(segmentSource('11:30 に会おう。').segments.length, 1);
+});
+
+test('a decorative sub-line stays out of what is translated even when <br> folded it into a prose line\'s own text', () => {
+  // All three of the card's lines are joined by <br> with no real newline, so item 2's own <br>-as-break
+  // rule turns them into one physical `line` whose translationText carries two embedded \n — a decorative
+  // reading built only for a whole, undivided line would never see past those to find them.
+  const mixed = '<div class="player">NOW PLAYING<br>ılılıllıılı<br>▶ 01:02 / 03:45</div>';
+  const segmented = segmentSource(mixed);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['NOW PLAYING'], 'the two decorative sub-lines never reach the translator, only the prose one does');
+  // Every sub-line decorative: nothing semantic is left, so the whole physical line is preserved and no
+  // segment is created for it at all — the same outcome as when it is written on separate lines.
+  const allDecorative = '<div class="player">ılılıllıılı<br>▶ 01:02 / 03:45</div>';
+  assert.deepEqual(segmentSource(allDecorative).segments, []);
+  // An ordinary multi-line card with no decorative content is completely unaffected: every sub-line and
+  // its \n are kept exactly as item 2 alone already produced them.
+  const prose = 'NOW PLAYING<br>今日の空<br>作词：陽炎';
+  assert.deepEqual(segmentSource(prose).segments.map(item => item.text), ['NOW PLAYING\n今日の空\n作词：陽炎']);
+  // On an old floor's own rules, translationText never carries an embedded \n in the first place (see
+  // stripStructuralTags), so this filter has nothing to do and the glued legacy reading is untouched.
+  assert.deepEqual(
+    segmentSource(mixed, { segmentationVersion: 1 }).segments.map(item => item.text),
+    ['NOW PLAYINGılılıllıılı▶ 01:02 / 03:45'],
+  );
+});
+
+test('a segment carries a separate reading text only where it differs from what is translated, with struck-through and redacted words dropped', () => {
+  const plain = segmentSource('风停了。');
+  assert.equal(plain.reading.size, 0, 'nothing hidden, nothing struck: no entry at all, not even an identical one');
+  const struck = segmentSource('他说<del>不</del>要去。');
+  assert.equal(struck.segments[0].text, '他说不要去。', 'the translation still sees the retracted word');
+  assert.equal(struck.reading.get(struck.segments[0].id), '他说要去。', 'the reading drops it');
+  const redacted = segmentSource('前面<span style="background-color:currentColor">涂黑的字</span>后面');
+  assert.equal(redacted.segments[0].text, '前面涂黑的字后面', 'unchanged for translation');
+  assert.equal(redacted.reading.get(redacted.segments[0].id), '前面后面');
+  // A decorative sub-line folded away by <br> is dropped from both the translation and the reading, even
+  // on a line that separately carries struck-through text of its own elsewhere in it.
+  const both = segmentSource('他说<del>不</del>要去。<br>ılılıllıılı');
+  assert.equal(both.segments[0].text, '他说不要去。', 'the waveform sub-line never reaches the translator either');
+  assert.equal(both.reading.get(both.segments[0].id), '他说要去。');
 });
 
 test('transparent container tags and escaped excluded blocks never enter API segments', () => {
@@ -1039,6 +1179,49 @@ test('only a real whole-line wrapper is carried, and only its presentation attri
   );
   assert.equal(withoutCarriedColor('<span style="color:#f0a;font-weight:700">'), '<span style="font-weight:700">');
   assert.equal(withoutCarriedColor('<font color="#8cf">'), '<font>');
+});
+
+test('formatting is found past a line-level <say> shell and the story quotes wrapping the whole line', () => {
+  // The preset's own standard write-up: a speaker mark, then the whole line's quotes, then the tags.
+  assert.deepEqual(
+    lineFormatting('<say who="樱井" mood="开心">「<big><b>好的呀</b></big>」</say>'),
+    { open: '<big><b>', close: '</b></big>' },
+    'neither the <say> shell nor the quotes it wraps are part of what carries',
+  );
+  // The tags may wrap the quotes themselves instead of sitting inside them.
+  assert.deepEqual(
+    lineFormatting('<say who="樱井"><big>「加粗呀」</big></say>'),
+    { open: '<big>', close: '</big>' },
+  );
+  // A <say> shell with no quotes inside still has its formatting found.
+  assert.deepEqual(lineFormatting('<say who="樱井"><i>心里想着</i></say>'), { open: '<i>', close: '</i>' });
+  // No <say>, no quotes: behaves exactly as it always has.
+  assert.deepEqual(lineFormatting('<i>斜体</i>'), { open: '<i>', close: '</i>' });
+  // A self-closing mark is not a shell; it names the run after it rather than enclosing one.
+  assert.equal(lineFormatting('<say 樱井/><big>没有外壳</big>'), null);
+  // Two speakers on one line: no single wrapper for the <say> shell to reveal.
+  assert.equal(lineFormatting('<say who="A">「甲」</say><say who="B">「乙」</say>'), null);
+});
+
+test('formatting past a <say> shell is found through indentation and stray whitespace, not just a bare shell', () => {
+  const fullWidthSpace = String.fromCharCode(0x3000).repeat(2);
+  // An indented, speaker-marked line: the preset's own leading whitespace must not stop the shell from
+  // being found, the same way it already does not stop a bare wrapper like <b> from being found.
+  assert.deepEqual(
+    lineFormatting(`${fullWidthSpace}<say who="A">「<big><b>好。</b></big>」</say>`),
+    { open: '<big><b>', close: '</b></big>' },
+  );
+  assert.deepEqual(lineFormatting(`${fullWidthSpace}<b>「好。」</b>`), { open: '<b>', close: '</b>' }, 'the case this already handled keeps working');
+  // Trailing whitespace after </say>.
+  assert.deepEqual(
+    lineFormatting('<say who="A">「<big><b>好。</b></big>」</say> '),
+    { open: '<big><b>', close: '</b></big>' },
+  );
+  // Whitespace just inside the <say> shell, around the quotes themselves.
+  assert.deepEqual(
+    lineFormatting('<say who="A"> 「<b>好。</b>」 </say>'),
+    { open: '<b>', close: '</b>' },
+  );
 });
 
 test('speaker colouring wins the colour but the carried weight and slant still apply', () => {

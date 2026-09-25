@@ -58,6 +58,7 @@ import {
   recoverStructuredTranslations,
   rebuildTaggedRegions,
   segmentSource,
+  resolveSegmentationVersion,
   stripGeneratedTranslationLines,
   upgradeLegacyBilingual,
   restyleBilingual,
@@ -81,7 +82,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.36.0';
+} from './core.js?v=0.36.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -138,10 +139,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.36.0';
-import { createTtsStore } from './tts-store.js?v=0.36.0';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.36.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.36.0';
+} from './tts.js?v=0.36.1';
+import { createTtsStore } from './tts-store.js?v=0.36.1';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.36.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.36.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -150,7 +151,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.36.0';
+} from './processing.js?v=0.36.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -167,9 +168,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.36.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.36.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.36.0';
+} from './prompts.js?v=0.36.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.36.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, untranslatedFloors } from './mini.js?v=0.36.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -184,15 +185,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.36.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.36.0';
+} from './palette.js?v=0.36.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.36.1';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.36.0';
+} from './diagnostics.js?v=0.36.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -947,6 +948,13 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     });
   }
   const extraction = extractAllRegions(cleanMessage, settings);
+  // Whichever built-in-regex rules produced what is already on this floor, so re-deriving its segments
+  // here — for the hash that decides whether it still matches, and for reading its translations back —
+  // never disagrees with what was actually written. A floor with no record yet (never translated) starts
+  // on the latest rules; one already translated keeps its own record until it is translated again, which
+  // is the only time this snapshot's segments and what gets saved for it are the same act. See
+  // resolveSegmentationVersion for why `metadata` alone is not enough to trust its own record.
+  const segmentationVersion = resolveSegmentationVersion(upgraded, metadata, { stripped: floor.stripped });
   const segmentOptions = {
     segmentPrefix: metadata?.segment_prefix ?? settings.segmentPrefix,
     segmentSuffix: metadata?.segment_suffix ?? settings.segmentSuffix,
@@ -955,10 +963,14 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     paragraphPerLine: metadata?.paragraph_per_line ?? settings.paragraphPerLine,
     excludedTags: settings.excludedTags,
     preserveLineRules: settings.preserveLineRules,
+    segmentationVersion,
   };
   const segments = [];
   // Segment id → the speaker marks the story wrote into that line, for the reading alone.
   const speech = new Map();
+  // Segment id → the same segment read aloud instead of translated, only where it differs; see
+  // segmentSource's own `reading`.
+  const reading = new Map();
   let paragraphs = 0;
   let nextId = 1;
   for (const region of extraction.regions) {
@@ -968,6 +980,7 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     region.paragraphs = segmented.paragraphs;
     segments.push(...segmented.segments);
     for (const [id, marked] of segmented.speech ?? []) speech.set(id, marked);
+    for (const [id, text] of segmented.reading ?? []) reading.set(id, text);
     paragraphs += segmented.paragraphs;
     nextId += segmented.segments.length;
   }
@@ -1012,7 +1025,11 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     extraction,
     segments,
     speech,
+    reading,
     paragraphs,
+    // Whatever rules built `segments` above; a write carries this straight back onto the floor's
+    // metadata so the next read agrees with it again. See segmentOptions.segmentationVersion.
+    segmentationVersion,
     existingTranslations,
     // Only trusted while the segmentation still matches, which is the same condition that makes the
     // stored translations reusable.
@@ -2165,6 +2182,10 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
   const message = latest.message;
   const metadata = {
     schema_version: 4,
+    // Whatever rules `latest` actually segmented this write with (see readMessageSnapshot), not
+    // whatever the newest code knows: the two must agree, or the next read derives a different
+    // segmentation than what this write is about to save under it.
+    segmentation_version: latest.segmentationVersion,
     app_version: APP_VERSION,
     source_hash: latest.sourceHash,
     swipe_id: snapshot.swipeId,
@@ -3145,7 +3166,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
       const quotePairs = ttsSettings(settings).quotePairs;
       const originalLine = segment => {
         const marked = snapshot.speech?.get(segment.id);
-        if (!marked) return { lineId: segment.id, text: plainLineText(segment.text) };
+        if (!marked) return { lineId: segment.id, text: plainLineText(snapshot.reading?.get(segment.id) ?? segment.text) };
         const read = readSpeechLine(marked, { quotePairs });
         return read.spans.length ? { lineId: segment.id, text: read.text, speech: read.spans } : { lineId: segment.id, text: read.text };
       };
@@ -9826,8 +9847,14 @@ async function inspectCurrentFloor(root) {
   const messageId = latestAssistantMessageId(context);
   if (messageId === null) throw new Error('没有找到可检查的 AI 回复。');
   const message = context.chat[messageId];
+  const floor = readFloor(message);
+  const metadata = floor.metadata ?? message.extra?.[MESSAGE_META_KEY];
+  // The same rules this floor was actually segmented with last time it was translated (see
+  // readMessageSnapshot), so what this reports agrees with what refreshCurrentCard shows for it instead
+  // of silently switching to the newest rules mid-inspection.
+  const segmentationVersion = resolveSegmentationVersion(floor.text, metadata, { stripped: floor.stripped });
   const report = inspectTagConfiguration(
-    stripGeneratedTranslationLines(floorText(message)),
+    stripGeneratedTranslationLines(floor.text),
     settings.bodyTags,
     settings.excludedTags,
     {
@@ -9836,6 +9863,7 @@ async function inspectCurrentFloor(root) {
       preserveLineRules: settings.preserveLineRules,
       paragraphPerLine: settings.paragraphPerLine,
       replaceTags: settings.replaceTags,
+      segmentationVersion,
     },
   );
   const lines = ['正文标签：'];

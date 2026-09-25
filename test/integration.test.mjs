@@ -163,6 +163,69 @@ test('streaming and whole-request paths agree on the already-translated gate', a
   await assert.rejects(__testing.startTranslation(0, { quiet: true, force: true }));
 });
 
+test('a floor already translated under v0.36.0 or older — a <br>-joined card line and a play-time line included — reads back exactly as it did, never re-translated', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: { apiMode: 'independent', streamingWriteback: true } });
+  // Neither shape had a built-in rule before v0.36.1: the card's three lines, joined only by <br> with
+  // no real newline between them, were sent as one glued paragraph, and the play-time line — digits, so
+  // the old "no letters, no digits" preserve check missed it — was sent to be translated as if it were
+  // prose.
+  const source = 'NOW PLAYING<br>今日の空<br>作词：陽炎\n\n00:42 / 03:15\n\n彼は笑った。';
+  const legacy = { ...settings, segmentationVersion: 1 };
+  const segmented = segmentSource(source, legacy);
+  assert.equal(segmented.segments.length, 3, 'the fixture reflects what v0.36.0 actually did: three paragraphs, all of them sent off');
+  const translations = new Map([
+    [segmented.segments[0].id, 'NOW PLAYING今日的天空作词：陽炎'],
+    [segmented.segments[1].id, '00:42 / 03:15'],
+    [segmented.segments[2].id, '他笑了。'],
+  ]);
+  const bilingual = assembleBilingual(segmented.layout, translations, legacy);
+  const inner = `\n${bilingual}\n`;
+  context.chat.push({
+    mes: `<story_scene>${inner}</story_scene>`,
+    swipe_id: 0,
+    extra: {
+      [MESSAGE_META_KEY]: {
+        // No segmentation_version field at all — exactly what a floor translated through v0.36.0 has.
+        schema_version: 4, swipe_id: 0, complete: true,
+        source_hash: await hashText(createTranslationSignature([{ tagName: 'story_scene', segments: segmentSource(inner, legacy).segments }])),
+        segment_prefix: settings.segmentPrefix ?? '', segment_suffix: settings.segmentSuffix ?? '',
+        translation_prefix: settings.translationPrefix ?? '{', translation_suffix: settings.translationSuffix ?? '}',
+        paragraph_per_line: false,
+      },
+    },
+  });
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.segments.length, 3, 'the fresh pass agrees with what is stored: the new <br> and play-time rules did not re-split or re-classify an old floor');
+  assert.equal(snapshot.existingTranslations.size, 3, 'every paragraph\'s translation is found, none orphaned by a segment the new rules stopped creating');
+  assert.equal(snapshot.translated, true, 'a floor already fully translated under the old rules is not seen as needing anything more');
+  const gate = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(gate.reason, 'already-translated', 'nothing is asked for again — the reason the v0.36.1 rules must not touch a floor v0.36.0 already finished');
+});
+
+test('a fresh swipe carrying a copy of a translated swipe\'s own `extra` is never pinned to that copy\'s old segmentation rules', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: {} });
+  // Swipe 0 was translated under v0.36.0's own rules and carries a real record of it.
+  context.chat.push(await translatedFloor('雨が降っている。', [[1, '下雨了。']], settings));
+  const message = context.chat[0];
+  // The host's own behaviour on a fresh generation: swipe 1 is brand new prose — nothing this extension
+  // has ever written to it, no boundary markers of any kind — but its `extra` starts life as a *copy* of
+  // swipe 0's, segmentation_version and all (see readFloor's and resolveSegmentationVersion's own notes).
+  const card = 'NOW PLAYING<br>今日の空';
+  message.swipes = [message.mes, `<story_scene>\n${card}\n</story_scene>`];
+  message.swipe_id = 1;
+  message.mes = message.swipes[1];
+  message.extra = { [MESSAGE_META_KEY]: { ...message.extra[MESSAGE_META_KEY], segmentation_version: 1, swipe_id: 1 } };
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.segmentationVersion, 2, 'nothing has translated this text, so a copied record\'s rules are never trusted for it');
+  assert.deepEqual(snapshot.segments.map(item => item.text), ['NOW PLAYING\n今日の空'], 'segmented under the latest rules, not glued as the copied v1 record would read it');
+});
+
 test('worldbook key matching honours regex, whole words and case, and skips secondary logic', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });

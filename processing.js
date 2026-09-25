@@ -1,7 +1,7 @@
 import {
   DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END,
   deepClone, mergeSettings, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors,
-} from './core.js?v=0.36.0';
+} from './core.js?v=0.36.1';
 
 export const PROCESSING_FIELDS = Object.freeze([
   'bodyTags', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
@@ -85,7 +85,7 @@ export function normalizeProcessingProfile(value, { newId = false, strict = fals
   if ((value.regexScripts?.length ?? 0) > MAX_RULES) throw new Error(`每套方案最多绑定 ${MAX_RULES} 条正则。`);
   const usedIds = new Set();
   const regexScripts = (value.regexScripts ?? []).map(rule => {
-    const next = normalizeNativeRegex(rule, { newId });
+    const next = migrateLegacyReadingRule(normalizeNativeRegex(rule, { newId }));
     if (usedIds.has(next.id)) next.id = processingId();
     usedIds.add(next.id);
     return next;
@@ -184,7 +184,11 @@ function speechQuoteRules() {
   return SPEECH_QUOTE_PAIRS.map(([open, close]) => ({
     id: `${MODULE_ID}:speech-quote-${close.codePointAt(0).toString(16)}`,
     scriptName: `镜译 · 说话人标记引号配对 ${open}${close}`,
-    findRegex: `/(<say(?=[\\s/>])[^<>]*>\\s*${open})([^「」『』“”"<\\n]*?)[${[...'」』”"“'].filter(mark => mark !== close).join('')}]?(\\s*<\\/say>)/g`,
+    // The middle group used to exclude '<' along with the other quote marks, so a line the preset had
+    // already painted — <say…>「<big><b>…</b></big>」</say> with no closer before </say> — never matched
+    // and kept its dangling quote. Tags carry no quote characters of their own, so letting them through
+    // does not risk pairing across a mark this rule was never meant to touch.
+    findRegex: `/(<say(?=[\\s/>])[^<>]*>\\s*${open})([^「」『』“”"\\n]*?)[${[...'」』”"“'].filter(mark => mark !== close).join('')}]?(\\s*<\\/say>)/g`,
     replaceString: `$1$2${close}$3`,
     trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: true,
     runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
@@ -254,28 +258,81 @@ export function readNativeRegexEdits(existing, profile) {
     });
 }
 
-const readingPattern = '<jy-source>([\\s\\S]*?)<\\/jy-source>\\n<jy-translation>([\\s\\S]*?)<\\/jy-translation>';
+// Every block container a card template plausibly uses — the same range the reading's own BREAK_RE
+// treats as line-level (tts-sanitizer.js). The source group below only matches when every one of them in
+// the block pairs up, tag for same-named tag, with nothing stray left over, so a block whose tags
+// briefly slipped out of balance — a translation glitch, a still-streaming reply, a status card built
+// from <details>/<section>/<ul> rather than a bare <div> — is shown as it is instead of coming out
+// wrapped in a beautify shell nested wrongly around the break. Matched case-insensitively: a model or a
+// pasted card writes <DIV> as often as <div>.
+const BALANCED_BLOCK_TAGS = '(?:details|summary|section|article|header|footer|ul|ol|li|table|thead|tbody|tr|td|th|blockquote|pre|h[1-6]|dl|dd|dt|div|p)';
+// '<' is only "safe" text when it starts neither a block tag nor one of this pattern's own boundaries —
+// without the second lookahead a greedy match happily read straight through </jy-source> looking for
+// the nearest closing block tag, and one wrap ate two floors' segments whole (source and translation
+// swapped in).
+const BALANCED_SAFE = `(?:[^<]|<(?!\\/?${BALANCED_BLOCK_TAGS}\\b)(?!\\/?jy-(?:source|translation)\\b))`;
+// Nesting is allowed up to three deep — a named group per level (`t1`/`t2`/`t3`) so each open only
+// closes on a `</tag>` of that exact same name, never a sibling's. A card nested any deeper is left
+// alone entirely, the same as one that is not balanced at all: conservative rather than guessing.
+const BALANCED_PAIR_1 = `<(?<t1>${BALANCED_BLOCK_TAGS})\\b[^<>]*>${BALANCED_SAFE}*<\\/\\k<t1>\\s*>`;
+const BALANCED_INNER_2 = `(?:${BALANCED_SAFE}|${BALANCED_PAIR_1})`;
+const BALANCED_PAIR_2 = `<(?<t2>${BALANCED_BLOCK_TAGS})\\b[^<>]*>${BALANCED_INNER_2}*<\\/\\k<t2>\\s*>`;
+const BALANCED_INNER_3 = `(?:${BALANCED_SAFE}|${BALANCED_PAIR_2})`;
+const BALANCED_PAIR_3 = `<(?<t3>${BALANCED_BLOCK_TAGS})\\b[^<>]*>${BALANCED_INNER_3}*<\\/\\k<t3>\\s*>`;
+const BALANCED_SOURCE = `${BALANCED_SAFE}*(?:${BALANCED_PAIR_3}${BALANCED_SAFE}*)*`;
+// Named rather than $1/$2: the nesting groups above (t1/t2/t3) are capturing groups of their own, so the
+// two groups the replaceString actually needs are named here and referenced as $<jySource>/$<jyTranslation>
+// instead, immune to however many more numbered groups BALANCED_SOURCE ends up defining.
+const readingPattern = `<jy-source>(?<jySource>${BALANCED_SOURCE})<\\/jy-source>\\n<jy-translation>(?<jyTranslation>[\\s\\S]*?)<\\/jy-translation>`;
 export const BUILTIN_READING_STYLES = Object.freeze([
   { id: 'cute', name: '可爱风', description: '一点桃粉，一枚小花。' },
   { id: 'minimal', name: '极简风', description: '淡化原文，留白分隔。' },
   { id: 'fold', name: '原文折叠', description: '原文可展开，译文缩进。' },
 ]);
 
+// The one built-in reading rule's replaceString, for a style id — settings-independent, so it also
+// serves as the reference migrateLegacyReadingRule compares a saved rule against, without re-deriving a
+// whole profile (and risking calling back into normalizeProcessingProfile) just to read this one string.
+function builtinReadingReplaceString(styleId) {
+  const before = styleId === 'fold'
+    ? '<details class="jy-reading-original"><summary>原文</summary><div class="jy-reading-source">\n\n$<jySource>\n\n</div></details>'
+    : '<div class="jy-reading-source">\n\n$<jySource>\n\n</div>';
+  return `<div class="jy-reading jy-reading-${styleId}">\n${before}\n<div class="jy-reading-translation">\n\n$<jyTranslation>\n\n</div>\n</div>`;
+}
+
 export function makeBuiltinReadingProfile(settings, styleId) {
   const style = BUILTIN_READING_STYLES.find(item => item.id === styleId);
   if (!style) throw new Error('没有找到这个内置美化。');
-  const before = styleId === 'fold'
-    ? '<details class="jy-reading-original"><summary>原文</summary><div class="jy-reading-source">\n\n$1\n\n</div></details>'
-    : '<div class="jy-reading-source">\n\n$1\n\n</div>';
   return normalizeProcessingProfile({
     id: processingId(), name: style.name,
     settings: { ...processingSnapshot(settings), segmentPrefix: '<jy-source>', segmentSuffix: '</jy-source>', translationPrefix: '<jy-translation>', translationSuffix: '</jy-translation>' },
     regexScripts: [{
       id: processingId(), scriptName: style.name,
-      findRegex: `/${readingPattern}/g`,
-      replaceString: `<div class="jy-reading jy-reading-${styleId}">\n${before}\n<div class="jy-reading-translation">\n\n$2\n\n</div>\n</div>`,
+      findRegex: `/${readingPattern}/gi`,
+      replaceString: builtinReadingReplaceString(styleId),
       trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
       runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
     }],
   });
+}
+
+// v0.36.1 tightened the built-in beautify's findRegex against block tags left unbalanced (BALANCED_SOURCE
+// above); a profile saved before that fix still carries the old, unguarded findRegex verbatim; nothing
+// else in normalizeProcessingProfile ever rewrites a rule's own regex once it is saved. A rule that reads
+// exactly as makeBuiltinReadingProfile used to emit — this findRegex, and a replaceString that is still
+// one of the three built-in styles' own template, neither touched since — picks up the new findRegex
+// here; a rule the reader edited, in either field, is left exactly as they wrote it.
+const LEGACY_READING_FIND_REGEX = '/<jy-source>([\\s\\S]*?)<\\/jy-source>\\n<jy-translation>([\\s\\S]*?)<\\/jy-translation>/g';
+function migrateLegacyReadingRule(rule) {
+  if (rule.findRegex !== LEGACY_READING_FIND_REGEX) return rule;
+  const style = BUILTIN_READING_STYLES.find(item => legacyReadingReplaceString(item.id) === rule.replaceString);
+  if (!style) return rule;
+  // Both fields move together: the guarded pattern numbers its groups differently, so the old $1/$2
+  // would no longer point at the source and the translation.
+  return { ...rule, findRegex: `/${readingPattern}/gi`, replaceString: builtinReadingReplaceString(style.id) };
+}
+
+// What makeBuiltinReadingProfile wrote before v0.36.1: the same template, reading its two groups by number.
+function legacyReadingReplaceString(styleId) {
+  return builtinReadingReplaceString(styleId).replace('$<jySource>', '$1').replace('$<jyTranslation>', '$2');
 }

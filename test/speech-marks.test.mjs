@@ -38,6 +38,20 @@ test('a speaker mark is read however the model half-remembered how to write it',
   assert.equal(speechMarkedLine('<saying>不是标记</saying>'), null, 'a tag that only starts with say is not a mark');
 });
 
+test('a mark\'s own struck-through or redacted words are dropped from what the mark is read with', () => {
+  const struck = readLine('<say who="泰罗">「这是<s>划掉的</s>话。」</say>');
+  assert.equal(struck.read.text, '「这是话。」', 'gone before the tag is stripped, not read as if it were still there');
+  assert.equal(struck.read.spans.length, 1, 'the mark itself, and who it names, are unaffected');
+  assert.equal(struck.read.spans[0].speaker, '泰罗');
+  const redacted = readLine('<say who="泰罗">「<span style="background-color:currentColor">秘密</span>之事。」</say>');
+  assert.equal(redacted.read.text, '「之事。」');
+  // The private-use markers speechMarkedLine writes in for <say> are not ordinary markup and survive
+  // dropHiddenMarkup untouched: an unaffected mark still reads and finds its speaker as it always did.
+  const plain = readLine('<say who="泰罗">「一句话。」</say>');
+  assert.equal(plain.read.text, '「一句话。」');
+  assert.equal(plain.read.spans[0]?.speaker, '泰罗');
+});
+
 test('the translator never sees a mark; the reading gets it beside the segment, not on it', () => {
   const segmented = segmentSource('樱井推开门。<say who="樱井" mood="开心">「你回来啦！」</say>\n\n风停了。');
   assert.deepEqual(segmented.segments, [{ id: 1, text: '樱井推开门。「你回来啦！」' }, { id: 2, text: '风停了。' }], 'the text sent to be translated is the story without its marks');
@@ -80,6 +94,14 @@ test('a mood is heard in Fish\'s own words, whichever language the mark wrote it
   assert.deepEqual(speechMood('耳语'), { emotion: '', tone: 'whispering' });
   assert.deepEqual(speechMood('不存在的情绪'), { emotion: '', tone: '' });
   for (const [, english] of SPEECH_MOODS) assert.ok(FISH_EMOTIONS.includes(english), `${english} is a word Fish knows`);
+});
+
+test('a mood of more than one word is kept whole, not torn apart at its own space', () => {
+  assert.deepEqual(speechMood('soft tone'), { emotion: '', tone: 'soft tone' });
+  assert.deepEqual(speechMood('Soft  Tone'), { emotion: '', tone: 'soft tone' }, 'case and spacing do not matter');
+  assert.deepEqual(speechMood('生气 in a hurry tone'), { emotion: 'angry', tone: 'in a hurry tone' });
+  assert.deepEqual(speechMood('happy, soft tone'), { emotion: 'happy', tone: 'soft tone' });
+  assert.deepEqual(speechMood('soft tones'), { emotion: '', tone: '' }, 'only the phrase itself, not a word it happens to start');
 });
 
 test('the reader\'s own word still outranks a mark; a mark outranks everything the text only suggests', () => {

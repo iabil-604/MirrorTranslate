@@ -689,6 +689,10 @@ test('tag fallback reads literal jy-translation blocks and sheds markup and boun
   const pictured = '<content>\n她笑了。\n<image>image###[Mage].\nA woman smiles at a statue.###</image>\n她点了点头。\n</content>';
   assert.deepEqual(linesFromTaggedText(pictured, ['content'], { excludedTags: ['image'] }).map(line => line.text), ['她笑了。', '她点了点头。'], 'what an excluded tag holds is not read, over several lines too');
   assert.equal(linesFromTaggedText(pictured, ['content']).length, 4, 'without the exclusion it is read as before');
+  // The same built-in decorative shapes segmentSource itself never sends translating or reading — see
+  // isDecorativeLine — are skipped here too, not just where segmentSource ran.
+  const card = '<jy-translation>风停了。\n▶ 01:02 / 03:45\nılılıllıılı\n「走吧。」</jy-translation>';
+  assert.deepEqual(linesFromTaggedText(card, ['jy-translation']).map(line => line.text), ['风停了。', '「走吧。」'], 'a play-time readout and a pseudo waveform are neither read as prose');
 });
 
 test('read-aloud settings normalise, clamp, migrate and follow the character card', () => {

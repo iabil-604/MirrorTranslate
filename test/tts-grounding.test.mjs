@@ -260,6 +260,8 @@ test('a quiet voice is kept wherever the text asks for one in its usual words, f
     for (const tone of ['whispering', 'soft tone']) assert.equal(groundVoice({ emotion: 'nervous', tone }, { text: '别告诉别人。', evidence: narration }).changed, false, `${narration} ${tone}`);
   }
   assert.deepEqual(groundVoice({ emotion: 'nervous', tone: 'soft tone' }, { text: '别告诉别人。', evidence: '她笑着说：' }).dropped.map(item => item.why), ['quiet']);
+  // Fish's own name for the tone, met in the evidence itself, asks for it too.
+  assert.equal(groundVoice({ emotion: 'nervous', tone: 'soft tone' }, { text: '别告诉别人。', evidence: 'in a soft tone' }).changed, false);
   // A voice that is low in pitch, an ear shouted into, or a voice told to be louder asks for nothing quiet.
   for (const [text, narration] of [
     ['跟我走。', '他的声音低沉而沙哑：'], ['跟我走。', '她的声音里带着轻蔑：'], ['站住！', '耳边响起一声怒吼：'], ['醒醒！', '他在她耳边大吼：'],

@@ -6,7 +6,7 @@ import {
   extractGeneratedTranslations, restyleBilingual, mergeSettings,
 } from '../core.js';
 import {
-  normalizeProcessingSettings, getActiveProcessingProfile, makeBuiltinReadingProfile,
+  normalizeProcessingSettings, normalizeProcessingProfile, processingSnapshot, getActiveProcessingProfile, makeBuiltinReadingProfile,
   selectProcessingProfile, captureProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, syncNativeRegex, readNativeRegexEdits, compileNativeRegex,
 } from '../processing.js';
@@ -147,6 +147,11 @@ test('native registration is isolated, stable across saves and switches, and rea
   assert.equal(mend('<say who="樱井">『好。”</say>'), '<say who="樱井">『好。』</say>');
   assert.equal(mend('<say who="樱井">「好。」</say>他说。'), '<say who="樱井">「好。」</say>他说。', 'a pair already right is left as it is');
   assert.equal(mend('<say who="樱井">「他说“好”</say>'), '<say who="樱井">「他说“好”</say>', 'a quotation inside it is not guessed at');
+  assert.equal(
+    mend('<say who="樱井" mood="开心">「<big><b>好。</b></big>"</say>'),
+    '<say who="樱井" mood="开心">「<big><b>好。</b></big>」</say>',
+    'a preset that already painted the line keeps the tags between the quotes from blocking the mend',
+  );
   assert.equal(mend('「好。"他说。'), '「好。"他说。', 'nothing outside a mark is touched');
   assert.equal(marks.markdownOnly, true, 'the marks are hidden where the floor is drawn');
   assert.equal(marks.promptOnly, false, 'and kept in what the main model reads, so it keeps writing them');
@@ -185,6 +190,60 @@ test('built-in styles preserve extraction settings and use display-only native r
     assert.ok(display.includes('Original.') && display.includes('译文。'));
     if (id === 'fold') { assert.match(display, /<details class=/); assert.doesNotMatch(display, /<details[^>]*\bopen\b/); }
   }
+});
+
+test('the built-in beautify never wraps a source block whose own block tags are not balanced', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  const rule = profile.regexScripts[0];
+  const wrap = source => `<jy-source>${source}</jy-source>\n<jy-translation>译文</jy-translation>`
+    .replace(compileNativeRegex(rule.findRegex), rule.replaceString);
+  const untouched = source => {
+    const raw = `<jy-source>${source}</jy-source>\n<jy-translation>译文</jy-translation>`;
+    return raw.replace(compileNativeRegex(rule.findRegex), rule.replaceString) === raw;
+  };
+  assert.match(wrap('一段<div>卡片</div>文字'), /jy-reading-source/, 'flat, balanced div still gets the beautify shell');
+  assert.match(wrap('一段<b>加粗</b>文字'), /jy-reading-source/, 'inline tags are not what this guard is about');
+  assert.match(wrap('一段<DIV>大写标签</DIV>文字'), /jy-reading-source/, 'a tag name in any case is still recognised');
+  assert.ok(untouched('一段<div>卡片文字'), 'an unclosed <div> is left exactly as it was, not nested inside the shell\'s own');
+  assert.ok(untouched('一段</div>卡片文字'), 'a stray closing </div> with no open is left alone the same way');
+  assert.ok(untouched('<details><summary>Status panel</summary>\nPlace: Old Library'), 'an unclosed <details> is caught too, not just div/p');
+  assert.ok(untouched('<section>Place: Old Library'), 'as is an unclosed <section>');
+  assert.ok(untouched('<ul><li>one'), 'and an unclosed <ul>');
+  // Nesting up to three deep is now recognised and still wrapped, tag for same-named tag.
+  assert.match(wrap('一段<div><div>卡片</div>文字</div>更多'), /jy-reading-source/, 'two levels of nesting');
+  assert.match(wrap('一段<div><div><div>卡片</div>文字</div>更多</div>末尾'), /jy-reading-source/, 'three levels of nesting');
+  assert.match(wrap('<div class="row"><div class="k">Place</div><div class="v">Old Library</div></div>'), /jy-reading-source/, 'a one-line nested status card');
+  assert.match(wrap('<details><summary>Status panel</summary>\nPlace: Old Library\n\nHour: Late night\n</details>'), /jy-reading-source/, 'a balanced <details> card');
+  // Four levels deep is past the limit: conservatively left alone, the same as an unbalanced block.
+  assert.ok(untouched('一段<div><div><div><div>卡片</div>文字</div>更多</div>末尾</div>结束'), 'nesting past the depth limit is left alone too, never wrapped mismatched');
+});
+
+test('an existing profile\'s saved built-in beautify rule picks up the balanced-tag guard, but only when untouched', () => {
+  // What a profile saved before v0.36.1 carries: the old, unguarded findRegex, and one of the three
+  // built-in styles' own replaceString, exactly as makeBuiltinReadingProfile used to write it.
+  const legacyFindRegex = '/<jy-source>([\\s\\S]*?)<\\/jy-source>\\n<jy-translation>([\\s\\S]*?)<\\/jy-translation>/g';
+  const fresh = makeBuiltinReadingProfile(normalizeProcessingSettings(), 'cute').regexScripts[0];
+  // The template as it was saved then: its two groups read by number.
+  const cuteReplace = fresh.replaceString.replace('$<jySource>', '$1').replace('$<jyTranslation>', '$2');
+  const saved = normalizeProcessingProfile({
+    name: '可爱风',
+    settings: processingSnapshot(normalizeProcessingSettings()),
+    regexScripts: [{ id: 'r1', scriptName: '可爱风', findRegex: legacyFindRegex, replaceString: cuteReplace, placement: [2] }],
+  });
+  assert.equal(saved.regexScripts[0].findRegex, fresh.findRegex, 'the saved rule is upgraded to the new, guarded pattern');
+  assert.equal(saved.regexScripts[0].replaceString, fresh.replaceString, 'and its template with it, since the new pattern numbers its groups differently');
+  const rawFor = source => `<jy-source>${source}</jy-source>\n<jy-translation>译文</jy-translation>`;
+  const wrap = source => rawFor(source).replace(compileNativeRegex(saved.regexScripts[0].findRegex), saved.regexScripts[0].replaceString);
+  assert.match(wrap('一段<div>卡片</div>文字'), /jy-reading-source">\n\n一段<div>卡片<\/div>文字\n\n[\s\S]*jy-reading-translation">\n\n译文\n\n/, 'a balanced div is still wrapped after the migration, source and translation each in its place');
+  assert.equal(wrap('一段<div>卡片文字'), rawFor('一段<div>卡片文字'), 'the migrated rule guards against an unbalanced tag exactly like a freshly made one');
+  // A rule with the legacy findRegex but a replaceString the reader changed is left exactly as saved.
+  const edited = normalizeProcessingProfile({
+    name: '自定义',
+    settings: processingSnapshot(normalizeProcessingSettings()),
+    regexScripts: [{ id: 'r1', scriptName: '自定义', findRegex: legacyFindRegex, replaceString: '$1 / $2', placement: [2] }],
+  });
+  assert.equal(edited.regexScripts[0].findRegex, legacyFindRegex, 'a replaceString the reader wrote themselves means the rule is theirs, not migrated');
 });
 
 test('a comment in the body is neither translated nor read, and is written back as it was', () => {

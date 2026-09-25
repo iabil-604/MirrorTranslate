@@ -185,6 +185,22 @@ test('reading the original takes the source lines, translated or not, with each 
   assert.equal(await __testing.collectTtsFloor(1, translationSide), null);
 });
 
+test('the source reading drops struck-through and redacted words on the main path, marked lines included', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-hidden');
+  const settings = __testing.configureForTest({ settings: { tts: { enabled: true, side: 'source' } } });
+  const body = [
+    '他说<del>不</del>要去。',
+    '前面<span style="background-color:currentColor">涂黑的字</span>后面。',
+    '<say who="泰罗">「这是<s>划掉的</s>话。」</say>',
+  ].join('\n\n');
+  // Never translated: this exercises the same plainLineText(segment.text) path an ordinary untranslated
+  // floor always takes, not a special case built only for this test.
+  context.chat.push({ mes: `<story_scene>\n${body}\n</story_scene>`, swipe_id: 0, extra: {} });
+  const floor = await __testing.collectTtsFloor(0, settings, 'source');
+  assert.deepEqual(floor.lines.map(line => line.text), ['他说要去。', '前面后面。', '「这是话。」']);
+});
+
 test('the light analysis labels utterances once per text version and never rewrites a line', async t => {
   restoreGlobals(t);
   const requests = [];

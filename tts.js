@@ -10,13 +10,14 @@ import {
   parsePairList,
   placeQuoteMarks,
   unifySpeakerNames,
+  isDecorativeLine,
   MARK_TAGS,
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.36.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.36.0';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.36.0';
+} from './core.js?v=0.36.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.36.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.36.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -90,7 +91,10 @@ export function linesFromTaggedText(text, tags = [], { excludedTags = [] } = {})
   for (const block of blocks) {
     for (const raw of block.inner.split('\n')) {
       const text = plainLineText(raw);
-      if (/[\p{L}\p{N}]/u.test(text)) lines.push({ lineId: lines.length + 1, text });
+      // The same judgement segmentSource applies through isBuiltinPreservedLine — a play-time readout or
+      // a pseudo waveform read as if it were prose otherwise, exactly the card this fallback path most
+      // often meets (a floor with no mirror of its own, read straight off its literal <jy-translation>).
+      if (text && !isDecorativeLine(text)) lines.push({ lineId: lines.length + 1, text });
     }
   }
   return lines;
@@ -399,19 +403,26 @@ function speechVocabulary() {
   for (const [chinese, english] of SPEECH_MOODS) moods.set(chinese, english);
   const tones = new Map(SPEECH_TONES);
   for (const tone of FISH_TONES) if (FISH_TAG_LABELS[tone]) tones.set(FISH_TAG_LABELS[tone], tone);
-  speechWords = { moods, tones };
+  // The words are split at spaces, except Fish's own words of more than one ('soft tone', 'in a hurry
+  // tone'), which are taken whole where they stand rather than torn into 'soft' and 'tone'.
+  const separators = '、,，;；+/|｜\\s';
+  const phrases = [...FISH_TONES, ...FISH_EMOTIONS].filter(word => /\s/.test(word))
+    .sort((left, right) => right.length - left.length)
+    .map(word => `${word.split(/\s+/).map(escapeRegex).join('\\s+')}(?![^${separators}])`);
+  const words = new RegExp([...phrases, `[^${separators}]+`].join('|'), 'giu');
+  speechWords = { moods, tones, words };
   return speechWords;
 }
 
 /** A mark's mood as Fish's words: one mood, one tone, whichever the words name, in either language. */
 export function speechMood(value) {
-  const { moods, tones } = speechVocabulary();
+  const { moods, tones, words } = speechVocabulary();
   let emotion = '';
   let tone = '';
-  for (const raw of String(value ?? '').split(/[、,，;；+/|｜\s]+/u)) {
+  for (const [raw] of String(value ?? '').matchAll(words)) {
     const word = raw.trim();
     if (!word) continue;
-    const lower = word.toLowerCase();
+    const lower = word.toLowerCase().replace(/\s+/g, ' ');
     const asTone = tones.get(word) ?? (FISH_TONES.includes(lower) ? lower : '');
     if (asTone) {
       tone ||= asTone;
@@ -1220,8 +1231,9 @@ const VOICED_SOUND = Object.freeze({
 });
 // The text asking for a quiet voice: without it, whispering and a soft tone are breath with words in.
 // A voice kept low or soft asks for it, a voice low in pitch (低沉) or a word said at an ear does not by
-// itself: a shout goes there too, so only speech said there without one counts.
-const QUIET_RE = /小声|小聲|低声|低聲|轻声|輕聲|柔声|柔聲|耳语|耳語|低语|低語|悄声|悄聲|悄悄|压低|壓低|细声|細聲|呢喃|嘀咕|咕哝|咕噥|附耳|[凑湊贴貼].{0,6}耳|\bwhisper|\bmurmur|\bmutter|\bsoftly\b|\bquietly\b|under (?:his|her|their) breath|轻轻(?:地)?(?:说|道|问|答|唤|开口)|声音(?:[放压壓]得?)?(?:很|极|極|更|有些|有点|有點|越来越|越來越|也|又|渐渐|漸漸|慢慢|逐渐|逐漸|微微|稍稍)?[轻輕低](?![沉哑啞蔑])|低低地|压着嗓|壓著嗓|耳[边邊畔](?:(?![大吼喊叫嚷怒])[^，。！？：:「」\n]){0,3}?(?:说|說|道|问|問)|耳元(?:(?![大叫怒喚])[^、。！？「」\n]){0,4}?(?:言|囁|ささや|呟|つぶや)|ささや|囁|耳打ち|ひそひそ|小さな声|呟|声を(?:潜|ひそ|落と|殺)|ぼそ/i;
+// itself: a shout goes there too, so only speech said there without one counts. Fish's own name for a
+// soft tone, written by a mark or a caller, asks for it as well.
+const QUIET_RE = /小声|小聲|低声|低聲|轻声|輕聲|柔声|柔聲|耳语|耳語|低语|低語|悄声|悄聲|悄悄|压低|壓低|细声|細聲|呢喃|嘀咕|咕哝|咕噥|附耳|[凑湊贴貼].{0,6}耳|\bwhisper|\bmurmur|\bmutter|\bsoftly\b|\bsoft\s+tone\b|\bquietly\b|under (?:his|her|their) breath|轻轻(?:地)?(?:说|道|问|答|唤|开口)|声音(?:[放压壓]得?)?(?:很|极|極|更|有些|有点|有點|越来越|越來越|也|又|渐渐|漸漸|慢慢|逐渐|逐漸|微微|稍稍)?[轻輕低](?![沉哑啞蔑])|低低地|压着嗓|壓著嗓|耳[边邊畔](?:(?![大吼喊叫嚷怒])[^，。！？：:「」\n]){0,3}?(?:说|說|道|问|問)|耳元(?:(?![大叫怒喚])[^、。！？「」\n]){0,4}?(?:言|囁|ささや|呟|つぶや)|ささや|囁|耳打ち|ひそひそ|小さな声|呟|声を(?:潜|ひそ|落と|殺)|ぼそ/i;
 // An ellipsis, a dash, a tilde or a heart: the text already trails off there, and a pause or a sound
 // beside one is performed as a held, breathy vowel rather than as what it was asked to be.
 const DRAWN_BEFORE_RE = /(?:[…‥⋯—～~♡❤♥]|\.\.)$/;

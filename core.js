@@ -8,11 +8,23 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.36.0';
+} from './prompts.js?v=0.36.1';
+// The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
+// struck-through and redacted content dropped with its words, so a segment carries it for the
+// translation to see — that stays in `text`, unaffected — while what the floor's own words are read
+// with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.36.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.36.0';
+export const APP_VERSION = '0.36.1';
+// How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
+// a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
+// built-in-regex fixes. A floor already translated keeps whichever rules produced what is stored on
+// it — recorded on its metadata as `segmentation_version` — so re-deriving its segments for matching
+// never disagrees with what was actually written; a floor with no record yet always starts on the
+// latest rules. See segmentSource's `segmentationVersion` option.
+export const SEGMENTATION_RULES_VERSION = 2;
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -26,6 +38,28 @@ export const AFFIX_END = '\u2063\u200c\u2063';
 // and re-translation restores it, so the swap is reversible without touching swipes.
 export const HIDDEN_START = '\u2063\u200d\u2063';
 export const HIDDEN_END = '\u2063\ufeff\u2063';
+
+/**
+ * Which segmentation rules a floor's own metadata actually speaks for. `metadata` alone is not enough:
+ * the host starts a freshly generated swipe with a *copy* of the previous swipe's `extra` (see readFloor
+ * above), so a floor nothing has ever translated can still carry a `segmentation_version` that describes
+ * someone else's text entirely. Trusting it there would lock a brand new reply onto whatever rules
+ * produced a different swipe, forever — `writeTranslation` copies whatever this returns straight onto
+ * the record it writes next.
+ *
+ * `text` is read for the boundaries a write of this extension's own leaves inside the floor itself
+ * (SOURCE_START/TRANSLATION_START/HIDDEN_START, and the legacy brace marker) — proof this exact text,
+ * not a copied record, was actually written to. `stripped` (a 只留译文 floor) is exempt: readFloor's own
+ * fingerprint or carriesTranslation already matched this metadata to this text by content, not by the
+ * swipe's copied `extra`, so nothing more needs proving here.
+ */
+export function resolveSegmentationVersion(text, metadata, { stripped = false } = {}) {
+  if (!metadata) return SEGMENTATION_RULES_VERSION;
+  const source = String(text ?? '');
+  const carries = stripped || [SOURCE_START, TRANSLATION_START, HIDDEN_START, `{${INVISIBLE_MARKER}`].some(marker => source.includes(marker));
+  return carries ? (Number(metadata.segmentation_version) || 1) : SEGMENTATION_RULES_VERSION;
+}
+
 const SOURCE_BLOCK_RE = new RegExp(`${SOURCE_START}([\\s\\S]*?)${SOURCE_END}`, 'g');
 const TRANSLATION_BLOCK_RE = new RegExp(`\\n?${TRANSLATION_START}([\\s\\S]*?)${TRANSLATION_END}`, 'g');
 const AFFIX_RE = new RegExp(`${AFFIX_START}[\\s\\S]*?${AFFIX_END}`, 'g');
@@ -53,6 +87,13 @@ const SPEECH_OPENERS = new Map([
   ['“', '”'],
   ['"', '"'],
 ]);
+// A whole line wrapped in exactly one speaker mark, its story-side shell rather than anything
+// carryable — <say who="樱井" mood="开心">…</say>. Used to look past the mark to whatever it wraps: the
+// words a preserve rule tests, the formatting a translation carries. The inner group excludes another
+// <say>/</say>, so a line where two people speak — two marks run together with nothing between them —
+// is not mistaken for one shell around both; that stays unmatched, for the ordinary handling. A
+// self-closing mark is not this shell either; it names the run after it rather than enclosing one.
+const SAY_SHELL_RE = /^<say(?=[\s/>])[^<>]*>((?:(?!<\/?say(?=[\s/>]))[\s\S])*)<\/say>$/i;
 
 /**
  * Splits a translated line into quoted and unquoted runs.
@@ -352,7 +393,7 @@ export function looksUntranslated(text, source = '') {
 // floor can be saved back in that form, so both spellings have to be recognised here.
 const SPEAKER_OPEN_RE = new RegExp(`<span class="(?:custom-)?${SPEAKER_CLASS}(?:[ "][^>]*)?>`);
 const VALID_TAG_RE = /^[A-Za-z][A-Za-z0-9_:-]*$/;
-const STRUCTURAL_TAG_RE = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
+const STRUCTURAL_TAG_RE = /\\?<(\/?)([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
 const HTML_ENTITY_RE = /&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi;
 // A Markdown picture as the host's showdown renders it — ![alt](src "title"), sizes and one level of
 // brackets in the address included — and the empty link a linked picture [![a](b)](c) leaves once the
@@ -814,13 +855,25 @@ export function parsePreserveLineRulesWithErrors(value) {
   return { rules, errors };
 }
 
-export function matchesPreserveLine(line, rules) {
+// `options.modern`: v0.36.1 also looks past a whole-line <say> shell before testing a rule, so an
+// indented line or one the story marked with a speaker still hits a preserve rule written for the bare
+// text. It is strictly additional — every version through v0.36.0's own test (a regex against the
+// untrimmed original, a prefix or exact rule against the trimmed line) is tried first and still wins on
+// its own; the shell-stripped subject is only a second try for whichever of those missed, never a
+// replacement for them. Off (segmentSource's old floors), behaviour is byte-identical to every version
+// through v0.36.0.
+export function matchesPreserveLine(line, rules, options = {}) {
   const raw = String(line ?? '');
   const trimmed = raw.trim();
+  let subject = null;
+  if (options.modern) {
+    const shell = trimmed.match(SAY_SHELL_RE);
+    subject = shell ? shell[1].trim() : trimmed;
+  }
   return (Array.isArray(rules) ? rules : []).some(rule => {
-    if (rule.type === 'regex') return rule.regex.test(raw);
-    if (rule.type === 'prefix') return trimmed.startsWith(rule.text);
-    return trimmed === rule.text;
+    if (rule.type === 'regex') return rule.regex.test(raw) || (subject !== null && subject !== raw && rule.regex.test(subject));
+    if (rule.type === 'prefix') return trimmed.startsWith(rule.text) || (subject !== null && subject !== trimmed && subject.startsWith(rule.text));
+    return trimmed === rule.text || (subject !== null && subject !== trimmed && subject === rule.text);
   });
 }
 
@@ -2195,10 +2248,33 @@ function splitPhysicalLines(value) {
   return lines.map((text, index) => ({ text, separator: index < lines.length - 1 ? '\n' : '' }));
 }
 
-function stripStructuralTags(value, structuralTags) {
-  return String(value ?? '').replace(STRUCTURAL_TAG_RE, (_raw, name) => {
-    structuralTags?.add(String(name).toLowerCase());
-    return '';
+// Tags that begin a fresh line where they stand, matching the reading's own BREAK_RE (tts-sanitizer.js):
+// br/hr always, and the block containers whose OPEN tag starts a line and whose CLOSE tag ends one — a
+// container tag (ul/ol/table/section/article/header/footer) only on its CLOSE, since its own open holds
+// nothing but further block children that already break on their own.
+const BREAK_TAGS_ALWAYS = new Set(['br', 'hr']);
+const BREAK_TAGS_ON_OPEN = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'tr', 'pre', 'dd', 'dt']);
+const BREAK_TAGS_ON_CLOSE = new Set([...BREAK_TAGS_ON_OPEN, 'ul', 'ol', 'section', 'article', 'header', 'footer', 'table']);
+
+// `modern`: v0.36.1's rule for what a removed tag leaves behind. Off (segmentSource's old floors) a tag
+// always leaves nothing, exactly as every version through v0.36.0 read it — a card's "NOW PLAYING<br>A"
+// glued into "NOW PLAYINGA". On, <br> and a block edge leave the line break they stood for, so text
+// split only by markup is not glued into one run of words when it is sent to be translated; two inline
+// elements sitting right against each other with nothing of their own between them — "<span>A</span>
+// <span>B</span>" — leave the single space that already keeps every other such pair apart instead.
+function stripStructuralTags(value, structuralTags, options = {}) {
+  const source = String(value ?? '');
+  return source.replace(STRUCTURAL_TAG_RE, (raw, closing, name, offset) => {
+    const tag = String(name).toLowerCase();
+    structuralTags?.add(tag);
+    if (!options.modern) return '';
+    const breaks = BREAK_TAGS_ALWAYS.has(tag) || (closing ? BREAK_TAGS_ON_CLOSE.has(tag) : BREAK_TAGS_ON_OPEN.has(tag));
+    if (breaks) return '\n';
+    // Only a closer immediately followed by another element's opener needs this: an opener followed by
+    // more markup is only nesting deeper into the same run, two closers in a row are only unwinding one,
+    // and a tag next to real text already has that text to stand on its own.
+    const next = source.slice(offset + raw.length, offset + raw.length + 2);
+    return closing && next[0] === '<' && next[1] !== '/' ? ' ' : '';
   });
 }
 
@@ -2276,7 +2352,11 @@ export function speechMarkedLine(value) {
     return `${SPEECH_OPEN}${marks.length - 1}${SPEECH_SEP}`;
   });
   if (!marks.length) return null;
-  return { text: stripStructuralTags(replaced).trim(), marks };
+  // Struck through or painted invisible on itself, inside the marked dialogue or outside it: dropped
+  // before the tags are stripped, the same as an unmarked line's own reading text — see segmentSource's
+  // `readingText`. The private-use markers just written in for <say> survive: dropHiddenMarkup only
+  // matches ordinary `<tag>` syntax, never those code points.
+  return { text: stripStructuralTags(dropHiddenMarkup(replaced)).trim(), marks };
 }
 
 // Presentation tags a preset puts around a line of dialogue. The translation is sent to the model
@@ -2335,6 +2415,27 @@ function wrapperClosesAtEnd(rest, tag) {
   return null;
 }
 
+// A line-level <say> shell and, inside or outside it, the pair of story quotes wrapping the whole
+// line: neither is formatting to carry, but a preset writes the tags that ARE — <big><b> — between
+// them, not outside them, so both are looked past before the carryable tags are searched for. Neither
+// shell reappears in the return value: the translation writes its own quotes and never sees a <say>.
+function unwrapLineForFormatting(line) {
+  // A leading indent (plain or full-width), a trailing space, or a space just inside the <say> shell is
+  // never part of either wrapper: trimmed here so an indented or speaker-marked line finds its shell the
+  // same way an unmarked one already does. lineFormatting's own '^\s*<' and wrapperClosesAtEnd re-trim
+  // whatever this returns, so nothing about the untrimmed case changes.
+  const trimmedLine = String(line ?? '').trim();
+  const say = trimmedLine.match(SAY_SHELL_RE);
+  let body = say ? say[1].trim() : trimmedLine;
+  for (const [open, close] of SPEECH_OPENERS) {
+    if (body.length > open.length + close.length - 1 && body.startsWith(open) && body.endsWith(close)) {
+      body = body.slice(open.length, body.length - close.length);
+      break;
+    }
+  }
+  return body;
+}
+
 /**
  * The presentation wrapper around a whole source line, ready to be re-applied to its translation.
  *
@@ -2342,7 +2443,7 @@ function wrapperClosesAtEnd(rest, tag) {
  * tags has nothing to carry, and a line with two sibling spans has no single wrapper to speak of.
  */
 export function lineFormatting(line) {
-  let body = String(line ?? '');
+  let body = unwrapLineForFormatting(line);
   const opens = [];
   const closes = [];
   for (let depth = 0; depth < 4; depth += 1) {
@@ -2368,7 +2469,19 @@ function isClosingTagOnlyLine(value) {
     && stripStructuralTags(source).trim() === '';
 }
 
-function isBuiltinPreservedLine(value) {
+// A play-time readout — "01:23 / 04:56", with a played/total pair of m:ss clocks and whatever icons or
+// dashes a card decorates it with — never prose, even though the digits themselves pass the letter and
+// number test below. Two clocks are required so an ordinary sentence that happens to end in one time
+// ("11:30 に会おう。") is not caught by this rule.
+const PLAY_TIME_RE = /^[^\p{L}\p{N}\n]*\d{1,2}:\d{2}[^\p{L}\p{N}\n]*\/[^\p{L}\p{N}\n]*\d{1,2}:\d{2}[^\p{L}\p{N}\n]*$/u;
+// A pseudo waveform some players draw from tall, thin glyphs — ı l I | — never actual letters, though
+// each one alone is a real letter the general check above would keep as prose.
+const WAVEFORM_RE = /^[ılI|]+$/u;
+
+// `options.modern`: v0.36.1's two new built-in patterns, gated the same way as segmentSource's other
+// rules — see stripStructuralTags. Off (an old floor's own rules), only the general "no letters, no
+// digits" test applies, exactly as every version through v0.36.0 read a line.
+function isBuiltinPreservedLine(value, options = {}) {
   const visibleOf = text => text
     .replace(HTML_ENTITY_RE, '')
     .replace(/\\(?=[\\`*_{}\[\]()#+\-.!|<>])/g, '')
@@ -2377,7 +2490,36 @@ function isBuiltinPreservedLine(value) {
   if (!visibleOf(stripped)) return false;
   // What is left once the pictures are gone: a line of pictures alone has no words in it.
   const words = visibleOf(stripped.replace(MARKDOWN_IMAGE_RE, '').replace(EMPTY_MARKDOWN_LINK_RE, ''));
-  return !/[\p{L}\p{N}]/u.test(words);
+  if (!/[\p{L}\p{N}]/u.test(words)) return true;
+  if (!options.modern) return false;
+  if (PLAY_TIME_RE.test(words)) return true;
+  const compact = words.replace(/\s+/gu, '');
+  return compact.length >= 6 && WAVEFORM_RE.test(compact);
+}
+
+/**
+ * Whether a line of already-plain text (tags gone, as every reading and translation sees it) is one of
+ * the built-in decorative shapes segmentSource itself never sends translating or reading — a play-time
+ * readout or a pseudo waveform, on top of a line with no letters or digits in it at all. The one
+ * judgement shared by every path that decides this for itself instead of through segmentSource: the
+ * literal-tag fallback a translated floor with no mirror of its own falls back to (tts.js's
+ * linesFromTaggedText) is the other reader of it.
+ */
+export function isDecorativeLine(text) {
+  return isBuiltinPreservedLine(String(text ?? ''), { modern: true });
+}
+
+// A play-time readout or a pseudo waveform is judged by its own physical line, but stripStructuralTags's
+// modern rule can now fold several of a card's physical lines — joined only by <br> or a block edge —
+// into one, `\n`-separated "line" here (see stripStructuralTags). Judging the joined whole against
+// PLAY_TIME_RE/WAVEFORM_RE would never match (their anchors let neither pattern see past an embedded
+// `\n`), so a played/total clock or a waveform on its own <br>-joined sub-line would otherwise reach the
+// translator and the reader after all — exactly the card the built-in rule exists for. Sub-lines that
+// are themselves builtin-preserved are dropped before the whole is judged or sent anywhere; prose
+// sub-lines are kept, `\n` and all, so an ordinary multi-line card is untouched.
+function withoutDecorativeSublines(value, options = {}) {
+  if (!options.modern || !value.includes('\n')) return value;
+  return value.split('\n').filter(sub => !isBuiltinPreservedLine(sub.trim(), options)).join('\n').trim();
 }
 
 /** A line that is only pictures (Markdown or <img>), with nothing to translate or read beside them. */
@@ -2395,12 +2537,22 @@ export function segmentSource(text, options = {}) {
   const prefix = typeof options.segmentPrefix === 'string' ? options.segmentPrefix : '';
   const suffix = typeof options.segmentSuffix === 'string' ? options.segmentSuffix : '';
   const startId = clampInteger(options.startId, 1, Number.MAX_SAFE_INTEGER, 1);
+  // Which of the v0.36.1 built-in-regex fixes apply: see SEGMENTATION_RULES_VERSION. A caller with no
+  // opinion gets the latest rules; a legacy (pre-schema-4) wrapper predates the option entirely and is
+  // always read with the old ones, whatever it was passed.
+  const modern = options.legacyWrappers === true ? false
+    : (options.segmentationVersion == null || Number(options.segmentationVersion) >= SEGMENTATION_RULES_VERSION);
   const parsedRules = parsePreserveLineRulesWithErrors(options.preserveLineRules);
   if (parsedRules.errors.length) throw new Error(parsedRules.errors.join(' '));
   const { masked, blocks } = maskExcludedTags(source, options.excludedTags);
   const structuralTags = new Set();
   // Segment id → the line with its speaker marks as markers, for the reading; see speechMarkedLine.
   const speech = new Map();
+  // Segment id → the same segment read aloud instead of translated: struck-through and redacted text
+  // dropped, everything else the same. Only present when it differs from the segment's own `text` — a
+  // reader who has never touched this leaves every id out and pays nothing beyond that one check per
+  // line — so a caller looks it up with `reading.get(id) ?? segments[i].text`.
+  const reading = new Map();
   let paragraphs = 0;
   let customPreservedLines = 0;
   let builtinPreservedLines = 0;
@@ -2445,11 +2597,23 @@ export function segmentSource(text, options = {}) {
       const sourceLine = replaceMaskedBlocks(line.text, blocks, 'restore');
       const withoutExcluded = replaceMaskedBlocks(line.text, blocks, 'remove');
       const lineStructuralTags = new Set();
-      const translationText = stripStructuralTags(withoutExcluded, lineStructuralTags).trim();
+      const translationText = withoutDecorativeSublines(
+        stripStructuralTags(withoutExcluded, lineStructuralTags, { modern }).trim(),
+        { modern },
+      );
       lineStructuralTags.forEach(tag => structuralTags.add(tag));
-      const customPreserved = matchesPreserveLine(sourceLine, parsedRules.rules);
+      // What the reading hears for this line when the story wrote no <say> mark on it: the same words
+      // as `translationText`, with whatever is struck through or painted invisible on itself dropped —
+      // that stays in `translationText`/segment.text untouched, so the translation still sees it and
+      // nothing about a segment's identity or hash changes. Skipped when nothing would differ, so a line
+      // with none of this markup costs nothing beyond the one `dropHiddenMarkup` no-op check.
+      const withoutHidden = dropHiddenMarkup(withoutExcluded);
+      const readingText = withoutHidden === withoutExcluded
+        ? translationText
+        : withoutDecorativeSublines(stripStructuralTags(withoutHidden, null, { modern }).trim(), { modern });
+      const customPreserved = matchesPreserveLine(sourceLine, parsedRules.rules, { modern });
       const builtinPreserved = !customPreserved && (
-        isBuiltinPreservedLine(translationText)
+        isBuiltinPreservedLine(translationText, { modern })
         || (!translationText && lineStructuralTags.size > 0)
       );
       if (customPreserved) customPreservedLines += 1;
@@ -2459,6 +2623,7 @@ export function segmentSource(text, options = {}) {
         source: sourceLine,
         separator: line.separator,
         translationText,
+        readingText,
         ...(semantic ? excludedAround(line.text, blocks) : { lead: '', trail: '' }),
         // Who says what, when the story marked it; kept beside the segment, never on it.
         speech: speechMarkedLine(withoutExcluded),
@@ -2497,6 +2662,7 @@ export function segmentSource(text, options = {}) {
         const segment = { id: startId + segments.length, text: line.translationText };
         segments.push(segment);
         if (line.speech) speech.set(segment.id, line.speech);
+        if (line.readingText !== line.translationText) reading.set(segment.id, line.readingText);
         layout.push({
           type: 'segment',
           id: segment.id,
@@ -2527,6 +2693,7 @@ export function segmentSource(text, options = {}) {
       const segment = { id: startId + segments.length, text: line.translationText };
       segments.push(segment);
       if (line.speech) speech.set(segment.id, line.speech);
+      if (line.readingText !== line.translationText) reading.set(segment.id, line.readingText);
       ids.push(segment.id);
       unitTexts.push(segment.text);
       unitFormats.push(line.format ?? null);
@@ -2572,6 +2739,7 @@ export function segmentSource(text, options = {}) {
     builtinPreservedLines,
     structuralTags: [...structuralTags].sort(),
     speech,
+    reading,
   };
 }
 
