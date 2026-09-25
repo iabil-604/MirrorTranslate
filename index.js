@@ -86,7 +86,7 @@ import {
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
   withoutSpeechMarks,
-} from './core.js?v=0.36.1';
+} from './core.js?v=0.37.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -144,10 +144,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.36.1';
-import { createTtsStore } from './tts-store.js?v=0.36.1';
-import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.36.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis } from './tts-deep.js?v=0.36.1';
+} from './tts.js?v=0.37.0';
+import { createTtsStore } from './tts-store.js?v=0.37.0';
+import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.37.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis } from './tts-deep.js?v=0.37.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -156,7 +156,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
-} from './processing.js?v=0.36.1';
+} from './processing.js?v=0.37.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -173,9 +173,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.36.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.36.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.36.1';
+} from './prompts.js?v=0.37.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.37.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.37.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -191,15 +191,15 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.36.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.36.1';
+} from './palette.js?v=0.37.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.37.0';
 import {
   addDiagnostic,
   clearDiagnostics,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.36.1';
+} from './diagnostics.js?v=0.37.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -11795,6 +11795,7 @@ async function openMiniWindow() {
       <label title="只管翻译走哪条连接，和控制中心「翻译台」里那个是同一个选择。朗读分析在「朗读 → 01 读什么」里另选，互不影响。"><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
       <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
       <button type="button" class="jy-text-button" data-jy-action="mini-translate-all" data-jy-mini-untranslated hidden></button>
+      <button type="button" class="jy-text-button" data-jy-action="mini-clear-floor" hidden title="清除这一楼的译文，正文恢复成原文">清除这一楼的译文</button>
     </div>
     <details class="jy-mini-scratch" data-jy-mini-scratch data-expanded="false">
       <summary class="jy-mini-scratch-top"><strong>随手翻</strong><span data-jy-mini-target>简体中文</span></summary>
@@ -11828,9 +11829,8 @@ async function openMiniWindow() {
       <button type="button" class="jy-button jy-mini-danger" data-jy-action="mini-stop" hidden>停止</button>
       <button type="button" class="jy-button" data-jy-action="mini-repair" hidden>补译</button>
       <button type="button" class="jy-button" data-jy-action="mini-retranslate" hidden>重翻</button>
-      <button type="button" class="jy-button jy-mini-danger" data-jy-action="mini-clear-floor" hidden title="清除这一楼的译文，正文恢复成原文">清除译文</button>
       <button type="button" class="jy-button jy-mini-auto" data-jy-action="mini-auto" aria-pressed="true" title="新楼生成完自动翻译">自动 开</button>
-      <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false" title="翻译模型、方案、全翻、随手翻">更多</button>
+      <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false" title="翻译模型、方案、全翻、清除译文、随手翻">更多</button>
     </div>
   </div>
 </div>

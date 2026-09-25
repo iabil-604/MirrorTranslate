@@ -1829,7 +1829,7 @@ test('a lyric line already written in Chinese is not translated, same as any oth
   assert.equal(segmented.lyricIds.size, 0, 'but it never becomes a segment to translate or read');
   assert.deepEqual(segmented.segments.map(item => item.text), ['第一行叙述。', '第二行叙述。']);
   const output = assembleBilingual(segmented.layout, new Map([[1, '叙述译文一'], [2, '叙述译文二']]), { allowMissing: true });
-  assert.match(output.replace(/[​‌⁠-⁤]/g, ''), /静静地看着你/);
+  assert.match(output.replace(/[\u200b\u200c\u2060-\u2064]/g, ''), /静静地看着你/);
 });
 
 test('the music-card group splits <br>-joined card rows and classifies each on its own', () => {
@@ -1873,7 +1873,7 @@ test('a lyric line renders "原文 (译文)" inline in bilingual mode and reads 
   const segmented = segmentSource(source, options);
   const translations = new Map([[1, '叙述译文一'], [2, '响彻天空'], [3, '叙述译文二']]);
   const rendered = assembleBilingual(segmented.layout, translations, options);
-  const visible = rendered.replace(/[​‌⁠-⁤]/g, '');
+  const visible = rendered.replace(/[\u200b\u200c\u2060-\u2064]/g, '');
   assert.match(visible, /そらにひびけ \(响彻天空\)/);
   assert.doesNotMatch(visible, /\{响彻天空\}/, 'the lyric translation never gets the ordinary {…} affix');
   const recovered = extractGeneratedTranslations(rendered, options);
@@ -1888,7 +1888,7 @@ test('a lyric line restores its own <br> after the closing parenthesis, bilingua
   assert.deepEqual(segmented.segments.map(item => item.text), ['そらにひびけ']);
   const translations = new Map([[segmented.segments[0].id, '响彻天空']]);
   const rendered = assembleBilingual(segmented.layout, translations, options);
-  const visible = rendered.replace(/[​‌⁠-⁤]/g, '');
+  const visible = rendered.replace(/[\u200b\u200c\u2060-\u2064]/g, '');
   assert.match(visible, /そらにひびけ \(响彻天空\)<br>/);
   const restored = stripGeneratedTranslationLines(rendered);
   assert.match(restored, /そらにひびけ<br>/);
@@ -1905,7 +1905,7 @@ test('a lyric row still untranslated (a partial write) keeps its own trailing <b
   assert.deepEqual(segmented.segments.map(item => item.text), ['そらにひびけ', 'もう一つの行']);
   const translations = new Map([[segmented.segments[1].id, '另一行译文']]);
   const rendered = assembleBilingual(segmented.layout, translations, { ...options, allowMissing: true });
-  const visible = rendered.replace(/[​‌⁠-⁤]/g, '');
+  const visible = rendered.replace(/[\u200b\u200c\u2060-\u2064]/g, '');
   assert.match(visible, /そらにひびけ<br>/, 'the untranslated row\'s own <br> is not lost');
   assert.doesNotMatch(visible, /そらにひびけ \(/, 'no dangling " (" with nothing to close it');
   const restored = stripGeneratedTranslationLines(rendered);
