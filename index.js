@@ -3264,7 +3264,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
         // this floor through the translation as its primary and derives labels with deriveLabelsForSide,
         // the same path 'both' already uses for its secondary side) — nothing extra is stored here.
         lines = snapshot.segments
-          .filter(segment => snapshot.existingTranslations.has(segment.id))
+          .filter(segment => snapshot.existingTranslations.has(segment.id) && !lyricIds?.has(segment.id))
           .map(segment => {
             const translationText = plainLineText(snapshot.existingTranslations.get(segment.id));
             if (!translationText) return null;

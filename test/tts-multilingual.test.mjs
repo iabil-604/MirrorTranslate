@@ -185,3 +185,32 @@ test('对白读原文 has no floor before the message is translated', async t =>
   context.chat.push({ mes: '<story_scene>\n桜井は空を見上げた。\n</story_scene>', swipe_id: 0, extra: {} });
   assert.equal(await __testing.collectTtsFloor(0, settings), null);
 });
+
+// A lyric line (v0.37.0) defaults out of every reading, the same as a plain or 读原文 floor already
+// skips it (see collectTtsFloor's 'source' and 'translation' branches) — this is the one place the two
+// features meet, so it gets its own coverage rather than trusting the two branches agree by accident.
+test('对白读原文 skips a lyric line, the same as plain and 读原文 reading already do', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-dialogue-source-lyric');
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      lyricLineRules: 'そらにひびけ',
+      tts: { enabled: true, mode: 'off', side: 'dialogue_source', fish: FISH },
+    },
+  });
+  const source = '桜井は空を見上げた。「今日は暑いね」\n\nそらにひびけ\n\n汤姆笑着点头。"Indeed it is."';
+  context.chat.push(await translatedFloor(source, [
+    [1, '樱井抬头看着天空，觉得有点晒。「今天真热啊」'],
+    [2, '响彻天空'],
+    [3, '汤姆笑着点了点头，用英语回答。「的确如此。」'],
+  ], settings));
+
+  const floor = await __testing.collectTtsFloor(0, settings);
+  assert.equal(floor.side, 'dialogue_source');
+  assert.deepEqual(floor.lines.map(line => line.lineId), [1, 3], 'the lyric line (id 2) never becomes a reading line');
+  assert.deepEqual(floor.lines, [
+    { lineId: 1, text: '樱井抬头看着天空，觉得有点晒。「今日は暑いね」' },
+    { lineId: 3, text: '汤姆笑着点了点头，用英语回答。"Indeed it is."' },
+  ]);
+});
