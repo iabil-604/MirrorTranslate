@@ -381,9 +381,8 @@ const CONTROL_CENTER_MARKUP = `
 </aside>
 <main class="jy-workspace">
 <section class="jy-page" data-jy-page="main" role="tabpanel">
-<header class="jy-page-heading"><div><h1>翻译台</h1><span class="jy-page-context" data-jy-desk-context></span></div><button type="button" class="jy-button" data-jy-action="refresh">刷新楼层</button></header>
-<div class="jy-desk">
- <div class="jy-manuscript">
+<header class="jy-page-heading"><div><h1>翻译台</h1><span class="jy-page-context" data-jy-desk-context></span></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span><button type="button" class="jy-button" data-jy-action="refresh">刷新楼层</button></header>
+<div class="jy-manuscript">
   <div class="jy-run-state" aria-live="polite"><span class="jy-dot" data-jy-task-dot="idle"></span><h2 data-jy-task-title>等待正文</h2><span class="jy-run-count" data-jy-current-state>待读取</span></div>
   <div class="jy-progress" aria-hidden="true"><span data-jy-progress></span></div>
   <p class="jy-muted" data-jy-task-message>打开一段故事，从这里开始翻译。</p>
@@ -397,56 +396,101 @@ const CONTROL_CENTER_MARKUP = `
    <div class="jy-thinking-body" id="jy-thinking-body" data-jy-thinking-body hidden><pre data-jy-thinking-text></pre></div>
   </section>
   <dl class="jy-desk-facts"><div><dt>当前楼层</dt><dd data-jy-floor>—</dd></div><div><dt>滑动页</dt><dd data-jy-swipe>—</dd></div><div><dt>正文规模</dt><dd data-jy-segments>—</dd></div><div><dt>目标语言</dt><dd data-jy-desk-target>—</dd></div></dl>
-  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button><button type="button" class="jy-button" data-jy-action="clear-floor">清除这一楼的译文</button></div>
- </div>
- <aside class="jy-desk-side">
-  <div class="jy-brief"><span class="jy-overline">翻译方案</span><h3 data-jy-active-profile>待读取</h3><button type="button" class="jy-button" data-jy-action="open-prompt">编辑规则 →</button></div>
-  <div class="jy-brief jy-brief-channel"><span class="jy-overline">翻译用的连接</span><label class="jy-brief-field"><span class="jy-sr-only">翻译用哪条连接</span><select data-jy-translation-channel aria-label="翻译用哪条连接"></select></label><span class="jy-badge" data-jy-channel-mode>主 API</span><p class="jy-muted" data-jy-channel-summary></p><label class="jy-brief-field jy-brief-retry"><span class="jy-label">翻译失败后自动重试</span><input type="number" data-jy-field="retries" min="0" max="5" step="1"></label><p class="jy-muted">只管翻译。朗读分析用哪条在「朗读」页单独选，互不牵连。</p><button type="button" class="jy-button" data-jy-action="open-settings">管理连接（地址、密钥、模型）→</button></div>
-  <div class="jy-brief"><span class="jy-overline">参考资料</span><p class="jy-muted" data-jy-context-summary></p></div>
- </aside>
+  <div class="jy-launch"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-button" data-jy-action="translate-missing">补译缺失段落</button><button type="button" class="jy-text-button jy-text-button-danger jy-launch-danger" data-jy-action="clear-floor">清除这一楼的译文</button></div>
 </div>
-<div class="jy-automation"><div><h3>自动接续翻译</h3><p class="jy-muted">主回复完成后，自动补上译文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label><label class="jy-check"><input type="checkbox" data-jy-field="streamingWriteback">流式写回（beta，勾选后所有翻译走流式；仅独立模式，跟随模式自动回退整包）</label></div>
-<div class="jy-automation" data-jy-tts-desk><div><h3>朗读（有声小说）</h3><p class="jy-muted">把译文或原文念出来，旁白和角色各用各的声音，副模型给每句写中文配音指令。关着就是只翻译，楼层里不加任何东西。需要 Fish Audio 的 API Key。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label><button type="button" class="jy-text-button" data-jy-action="open-tts" hidden>朗读设置 →</button></div>
-<div class="jy-automation" data-jy-translation-only><div><h3>只留译文</h3><p class="jy-muted">翻译完整的楼层，正文里只留译文；原文收进镜译的楼层数据，重译、朗读原文、发给主模型时自动取回。打开后新翻译的楼层生效。复制、导出 txt 和其他插件只拿得到译文；手改过的楼层不再自动翻译；卸载镜译前先点「恢复本聊天的原文」。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="translationOnly" aria-label="只留译文"><span></span></label><button type="button" class="jy-text-button" data-jy-action="restore-originals">恢复本聊天的原文</button></div>
+<div class="jy-card-grid">
+ <section class="jy-card">
+  <h2>自动</h2>
+  <div class="jy-card-row"><div class="jy-card-row-text"><h3>自动接续翻译</h3><p class="jy-muted">主回复完成后，自动补上译文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label></div>
+  <div class="jy-card-row jy-card-row-dependent"><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label></div>
+  <div class="jy-card-row jy-card-row-dependent" data-jy-stream-row><label class="jy-check"><input type="checkbox" data-jy-field="streamingWriteback">流式写回（beta）</label><p class="jy-muted" data-jy-stream-reason>只在独立连接下生效；跟随酒馆时自动回退整包。</p></div>
+  <div class="jy-card-row"><span class="jy-label">翻译失败后自动重试</span><span class="jy-card-row-field"><input type="number" data-jy-field="retries" min="0" max="5" step="1" aria-label="翻译失败后自动重试"><span class="jy-muted">次</span></span></div>
+ </section>
+ <section class="jy-card">
+  <h2>用什么翻</h2>
+  <div class="jy-card-row"><div class="jy-card-row-text"><h3>翻译方案</h3><p class="jy-muted" data-jy-active-profile>待读取</p></div><button type="button" class="jy-text-button" data-jy-action="open-prompt">编辑规则 →</button></div>
+  <div class="jy-card-row"><div class="jy-card-row-text"><h3>翻译用哪条连接</h3><p class="jy-muted" data-jy-channel-summary></p></div><label class="jy-sr-only" for="jy-desk-channel">翻译用哪条连接</label><select id="jy-desk-channel" data-jy-translation-channel></select></div>
+  <div class="jy-card-row"><p class="jy-muted">连接的地址、密钥、模型在「模型连接」页管理；朗读分析、深度分析用哪条各自在「朗读」页选，互不牵连。</p><button type="button" class="jy-text-button" data-jy-action="open-settings">管理连接 →</button></div>
+  <div class="jy-card-row"><div class="jy-card-row-text"><h3>参考资料</h3><p class="jy-muted" data-jy-context-summary></p></div><button type="button" class="jy-text-button" data-jy-action="open-prompt">改 →</button></div>
+ </section>
+</div>
+<section class="jy-card" data-jy-translation-only>
+ <div class="jy-card-row"><div class="jy-card-row-text"><h3>只留译文</h3><p class="jy-muted">打开后新翻译的楼层只留译文，原文收进楼层数据；手改过的楼层不再自动翻译，卸载镜译前先恢复原文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="translationOnly" aria-label="只留译文"><span></span></label></div>
+ <div class="jy-card-row jy-card-row-end"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="restore-originals">恢复本聊天的原文</button></div>
+</section>
+<section class="jy-card" data-jy-tts-desk>
+ <div class="jy-card-row"><div class="jy-card-row-text"><h3>朗读（有声小说）</h3><p class="jy-muted">把译文或原文念出来，细节在朗读页。关着就是只翻译，楼层里不加任何东西。需要 Fish Audio 的 API Key。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
+ <div class="jy-card-row jy-card-row-end"><button type="button" class="jy-text-button" data-jy-action="open-tts" hidden>朗读设置 →</button></div>
+</section>
 </section>
 
 <section class="jy-page" data-jy-page="prompt" role="tabpanel" hidden>
-<header class="jy-page-heading"><div><h1>翻译规则</h1><span class="jy-page-context" data-jy-prompt-size>0 字</span></div></header>
+<header class="jy-page-heading"><div><h1>翻译规则</h1><span class="jy-page-context" data-jy-prompt-context></span></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span></header>
 <div class="jy-profile-bar">
 <label><span class="jy-label">当前方案</span><select data-jy-prompt-profile-select></select></label>
 <label><span class="jy-label">方案名称</span><input type="text" data-jy-prompt-profile-name maxlength="60"></label>
 <label><span class="jy-label">目标语言</span><input type="text" list="jy-target-language-list" data-jy-profile-field="targetLanguage" maxlength="80" placeholder="简体中文"></label>
 <datalist id="jy-target-language-list"><option value="简体中文"></option><option value="繁體中文"></option><option value="English"></option><option value="한국어"></option></datalist>
 </div>
-<div class="jy-profile-tools"><p class="jy-muted" data-jy-language-support></p><details class="jy-menu"><summary>方案管理</summary><div class="jy-menu-actions"><button type="button" class="jy-button" data-jy-action="export-profile">导出当前方案 JSON</button><button type="button" class="jy-button" data-jy-action="import-profile">导入方案 JSON</button><input type="file" data-jy-profile-import accept=".json,application/json" hidden><button type="button" class="jy-button" data-jy-action="duplicate-prompt-profile">复制新方案</button><button type="button" class="jy-button" data-jy-action="refresh-base-prompts">采用新版规范与清单</button><button type="button" class="jy-button" data-jy-action="reset-prompt-profile">恢复当前方案</button><button type="button" class="jy-button" data-jy-action="delete-prompt-profile">删除当前方案</button></div></details></div>
-<div class="jy-rule-workbench">
-<aside class="jy-rule-directory"><div class="jy-rule-directory-title">标准条目 <span data-jy-modified-count>全部默认</span></div><div data-jy-standard-prompt-list></div><div class="jy-rule-directory-title">自定义条目<button type="button" class="jy-icon-button" data-jy-action="add-prompt-section" aria-label="添加自定义条目">＋</button></div><div data-jy-custom-prompt-list></div><p class="jy-muted jy-empty-small" data-jy-custom-empty>按 ＋ 添加你的规则</p></aside>
-<div class="jy-editor-stage" data-jy-editor-stage><div class="jy-editor-placeholder" data-jy-editor-placeholder><span aria-hidden="true">Aa</span><h2>从左侧选择一项规则</h2><p>文风、译名与措辞，都由你决定。</p></div></div>
+<p class="jy-muted" data-jy-language-support></p>
+<div class="jy-card-grid">
+ <section class="jy-card">
+  <h2>常用</h2><p class="jy-muted">选一下就行</p>
+  <div data-jy-standard-prompt-list="common"></div>
+ </section>
+ <section class="jy-card">
+  <h2>进阶</h2><p class="jy-muted">要自己写几句</p>
+  <div data-jy-standard-prompt-list="advanced"></div>
+  <div class="jy-card-row"><div class="jy-card-row-text"><h3>自定义条目</h3><p class="jy-muted jy-empty-small" data-jy-custom-empty>按 ＋ 添加你的规则</p></div><button type="button" class="jy-icon-button" data-jy-action="add-prompt-section" aria-label="添加自定义条目">＋</button></div>
+  <div data-jy-custom-prompt-list></div>
+ </section>
+ <section class="jy-card">
+  <h2>专家</h2><p class="jy-muted">直接改发给模型的话 · 共 <span data-jy-prompt-size>0 字</span></p>
+  <div data-jy-standard-prompt-list="expert"></div>
+ </section>
 </div>
-<details class="jy-advanced"><summary>后置提示词（附在请求最末尾）</summary><div class="jy-reference-body"><label><span class="jy-label">身份</span><select data-jy-profile-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label><p class="jy-muted">留空时不发送；填写后作为最后一条消息附在全部条目之后，身份可选。</p></div><label><span class="jy-label">内容</span><textarea rows="4" data-jy-profile-field="postscript" placeholder="留空即不发送"></textarea></label></details>
-<details class="jy-reference-settings"><summary>参考资料与上下文</summary><div class="jy-reference-body"><label class="jy-check"><input type="checkbox" data-jy-field="includeWorldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-field="includeCharacterCard">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-field="includeRecentContext">近期对话</label><label><span class="jy-label">近期对话条数</span><input type="number" data-jy-field="contextMessages" min="1" max="20" step="1"></label></div></details>
-<footer class="jy-footer"><span class="jy-save-note" data-jy-prompt-save-note>修改后保存方案</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-prompt">保存方案</button></footer>
+<div class="jy-editor-stage" data-jy-editor-stage><div class="jy-editor-placeholder" data-jy-editor-placeholder><span aria-hidden="true">Aa</span><h2>点开一项规则来改</h2><p>文风、译名与措辞，都由你决定。</p></div></div>
+<section class="jy-card"><details class="jy-fold" data-jy-prompt-reference-fold><summary><h2>参考资料与上下文</h2><span class="jy-fold-summary" data-jy-prompt-reference-summary></span></summary><div class="jy-reference-body jy-form-body"><label class="jy-check"><input type="checkbox" data-jy-field="includeWorldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-field="includeCharacterCard">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-field="includeRecentContext">近期对话</label><label><span class="jy-label">近期对话条数</span><input type="number" data-jy-field="contextMessages" min="1" max="20" step="1"></label></div></details></section>
+<section class="jy-card">
+ <h2>方案管理</h2>
+ <div class="jy-actions">
+  <button type="button" class="jy-button" data-jy-action="export-profile">导出当前方案 JSON</button>
+  <button type="button" class="jy-button" data-jy-action="import-profile">导入方案 JSON</button>
+  <input type="file" data-jy-profile-import accept=".json,application/json" hidden>
+  <button type="button" class="jy-button" data-jy-action="duplicate-prompt-profile">复制新方案</button>
+  <button type="button" class="jy-button" data-jy-action="refresh-base-prompts">采用新版规范与清单</button>
+  <span class="jy-actions-spacer"></span>
+  <button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="reset-prompt-profile">恢复当前方案</button>
+  <button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="delete-prompt-profile">删除当前方案</button>
+ </div>
+</section>
 </section>
 
 <section class="jy-page" data-jy-page="settings" role="tabpanel" hidden>
-<header class="jy-page-heading"><div><h1>模型连接</h1><span class="jy-page-context" data-jy-channel-context>连接库：只存连接，谁用哪条各自去选</span></div><button type="button" class="jy-button" data-jy-action="test-api">测试这条连接</button></header>
-<div class="jy-channel-uses" data-jy-channel-uses></div>
-<p class="jy-muted" data-jy-api-help>这一页只存连接：地址、密钥、模型、请求参数、后置提示词。下面「正在编辑」选哪一条，只决定你在改哪一条，不会换掉任何功能正在用的连接。翻译用哪条在「翻译台」选，朗读分析和深度分析用哪条在「朗读」页选；「跟随酒馆」不需要在这里存，那几处的下拉框里直接有。</p>
-<div class="jy-connection-form" data-jy-independent-panel>
- <div class="jy-form-section"><div class="jy-section-title"><span>01</span><h2>保存的连接</h2></div><div class="jy-form-body"><label><span class="jy-label">正在编辑</span><select data-jy-edit-channel></select></label><p class="jy-muted" data-jy-channel-usage></p><div class="jy-inline-actions"><button type="button" class="jy-button" data-jy-action="add-channel">＋ 新建连接</button><button type="button" class="jy-button" data-jy-action="delete-channel">删除这条连接</button></div><label><span class="jy-label">连接名称</span><input type="text" data-jy-channel-field="name" placeholder="给这个连接起个名字"></label></div></div>
- <div class="jy-form-section"><div class="jy-section-title"><span>02</span><h2>接口与模型</h2></div><div class="jy-form-body">
+<header class="jy-page-heading"><div><h1>模型连接</h1><span class="jy-page-context">每条连接一张卡，勾选它用在哪里</span></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span><button type="button" class="jy-button" data-jy-action="add-channel">＋ 新建连接</button></header>
+<section class="jy-card jy-channel-card">
+ <div class="jy-channel-card-head">
+  <span class="jy-card-row-text"><h2>跟随酒馆</h2><p class="jy-muted">用酒馆当前的 API 和模型，不用填。</p></span>
+  <span class="jy-badge">内置</span>
+  <div class="jy-channel-card-uses" data-jy-channel-use-row="follow"></div>
+ </div>
+</section>
+<div data-jy-channel-cards></div>
+<div class="jy-connection-form" data-jy-channel-detail hidden>
+ <label><span class="jy-label">连接名称</span><input type="text" data-jy-channel-field="name" placeholder="给这个连接起个名字"></label>
+ <div class="jy-form-grid jy-form-grid-tight">
  <label><span class="jy-label">API 基础地址</span><input type="url" data-jy-channel-field="url" placeholder="https://example.com/v1" autocomplete="off"></label>
  <label><span class="jy-label">API 密钥</span><input type="password" data-jy-channel-field="key" placeholder="无密钥接口可留空" autocomplete="new-password"></label>
- <div class="jy-model-heading"><label class="jy-label" for="jy-api-model-select">选择模型</label><button type="button" class="jy-button" data-jy-action="fetch-models">拉取模型 ↻</button></div>
+ </div>
+ <div class="jy-model-heading"><label class="jy-label" for="jy-api-model-select">选择模型</label><div class="jy-inline-actions"><button type="button" class="jy-button" data-jy-action="fetch-models">拉取模型 ↻</button><button type="button" class="jy-button" data-jy-action="test-api">测试这条连接</button></div></div>
  <div class="jy-model-picker"><input type="search" data-jy-model-search aria-label="搜索模型" placeholder="搜索模型名称"><select id="jy-api-model-select" data-jy-model-select aria-describedby="jy-api-model-help"><option value="">先拉取模型列表</option></select></div>
  <label><span class="jy-label">当前模型（也可手动填写）</span><input type="text" data-jy-channel-field="model" placeholder="模型名称" autocomplete="off"></label>
  <p id="jy-api-model-help" class="jy-muted" data-jy-model-help></p>
- </div></div>
  <details class="jy-advanced"><summary>请求参数</summary><div class="jy-form-grid">
  <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
- </div></details><details class="jy-advanced"><summary>这条连接的后置提示词（附在每次请求的最末尾）</summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存，点「保存连接」生效；一本都不开则节约模式下完全不带世界书。</p></details><div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="save-channel">保存连接</button></div>
+ </div></details><details class="jy-advanced"><summary>这条连接的后置提示词（附在每次请求的最末尾）</summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存；一本都不开则节约模式下完全不带世界书。</p></details>
+ <div class="jy-actions"><span class="jy-actions-spacer"></span><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="delete-channel">删除这条连接</button></div>
 </div>
-<footer class="jy-footer"><span class="jy-save-note">修改后保存设置</span><button type="button" class="jy-button jy-button-primary" data-jy-action="save-settings">保存设置</button></footer>
 </section>
 
 <section class="jy-page" data-jy-page="processing" role="tabpanel" hidden>
@@ -3108,7 +3152,7 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
     toast('info', '本聊天没有只留译文的楼层。');
     return { restored: 0 };
   }
-  if (!ask(`本聊天有 ${restores} 处只留了译文（${plan.length} 楼），要把原文放回去吗？放回后恢复成双语。${edited ? `其中 ${edited} 处的译文后来被改过，这些改动会丢。` : ''}`)) {
+  if (!(await ask(`本聊天有 ${restores} 处只留了译文（${plan.length} 楼），要把原文放回去吗？放回后恢复成双语。${edited ? `其中 ${edited} 处的译文后来被改过，这些改动会丢。` : ''}`))) {
     return { restored: 0, cancelled: true };
   }
   const changes = [];
@@ -3170,7 +3214,7 @@ async function clearFloorTranslation(messageId = null, { ask = () => true } = {}
     toast('info', `第 ${id} 楼还没有翻译，不用清除。`);
     return { cleared: false, messageId: id };
   }
-  if (!ask(`清除第 ${id} 楼的译文？正文会恢复成原文，这一楼镜译记下的翻译状态和标注都会丢，要再看到译文得重新翻译。`)) {
+  if (!(await ask(`清除第 ${id} 楼的译文？正文会恢复成原文，这一楼镜译记下的翻译状态和标注都会丢，要再看到译文得重新翻译。`))) {
     return { cleared: false, cancelled: true, messageId: id };
   }
   const previous = {
@@ -8029,15 +8073,74 @@ function countNonEmptyLines(value) {
   return String(value ?? '').split(/\r?\n/).filter(line => line.trim()).length;
 }
 
+/**
+ * A 常用 row for one of the five preset+custom items (翻译文风 and friends): the select sits right in
+ * the row — DESIGN §15.4 常用（选择题）, no pencil to open first — and only the 自定义 preview/textarea
+ * pair beneath it folds by preset, exactly as `updatePromptConditionalFields` already toggles for the
+ * old stage-based editor. A row carries its own 「改过」 badge (§9.2 徽章 token) instead of the shared
+ * `data-jy-modified` left bar a pencil item uses, since there is no pencil head here to carry it.
+ */
+function makePromptSelectRow(doc, { title, modeField, customField, presets, profile, modified }) {
+  const nodes = [];
+  const row = doc.createElement('div');
+  row.className = 'jy-card-row';
+  const text = doc.createElement('div');
+  text.className = 'jy-card-row-text';
+  const heading = doc.createElement('h3');
+  heading.textContent = title;
+  text.appendChild(heading);
+  if (modified) {
+    const badge = doc.createElement('span');
+    badge.className = 'jy-badge jy-badge-changed';
+    badge.textContent = '改过';
+    text.appendChild(badge);
+  }
+  row.appendChild(text);
+  row.appendChild(makePromptSelect(doc, modeField, profile[modeField], presets));
+  nodes.push(row);
+  // What the chosen preset actually tells the model. Picking between 韩系 · 网文韩漫 and 欧美 · 小说
+  // 奇幻 by label alone is exactly the guessing readers asked to be spared.
+  const preview = doc.createElement('p');
+  preview.className = 'jy-muted jy-preset-preview jy-prompt-select-detail';
+  preview.dataset.jyPresetPreviewFor = modeField;
+  preview.textContent = presets[profile[modeField]]?.prompt ?? '';
+  preview.hidden = profile[modeField] === 'custom' || !preview.textContent;
+  nodes.push(preview);
+  const custom = makePromptTextarea(doc, customField, profile[customField], 5, '写下这项自定义规则。');
+  custom.dataset.jyCustomFor = modeField;
+  const customLabel = doc.createElement('label');
+  customLabel.className = 'jy-prompt-select-detail';
+  const customTitle = doc.createElement('span');
+  customTitle.className = 'jy-label';
+  customTitle.textContent = '自定义规则';
+  customLabel.append(customTitle, custom);
+  customLabel.hidden = profile[modeField] !== 'custom';
+  nodes.push(customLabel);
+  return nodes;
+}
+
+/** DESIGN §15.4 翻译规则: which of the three cards a standard item belongs to. */
+const PROMPT_ITEM_GROUPS = Object.freeze({
+  common: ['style', 'leaning', 'honorific', 'name', 'punctuation', 'glossary'],
+  advanced: ['banned', 'examples'],
+  expert: ['jailbreak', 'core', 'checklist', 'postscript'],
+});
+
 function renderStandardPromptItems(root, profile) {
   const doc = root.ownerDocument;
-  const list = root.querySelector('[data-jy-standard-prompt-list]');
-  if (!list) return;
-  list.replaceChildren();
+  const lists = {
+    common: root.querySelector('[data-jy-standard-prompt-list="common"]'),
+    advanced: root.querySelector('[data-jy-standard-prompt-list="advanced"]'),
+    expert: root.querySelector('[data-jy-standard-prompt-list="expert"]'),
+  };
+  if (!lists.common) return 0;
+  for (const list of Object.values(lists)) list?.replaceChildren();
+  const groupOf = id => (Object.entries(PROMPT_ITEM_GROUPS).find(([, ids]) => ids.includes(id))?.[0]) || 'common';
+  const put = (id, node) => lists[groupOf(id)]?.append(...(Array.isArray(node) ? node : [node]));
   let modifiedCount = 0;
   const addTextareaItem = (id, title, field, value, rows, badge, placeholder = '', modified = false) => {
     if (modified) modifiedCount += 1;
-    list.appendChild(makePromptItem(doc, {
+    put(id, makePromptItem(doc, {
       id,
       title,
       badge,
@@ -8067,7 +8170,6 @@ function renderStandardPromptItems(root, profile) {
     '',
     profile.corePrompt !== CORE_TRANSLATION_SPEC,
   );
-
   const optionItems = [
     ['style', '翻译文风', 'styleMode', 'styleCustom', STYLE_PRESETS],
     ['leaning', '翻译倾向', 'leaningMode', 'leaningCustom', LEANING_PRESETS],
@@ -8078,32 +8180,12 @@ function renderStandardPromptItems(root, profile) {
   for (const [id, title, modeField, customField, presets] of optionItems) {
     const optionModified = profile[modeField] === 'custom';
     if (optionModified) modifiedCount += 1;
-    list.appendChild(makePromptItem(doc, {
-      id,
-      title,
-      badge: promptOptionLabel(presets, profile[modeField]),
-      promptKey: id,
-      modified: optionModified,
-      buildEditor: editor => {
-        appendLabeledControl(doc, editor, '采用规则', makePromptSelect(doc, modeField, profile[modeField], presets));
-        // What the chosen preset actually tells the model. Picking between 韩系 · 网文韩漫 and
-        // 欧美 · 小说奇幻 by label alone is exactly the guessing readers asked to be spared.
-        const preview = doc.createElement('p');
-        preview.className = 'jy-muted jy-preset-preview';
-        preview.dataset.jyPresetPreviewFor = modeField;
-        preview.textContent = presets[profile[modeField]]?.prompt ?? '';
-        preview.hidden = profile[modeField] === 'custom' || !preview.textContent;
-        editor.appendChild(preview);
-        const custom = makePromptTextarea(doc, customField, profile[customField], 7, '写下这项自定义规则。');
-        custom.dataset.jyCustomFor = modeField;
-        appendLabeledControl(doc, editor, '自定义规则', custom);
-      },
-    }));
+    put(id, makePromptSelectRow(doc, { title, modeField, customField, presets, profile, modified: optionModified }));
   }
 
   const bannedModified = profile.avoidPhrases.trim() !== DEFAULT_AVOID_PHRASES.trim() || Boolean(profile.forbiddenPhrases.trim());
   if (bannedModified) modifiedCount += 1;
-  list.appendChild(makePromptItem(doc, {
+  put('banned', makePromptItem(doc, {
     id: 'banned',
     title: '禁用表达 / 杀八股',
     badge: `${countNonEmptyLines(profile.avoidPhrases) + countNonEmptyLines(profile.forbiddenPhrases)} 条`,
@@ -8117,7 +8199,31 @@ function renderStandardPromptItems(root, profile) {
   addTextareaItem('glossary', '姓名与术语表', 'glossary', profile.glossary, 10, `${countNonEmptyLines(profile.glossary)} 条`, '魔導書 = 魔导书\n王都 = 王都', Boolean(profile.glossary.trim()));
   addTextareaItem('examples', '正例与反例', 'examples', profile.examples, 14, profile.examples.trim() ? '已填写' : '未填写', '放入你认可或不认可的原文与译文对照例子。', Boolean(profile.examples.trim()));
   addTextareaItem('checklist', '输出前思考清单', 'checklistPrompt', profile.checklistPrompt, 16, profile.checklistPrompt === PRE_OUTPUT_CHECKLIST ? '默认' : '已修改', '', profile.checklistPrompt !== PRE_OUTPUT_CHECKLIST);
-  setText(root, '[data-jy-modified-count]', modifiedCount ? `${modifiedCount} 处已改` : '全部默认');
+  put('postscript', makePromptItem(doc, {
+    id: 'postscript',
+    title: '后置提示词',
+    badge: profile.postscript.trim() ? '已填写' : '未填写',
+    modified: Boolean(profile.postscript.trim()),
+    buildEditor: editor => {
+      const roleSelect = doc.createElement('select');
+      roleSelect.dataset.jyProfileField = 'postscriptRole';
+      for (const [value, label] of [['user', 'user'], ['system', 'system'], ['assistant', 'assistant']]) {
+        const option = doc.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        roleSelect.appendChild(option);
+      }
+      roleSelect.value = profile.postscriptRole || 'user';
+      appendLabeledControl(doc, editor, '身份', roleSelect);
+      const note = doc.createElement('p');
+      note.className = 'jy-muted';
+      note.textContent = '留空时不发送；填写后作为最后一条消息附在全部条目之后，身份可选，附在请求最末尾。';
+      editor.appendChild(note);
+      appendLabeledControl(doc, editor, '内容', makePromptTextarea(doc, 'postscript', profile.postscript, 4, '留空即不发送'));
+    },
+  }));
+  if (profile.postscript.trim()) modifiedCount += 1;
+  return modifiedCount;
 }
 
 function renderCustomPromptItems(root, profile) {
@@ -8219,11 +8325,9 @@ function syncPromptFields(root, settings) {
   if (name) name.value = profile.name;
   const targetLanguage = root.querySelector('[data-jy-profile-field="targetLanguage"]');
   if (targetLanguage) targetLanguage.value = profile.targetLanguage;
-  const postscript = root.querySelector('[data-jy-profile-field="postscript"]');
-  if (postscript) postscript.value = profile.postscript ?? '';
-  const postscriptRole = root.querySelector('[data-jy-profile-field="postscriptRole"]');
-  if (postscriptRole) postscriptRole.value = profile.postscriptRole || 'user';
-  renderStandardPromptItems(root, profile);
+  // postscript/postscriptRole live inside the 专家 card's own prompt item now (built fresh below with
+  // profile.postscript already as its value), not as static fields to fill in ahead of that render.
+  const modifiedCount = renderStandardPromptItems(root, profile);
   renderCustomPromptItems(root, profile);
   const stage = root.querySelector('[data-jy-editor-stage]');
   for (const panel of root.querySelectorAll('[data-jy-prompt-editor-panel]')) stage.appendChild(panel);
@@ -8242,6 +8346,11 @@ function syncPromptFields(root, settings) {
       : `${normalizeTargetLanguage(profile.targetLanguage)} 使用通用翻译规范；自定义规则照常生效。`,
   );
   setText(root, '[data-jy-prompt-size]', `${countPromptCharacters(profile).toLocaleString()} 字`);
+  setText(
+    root,
+    '[data-jy-prompt-context]',
+    `目标语言 ${normalizeTargetLanguage(profile.targetLanguage)}${modifiedCount ? ` · 改过 ${modifiedCount} 项` : ''}`,
+  );
 }
 
 function collectPromptFields(root, settings) {
@@ -8326,59 +8435,93 @@ function editingChannelId(settings = runtime.settings) {
   return channels.some(channel => channel.id === translation) ? translation : (channels[0]?.id ?? '');
 }
 
-/** The strip at the top of the connection page: who uses what, each with the way to where it is chosen. */
-function renderChannelUses(root, settings, editing) {
-  const users = channelUsers(settings);
-  const box = root.querySelector('[data-jy-channel-uses]');
-  if (box) {
-    const doc = box.ownerDocument;
-    box.replaceChildren(...users.map(user => {
-      const card = doc.createElement('div');
-      card.className = 'jy-channel-use';
-      card.dataset.editing = String(user.choice === editing);
-      const label = doc.createElement('span');
-      label.className = 'jy-label';
-      label.textContent = user.feature;
-      const name = doc.createElement('strong');
-      name.textContent = channelLabel(settings, user.choice, { short: true });
-      const parts = [label, name];
-      if (user.note) {
-        const note = doc.createElement('small');
-        note.textContent = user.note;
-        parts.push(note);
-      }
-      const go = doc.createElement('button');
-      go.type = 'button';
-      go.className = 'jy-text-button';
-      go.dataset.jyAction = user.action;
-      go.textContent = `在${user.where}换 →`;
-      parts.push(go);
-      card.append(...parts);
-      return card;
-    }));
-  }
-  const using = users.filter(user => user.choice === editing).map(user => user.feature);
-  setText(root, '[data-jy-channel-usage]', using.length
-    ? `正在编辑的这条现在给${using.join('、')}用${using.length > 1 ? '，改它这几处都会跟着变' : '，改它就是改这一处用的连接'}。`
-    : '正在编辑的这条现在没有功能在用；要用它，去翻译台或朗读页的下拉框里选。');
+/** One 用在 checkbox — checked when `use` currently resolves to `choice` ('follow' or a channel id). */
+function makeChannelUseCheckbox(doc, settings, use, choice) {
+  const label = doc.createElement('label');
+  label.className = 'jy-check';
+  const input = doc.createElement('input');
+  input.type = 'checkbox';
+  input.dataset.jyChannelUse = use;
+  input.dataset.jyChannelUseChoice = choice;
+  input.checked = connectionUseChoice(settings, use) === choice;
+  label.append(input, doc.createTextNode(CONNECTION_USE_LABELS[use]));
+  return label;
+}
+
+function fillChannelUseRow(row, settings, choice) {
+  if (!row) return;
+  const doc = row.ownerDocument;
+  row.replaceChildren(...CONNECTION_USES.map(use => makeChannelUseCheckbox(doc, settings, use, choice)));
+}
+
+/**
+ * DESIGN §15.4 模型连接: one card per saved connection, its head carrying the 用在 checkboxes
+ * (`core.js` `CONNECTION_USES`/`connectionUseChoice`) that used to be three separate dropdowns spread
+ * across 翻译台 and 朗读. Only the connection being edited (`editingChannelId`) expands — the same single
+ * detail block the page always had, physically moved into that card's slot, exactly how the prompt
+ * page's shared editor stage already relocates whichever prompt item is open.
+ */
+function renderChannelCards(root, settings, editing) {
+  fillChannelUseRow(root.querySelector('[data-jy-channel-use-row="follow"]'), settings, 'follow');
+  const host = root.querySelector('[data-jy-channel-cards]');
+  const detail = root.querySelector('[data-jy-channel-detail]');
+  if (!host) return;
+  const doc = host.ownerDocument;
+  host.replaceChildren(...settings.channels.map(channel => {
+    const isEditing = channel.id === editing;
+    const card = doc.createElement('section');
+    card.className = 'jy-card jy-channel-card';
+    card.dataset.jyChannelCard = channel.id;
+    const head = doc.createElement('div');
+    head.className = 'jy-channel-card-head';
+    const toggle = doc.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'jy-channel-card-toggle';
+    toggle.dataset.jyAction = 'edit-channel';
+    toggle.dataset.jyChannelId = channel.id;
+    const text = doc.createElement('span');
+    text.className = 'jy-card-row-text';
+    const heading = doc.createElement('h2');
+    heading.textContent = channel.name || DEFAULT_CHANNEL.name;
+    text.appendChild(heading);
+    if (!isEditing) {
+      const summary = doc.createElement('p');
+      summary.className = 'jy-muted';
+      summary.textContent = channel.url && channel.model
+        ? `${channel.url} · ${channel.model}`
+        : (channel.url || channel.model || '还没有填地址和模型');
+      text.appendChild(summary);
+    }
+    toggle.appendChild(text);
+    head.appendChild(toggle);
+    const uses = doc.createElement('div');
+    uses.className = 'jy-channel-card-uses';
+    uses.append(...CONNECTION_USES.map(use => makeChannelUseCheckbox(doc, settings, use, channel.id)));
+    head.appendChild(uses);
+    const chevron = doc.createElement('button');
+    chevron.type = 'button';
+    chevron.className = 'jy-channel-card-chevron';
+    chevron.dataset.jyAction = 'edit-channel';
+    chevron.dataset.jyChannelId = channel.id;
+    chevron.setAttribute('aria-label', isEditing ? '收起这条连接' : '展开这条连接');
+    chevron.setAttribute('aria-expanded', String(isEditing));
+    chevron.textContent = isEditing ? '▾' : '▸';
+    head.appendChild(chevron);
+    card.appendChild(head);
+    if (isEditing && detail) {
+      detail.hidden = false;
+      card.appendChild(detail);
+    }
+    return card;
+  }));
 }
 
 function syncChannelFields(root, settings) {
   const editing = editingChannelId(settings);
   runtime.editingChannelId = editing;
-  const select = root.querySelector('[data-jy-edit-channel]');
-  if (select) {
-    select.replaceChildren(...settings.channels.map(channel => {
-      const option = document.createElement('option');
-      option.value = channel.id;
-      option.textContent = channel.name;
-      return option;
-    }));
-    select.value = editing;
-  }
   const translation = root.querySelector('[data-jy-translation-channel]');
   if (translation) fillChannelPicker(translation, settings, translationChannelChoice(settings));
-  renderChannelUses(root, settings, editing);
+  renderChannelCards(root, settings, editing);
   const channel = settings.channels.find(item => item.id === editing) ?? getActiveChannel(settings);
   root.dataset.jyEditingChannelId = channel.id;
   for (const element of root.querySelectorAll('[data-jy-channel-field]')) {
@@ -8414,7 +8557,6 @@ function updateSummary(root, settings) {
   const channel = getActiveChannel(settings);
   const promptProfile = getActivePromptProfile(settings);
   const independent = settings.apiMode === 'independent';
-  setText(root, '[data-jy-channel-mode]', independent ? '保存的连接' : '酒馆当前连接');
   setText(
     root,
     '[data-jy-channel-summary]',
@@ -8430,6 +8572,25 @@ function updateSummary(root, settings) {
     promptProfile.glossary.trim() && '姓名与术语',
   ].filter(Boolean);
   setText(root, '[data-jy-context-summary]', sources.length ? `当前启用：${sources.join('、')}。` : '当前没有启用额外参考资料。');
+  // DESIGN §15.4 折叠组: the fold header's own one-line summary, covering only the three checkboxes
+  // this fold actually holds — 当前角色 and 姓名与术语 above are not toggles inside it.
+  setText(
+    root,
+    '[data-jy-prompt-reference-summary]',
+    [
+      settings.includeWorldbook && '世界书',
+      settings.includeCharacterCard && '角色卡设定',
+      settings.includeRecentContext && `近期对话 ${settings.contextMessages} 条`,
+    ].filter(Boolean).join(' · ') || '未启用',
+  );
+  // DESIGN §15.4 依赖缩进变灰: 流式写回 only takes effect on an independent connection; on 跟随酒馆 it
+  // silently falls back to a whole-floor write, so the row says so and its switch is greyed out.
+  const streamRow = root.querySelector('[data-jy-stream-row]');
+  if (streamRow) {
+    streamRow.dataset.jyBlocked = String(!independent);
+    const streamField = streamRow.querySelector('[data-jy-field="streamingWriteback"]');
+    if (streamField) streamField.disabled = !independent;
+  }
 }
 
 function syncFields(root, settings) {
@@ -10588,6 +10749,19 @@ function createControlCenter(rootDocument = document) {
       togglePromptEditor(root, button.dataset.jyPromptEditor);
       return;
     }
+    if (action === 'edit-channel') {
+      // Whatever is sitting in the card that closes is kept before another one opens, the same as
+      // the old 「正在编辑」 dropdown did — switching cards changes nothing any feature uses.
+      const id = button.dataset.jyChannelId;
+      try {
+        saveSettings(collectSettings(root));
+      } catch (error) {
+        toast('error', safeError(error));
+      }
+      runtime.editingChannelId = id;
+      syncFields(root, runtime.settings);
+      return;
+    }
     if (action === 'check-update') {
       await handleUpdateAction(button);
       return;
@@ -10667,13 +10841,13 @@ function createControlCenter(rootDocument = document) {
         saveSettings(collectSettings(root));
         await startTranslation(null, { force: true });
       } else if (action === 'restore-originals') {
-        await restoreChatOriginals({ ask: text => typeof globalThis.confirm !== 'function' || globalThis.confirm(text) });
+        await restoreChatOriginals({ ask: text => confirmDestructive({ title: '恢复本聊天的原文', message: text, confirmLabel: '恢复原文' }) });
       } else if (action === 'translate-missing') {
         // Seeds with whatever is already written back, so only the gaps go to the API.
         saveSettings(collectSettings(root));
         await startTranslation(null, { force: false });
       } else if (action === 'clear-floor') {
-        const cleared = await clearFloorTranslation(null, { ask: text => typeof globalThis.confirm !== 'function' || globalThis.confirm(text) });
+        const cleared = await clearFloorTranslation(null, { ask: text => confirmDestructive({ title: '清除这一楼的译文', message: text, confirmLabel: '清除译文' }) });
         // The card's own state chip (「翻译完成 | 已翻译」and the like) is drawn from the last card scan,
         // not re-read on its own — the same reason the 「刷新楼层」 button next to it calls this.
         if (cleared.cleared) await refreshCurrentCard(root);
@@ -10701,10 +10875,6 @@ function createControlCenter(rootDocument = document) {
         saveSettings(next);
         syncFields(root, runtime.settings);
         toast('success', '已采用新版规范与清单，原方案已备份。');
-      } else if (action === 'save-prompt') {
-        saveSettings(collectSettings(root));
-        syncFields(root, runtime.settings);
-        toast('success', '当前翻译方案已保存。');
       } else if (action === 'duplicate-prompt-profile') {
         const next = collectSettings(root);
         const active = getActivePromptProfile(next);
@@ -10815,10 +10985,6 @@ function createControlCenter(rootDocument = document) {
         const models = await fetchChannelModels(id);
         syncFields(root, runtime.settings);
         toast('success', `模型列表已更新，共 ${models.length} 个，请选择需要使用的模型。`);
-      } else if (action === 'save-channel') {
-        saveSettings(collectSettings(root));
-        syncFields(root, runtime.settings);
-        toast('success', '这条连接已保存。');
       } else if (action === 'save-settings') {
         saveSettings(collectSettings(root));
         await runtime.processingRefresh;
@@ -11253,11 +11419,29 @@ function createControlCenter(rootDocument = document) {
     if (event.target.matches('[data-jy-profile-field="styleMode"], [data-jy-profile-field="leaningMode"], [data-jy-profile-field="honorificMode"], [data-jy-profile-field="nameMode"], [data-jy-profile-field="punctuationMode"]')) {
       updatePromptConditionalFields(root);
     }
-    if (event.target.matches('[data-jy-edit-channel]')) {
-      // What was typed into the connection being left is kept before another one is opened; opening
-      // one changes nothing any feature uses.
-      saveSettings(collectSettings(root));
-      runtime.editingChannelId = event.target.value;
+    // 翻译规则 has no save button either (DESIGN §15.4): every field on it — the profile's own name
+    // and target language, each standard item's textarea/select, a custom section's own fields, and
+    // 近期对话条数 — saves itself once the field settles, the same way the switches above already do.
+    if (event.target.matches('[data-jy-profile-field], [data-jy-custom-field], [data-jy-prompt-profile-name], [data-jy-field="contextMessages"]')) {
+      try {
+        saveSettings(collectSettings(root));
+      } catch (error) {
+        toast('error', safeError(error));
+      }
+      syncFields(root, runtime.settings);
+      return;
+    }
+    if (event.target.matches('[data-jy-channel-use]')) {
+      // DESIGN §15.4 模型连接 卡头勾选用在: each use holds exactly one choice, so only a box being
+      // checked acts — unchecking the one active box would leave the use pointing at nothing, and the
+      // resync below always re-checks exactly one box per use anyway.
+      if (event.target.checked) {
+        try {
+          saveSettings(setConnectionUse(collectSettings(root), event.target.dataset.jyChannelUse, event.target.dataset.jyChannelUseChoice));
+        } catch (error) {
+          toast('error', safeError(error));
+        }
+      }
       syncFields(root, runtime.settings);
       return;
     }
@@ -11265,6 +11449,17 @@ function createControlCenter(rootDocument = document) {
       saveSettings(collectSettings(root));
       syncFields(root, runtime.settings);
       toast('success', `翻译改用：${channelLabel(runtime.settings, translationChannelChoice(runtime.settings))}。朗读用的连接不受影响。`);
+      return;
+    }
+    // 翻译台 has no save button (DESIGN §15.4 改了就存): 重试次数 saves itself once the field loses focus
+    // with a changed value, same as every switch on this page already does at once.
+    if (event.target.matches('[data-jy-field="retries"]')) {
+      try {
+        saveSettings(collectSettings(root));
+      } catch (error) {
+        toast('error', safeError(error));
+      }
+      syncFields(root, runtime.settings);
       return;
     }
     if (event.target.matches('[data-jy-field="floatingStyle"]')) {
@@ -11284,10 +11479,33 @@ function createControlCenter(rootDocument = document) {
       saveSettings(collectSettings(root));
       syncFields(root, runtime.settings);
     }
-    if (event.target.matches('[data-jy-wi-book-switch]')) toggleWorldInfoBook(event.target);
+    if (event.target.matches('[data-jy-wi-book-switch]')) {
+      toggleWorldInfoBook(event.target);
+      try {
+        saveSettings(collectSettings(root));
+      } catch (error) {
+        toast('error', safeError(error));
+      }
+    }
     if (event.target.matches('[data-jy-wi-pick]')) {
       const group = event.target.closest('.jy-wi-book');
       if (group) updateWorldInfoBookCount(group);
+      try {
+        saveSettings(collectSettings(root));
+      } catch (error) {
+        toast('error', safeError(error));
+      }
+    }
+    // 模型连接 has no save button either (DESIGN §15.4): every field in the expanded card — name,
+    // address, key, request parameters, the connection's own postscript — saves itself once it settles.
+    if (event.target.matches('[data-jy-channel-field]')) {
+      try {
+        saveSettings(collectSettings(root));
+      } catch (error) {
+        toast('error', safeError(error));
+      }
+      syncFields(root, runtime.settings);
+      return;
     }
     if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEffects"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringAutoSpeakers"], [data-jy-field="coloringContrast"]')) {
       saveSettings(collectSettings(root));

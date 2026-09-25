@@ -248,6 +248,49 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-channel-use[data-editing="true"] { border-color: var(--jy-accent); background: var(--jy-accent-tint); }
 /* The buttons below pull themselves up under the picker; the line between them keeps its own room. */
 .jy-form-body [data-jy-channel-usage] { margin: 6px 0 18px; }
+
+/* DESIGN §15.4 高级模式排版: a generic card for the 翻译台 / 翻译规则 / 模型连接 re-layout — the
+   编辑区 padding tier (§3), reused wherever a page groups a few rows under one heading. */
+.jy-card { display: flex; flex-direction: column; gap: 2px; padding: 16px 18px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); margin-bottom: 18px; }
+.jy-card > h2 { margin-bottom: 6px; }
+.jy-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; align-items: start; }
+.jy-card-grid > .jy-card { margin-bottom: 0; }
+.jy-card-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 9px 0; border-top: 1px solid var(--jy-line-soft); }
+.jy-card-row:first-child { border-top: 0; padding-top: 0; }
+.jy-card-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 160px; }
+.jy-card-row-text h3 { overflow-wrap: anywhere; }
+.jy-card-row-text > .jy-muted { margin-top: 0; }
+.jy-card-row select { min-width: 0; max-width: 220px; }
+.jy-card-row-field { display: inline-flex; align-items: center; gap: 6px; }
+.jy-card-row-field input[type="number"] { width: 72px; }
+.jy-card-row-end { justify-content: flex-end; }
+/* 依赖缩进变灰: indented 28px under the switch it depends on; greyed with a reason only while blocked. */
+.jy-card-row-dependent { margin-left: 28px; }
+.jy-card-row-dependent[data-jy-blocked="true"] { opacity: .55; }
+.jy-card-row-dependent[data-jy-blocked="true"] .jy-switch, .jy-card-row-dependent[data-jy-blocked="true"] input { cursor: not-allowed; }
+/* 危险操作: a red text button, grouped at the end of its card or action row. */
+.jy-text-button-danger { color: var(--jy-error); }
+.jy-launch-danger { margin-left: auto; }
+/* 翻译规则 §15.4 常用（选择题）: the 自定义 preview/textarea a select-row folds in, without the
+   .jy-form-body ancestor that used to give a static field its spacing. */
+.jy-prompt-select-detail { display: block; margin: -4px 0 10px; padding-left: 2px; }
+.jy-prompt-select-detail.jy-preset-preview { font-style: italic; }
+.jy-prompt-select-detail .jy-label { display: block; margin-bottom: 6px; }
+/* 改过 pill (§9.2 徽章 token, §6.4 已改动 colours) for a row with no pencil head of its own to carry it. */
+.jy-badge-changed { border-color: transparent; background: var(--jy-accent-tint); color: var(--jy-accent-ink); font-weight: 600; }
+/* Pushes the two red 方案管理 buttons to the end of their row without a third one drifting there too. */
+.jy-actions-spacer { flex: 1 1 auto; }
+
+/* DESIGN §15.4 模型连接: one card per connection, its head carrying the 用在 checkboxes. */
+.jy-channel-card { margin-bottom: 10px; }
+.jy-channel-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.jy-channel-card-toggle { flex: 1 1 200px; display: flex; min-width: 0; border: 0; background: transparent; padding: 0; text-align: left; color: inherit; }
+.jy-channel-card-toggle .jy-card-row-text h2 { font-size: 13px; overflow-wrap: anywhere; }
+.jy-channel-card-uses { display: flex; flex-wrap: wrap; gap: 3px 14px; }
+.jy-channel-card-uses .jy-check { padding: 0; white-space: nowrap; }
+.jy-channel-card-chevron { flex: none; border: 0; background: transparent; color: var(--jy-muted-soft); font-size: 11px; padding: 4px; }
+.jy-channel-card [data-jy-channel-detail] { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--jy-line-soft); }
+.jy-channel-card [data-jy-channel-detail] > label { display: block; margin-bottom: 16px; }
 .jy-processing-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; border-bottom: 1px solid var(--jy-line); padding-bottom: 26px; }
 .jy-text-scope { padding: 15px 17px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
 .jy-text-scope h2 { margin-bottom: 12px; font-size: 14px; }
@@ -430,6 +473,11 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-inline-field select { min-width: 0; max-width: 100%; }
   .jy-log-tools { margin-left: 0; }
   .jy-footer { padding-bottom: max(14px,env(safe-area-inset-bottom)); }
+  .jy-card { padding: 14px 14px; }
+  .jy-card-row select, .jy-card-row-field input[type="number"] { max-width: none; width: 100%; }
+  .jy-card-row-dependent { margin-left: 18px; }
+  .jy-channel-card-toggle { flex-basis: 100%; }
+  .jy-channel-card-uses { gap: 4px 12px; font-size: 11px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 
