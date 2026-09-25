@@ -842,7 +842,7 @@ export function composeAnnotationSection({ speakers = false, emotions = false, r
     if (hasFragments) {
       example.runs = ['<译文里对应这处原文排版的字>'];
       fields.push('runs（原文自带排版的片段，翻成了译文里的哪几个字）');
-      rules.push('runs：这一项如果带 fragments 字段，那是原文里本来就有特殊排版（加粗、变色、删除线之类）的几处片段，已经去掉了标签、只留文字，按原文出现的顺序编了号。runs 按同样的顺序，逐条写出 fragments 里第几条文字被译成了译文里的哪几个字，只填译文里实际写出的字，不加任何符号、标签或编号；这一项没有 fragments 字段就不写 runs，某一条在译文里找不到对应的字就跳过那一条，其余照写。');
+      rules.push('runs：这一项如果带 fragments 字段，那是原文里本来就有特殊排版（加粗、变色、删除线之类）的几处片段，已经去掉了标签、只留文字，按原文出现的顺序编了号。runs 数组按同样的顺序，第几条对应 fragments 里第几条，逐条写出那条文字被译成了译文里的哪几个字，只填译文里实际写出的字，不加任何符号、标签或编号；这一项没有 fragments 字段就不写 runs，某一条在译文里找不到对应的字，就在这一条的位置写空字符串 ""，不要整条跳过、也不要挪到别的位置——数组的长度和顺序必须和 fragments 一一对应，其余条目照写。');
     }
     checks.push('moves 和 runs 里的字都能在这一项的 text 里逐字找到');
   }

@@ -447,6 +447,12 @@ test('a segment\'s own `fragments` field never reaches the request unless 特效
   const input = JSON.parse(effectsOn.find(message => message.role === 'user').content);
   assert.deepEqual(input.segments[0].fragments, ['特别轻']);
   assert.equal(input.annotate.runs, true, 'the field is only ever sent alongside the instruction for what it means');
+  // A fragment the translation could not find a matching run for writes an empty string in its own
+  // position (readCarriedRunText/carriedRunsFor already read that position correctly by index) rather
+  // than being skipped — skipping would shift every fragment after it out of alignment with its run.
+  const runsSection = effectsOn.find(message => message.content.includes('附加标注')).content;
+  assert.match(runsSection, /找不到对应的字，就在这一条的位置写空字符串 ""/);
+  assert.doesNotMatch(runsSection, /跳过那一条/);
 
   // A segment with nothing to carry is untouched either way — never an empty `fragments: []`.
   const bare = { id: 2, text: '她点了点头。' };
