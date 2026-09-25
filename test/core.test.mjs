@@ -1393,9 +1393,29 @@ test('an echo of a source with nothing but a gasp or a stammer in it is not flag
   // A pure-punctuation source never reaches this at all (segmentSource keeps it out), but a source
   // with a real word beside the gasp still goes back for translation as it always did.
   assert.equal(looksUntranslated('「……っ、待って」', '「……っ、待って」'), true);
-  // Three or more interjection kana is no longer "a gasp or a stammer" by this rule's own two-letter
-  // ceiling, so an echo of one still counts as untranslated.
+  // Three real vowel morae in a row is more than isTrivialInterjectionSource's own one-real-mora
+  // ceiling — it is no longer "a gasp or a stammer" — so an echo of it still counts as untranslated.
   assert.equal(looksUntranslated('あああ', 'あああ'), true);
+});
+
+test('a gasp built on ー, doubled っ or the は/か consonant rows is recognised the same as a bare vowel, and a real short word is not', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // A long-vowel or doubled-stammer gasp: only one real mora once ー, ～/〜, small kana and repeated っ
+  // are set aside as filler rather than counted, so these settle in one reply instead of two.
+  for (const line of ['あーっ！', 'えーっ！？', 'うーん……', '……っっっ', 'えっっ', 'あ～っ', 'んんっ', 'うぅっ']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is one real mora plus filler, not a word`);
+  }
+  // The は/か consonant rows are gasps too, not only the five vowels — わ行/さ行 words are not covered
+  // by this the way tts.js's own INTERJECTION_CHARS draws the line at は行.
+  for (const line of ['はぁ……', 'ひっ', 'くっ', 'きゃっ', 'ふぅ……', 'ヒッ', 'ハァ……']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a single is-row/ka-row gasp`);
+  }
+  // Two real morae is always either a real short word or a name once it is not a bare gasp — even
+  // when, letter for letter, it is built from the same vowels a gasp is: おい (喂), いえ/いい (不/好),
+  // ええ (嗯), あい (愛) and うえ (上) all still need an actual translation, not a shrug.
+  for (const line of ['おい！', 'いえ', 'いい', 'ええ', 'あい', 'うえ', 'アイ！', 'イオ']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a real word or name, not a gasp`);
+  }
 });
 
 test('isShortExactEcho tells a short unchanged answer apart from a long one', async () => {
@@ -1411,6 +1431,22 @@ test('isShortExactEcho tells a short unchanged answer apart from a long one', as
   // Not an echo at all: no exact match, so this is never in play.
   assert.equal(isShortExactEcho('キラキラ', 'ドキドキ'), false);
   assert.equal(isShortExactEcho('下雨了。', '雨が降っている。'), false);
+});
+
+test('isShortExactEcho only forgives a second echo that is still plausibly untranslatable, not just short', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // Real greetings, names, ordinary sentences and a Han-bearing exclamation: every one of these is
+  // eight letters or fewer, so the old rule accepted an exact echo of any of them on a second sighting.
+  // A model that is simply lazy echoes short lines too, and a lazy echo is not "nothing to translate".
+  for (const line of ['ごめんなさい', 'バカ！', 'アリス！', '好きだよ', '待ってください', '大丈夫ですか？', 'ウソでしょ？', 'ありがとう', '行くぞ！']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} is a real line, not an echo worth accepting`);
+  }
+  // Two more sound-symbolic reduplications, matching ドキドキ's own shape.
+  assert.equal(isShortExactEcho('ワクワク', 'ワクワク'), true);
+  assert.equal(isShortExactEcho('ゴゴゴ', 'ゴゴゴ'), true);
+  // Some of what rule 1 already accepts on a single sighting is naturally also accepted here, on a
+  // second one — the two rules were never meant to disagree about the same source.
+  assert.equal(isShortExactEcho('はぁ……', 'はぁ……'), true);
 });
 
 test('a floor that fits one batch is spread evenly across parallel lanes', () => {

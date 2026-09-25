@@ -382,20 +382,43 @@ const KANA_OR_HAN_RE = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u3
 // sent at all; this is for the ones a stray kana still let through.
 const RESIDUE_LETTER_RE = /[\p{L}\p{N}]|[～〜]/u;
 
-// Small kana that only decorate a gasp or a stammer, the moraic ん/ン, the drawn-out sound marks and the
-// five bare vowels: what a Japanese interjection is still made of once everything else is stripped away.
-const INTERJECTION_KANA = new Set('ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮーんン～〜あいうえおアイウエオ');
+// Small kana that only decorate a gasp or a stammer, the moraic ん/ン and the drawn-out sound marks:
+// filler that never turns a gasp into a word or a name on its own, so none of it counts toward how
+// many real morae a residue has. ん stays here rather than among the counted morae so that あっ-style
+// stammers keep working (「……うん。」, 「うーん……」) — the cost is a narrow gap of its own, see
+// isTrivialInterjectionSource's own note.
+const INTERJECTION_FILLER = new Set('ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮーんン～〜');
+
+// The five vowels and the は/か consonant rows: the only full-size morae an honest gasp or stammer is
+// ever built from (はぁ, ひっ, くっ, きゃっ, ふぅ…). Kept in step with tts.js's own INTERJECTION_CHARS,
+// which draws the same は行 line for a breath rather than a word.
+const INTERJECTION_MORA = new Set('あいうえおアイウエオはひふへほハヒフヘホかきくけこカキクケコ');
+
+// Real short kana words this same letter shape can spell — carrying actual meaning, never "nothing to
+// translate" even though every letter of them is drawn from INTERJECTION_MORA. Kept in step with
+// tts.js's own KANA_WORDS_RE (はい/いいえ/いえ/いい are words there too, not gasps); おい/ええ/あい/うえ
+// are the other short real words the same two-vowel shape spells.
+const KANA_REAL_WORDS = new Set([
+  'はい', 'ハイ', 'いいえ', 'イイエ', 'いえ', 'いい', 'おい', 'オイ', 'ええ', 'エエ', 'あい', 'アイ', 'うえ', 'ウエ',
+]);
 
 function residueLetters(text) {
   return [...String(text ?? '')].filter(ch => RESIDUE_LETTER_RE.test(ch));
 }
 
-// A source with nothing in it worth translating beyond a gasp or a stammer: at most two letters left
-// once every mark is stripped, every one of them an interjection kana (design: a repair request over
-// 「……っ」 or 「ッ！」 only ever gets the same unchanged answer back, forever).
+// A source with nothing in it worth translating beyond a gasp or a stammer: everything left once every
+// mark is stripped is filler, with at most one real mora among it (design: a repair request over
+// 「……っ」, 「ッ！」 or 「はぁ……」 only ever gets the same unchanged answer back, forever). Two or more
+// real morae is always either a real short word (see KANA_REAL_WORDS) or a name, never a bare gasp —
+// except a single mora next to a bare ん (アン, ケン…), which this cannot tell apart from a stammer like
+// 「……うん。」 without more than letter shapes to go on; that narrow gap is left to isShortExactEcho's
+// own, stricter two-echo confirmation instead of ever being accepted on one unconfirmed reply.
 function isTrivialInterjectionSource(source) {
   const letters = residueLetters(source);
-  return letters.length > 0 && letters.length <= 2 && letters.every(ch => INTERJECTION_KANA.has(ch));
+  if (!letters.length || letters.length > 4) return false;
+  if (!letters.every(ch => INTERJECTION_FILLER.has(ch) || INTERJECTION_MORA.has(ch))) return false;
+  const morae = letters.filter(ch => INTERJECTION_MORA.has(ch));
+  return morae.length <= 1;
 }
 
 // An answer to a trivial interjection source is accepted whole (an unchanged echo) or with some/all of
@@ -433,9 +456,32 @@ export function looksUntranslated(text, source = '') {
   return kana >= 3 && kana / script >= 0.3;
 }
 
+// ドキドキ, ワクワク, ゴゴゴ: Japanese sound-symbolic words are almost always built by repeating a short
+// unit two or more times over, which an ordinary word or a name never is. True when `letters` splits
+// evenly into two or more copies of the same shorter run.
+function isReduplicatedSound(letters) {
+  for (let unit = 1; unit <= Math.floor(letters.length / 2); unit += 1) {
+    if (letters.length % unit) continue;
+    const base = letters.slice(0, unit).join('');
+    let repeats = true;
+    for (let at = unit; at < letters.length; at += unit) {
+      if (letters.slice(at, at + unit).join('') !== base) { repeats = false; break; }
+    }
+    if (repeats) return true;
+  }
+  return false;
+}
+
 /**
- * Whether `text` is a short, exact echo of `source` — the same content (whitespace aside), at most 8
- * letters once punctuation, symbols, quote marks and this extension's own markers are stripped away.
+ * Whether `text` is a short, exact echo of `source` (whitespace aside) that is still plausibly
+ * untranslatable — not merely short. A model that already echoed a source once is not, on its own,
+ * good evidence that a real sentence, name or ordinary word needs no translation; it usually just means
+ * the model is lazy. This only ever fires for a source with no Han character in it, at most 8 letters
+ * once every mark is stripped, and shaped either like a gasp or a stammer (the same filler-plus-at-most-
+ * one-real-mora material isTrivialInterjectionSource accepts on a single sighting, just without its own
+ * one-mora ceiling — a second identical reply is stronger evidence than a first) or a doubled/tripled
+ * sound-symbolic word (see isReduplicatedSound). KANA_REAL_WORDS is checked first and always wins, so a
+ * real short word built from the same letters — いい, ええ… — is never waved through by either shape.
  *
  * A short segment the model hands back unchanged twice in a row — once on the first request, once on
  * the repair that followed — is treated as the model saying it needs no translation, rather than being
@@ -447,8 +493,12 @@ export function isShortExactEcho(text, source) {
   if (!source) return false;
   const value = String(text ?? '');
   if (value.replace(/\s+/g, '') !== String(source).replace(/\s+/g, '')) return false;
+  if (/\p{Script=Han}/u.test(String(source))) return false;
   const letters = residueLetters(source);
-  return letters.length > 0 && letters.length <= 8;
+  if (!letters.length || letters.length > 8) return false;
+  if (KANA_REAL_WORDS.has(letters.join(''))) return false;
+  if (letters.every(ch => INTERJECTION_FILLER.has(ch) || INTERJECTION_MORA.has(ch))) return true;
+  return isReduplicatedSound(letters);
 }
 
 // SillyTavern rewrites message class names with a custom- prefix when it renders, and an edited

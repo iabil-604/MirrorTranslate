@@ -1640,3 +1640,184 @@ test('补译缺失段落 completes a floor left partial on an echoed interjectio
   const snapshot = await __testing.readMessageSnapshot(0, settings);
   assert.equal(snapshot.translated, true);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Reviewer follow-up on the echo fix above: the two-echo rule (core.js's isShortExactEcho) was wide
+// enough to accept a real short sentence, name or greeting the model was simply too lazy to translate,
+// not only a gasp or an onomatopoeia — and the confirming second request could be starved by a shared
+// retry budget, or never sent at all once streaming or retries: 0 were involved. See core.js's
+// isShortExactEcho/isTrivialInterjectionSource and index.js's translateOneBatch/translateMessageStreaming.
+// ---------------------------------------------------------------------------------------------
+
+test('two real short kana phrases echoed twice in a row are never written down as their own translation', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const input = JSON.parse(prompt.at(-1).content);
+      asked.push(input.segments.map(segment => segment.id));
+      // Line 1 translates normally; ありがとう and ごめんなさい — real, ordinary, kana-only lines with
+      // no Han in them, so the old rule's Han check alone did not save them — come back unchanged
+      // every time, the way a lazy model answers a short line it could have just translated.
+      return Promise.resolve(JSON.stringify(input.segments.map(segment => ({
+        id: segment.id,
+        text: segment.id === 1 ? '下雨了。' : segment.text,
+      }))));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  context.chat.push({ mes: '<story_scene>\n雨が降っている。\n\nありがとう\n\nごめんなさい\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.ok(asked.length > 0);
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, true, 'a real "thank you" or "sorry" echoed twice is still a translation failure, never accepted as itself');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, false);
+  assert.equal(snapshot.existingTranslations.get(1), '下雨了。', 'the ordinary line beside them still translated normally');
+  assert.equal(snapshot.existingTranslations.has(2), false, 'ありがとう is never written down as its own translation');
+  assert.equal(snapshot.existingTranslations.has(3), false, 'ごめんなさい is never written down as its own translation');
+});
+
+test('two onomatopoeia segments split across concurrent lanes are both confirmed, not only whichever lane spent the one shared retry', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const input = JSON.parse(prompt.at(-1).content);
+      // Every request is answered with an exact echo of whatever it asked for.
+      return Promise.resolve(JSON.stringify(input.segments.map(segment => ({ id: segment.id, text: segment.text }))));
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'follow', streamingWriteback: false, retries: 1,
+      channels: [{ id: 'default', maxTokens: 4096, timeoutSec: 30, concurrency: 2 }],
+    },
+    initialized: true,
+  });
+  context.chat.push({ mes: '<story_scene>\nドキドキ\n\nワクワク\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'both onomatopoeia lines are accepted — the confirming request is free, not charged to the one shared retry');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+  assert.equal(snapshot.existingTranslations.get(1), 'ドキドキ');
+  assert.equal(snapshot.existingTranslations.get(2), 'ワクワク');
+});
+
+test('an onomatopoeia accepted after two echoes keeps the speaker/emotion mark it was returned with', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const input = JSON.parse(prompt.at(-1).content);
+      const items = input.segments.map(segment => (segment.id === 1
+        ? { id: 1, text: '天气真好。', speaker: '英梨梨', emotion: 'happy' }
+        : { id: segment.id, text: segment.text, speaker: '英梨梨', emotion: 'whisper' }));
+      return Promise.resolve(JSON.stringify(items));
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { ...coloringSettings, apiMode: 'follow', streamingWriteback: false, retries: 1 },
+    initialized: true,
+  });
+  context.chat.push({ mes: '<story_scene>\n天気がいい。\n\nドキドキ\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined);
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.existingAnnotations.get(1)?.speaker, '英梨梨');
+  assert.equal(snapshot.existingAnnotations.get(2)?.speaker, '英梨梨', 'the accepted echo keeps the speaker mark it was returned with, not just its text');
+  assert.equal(snapshot.existingAnnotations.get(2)?.emotion, 'whisper');
+});
+
+test('a run that succeeds by accepting an echoed onomatopoeia leaves no error-level diagnostic behind', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  clearDiagnostics();
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const input = JSON.parse(prompt.at(-1).content);
+      return Promise.resolve(JSON.stringify(input.segments.map(segment => ({
+        id: segment.id,
+        text: segment.id === 1 ? '天气真好。' : segment.text,
+      }))));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  context.chat.push({ mes: '<story_scene>\n天気がいい。\n\nドキドキ\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined);
+  const errors = readDiagnostics().filter(entry => entry.level === 'error');
+  assert.deepEqual(errors, [], 'the run succeeded by recognising an echo; nothing in its own log should read as a failure');
+});
+
+test('a streamed echo is remembered across the whole-request repair, settling in one repair call instead of two', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n天気がいい。\n\nドキドキ\n</story_scene>', swipe_id: 0 };
+  const repairs = [];
+  mockHost([message], {
+    ChatCompletionService: {
+      async processRequest(payload) {
+        const input = JSON.parse(payload.messages.at(-1).content);
+        repairs.push(input.segments.map(segment => segment.id));
+        return { content: JSON.stringify(input.segments.map(segment => ({ id: segment.id, text: 'ドキドキ' }))) };
+      },
+    },
+  });
+  __testing.configureForTest({
+    settings: { ...streamingSettings, retries: 1, channels: [{ ...streamingSettings.channels[0], concurrency: 1 }] },
+    initialized: true,
+  });
+  globalThis.fetch = async (_url, init) => {
+    const input = JSON.parse(JSON.parse(init.body).messages.at(-1).content);
+    const payload = JSON.stringify(input.segments.map(segment => ({
+      id: segment.id,
+      text: segment.id === 1 ? '天气真好。' : 'ドキドキ',
+    })));
+    return sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: payload } }] })}\n\n`, 'data: [DONE]\n\n']);
+  };
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  assert.equal(repairs.length, 1, 'the streamed echo already counts as the first sighting, so one whole-request repair confirms it, not a second one');
+  assert.match(message.mes, /ドキドキ/);
+  assert.equal(message.extra[MESSAGE_META_KEY].complete, true);
+});
+
+test('at retries 0, a streamed echo is still confirmed through one free whole-request repair, not left missing forever', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n天気がいい。\n\nドキドキ\n</story_scene>', swipe_id: 0 };
+  const repairs = [];
+  mockHost([message], {
+    ChatCompletionService: {
+      async processRequest(payload) {
+        const input = JSON.parse(payload.messages.at(-1).content);
+        repairs.push(input.segments.map(segment => segment.id));
+        return { content: JSON.stringify(input.segments.map(segment => ({ id: segment.id, text: 'ドキドキ' }))) };
+      },
+    },
+  });
+  __testing.configureForTest({
+    settings: { ...streamingSettings, retries: 0, channels: [{ ...streamingSettings.channels[0], concurrency: 1 }] },
+    initialized: true,
+  });
+  globalThis.fetch = async (_url, init) => {
+    const input = JSON.parse(JSON.parse(init.body).messages.at(-1).content);
+    const payload = JSON.stringify(input.segments.map(segment => ({
+      id: segment.id,
+      text: segment.id === 1 ? '天气真好。' : 'ドキドキ',
+    })));
+    return sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: payload } }] })}\n\n`, 'data: [DONE]\n\n']);
+  };
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  assert.equal(repairs.length, 1, 'retries: 0 still allows the one free confirming request — it never spends the (empty) retry budget');
+  assert.match(message.mes, /ドキドキ/);
+  assert.equal(message.extra[MESSAGE_META_KEY].complete, true, 'no longer stuck partial forever just because retries is 0');
+});

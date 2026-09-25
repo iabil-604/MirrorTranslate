@@ -1980,9 +1980,10 @@ function toggleWorldInfoBook(box) {
  * model never returned at all, instead of being written down looking like a translation.
  *
  * A dropped line short enough to be `isShortExactEcho` of its source is also recorded on `recovered.
- * echoes` (id → the echoed text) before it is deleted. translateOneBatch is the one reader of it: a
- * segment the model hands back unchanged there twice running, once here and once on the repair this
- * drop sends out, is accepted instead of being asked a third time — see its own comment.
+ * echoes` (id → { text, mark }, `mark` the speaker/emotion annotation this same reply returned for it,
+ * if any) before it is deleted. translateOneBatch is the one reader of it: a segment the model hands
+ * back unchanged there twice running, once here and once on the repair this drop sends out, is accepted
+ * — annotation included — instead of being asked a third time — see its own comment.
  */
 function withoutUntranslated(recovered, segments, settings, { quiet = false } = {}) {
   const profile = getActivePromptProfile(settings);
@@ -1996,7 +1997,8 @@ function withoutUntranslated(recovered, segments, settings, { quiet = false } = 
   recovered.echoes = new Map();
   for (const id of dropped) {
     const text = recovered.translations.get(id);
-    if (isShortExactEcho(text, sources.get(Number(id)))) recovered.echoes.set(id, text);
+    const mark = recovered.annotations?.get(id);
+    if (isShortExactEcho(text, sources.get(Number(id)))) recovered.echoes.set(id, { text, mark });
     recovered.translations.delete(id);
     recovered.annotations?.delete(id);
   }
@@ -2095,7 +2097,11 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
   signal?.throwIfAborted?.();
   const recovered = withoutUntranslated(recoverStructuredTranslations(raw, segments), segments, settings);
   if (!recovered.translations.size) {
-    recordDiagnostic('error', 'translation.empty-response', '副 API 返回中没有任何可用译文。', {
+    // A reply that is entirely a recognised echo (recovered.echoes) is not a failure in the making —
+    // translateOneBatch is about to accept it, or is already one matching reply away from accepting
+    // it. An error-level entry here would sit right next to translation.echo-accepted and the eventual
+    // translation.complete, reading as a run that failed when it in fact succeeded.
+    recordDiagnostic(recovered.echoes?.size ? 'warn' : 'error', 'translation.empty-response', '副 API 返回中没有任何可用译文。', {
       phase,
       requestedIds: segments.map(segment => segment.id),
       parserWarnings: recovered.warnings,
@@ -2154,13 +2160,16 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
       for (const [id, text] of recovered.translations) translations.set(id, text);
       for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
       // A short segment withoutUntranslated dropped as an exact echo of its source: seen unchanged
-      // once before (the request this dropped id's own repair answers), it is accepted as the model
-      // saying it needs no translation, rather than asked a third time forever — see isShortExactEcho.
+      // once before (the request this dropped id's own repair answers), it is accepted — its
+      // speaker/emotion mark along with it — as the model saying it needs no translation, rather than
+      // asked a third time forever — see isShortExactEcho.
       const acceptedEchoes = [];
-      for (const [id, text] of recovered.echoes ?? []) {
+      for (const [id, echo] of recovered.echoes ?? []) {
+        const { text, mark } = echo;
         const normalized = String(text).replace(/\s+/g, '');
         if (state.echoSeen.get(id) === normalized) {
           translations.set(id, text);
+          if (mark) annotations.set(id, mark);
           state.echoSeen.delete(id);
           acceptedEchoes.push(id);
         } else {
@@ -2198,6 +2207,16 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
         // Shrinking changes the request, so it is not charged to the retry budget.
         pending = pending.slice(0, Math.ceil(pending.length / 2));
         recordDiagnostic('warn', 'translation.shrink', '本批没有新增译文，改用更小的批次重试。', { nextBatch: pending.length });
+        continue;
+      }
+      if (pending.every(item => state.echoSeen.has(item.id))) {
+        // Every id still pending here already echoed once: the next request only confirms a suspected
+        // echo, it does not ask again for something that might still fail — free, like the shrink just
+        // above, so one lane spending the shared retry budget on an ordinary repair can never starve
+        // another lane's confirmation of a segment that already echoed (retries: 0 included).
+        recordDiagnostic('warn', 'translation.echo-confirm', '副 API 疑似将这些段落原样返回，免费确认一次，不占用重试次数。', {
+          ids: pending.map(item => item.id),
+        });
         continue;
       }
       if (!consumeRetry(budget, 'missing-translations', { missingIds: pending.map(item => item.id) })) return lastError;
@@ -2267,7 +2286,7 @@ async function runInLanes(items, lanes, work) {
   return results;
 }
 
-async function invokeWithRetries(segments, settings, signal, packet = {}, seedTranslations = new Map(), retryBudget = null, seedAnnotations = new Map(), lyricIds = null) {
+async function invokeWithRetries(segments, settings, signal, packet = {}, seedTranslations = new Map(), retryBudget = null, seedAnnotations = new Map(), lyricIds = null, seedEchoSeen = new Map()) {
   const budget = retryBudget || { remaining: settings.retries };
   const translations = new Map(seedTranslations);
   const annotations = new Map(seedAnnotations);
@@ -2280,8 +2299,11 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
   // batch starting after another one finished would otherwise take itself for a repair.
   // `echoSeen` (id → its normalized text) remembers a short exact echo across the primary/repair
   // attempts translateOneBatch makes within this one call, so the second matching echo can be
-  // told apart from the first — see translateOneBatch and core.js's isShortExactEcho.
-  const state = { requests: 0, roster: annotationRoster(settings), styles: translationStyles(settings), seeded: translations.size > 0, lyricIds, echoSeen: new Map() };
+  // told apart from the first — see translateOneBatch and core.js's isShortExactEcho. `seedEchoSeen`
+  // carries in an id already echoed once before this call started — translateMessageStreaming's own
+  // streamed batch, before it falls back to this whole-request repair, for one — so that reply counts
+  // as the first sighting instead of being forgotten the moment the stream hands off.
+  const state = { requests: 0, roster: annotationRoster(settings), styles: translationStyles(settings), seeded: translations.size > 0, lyricIds, echoSeen: new Map(seedEchoSeen) };
   let lastError;
   recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
     segments: needed.length,
@@ -2797,6 +2819,11 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     const roster = annotationRoster(settings);
     const styles = translationStyles(settings);
     const total = snapshot.segments.length;
+    // A streamed batch's own echo, carried into the whole-request repair below as that repair's
+    // `seedEchoSeen`: without it, a segment the model already echoed once here needs two more
+    // matching replies there (once, and then the repair that confirms it) before it is accepted,
+    // rather than one — see invokeWithRetries and core.js's isShortExactEcho.
+    const streamEchoSeen = new Map();
 
     // One progressive write at a time. Overlapping runs each snapshot the floor before the other
     // has assigned, so a failing saveChat could roll the floor back over a newer write.
@@ -2904,6 +2931,9 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
         const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, hasLyrics, hasFragments });
         for (const [id, value] of recovered.translations) translations.set(id, value);
         for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
+        for (const [id, echo] of recovered.echoes ?? []) {
+          if (!translations.has(id)) streamEchoSeen.set(id, String(echo.text).replace(/\s+/g, ''));
+        }
         updateTask({
           status: 'running',
           message: `已恢复 ${translations.size} / ${total} 段。`,
@@ -2915,6 +2945,13 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       const recovered = withoutUntranslated(recoverStructuredTranslations(raw, pending), pending, settings);
       for (const [id, value] of recovered.translations) translations.set(id, value);
       for (const [id, mark] of recovered.annotations) annotations.set(id, mark);
+      // The streaming path never confirms an echo itself — one attempt per batch, no repair loop here
+      // — but a segment it drops as a recognised echo is still worth remembering: the whole-request
+      // repair below is seeded with it, so a second matching reply there is this segment's second
+      // sighting rather than its first. See streamEchoSeen's own note above and invokeWithRetries.
+      for (const [id, echo] of recovered.echoes ?? []) {
+        if (!translations.has(id)) streamEchoSeen.set(id, String(echo.text).replace(/\s+/g, ''));
+      }
       const reasoning = extractReasoningText(raw);
       // The thinking stops being a progress indicator here and becomes a record: the panel folds it
       // away, and the log keeps the whole thing for anyone who wants to know where the minutes went.
@@ -2943,13 +2980,18 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     // per batch, so a line a small model skipped, or sent back still in Japanese, simply stayed missing
     // until someone pressed 补译. Close those gaps through the same repair loop before writing.
     const gaps = snapshot.segments.filter(segment => !translations.has(segment.id));
-    if (gaps.length && translations.size && Number(settings.retries) > 0) {
+    // A gap the streamed batch already recorded in streamEchoSeen only needs one more matching reply
+    // to be confirmed — that request is free (see translateOneBatch's echo-confirm path), so it still
+    // runs with retries set to 0, the one setting that used to skip this block outright and leave an
+    // honestly-echoed segment missing forever.
+    const hasEchoGap = gaps.some(segment => streamEchoSeen.has(segment.id));
+    if (gaps.length && translations.size && (Number(settings.retries) > 0 || hasEchoGap)) {
       recordDiagnostic('warn', 'translation.stream-repair', '流式批次有缺失段落，改用整包请求补译。', {
         missingIds: gaps.map(segment => segment.id),
       });
       updateTask({ status: 'running', message: `正在补译缺失的 ${gaps.length} 段…` });
       try {
-        const repaired = await invokeWithRetries(gaps, settings, controller.signal, packet, translations, null, annotations, snapshot.lyricIds);
+        const repaired = await invokeWithRetries(gaps, settings, controller.signal, packet, translations, null, annotations, snapshot.lyricIds, streamEchoSeen);
         for (const [id, value] of repaired.translations) translations.set(id, value);
         for (const [id, mark] of repaired.annotations ?? []) annotations.set(id, mark);
       } catch (error) {
