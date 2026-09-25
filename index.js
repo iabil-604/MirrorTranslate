@@ -142,7 +142,7 @@ import {
 } from './tts.js?v=0.36.1';
 import { createTtsStore } from './tts-store.js?v=0.36.1';
 import { SPEAKER_SOURCE_LABELS, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.36.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings } from './tts-deep.js?v=0.36.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis } from './tts-deep.js?v=0.36.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -454,7 +454,7 @@ const CONTROL_CENTER_MARKUP = `
 <section class="jy-page" data-jy-page="tts" role="tabpanel" hidden>
 <header class="jy-page-heading"><div><h1>朗读</h1><span class="jy-page-context">旁白和每个角色各用各的声音，多国语言各配各的音色，点哪句读哪句</span></div><button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button></header>
 <div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每个自然段后面会出现「播放」和「重新生成」两个按钮，楼层开头有一个小的「朗读」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep">深度分析：在骨架上再看一遍，定情绪浓度和表演</option></select></label><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep">深度分析：在骨架上再看一遍，定情绪起伏和表演</option></select></label><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
 <p class="jy-muted" data-jy-tts-mode-help></p>
 <details class="jy-form-section jy-fold" data-jy-fold="tts-read"><summary class="jy-section-title"><span>01</span><h2>读什么</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-form-grid jy-form-grid-tight"><label title="简单分析、「分析这一楼」、按意见改、从角色卡和世界书识别角色，都走这条。和翻译用哪条互不相干。"><span class="jy-label">朗读分析用的连接</span><select data-jy-tts-field="analysisChannelId"><option value="follow">跟随酒馆（酒馆当前的连接和模型）</option></select></label></div>
@@ -3382,7 +3382,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       const braces = (String(text).match(/}/g) ?? []).length;
       if (braces <= closed) return;
       closed = braces;
-      const partial = parseVoiceAnalysis(text, utterances);
+      const partial = depth === 'deep' ? parseDeepAnalysis(text, utterances) : parseVoiceAnalysis(text, utterances);
       let ready = 0;
       const readyIds = new Set();
       for (const line of paragraphs) {
@@ -3429,7 +3429,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       }
       throw error;
     }
-    const parsed = parseVoiceAnalysis(raw, utterances);
+    const parsed = depth === 'deep' ? parseDeepAnalysis(raw, utterances) : parseVoiceAnalysis(raw, utterances);
     parsed.labels = stampLabels(parsed.labels, askedAt);
     const seconds = Number(((Date.now() - started) / 1000).toFixed(1));
     recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.analysis', parsed.labels.size
@@ -3446,6 +3446,15 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       contextBytes: packet ? Object.values(packet).reduce((sum, value) => sum + String(value ?? '').length, 0) : undefined,
       seconds,
     }, raw, { fullRequest: messages, floor: floor.messageId });
+    // A deep reply whose line did not reproduce its sentence word for word: the sentence kept only
+    // its opening tags (parseDeepAnalysis), and that is worth a diagnostic naming which sentence and
+    // where it first stopped matching.
+    if (depth === 'deep' && parsed.mismatches?.length) {
+      recordDiagnostic('warn', 'tts.analysis-deep-line', `深度分析有 ${parsed.mismatches.length} 句 line 跟正文对不上，只保留了句首的标签：${parsed.mismatches.slice(0, 3)
+        .map(item => `第 ${item.id} 句「${item.sentence.slice(0, 16)}${item.sentence.length > 16 ? '…' : ''}」从第 ${item.at} 个字起不一样`).join('；')}${parsed.mismatches.length > 3 ? '…' : ''}`, {
+        floor: floor.floorId, depth, mismatches: parsed.mismatches,
+      }, '', { floor: floor.messageId });
+    }
     // An empty answer is not cached: the next play asks again instead of living with a failed reply.
     if (parsed.labels.size) {
       await ttsStore().putAnalysis({ key, floorId: floor.floorId, version: floor.version, depth, labels: [...parsed.labels], voices: [...parsed.voices], analyzedAt: askedAt });

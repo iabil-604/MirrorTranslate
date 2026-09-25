@@ -235,11 +235,9 @@ test('the deep reading carries the card and the recent floors, and every sentenc
       requests.push(payload);
       return {
         content: JSON.stringify({
-          scene: '闷热的教室',
-          characters: [{ name: '泰罗', state: '快热疯了', habit: '句尾拖长' }],
           voices: [
             { id: 1, type: 'narration' },
-            { id: 2, type: 'dialogue', speaker: '泰罗', emotion: 'frustrated', intensity: 2, speed: 'fast', volume: 'loud', tension: 1, stress: ['热'], pauses: [{ after: '我操', length: 'short' }], subtext: '想让人拦着' },
+            { id: 2, speaker: '泰罗', emotion: 'frustrated', pace: 'fast', line: '我操 [pause] 好 [emphasis] 热啊！' },
           ],
         }),
       };
@@ -258,13 +256,11 @@ test('the deep reading carries the card and the recent floors, and every sentenc
   assert.match(input.references.recent, /泰罗擦了擦汗/);
   assert.equal('worldbook' in input.references, false);
   assert.equal(segments[1].emotion, 'frustrated');
-  assert.equal(segments[1].voice.subtext, '想让人拦着');
-  assert.deepEqual(segments[1].voice.pauses, [{ after: '我操', length: 'short' }]);
+  assert.deepEqual(segments[1].voice.pauses, [{ after: '操', length: 'short' }]);
 
   const inspected = await __testing.ttsInspect(1, 2);
   assert.equal(inspected.text, '[frustrated] 我操 [pause] 好 [emphasis] 热啊！', 'Fish\'s own words only: the mood, the pause, the stress');
-  assert.deepEqual(inspected.prosody, { speed: 1.12, volume: 3 });
-  assert.ok(inspected.summary.some(([term]) => term === '潜台词'));
+  assert.deepEqual(inspected.prosody, { speed: 1.12, volume: 0 });
   assert.equal(inspected.depth, 'deep');
   assert.equal(requests.length, 1);
   // A longer cast list or another floor on top is no reason to read this floor again.
@@ -273,19 +269,41 @@ test('the deep reading carries the card and the recent floors, and every sentenc
   await __testing.prepareTtsSegments(floor, runtime());
   assert.equal(requests.length, 1, 'the reading is keyed by the text alone');
 
-  // The fast, loud sentence is its own request: Fish's prosody is per request.
+  // The fast sentence is its own request: Fish's prosody is per request.
   const calls = mockFish();
   const { items } = await __testing.ttsItemsFor(floor, segments, settings);
   const { record } = await __testing.ensureTtsRecording(floor, 'floor:all', items, settings);
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].body.prosody, { speed: 1, volume: 0 });
-  assert.deepEqual(calls[1].body.prosody, { speed: 1.12, volume: 3 });
+  assert.deepEqual(calls[1].body.prosody, { speed: 1.12, volume: 0 });
   assert.equal(calls[1].body.text, '[frustrated] 我操 [pause] 好 [emphasis] 热啊！');
   assert.equal(record.parts.length, 2);
   assert.deepEqual(record.timeline.map(entry => [entry.id, entry.part]), [[1, 0], [2, 1]]);
 });
 
 
+
+test('a deep line that fails the word-for-word check falls back to its opening tag, logged once', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-deep-mismatch', {
+    async processRequest() {
+      return { content: JSON.stringify({ voices: [{ id: 1, type: 'narration' }, { id: 2, speaker: '泰罗', emotion: 'sad', line: '[sad] 我快要热坏了啊啊！' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, deepUnlocked: true, mode: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('空は青い。泰羅は言った：「暑さで頭がおかしくなりそうだ！」', [[1, '蓝蓝的天空，泰罗说：「我快要热坏了！」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const read = await __testing.prepareTtsSegments(floor, settings);
+  // The line no longer matches its sentence from where it adds an extra 啊: only the leading [sad] survives.
+  assert.deepEqual(read.segments[1].voice, { emotion: 'sad' });
+  const notes = readTtsDiagnostics().filter(entry => entry.scope === 'tts.analysis-deep-line' && entry.details?.floor === floor.floorId);
+  assert.equal(notes.length, 1, 'one diagnostic line names the mismatch');
+  assert.match(notes[0].message, /第 2 句/);
+  assert.equal(notes[0].details.mismatches[0].id, 2);
+  assert.equal(notes[0].details.mismatches[0].sentence, '我快要热坏了！');
+});
 
 test('the deep reading ignores the translation\'s marks and reads the text it will speak', async t => {
   restoreGlobals(t);
@@ -319,7 +337,7 @@ test('reading both languages: one reading of the original carries over to the tr
   const { context } = mockHost('tts-both', {
     async processRequest(payload) {
       requests.push(payload);
-      return { content: JSON.stringify({ voices: [{ id: 1 }, { id: 2, type: 'dialogue', speaker: '樱井', emotion: 'tender', speed: 'slow', stress: ['来'] }] }) };
+      return { content: JSON.stringify({ voices: [{ id: 1 }, { id: 2, speaker: '樱井', emotion: 'tender', pace: 'slow', line: '[emphasis] 来たんだね' }] }) };
     },
   });
   const settings = __testing.configureForTest({
@@ -946,7 +964,7 @@ test('a look at the floor asks nothing; the reading asks once and the look then 
   const { context } = mockHost('tts-passive', {
     async processRequest(payload) {
       requests.push(payload);
-      return { content: JSON.stringify({ voices: [{ id: 1, type: 'narration' }, { id: 2, type: 'dialogue', speaker: '泰罗', emotion: 'angry', intensity: 2, direction: '压着火，装冷淡' }] }) };
+      return { content: JSON.stringify({ voices: [{ id: 1, type: 'narration' }, { id: 2, speaker: '泰罗', emotion: 'angry', line: '[angry] 热死了，才九月啊' }] }) };
     },
   });
   const settings = __testing.configureForTest({
@@ -972,7 +990,7 @@ test('a look at the floor asks nothing; the reading asks once and the look then 
   const again = await __testing.ttsInspect(0, 2);
   assert.equal(requests.length, 1);
   assert.equal(again.depth, 'deep');
-  assert.equal(again.voice?.direction, '压着火，装冷淡');
+  assert.equal(again.voice?.emotion, 'angry');
 });
 
 test('a floor plans one pair of buttons per paragraph, in reading order', () => {
@@ -1794,7 +1812,7 @@ test('the deep reading: its own request on the floor it speaks, with the card an
       requests.push(payload);
       const input = JSON.parse(payload.messages.at(-1).content);
       if (input.task === 'refine_voices_for_audiobook') return { content: JSON.stringify({ voices: [{ id: 2, emotion: 'angry', intensity: 2 }] }) };
-      return { content: JSON.stringify({ voices: [{ id: 1 }, { id: 2, why: '嘴硬，其实是撒娇', emotion: 'shy', intensity: 0, tone: 'soft tone', pauses: [{ after: '我', length: 'short' }] }] }) };
+      return { content: JSON.stringify({ voices: [{ id: 1 }, { id: 2, emotion: 'shy', line: '[shy][soft tone] 我 [pause] 才没有寂寞。' }] }) };
     },
   });
   const deepChannel = normalizeChannel({ id: 'c2', name: 'thinker', url: 'https://deep.example/v1', key: 'k2', model: 'reasoner' });
@@ -1819,11 +1837,10 @@ test('the deep reading: its own request on the floor it speaks, with the card an
   assert.match(input.references.recent, /作业塞进了书包/);
   assert.equal(read.depth, 'deep');
   // The mood is the reading's own; the name the translation marked is kept where the reading gave none.
-  assert.deepEqual([read.segments[1].speaker, read.segments[1].emotion, read.segments[1].intensity], ['泰罗', 'shy', 0]);
+  assert.deepEqual([read.segments[1].speaker, read.segments[1].emotion, read.segments[1].intensity], ['泰罗', 'shy', 1]);
   const inspected = await __testing.ttsInspect(1, 2);
   assert.equal(inspected.depth, 'deep');
   assert.equal(inspected.text, '[shy] 我 [pause] 才没有寂寞。', 'a soft tone neither language asked for is not sent');
-  assert.ok(inspected.summary.some(([term, value]) => term === '依据' && value === '嘴硬，其实是撒娇'));
   // A second look asks nothing.
   await __testing.prepareTtsSegments(floor, settings);
   assert.equal(requests.length, 1);

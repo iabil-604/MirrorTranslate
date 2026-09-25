@@ -29,7 +29,7 @@ import {
   splitUtterances,
 } from '../tts.js';
 import { normalizeEmotion } from '../palette.js';
-import { DEEP_PROMPT, buildDeepAnalysisMessages } from '../tts-deep.js';
+import { DEEP_PROMPT, buildDeepAnalysisMessages, parseDeepAnalysis } from '../tts-deep.js';
 import { pinSpeakers } from '../tts-speakers.js';
 
 const S2 = { model: 's2-pro' };
@@ -180,22 +180,23 @@ test('what Fish never hears is left alone, so a reading that changes nothing aud
   assert.equal(compileVoiceCues(segments[0], { lean: true }).cues.join(''), '[frustrated]');
 });
 
-test('the analyses ask for every line in order, the minimal answer for an unread one, and a quote that is not speech read as narration', () => {
-  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEEP_PROMPT]) {
-    assert.match(prompt, /每个编号都要回答，按编号从小到大|每个 ⟦编号⟧ 都要回答，按编号从小到大/);
-    assert.match(prompt, /\{"id":N,"type":"dialogue"\}/);
-    assert.match(prompt, /\{"id":N,"type":"narration"\}/);
-    assert.doesNotMatch(prompt, /写 calm|calm 凑数(?!。)/);
-  }
+test('the simple analysis asks for every line in order and the minimal answer for an unread one', () => {
+  assert.match(DEFAULT_TTS_PROMPTS.simple, /每个编号都要回答，按编号从小到大/);
+  assert.match(DEFAULT_TTS_PROMPTS.simple, /\{"id":N,"type":"dialogue"\}/);
+  assert.match(DEFAULT_TTS_PROMPTS.simple, /\{"id":N,"type":"narration"\}/);
+  assert.doesNotMatch(DEFAULT_TTS_PROMPTS.simple, /写 calm|calm 凑数(?!。)/);
+  assert.match(DEEP_PROMPT, /每个 ⟦编号⟧ 都要回答，按编号从小到大/);
+  assert.match(DEEP_PROMPT, /\{"id":N,"type":"narration"\}/);
   assert.match(DEEP_PROMPT, /不要拿 calm 凑数/);
-  assert.match(DEEP_PROMPT, /evidence 逐字照抄写出这个声音的那几个字/);
   assert.match(DEEP_PROMPT, /在心里核对一遍，不要写出来/);
-  assert.match(DEEP_PROMPT, /styles 对停顿另有要求时按 styles/);
-  // The example shows the shape, and nothing a rule forbids: no volume beside a tone, no strength by default.
+  // The reply carries every tag inline on the sentence itself, not as a side field per effect: the
+  // example shows a spoken line (speaker, emotion, pace, line) and a bare narration answer, and
+  // nothing the new format dropped — no strength, no volume, no side field a tag now covers.
   const example = JSON.parse(DEEP_PROMPT.split('\n')[1].match(/\{"voices".*\]\}/)[0]).voices[0];
-  assert.ok(example.tone && !('volume' in example), 'rule 12: a volume only where no tone is written');
-  assert.equal('intensity' in example, false, 'rule 4: a strength only where the mood is clearly weaker or stronger');
-  assert.match(DEEP_PROMPT, /示例里没有的 intensity、speed、volume 按第 4、12 条写/);
+  assert.deepEqual(Object.keys(example).sort(), ['emotion', 'id', 'line', 'pace', 'speaker']);
+  assert.equal('intensity' in example, false, 'the new format carries no strength field of its own');
+  assert.equal('volume' in example, false, 'volume is not part of the deep reply any more');
+  assert.match(example.line, /^\[nervous\] /, 'the example carries its own leading tag, not a side field');
   // The words a situation is mapped to are ones the request offers.
   const offered = new Set([...FISH_EMOTIONS, ...SPOKEN_SOUNDS, ...FISH_TONES]);
   for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEEP_PROMPT]) {
@@ -206,12 +207,18 @@ test('the analyses ask for every line in order, the minimal answer for an unread
   const input = JSON.parse(buildDeepAnalysisMessages(splitUtterances([{ lineId: 1, text: '「好。」' }]))[1].content);
   assert.deepEqual(input.sounds, SPOKEN_SOUNDS);
   assert.deepEqual(input.emotions, FISH_EMOTIONS);
-  // The reply: a sign in quotes is the narrator's, a bare dialogue answer labels the line and sends no cue.
+  assert.ok(FISH_SOUNDS.includes('moaning'), 'a stored moan still parses, to be dropped on its way out');
+  // A prompt of the reader's own is offered the same sounds, in the reader's words.
+  assert.deepEqual(SOUND_TAGS.filter(word => ['呻吟', '人群笑声', '背景笑声', '观众笑声'].includes(word)), []);
+  assert.ok(SOUND_TAGS.includes('叹气') && SOUND_TAGS.includes('冷哼'));
+});
+
+test('a deep reply: a sign in quotes is the narrator\'s, a spoken line carries its tags, and a bare line still reads', () => {
   const utterances = splitUtterances([{ lineId: 1, text: '门上挂着「闲人免进」的牌子。她叹了口气：「又锁了。」' }, { lineId: 2, text: '「走吧。」' }]);
-  const parsed = parseVoiceAnalysis(JSON.stringify({ voices: [
+  const parsed = parseDeepAnalysis(JSON.stringify({ voices: [
     { id: 2, type: 'narration' },
-    { id: 5, speaker: '千夏', emotion: 'disappointed', sounds: [{ at: 'start', tag: 'sighing', evidence: '叹了口气' }] },
-    { id: 6, type: 'dialogue' },
+    { id: 5, speaker: '千夏', emotion: 'disappointed', line: '[disappointed][sighing] 又锁了。' },
+    { id: 6, line: '走吧。' },
   ] }), utterances);
   assert.deepEqual(parsed.labels.get(2), { type: 'narration' });
   assert.deepEqual(parsed.labels.get(6), { type: 'dialogue' });
@@ -219,10 +226,6 @@ test('the analyses ask for every line in order, the minimal answer for an unread
   assert.equal(segments.find(item => item.id === 2).type, 'narration');
   assert.equal(lean(segments.find(item => item.id === 5)), '[disappointed][sighing] 又锁了。');
   assert.equal(lean(segments.find(item => item.id === 6)), '走吧。');
-  assert.ok(FISH_SOUNDS.includes('moaning'), 'a stored moan still parses, to be dropped on its way out');
-  // A prompt of the reader's own is offered the same sounds, in the reader's words.
-  assert.deepEqual(SOUND_TAGS.filter(word => ['呻吟', '人群笑声', '背景笑声', '观众笑声'].includes(word)), []);
-  assert.ok(SOUND_TAGS.includes('叹气') && SOUND_TAGS.includes('冷哼'));
 });
 
 test('a line the reader or the story gave to somebody stays spoken, whatever a model made of the quote', () => {
