@@ -971,6 +971,12 @@ export function consoleFoldSummary(value = {}) {
   return `${tuning} · 标点情绪标签 ${marks} 条`;
 }
 
+/** "N 个音色" for a non-empty library, "空" for none — 音色库 fold's summary, nested inside 音色's card. */
+export function voiceLibraryFoldSummary(voiceLibrary) {
+  const list = normalizeVoiceLibrary(voiceLibrary);
+  return list.length ? `${list.length} 个音色` : '空';
+}
+
 export function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }

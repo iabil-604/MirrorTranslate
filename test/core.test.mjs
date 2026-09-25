@@ -88,6 +88,7 @@ import {
   quoteSymbolFoldSummary,
   fishParamsFoldSummary,
   consoleFoldSummary,
+  voiceLibraryFoldSummary,
   DEFAULT_CONSOLE,
 } from '../core.js';
 import {
@@ -2249,5 +2250,19 @@ test('consoleFoldSummary reads "AI 判断" until a slider leaves 50, then counts
   assert.equal(
     consoleFoldSummary({ ...DEFAULT_CONSOLE, pause: 75, speed: 0, marks: [{ punct: '！！', tag: '加大音量', at: 'head' }] }),
     '2 项已设定 · 标点情绪标签 1 条',
+  );
+});
+
+test('voiceLibraryFoldSummary counts voices with a usable id and reads "空" for none', () => {
+  assert.equal(voiceLibraryFoldSummary(undefined), '空');
+  assert.equal(voiceLibraryFoldSummary([]), '空');
+  assert.equal(voiceLibraryFoldSummary([{ id: 'a', name: '少女', voiceId: '' }]), '空');
+  assert.equal(voiceLibraryFoldSummary([{ id: 'a', name: '少女', voiceId: 'voice-a' }]), '1 个音色');
+  assert.equal(
+    voiceLibraryFoldSummary([
+      { id: 'a', name: '少女', voiceId: 'voice-a' },
+      { id: 'b', name: '老人', voiceId: 'voice-b' },
+    ]),
+    '2 个音色',
   );
 });
