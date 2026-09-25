@@ -48,6 +48,7 @@ import {
   normalizeOpenAiBaseUrl,
   parseModelListResponse,
   parsePreserveLineRulesWithErrors,
+  parseLyricLineRulesWithErrors,
   parseTagNames,
   parseTagNamesWithErrors,
   splitSpeechParts,
@@ -1796,4 +1797,126 @@ test('the original\'s side places its runs by order without the signs it folded 
     { head: '等等', speaker: '艾琳' }, { head: '那里很危险', speaker: '莉莉丝' }, { head: '算了', speaker: '千夏' },
   ] });
   assert.deepEqual(unplaced.map(own => own?.speaker ?? null), [null, null]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// v0.37.0 lyric-line rules, the music-card rule group, and inline pairing.
+// Every fixture below is invented text, never a real song's lyrics.
+// ---------------------------------------------------------------------------------------------
+
+test('lyric-line rules use the same exact, prefix and regex grammar as preserve rules', () => {
+  const parsed = parseLyricLineRulesWithErrors(['夜风轻轻吹过', 'prefix:作词', '/^\\s*献给/']);
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.rules.map(rule => rule.type), ['exact', 'prefix', 'regex']);
+  assert.match(parseLyricLineRulesWithErrors('/[/').errors[0], /第 1 行正则无效/);
+});
+
+test('a lyric line forms its own unit, never joining the narration around it', () => {
+  const source = '第一行叙述。\nそらにひびけ\n第二行叙述。';
+  const segmented = segmentSource(source, { lyricLineRules: ['そらにひびけ'] });
+  assert.equal(segmented.lyricLines, 1);
+  assert.equal(segmented.paragraphs, 1, 'still one blank-line-delimited paragraph');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['第一行叙述。', 'そらにひびけ', '第二行叙述。']);
+  assert.deepEqual([...segmented.lyricIds], [2]);
+  const kinds = segmented.layout.filter(part => part.type === 'segment').map(part => Boolean(part.lyric));
+  assert.deepEqual(kinds, [false, true, false], 'the lyric line is its own segment, flagged apart from its neighbours');
+});
+
+test('a lyric line already written in Chinese is not translated, same as any other preserved line', () => {
+  const source = '第一行叙述。\n静静地看着你\n第二行叙述。';
+  const segmented = segmentSource(source, { lyricLineRules: ['静静地看着你'] });
+  assert.equal(segmented.lyricLines, 1, 'still counted as a lyric-line candidate for the inspector');
+  assert.equal(segmented.lyricIds.size, 0, 'but it never becomes a segment to translate or read');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['第一行叙述。', '第二行叙述。']);
+  const output = assembleBilingual(segmented.layout, new Map([[1, '叙述译文一'], [2, '叙述译文二']]), { allowMissing: true });
+  assert.match(output.replace(/[​‌⁠-⁤]/g, ''), /静静地看着你/);
+});
+
+test('the music-card group splits <br>-joined card rows and classifies each on its own', () => {
+  const card = 'NOW PLAYING<br>今日は静かな朝<br>作词：风铃<br>もう一度歌おう';
+  const segmented = segmentSource(card, { musicCardRules: true });
+  // NOW PLAYING is the built-in caption. 今日は静かな朝 and もう一度歌おう have nothing to claim them,
+  // so the catch-all makes them lyric lines. 作词：风铃 is also a lyric-line candidate by the same
+  // catch-all, but it carries no kana at all, so it is judged already-Chinese and skipped.
+  assert.equal(segmented.lyricLines, 3);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['今日は静かな朝', 'もう一度歌おう']);
+  assert.equal(segmented.segments.length, segmented.lyricIds.size, 'every remaining segment here is a lyric one');
+  assert.equal(segmented.cardPreservedLines, 1, 'NOW PLAYING only');
+});
+
+test('the waveform row still goes through the older built-in rule, not the music-card catch-all', () => {
+  const card = 'NOW PLAYING<br>そらいろの手紙<br>ılılılıllı';
+  const segmented = segmentSource(card, { musicCardRules: true });
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらいろの手紙']);
+  assert.equal(segmented.cardPreservedLines, 1, 'NOW PLAYING');
+  assert.equal(segmented.builtinPreservedLines, 1, 'the waveform row, by the v0.36.1 rule');
+  assert.equal(segmented.lyricLines, 1);
+});
+
+test('a row already written "原文 (中文)" is preserved untouched by the music-card group', () => {
+  const card = 'NOW PLAYING<br>灯りが揺れる (灯光摇曳)<br>次の一行';
+  const segmented = segmentSource(card, { musicCardRules: true });
+  assert.deepEqual(segmented.segments.map(item => item.text), ['次の一行']);
+  assert.equal(segmented.cardPreservedLines, 2, 'NOW PLAYING and the already-bilingual row');
+});
+
+test('a reader’s own preserve rule still wins over the music-card catch-all, <br> and all', () => {
+  const card = 'NOW PLAYING<br>作词：星野<br>そらいろの手紙';
+  const segmented = segmentSource(card, { musicCardRules: true, preserveLineRules: ['prefix:作词'] });
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらいろの手紙']);
+  assert.equal(segmented.customPreservedLines, 1);
+});
+
+test('a lyric line renders "原文 (译文)" inline in bilingual mode and reads back to the same translation', () => {
+  const source = '第一行叙述。\nそらにひびけ\n第二行叙述。';
+  const options = { lyricLineRules: ['そらにひびけ'] };
+  const segmented = segmentSource(source, options);
+  const translations = new Map([[1, '叙述译文一'], [2, '响彻天空'], [3, '叙述译文二']]);
+  const rendered = assembleBilingual(segmented.layout, translations, options);
+  const visible = rendered.replace(/[​‌⁠-⁤]/g, '');
+  assert.match(visible, /そらにひびけ \(响彻天空\)/);
+  assert.doesNotMatch(visible, /\{响彻天空\}/, 'the lyric translation never gets the ordinary {…} affix');
+  const recovered = extractGeneratedTranslations(rendered, options);
+  assert.deepEqual(new Map(recovered), translations);
+  assert.equal(restyleBilingual(rendered, options), rendered, 're-colouring must leave a lyric pair exactly as written');
+});
+
+test('a lyric line restores its own <br> after the closing parenthesis, bilingual mode', () => {
+  const card = 'NOW PLAYING<br>そらにひびけ<br>作词：风铃';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(card, options);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらにひびけ']);
+  const translations = new Map([[segmented.segments[0].id, '响彻天空']]);
+  const rendered = assembleBilingual(segmented.layout, translations, options);
+  const visible = rendered.replace(/[​‌⁠-⁤]/g, '');
+  assert.match(visible, /そらにひびけ \(响彻天空\)<br>/);
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.match(restored, /そらにひびけ<br>/);
+  assert.doesNotMatch(restored, /[()]/);
+});
+
+test('a lyric line in 只留译文 mode also pairs inline, plain text, no markers needed', () => {
+  const source = '第一行叙述。\nそらにひびけ\n第二行叙述。';
+  const options = { lyricLineRules: ['そらにひびけ'] };
+  const segmented = segmentSource(source, options);
+  const translations = new Map([[1, '叙述译文一'], [2, '响彻天空'], [3, '叙述译文二']]);
+  const output = assembleTranslationOnly(segmented.layout, translations, options);
+  assert.equal(output, '叙述译文一\nそらにひびけ (响彻天空)\n叙述译文二');
+});
+
+test('inspectTagConfiguration counts lyric and music-card-preserved lines separately from the rest', () => {
+  const card = '<story_scene>NOW PLAYING<br>そらにひびけ<br>もう一つの行</story_scene>';
+  const report = inspectTagConfiguration(card, ['story_scene'], [], { musicCardRules: true });
+  assert.equal(report.cardPreservedLines, 1);
+  assert.equal(report.lyricLines, 2);
+  assert.equal(report.translationUnits, 2);
+});
+
+test('with the music-card group off, a <br>-joined card is read exactly as v0.36.1 already reads it', () => {
+  const card = 'NOW PLAYING<br>今日の空<br>作词：陽炎';
+  assert.deepEqual(
+    segmentSource(card).segments.map(item => item.text),
+    ['NOW PLAYING\n今日の空\n作词：陽炎'],
+    'musicCardRules defaults off, so an existing floor segments exactly as it always has',
+  );
 });
