@@ -59,6 +59,13 @@ label { min-width: 0; }
 /* DESIGN §15.1 模式切换: two-segment 正常模式 / 高级模式 under the brand, shown in both modes. */
 .jy-mode-switch { display: flex; gap: 2px; margin: 0 8px 18px; padding: 2px; border-radius: 9px; background: #0f2c24; }
 .jy-mode-switch button { flex: 1 1 0; min-height: 34px; padding: 0 4px; border: 0; border-radius: 7px; background: transparent; color: #a9c0b2; font-size: 12px; font-weight: 650; cursor: pointer; transition: background var(--jy-hover), color var(--jy-hover); }
+/* DESIGN §15.1 触屏 ≥ 44: the max-width:640px rule below only ever caught a narrow phone — a touch
+   tablet or a touch laptop wider than that got the 34px desktop target instead (review finding
+   style.css:471). `hover: none` also catches a touch device that reports a coarse-but-not-strictly-
+   coarse pointer. */
+@media (pointer: coarse), (hover: none) {
+  .jy-mode-switch button { min-height: 44px; }
+}
 .jy-mode-switch button[aria-pressed="true"] { background: #f2f7f0; color: var(--jy-rail); }
 .jy-monogram { display: grid; place-items: center; width: 34px; height: 38px; border: 1px solid #91ad9680; border-radius: 4px 11px 4px 4px; font: 21px Georgia, "Songti SC", serif; color: #e2cf9c; flex: 0 0 auto; }
 .jy-identity strong { display: block; font-size: 17px; font-weight: 700; letter-spacing: .16em; color: #f2f7f0; }
@@ -81,6 +88,8 @@ label { min-width: 0; }
 .jy-overline { font-size: 11px; color: var(--jy-muted); font-weight: 700; margin-bottom: 5px; }
 .jy-muted { color: var(--jy-muted); font-size: 12px; line-height: 1.7; margin-top: 6px; overflow-wrap: anywhere; }
 .jy-processing-bar, .jy-processing-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* DESIGN §15.4 危险操作: 红字文字按钮放每组末尾 — a toolbar holding only that button, right-aligned. */
+.jy-processing-toolbar-end { justify-content: flex-end; }
 .jy-processing-bar { margin-bottom: 20px; }
 .jy-processing-choice { display: flex; align-items: center; gap: 10px; flex: 1 1 170px; max-width: 320px; }
 .jy-processing-choice > span { flex-shrink: 0; color: var(--jy-muted); font-size: 12px; }
@@ -217,7 +226,11 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-save-note { color: var(--jy-muted); font-size: 11px; }
 .jy-save-note[data-jy-dirty="true"] { color: var(--jy-focus); font-weight: 600; }
 /* DESIGN §15.4 「改了就存」: the label a page's header shows once save-on-change replaces its save button. */
-.jy-autosave-indicator { font-size: 11px; color: var(--jy-ok); flex: none; }
+/* margin-left: auto — .jy-page-heading's justify-content: space-between otherwise spreads three
+   children (title block, this indicator, a header button such as ＋新建连接/刷新楼层) evenly across
+   the row, leaving the indicator stranded around the middle instead of beside the button it belongs
+   next to (review finding style.css:78). The row's own `gap` still holds it apart from that button. */
+.jy-autosave-indicator { font-size: 11px; color: var(--jy-ok); flex: none; margin-left: auto; }
 .jy-connection-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .jy-connection-choice label { position: relative; cursor: pointer; }
 .jy-connection-choice input { position: absolute; opacity: 0; }
@@ -237,7 +250,11 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-preset-drift { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 12px 0 0; color: var(--jy-muted); font-size: 12px; }
 .jy-preset-drift-list { margin: 6px 0 0; padding-left: 18px; color: var(--jy-muted); font-size: 12px; }
 .jy-preset-drift-list li { margin: 2px 0; }
-.jy-desk-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; margin-top: 18px; }
+/* minmax(0,1fr) rather than a bare 1fr: without it a column track cannot shrink below its content's
+   min-content width, and the 朗读语言 select's long option text (width:auto) forced this whole grid,
+   and the dialog around it, into horizontal scroll between about 641px and 950px (review finding
+   style.css:240). */
+.jy-desk-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 18px; }
 .jy-desk-column { display: flex; flex-direction: column; gap: 18px; }
 .jy-desk-card { padding: 16px 18px; }
 .jy-card-title { margin: 0 0 4px; font-size: 14px; }
@@ -254,7 +271,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-summary-row .jy-mini-pill { margin-left: 6px; }
 .jy-summary-select { justify-content: space-between; }
 .jy-summary-select .jy-label { margin: 0; flex: none; }
-.jy-summary-select select { width: auto; min-width: 168px; }
+.jy-summary-select select { width: auto; min-width: 168px; max-width: 100%; }
 .jy-state-mark { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none; font-size: 11px; color: var(--jy-muted); }
 .jy-state-mark[data-state="done"] { color: var(--jy-ok); }
 .jy-state-mark[data-state="busy"] { color: var(--jy-focus); }
@@ -339,9 +356,23 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-channel-card-uses { display: flex; flex-wrap: wrap; gap: 3px 14px; }
 .jy-channel-card-uses .jy-check { padding: 0; white-space: nowrap; }
 .jy-channel-card-chevron { flex: none; border: 0; background: transparent; color: var(--jy-muted-soft); font-size: 11px; padding: 4px; }
+/* DESIGN §15.1 触屏 ≥ 44: these rows measured 19–21px tall and the chevron 17×26 under touch, and
+   every 用在 checkbox shared one generic name with no connection attached (review finding
+   style.css:270 — the aria-label fix for the name is in index.js's makeChannelUseCheckbox /
+   buildDeskConnectionRow). */
+@media (pointer: coarse), (hover: none) {
+  .jy-desk-connection-uses label,
+  .jy-channel-card-uses .jy-check { min-height: 44px; padding: 6px 0; }
+  .jy-channel-card-toggle,
+  .jy-desk-connection-open { min-height: 44px; }
+  .jy-channel-card-chevron { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0; }
+}
 .jy-channel-card [data-jy-channel-detail] { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--jy-line-soft); }
 .jy-channel-card [data-jy-channel-detail] > label { display: block; margin-bottom: 16px; }
-.jy-processing-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; border-bottom: 1px solid var(--jy-line); padding-bottom: 26px; }
+/* align-items: start — this grid's default stretch made every card in a row match the tallest one's
+   height, leaving hundreds of pixels of empty bordered space below a shorter card's own content on
+   both 正文处理 and 朗读 (review finding index.js:625, same class on both pages). */
+.jy-processing-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; border-bottom: 1px solid var(--jy-line); padding-bottom: 26px; }
 .jy-text-scope { padding: 15px 17px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
 .jy-text-scope h2 { margin-bottom: 12px; font-size: 14px; }
 .jy-text-scope .jy-overline { margin-bottom: 3px; }
@@ -470,8 +501,10 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-mode-switch { margin: 0 0 8px; }
   .jy-mode-switch button { min-height: 44px; font-size: 12.5px; }
   /* Columns follow the tabs actually shown: 朗读 is hidden in ordinary mode, and a fixed count would
-     leave an empty slot at the end of the row. */
-  .jy-navigation { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); gap: 3px; }
+     leave an empty slot at the end of the row. minmax(44px,1fr) plus overflow-x rather than
+     minmax(0,1fr): six advanced-mode tabs at a 320px phone width squeezed to 42px each instead of
+     scrolling, under DESIGN §15.5's own "高级模式六页签横向可滑" (review finding style.css:471). */
+  .jy-navigation { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(44px,1fr); gap: 3px; overflow-x: auto; }
   .jy-navigation button { display: flex; flex-direction: column; gap: 5px; min-height: 54px; padding: 6px 1px 8px; border-radius: 5px 5px 0 0; font-size: 10px; }
   .jy-navigation button > span { font-size: 19px; }
   .jy-rail-bottom { position: absolute; top: 8px; right: 55px; margin: 0; padding: 0; border: 0; gap: 9px; }
@@ -819,7 +852,9 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-fold > summary::before { content: ""; width: 7px; height: 7px; margin-right: 2px; border-right: 2px solid var(--jy-accent); border-bottom: 2px solid var(--jy-accent); transform: rotate(-45deg); transition: transform var(--jy-hover); align-self: center; flex: 0 0 auto; }
 .jy-fold[open] > summary::before { transform: rotate(45deg); }
 .jy-fold > summary h2 { font-size: 13px; }
-.jy-fold-summary { margin-left: auto; color: var(--jy-muted); font-size: 11px; font-weight: 500; text-align: right; overflow-wrap: anywhere; }
+/* DESIGN §15.4 折叠组: 当前值摘要 is specified at 12px `--jy-muted`; this was 11px (review finding
+   style.css:822). */
+.jy-fold-summary { margin-left: auto; color: var(--jy-muted); font-size: 12px; font-weight: 500; text-align: right; overflow-wrap: anywhere; }
 .jy-fold[open] > summary .jy-fold-summary { display: none; }
 .jy-fold > .jy-form-body { padding-top: 16px; }
 /* DESIGN §15.4 折叠组 nested inside a card (正文处理/朗读's always-open cards): a hairline separates it
@@ -831,6 +866,11 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-dependent-reason { display: none; margin: 2px 0 0; font-size: 11px; }
 .jy-dependent[data-jy-dependent-off="true"] .jy-check { color: var(--jy-muted-soft); }
 .jy-dependent[data-jy-dependent-off="true"] .jy-dependent-reason { display: block; }
+/* 微调's own 特效字 row (DESIGN §15.3) carries the same [data-jy-dependent]/[data-jy-dependent-off]
+   marker but is a .jy-summary-row-sub, not a .jy-dependent — it used to look fully active and explain
+   nothing when 说话人着色 was off (review finding index.js:404). */
+.jy-summary-row[data-jy-dependent-off="true"] h3 { color: var(--jy-muted-soft); }
+.jy-summary-row[data-jy-dependent-off="true"] .jy-dependent-reason { display: block; }
 /* DESIGN §15.4 更多 (朗读 page): a labelled card holding several individually-folded groups. */
 .jy-more-group { margin-top: 4px; }
 .jy-more-group > h2 { margin: 0 0 10px; font-size: 14px; font-weight: 650; }

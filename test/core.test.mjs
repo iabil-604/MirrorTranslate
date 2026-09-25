@@ -2219,15 +2219,36 @@ test('segmentAffixSummary reads the default 译文 { } / 原文 无 pair and any
 test('coloringDetailFoldSummary reports the numbers actually set, falling back to DEFAULT_COLORING for a bare object', () => {
   assert.equal(
     coloringDetailFoldSummary({ minContrast: 4.5, vividness: 0.65 }),
-    '情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+    '对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
   );
   assert.equal(
     coloringDetailFoldSummary({}),
-    '情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+    '对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
   );
   assert.equal(
     coloringDetailFoldSummary({ minContrast: 7, vividness: 1 }),
-    '情绪起伏 · 名单外自动取色 · 对比度目标 7 · 彩度 1.00 · 读取当前主题与壁纸',
+    '对比度目标 7 · 彩度 1.00 · 读取当前主题与壁纸',
+  );
+});
+
+// A collapsed fold used to claim 情绪起伏/名单外自动取色 were on no matter what the switches actually
+// said (review finding core.js:946) — each token now only shows up when its own setting is on.
+test('coloringDetailFoldSummary only lists 情绪起伏/名单外自动取色 when those switches are actually on', () => {
+  assert.equal(
+    coloringDetailFoldSummary({ rhythm: true, minContrast: 4.5, vividness: 0.65 }),
+    '情绪起伏 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ autoSpeakers: true, minContrast: 4.5, vividness: 0.65 }),
+    '名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ rhythm: true, autoSpeakers: true, minContrast: 4.5, vividness: 0.65 }),
+    '情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ rhythm: false, autoSpeakers: false, minContrast: 4.5, vividness: 0.65 }),
+    '对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
   );
 });
 

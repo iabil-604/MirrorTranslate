@@ -303,6 +303,20 @@ function builtinReadingReplaceString(styleId) {
   return `<div class="jy-reading jy-reading-${styleId}">\n${before}\n<div class="jy-reading-translation">\n\n$<jyTranslation>\n\n</div>\n</div>`;
 }
 
+// The reverse of makeBuiltinReadingProfile: which built-in style (if any) a profile's own prefixes
+// and rule already match — used to show a picker's actually-active choice instead of a fixed default,
+// and to tell "already on this style" apart from "switching to a different one" (review finding
+// index.js:11796/491: 微调's 内置美化 select never reflected the active profile and could not be told
+// to just stay on the style it already showed).
+export function detectBuiltinReadingStyle(profile) {
+  const values = profile?.settings;
+  if (!values || values.segmentPrefix !== '<jy-source>' || values.segmentSuffix !== '</jy-source>'
+    || values.translationPrefix !== '<jy-translation>' || values.translationSuffix !== '</jy-translation>') return null;
+  const rule = (profile.regexScripts ?? []).find(item => BUILTIN_READING_STYLES.some(style => item.replaceString === builtinReadingReplaceString(style.id)));
+  if (!rule) return null;
+  return BUILTIN_READING_STYLES.find(style => rule.replaceString === builtinReadingReplaceString(style.id))?.id ?? null;
+}
+
 export function makeBuiltinReadingProfile(settings, styleId) {
   const style = BUILTIN_READING_STYLES.find(item => item.id === styleId);
   if (!style) throw new Error('没有找到这个内置美化。');

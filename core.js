@@ -942,11 +942,19 @@ export function segmentAffixSummary(settings = {}) {
   return `原文 ${affixPairLabel(settings.segmentPrefix, settings.segmentSuffix)} · 译文 ${affixPairLabel(settings.translationPrefix, settings.translationSuffix)}`;
 }
 
-/** "情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸" — 颜色细节 fold's summary. */
+/** "情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸" — 颜色细节 fold's summary.
+ * 情绪起伏/名单外自动取色 only appear when actually on — a collapsed row used to claim both regardless
+ * of the real setting (review finding core.js:946). */
 export function coloringDetailFoldSummary(coloring = {}) {
   const contrast = Number.isFinite(coloring.minContrast) ? coloring.minContrast : DEFAULT_COLORING.minContrast;
   const vividness = Number.isFinite(coloring.vividness) ? coloring.vividness : DEFAULT_COLORING.vividness;
-  return `情绪起伏 · 名单外自动取色 · 对比度目标 ${contrast} · 彩度 ${vividness.toFixed(2)} · 读取当前主题与壁纸`;
+  return [
+    coloring.rhythm ? '情绪起伏' : '',
+    coloring.autoSpeakers ? '名单外自动取色' : '',
+    `对比度目标 ${contrast}`,
+    `彩度 ${vividness.toFixed(2)}`,
+    '读取当前主题与壁纸',
+  ].filter(Boolean).join(' · ');
 }
 
 /** "「」 『』 · （）" — 对白符号 · 跳过符号 fold's summary, empty skip pairs shown as "空". */
