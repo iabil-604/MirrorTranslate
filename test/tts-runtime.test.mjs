@@ -1348,6 +1348,32 @@ test('the plain reading names the speakers itself: several voices in one floor, 
   assert.deepEqual(inspected.cast.slice(0, 2), ['泰罗', '樱井']);
 });
 
+// Rule 2 of the speaker-mark request asks the model to write, for a person outside the cast, whatever
+// the body itself calls them — a mark exactly like that must still read as its own person, not fall to
+// whoever else is on the voice table, on an untranslated floor where nothing else can correct it.
+test('a mark for somebody outside the cast keeps their own line; it is not silently handed to the only voiced person on the floor', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-say-uncast-stranger');
+  context.characters = [{ name: '凛', avatar: 'rin.png', description: '', personality: '', scenario: '' }];
+  context.name2 = '凛';
+  const settings = __testing.configureForTest({
+    settings: {
+      tts: { enabled: true, mode: 'off', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'rin.png': [{ name: '凛', voiceId: 'voice-rin' }] },
+    },
+  });
+  context.chat.push({
+    mes: '<story_scene>\n<say who="凛" mood="平静">「就这家吧。」</say><say who="店员" mood="开心">「欢迎光临！」</say>\n</story_scene>',
+    swipe_id: 0,
+    extra: {},
+  });
+  const floor = await __testing.collectTtsFloor(0, settings, 'source');
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.deepEqual(segments.map(item => [item.speaker, item.speakerSource]), [['凛', 'tag'], ['店员', 'tag']], '店员 is read as their own mark, not folded into 凛 for want of a cast entry');
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.deepEqual(items.map(item => item.voiceId), ['voice-rin', 'voice-default'], '店员 gets the default dialogue voice, never 凛\'s');
+});
+
 test('the simple analysis is the model\'s, names and moods alike; only the reader\'s own word is set before it', async t => {
   restoreGlobals(t);
   const requests = [];
@@ -2313,6 +2339,89 @@ test('a mark the cast does not know falls back to the translation\'s own speaker
   assert.deepEqual([again.segments[0].speaker, again.segments[0].speakerSource], ['真嗣', 'tag']);
 });
 
+test('two lines marked alike but hinted for two different people are each corrected from their own line, never from the first one discovered', async t => {
+  restoreGlobals(t);
+  let requests = 0;
+  const { context } = mockHost('tts-say-descriptor-two-girls', {
+    async processRequest() {
+      requests += 1;
+      return { content: '{}' };
+    },
+  });
+  context.characters = [{ name: '凛', avatar: 'card.png', description: '', personality: '', scenario: '' }];
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'off', side: 'translation', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'card.png': [{ name: '凛', voiceId: 'voice-rin' }, { name: '明日香', voiceId: 'voice-asuka' }] },
+    },
+  });
+  // The body calls both girls 少女; the translation tells them apart.
+  context.chat.push(await translatedFloor(
+    '<say who="少女" mood="平静">「就是这里。」</say>\n\n<say who="少女" mood="生气、大喊">「太慢了！」</say>',
+    [[1, '「就是这里。」'], [2, '「太慢了！」']],
+    settings,
+    { 1: { speaker: '凛', emotion: 'calm' }, 2: { speaker: '明日香', emotion: 'angry' } },
+  ));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests, 0);
+  assert.deepEqual(segments.map(item => item.speaker), ['凛', '明日香'], 'each 少女 line reads as the person its own line was hinted for, not both as whichever line was seen first');
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.deepEqual(items.map(item => item.voiceId), ['voice-rin', 'voice-asuka']);
+
+  // The floor could not agree on one person for 少女, so nothing was learned from it: a stranger marked
+  // 少女 on a later, untranslated floor gets the default voice, not either girl's.
+  context.chat.push({ mes: '<story_scene><say who="少女" mood="平静">「你好。」</say></story_scene>', swipe_id: 0, extra: {} });
+  const plain = await __testing.collectTtsFloor(1, settings, 'source');
+  const again = await __testing.prepareTtsSegments(plain, settings);
+  const { items: laterItems } = await __testing.ttsItemsFor(plain, again.segments, settings);
+  assert.deepEqual(laterItems.map(item => item.voiceId), ['voice-default'], '少女 was never learned as any one person\'s spelling');
+});
+
+test('a spelling learned from an earlier floor still gives way to a later floor\'s own, disagreeing translation hint', async t => {
+  restoreGlobals(t);
+  let requests = 0;
+  const { context } = mockHost('tts-say-descriptor-alias-overridden', {
+    async processRequest() {
+      requests += 1;
+      return { content: '{}' };
+    },
+  });
+  context.characters = [{ name: '凛', avatar: 'card.png', description: '', personality: '', scenario: '' }];
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'off', side: 'translation', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'card.png': [{ name: '凛', voiceId: 'voice-rin' }, { name: '明日香', voiceId: 'voice-asuka' }] },
+    },
+  });
+  // Floor 0: the only 少女 line is 凛's — 少女=凛 is learned.
+  context.chat.push(await translatedFloor(
+    '<say who="少女" mood="平静">「就这家吧。」</say>',
+    [[1, '「就这家吧。」']],
+    settings,
+    { 1: { speaker: '凛', emotion: 'calm' } },
+  ));
+  const first = await __testing.collectTtsFloor(0, settings);
+  await __testing.prepareTtsSegments(first, settings);
+  assert.equal(requests, 0);
+
+  // Floor 1: a different girl, also marked 少女, but the translation this time names 明日香 — the fresh
+  // hint on this very line must win over the guess learned from the floor above.
+  context.chat.push(await translatedFloor(
+    '<say who="少女" mood="生气、大喊">「你是笨蛋吗？」</say>',
+    [[1, '「你是笨蛋吗？」']],
+    settings,
+    { 1: { speaker: '明日香', emotion: 'angry' } },
+  ));
+  const second = await __testing.collectTtsFloor(1, settings);
+  const { segments } = await __testing.prepareTtsSegments(second, settings);
+  assert.equal(segments[0].speaker, '明日香', 'this floor\'s own hint for this line outranks the spelling learned from the floor before it');
+  const { items } = await __testing.ttsItemsFor(second, segments, settings);
+  assert.deepEqual(items.map(item => item.voiceId), ['voice-asuka']);
+});
+
 test('with the switch on, every reply asks for speaker marks at depth 0 as the system, in the story\'s own quotation marks', async t => {
   restoreGlobals(t);
   const { context } = mockHost('tts-say-prompt');
@@ -2361,6 +2470,64 @@ test('with the switch on, every reply asks for speaker marks at depth 0 as the s
   assert.equal(sent(), null);
 });
 
+// R2: the card itself is named in the body's own language (碇シンジ), while the voice table — and the
+// translation — know him only as 真嗣. The request must ask the model for the voice table's own
+// spelling, not the card's, so the mark it gets back needs no cross-language correction at all.
+test('the speaker-mark request asks for the voice table\'s own spelling of a card named in the body\'s language, not the card\'s own name', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-say-prompt-card-language');
+  context.name2 = '碇シンジ';
+  context.characters = [{ name: '碇シンジ', avatar: 'shinji.png', description: '', personality: '', scenario: '' }];
+  const prompts = new Map();
+  context.setExtensionPrompt = (key, value, position, depth, scan, role) => prompts.set(key, { value, position, depth, scan, role });
+  const sent = () => [...prompts.values()].find(item => item.value) ?? null;
+  __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', speechMarks: true, fish: FISH }, ttsVoices: { 'shinji.png': [{ name: '真嗣', voiceId: 'voice-shinji' }] } },
+  });
+  assert.equal(__testing.syncSpeechPrompt(), true);
+  const request = sent();
+  assert.match(request.value, /真嗣/, 'the voice table\'s own spelling is on the list');
+  assert.doesNotMatch(request.value, /碇シンジ/, 'the card\'s own, unvoiced spelling is not asked for once the voice table names its own people');
+
+  // Without a voice table at all, the card's own name is still the best the request has.
+  __testing.configureForTest({ settings: { tts: { enabled: true, mode: 'off', speechMarks: true, fish: FISH }, ttsVoices: {} } });
+  __testing.syncSpeechPrompt();
+  assert.match(sent().value, /碇シンジ/, 'with nothing voiced, the card\'s own name still widens the list, same as before');
+});
+
+test('a card named in the body\'s own language, with the voice table\'s Chinese name, reads in the voice table\'s own voice (R2)', async t => {
+  restoreGlobals(t);
+  let requests = 0;
+  const { context } = mockHost('tts-say-card-language-voiced', {
+    async processRequest() {
+      requests += 1;
+      return { content: '{}' };
+    },
+  });
+  context.name2 = '碇シンジ';
+  context.characters = [{ name: '碇シンジ', avatar: 'shinji.png', description: '', personality: '', scenario: '' }];
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'off', side: 'translation', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'shinji.png': [{ name: '真嗣', voiceId: 'voice-shinji' }] },
+    },
+  });
+  // The card writes its own mark with its own (unvoiced) name; the translation already gives the line
+  // to the voice table's own person.
+  context.chat.push(await translatedFloor(
+    '<say who="碇シンジ" mood="无奈">「……仕方ないよ。」</say>',
+    [[1, '「……没办法啊。」']],
+    settings,
+    { 1: { speaker: '真嗣', emotion: 'sad' } },
+  ));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests, 0);
+  assert.equal(segments[0].speaker, '真嗣', 'the card\'s own, unvoiced spelling is corrected to the voice table\'s person, not kept as a person of its own');
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.deepEqual(items.map(item => item.voiceId), ['voice-shinji'], '真嗣\'s own bound voice is found, not the default fallback');
+});
 
 test('the whole floor can go to Fish as one request with every voice in it, or one sentence at a time', async t => {
   restoreGlobals(t);

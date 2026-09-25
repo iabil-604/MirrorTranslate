@@ -107,15 +107,28 @@ function buildLookup(cast) {
 }
 
 /**
- * The cast's own name for a spelling, or '' when nobody in the cast is a match.
- *
- * `unifySpeakerNames` always hands back *some* string for a name it was asked about — it falls back to
- * the spelling it was given when nothing matches, so a loop unifying several reported names together
- * never loses one. That is the wrong fallback here: a caller asking "is this spelling somebody I
- * know" needs a real "no" to tell an unresolved mark from a resolved one, not its own question handed
- * back as if it were the answer.
+ * The cast's own name for a spelling, or the spelling itself when nobody in the cast is a match —
+ * `unifySpeakerNames`'s own fallback, kept: a mark or a hint naming somebody outside the cast (a shop
+ * clerk the story never puts on the cast list) is still a person, one `resolveSpeakers` and
+ * `surveyFloor` need to go on telling apart from every other line nobody named at all, not a nobody to
+ * be quietly dropped. The correction a spelling nobody voiced actually needs — reading it as one more
+ * spelling of somebody the cast already has — happens upstream of both, in `discoverSpeakerAliases`.
  */
 function canonical(value, { lookup, names }) {
+  const wanted = String(value ?? '').trim();
+  if (!wanted) return '';
+  if (lookup.has(wanted)) return lookup.get(wanted);
+  const matched = unifySpeakerNames([wanted], names).get(wanted);
+  return matched && names.includes(matched) ? matched : wanted;
+}
+
+/**
+ * The cast's own name for a spelling, or '' when nobody in the cast is a match — unlike `canonical`,
+ * never the spelling itself back. `discoverSpeakerAliases` is the one caller that needs a real "no" to
+ * tell an unresolved mark from a resolved one, not its own question handed back as if it were the
+ * answer.
+ */
+function strictCanonical(value, { lookup, names }) {
   const wanted = String(value ?? '').trim();
   if (!wanted) return '';
   if (lookup.has(wanted)) return lookup.get(wanted);
@@ -387,28 +400,60 @@ export function speakerHints(labels) {
 }
 
 /**
- * Alias candidates a floor points out on its own: a `<say who>` spelling that matches nobody in the
- * cast, on a line whose translation hint resolves to somebody the cast already knows. A body written
- * in another language than the cast's names is exactly this case — the story's own mark names the
- * character in its own language, the translation already carries the cast's spelling for the same
+ * What a floor's own `<say who>` marks are worth once nobody a voice answers to has the spelling they
+ * used: a `<say who>` spelling that matches nobody a voice reads in, on a line whose translation hint —
+ * this floor's own, or one remembered from a floor before it — resolves to somebody who is. A body
+ * written in another language than the cast's names is exactly this case — the story's own mark names
+ * the character in its own language, the translation already carries the cast's spelling for the same
  * line, and the mark's spelling is in all likelihood just one more way that same person gets written,
- * not somebody new. Manual and reader-picked names are not looked at; a reader who set a speaker by
- * hand is not the story guessing at a spelling.
+ * not somebody new. So is a card whose own name is written in the body's language while its voice row
+ * uses another spelling entirely (`voiced` is what tells the two apart: a mark resolving to a cast
+ * entry with no voice counts the same as resolving to nobody). Manual and reader-picked names are not
+ * looked at; a reader who set a speaker by hand is not the story guessing at a spelling.
  *
- * Returns a map from the mark's own spelling to the cast name it most likely belongs to.
+ * Correction is read line by line, from that very line's own hint, never by spelling alone — two lines
+ * marked alike but hinted for two different people each keep their own, and `remembered` (a spelling
+ * already learned from a floor before this one, see `noteAutoSpeakerAliases`) only stands in where this
+ * floor's own hint says nothing, so a later floor's own, disagreeing hint always wins over an earlier
+ * guess.
+ *
+ * Returns `{ corrected, learnable }`: `corrected` maps a quoted utterance's id to the speaker its own
+ * mark is corrected to, for every line this floor or `remembered` can correct; `learnable` maps a
+ * mark's spelling to the one person every line marked with it, on this floor, agreed it names — a
+ * spelling more than one line disagreed on is left out, and so is a crowd, a role or a placeholder
+ * (`castRejects`), worth marking a line but never worth remembering as somebody's name.
  */
-export function discoverSpeakerAliases(utterances, { cast = [], hints = null, tagged = null } = {}) {
-  const found = new Map();
-  if (!(tagged instanceof Map) || !tagged.size) return found;
-  const people = buildLookup(cast);
-  for (const utterance of Array.isArray(utterances) ? utterances : []) {
-    if (utterance.kind !== 'quoted') continue;
-    const raw = String(tagged.get(utterance.id) ?? '').trim();
-    if (!raw || found.has(raw) || canonical(raw, people)) continue;
-    const resolvedHint = hints instanceof Map ? canonical(hints.get(utterance.id), people) : '';
-    if (resolvedHint) found.set(raw, resolvedHint);
+export function discoverSpeakerAliases(utterances, { cast = [], hints = null, tagged = null, voiced = null, learned = null } = {}) {
+  const corrected = new Map();
+  const learnable = new Map();
+  if (tagged instanceof Map && tagged.size) {
+    const people = buildLookup(cast);
+    const voicedNames = voiced instanceof Set ? voiced : new Set(Array.isArray(voiced) ? voiced : []);
+    const isVoiced = name => !voicedNames.size || voicedNames.has(name);
+    const learnedMap = learned instanceof Map ? learned : new Map();
+    const bySpelling = new Map();
+    for (const utterance of Array.isArray(utterances) ? utterances : []) {
+      if (utterance.kind !== 'quoted') continue;
+      const raw = String(tagged.get(utterance.id) ?? '').trim();
+      if (!raw) continue;
+      const matched = strictCanonical(raw, people);
+      if (matched && isVoiced(matched)) continue;
+      const resolvedHint = hints instanceof Map ? strictCanonical(hints.get(utterance.id), people) : '';
+      if (resolvedHint && isVoiced(resolvedHint)) {
+        corrected.set(utterance.id, resolvedHint);
+        if (!bySpelling.has(raw)) bySpelling.set(raw, new Set());
+        bySpelling.get(raw).add(resolvedHint);
+        continue;
+      }
+      const remembered = learnedMap.get(raw);
+      if (remembered && isVoiced(remembered)) corrected.set(utterance.id, remembered);
+    }
+    for (const [spelling, names] of bySpelling) {
+      if (names.size !== 1 || castRejects(spelling)) continue;
+      learnable.set(spelling, [...names][0]);
+    }
   }
-  return found;
+  return { corrected, learnable };
 }
 
 /**

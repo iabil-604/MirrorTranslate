@@ -1317,11 +1317,13 @@ function autoSpeakerAliases() {
 }
 
 /**
- * Learns the alias candidates `discoverSpeakerAliases` found on a floor: a `<say who>` spelling that
- * matched nobody in the cast, on a line whose translation named somebody the cast already knows. Kept
- * for this session alone, the way an auto-coloured name is (`autoSpeakerNames`) — never written into
- * the voice table itself, so the reader's own table is never rewritten without them looking at it; a
- * spelling worth keeping for good is still the reader's own to add, in the character's own alias field.
+ * Learns the alias candidates `discoverSpeakerAliases` found on a floor (its `learnable`): a `<say who>`
+ * spelling every line under it, on this floor, agreed names one particular voiced person — matched
+ * nobody a voice answers to under its own name, in other words a nickname or another language's
+ * spelling of somebody the cast already has. Kept for this session alone, the way an auto-coloured name
+ * is (`autoSpeakerNames`) — never written into the voice table itself, so the reader's own table is
+ * never rewritten without them looking at it; a spelling worth keeping for good is still the reader's
+ * own to add, in the character's own alias field.
  */
 function noteAutoSpeakerAliases(discovered, messageId = null) {
   if (!(discovered instanceof Map) || !discovered.size) return;
@@ -3414,8 +3416,15 @@ function ttsKnownNames(settings = runtime.settings) {
  * The people the speaker engine can name, each with the spellings it may meet in the text: the voice
  * table's rows, the colouring's palette, the card's character and the reader, and whoever the model
  * has already named this session. Names only; which voice a name reads in is nobody's business here.
+ *
+ * `includeLearned` folds in the spellings a floor's own marks have turned out to mean this session (see
+ * `autoSpeakerAliases`) as if they were the cast's own aliases — true everywhere this cast is asked
+ * for, except where a mark is being matched against it to decide whether it still needs correcting: a
+ * guess from a floor before this one must not read as if a voice had already answered to the spelling,
+ * or the correction that checks it against this floor's own hint (`discoverSpeakerAliases`,
+ * `prepareTtsSegments`) never runs.
  */
-function ttsCast(settings = runtime.settings) {
+function ttsCast(settings = runtime.settings, { includeLearned = true } = {}) {
   const context = getContext();
   const cast = [];
   const add = (name, aliases = []) => {
@@ -3436,9 +3445,11 @@ function ttsCast(settings = runtime.settings) {
   for (const name of autoSpeakerNames()) add(name);
   // A mark's own spelling, once a floor has shown it means somebody already on this list: from here on
   // the reading recognises it on its own, translation or not.
-  for (const [alias, name] of autoSpeakerAliases()) {
-    const entry = cast.find(item => item.name === name);
-    if (entry && !entry.aliases.includes(alias)) entry.aliases.push(alias);
+  if (includeLearned) {
+    for (const [alias, name] of autoSpeakerAliases()) {
+      const entry = cast.find(item => item.name === name);
+      if (entry && !entry.aliases.includes(alias)) entry.aliases.push(alias);
+    }
   }
   return cast;
 }
@@ -3977,16 +3988,23 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   const tagged = ttsTagReading(floor, utterances, tts);
   const rawTagSpeakers = speakerHints(tagged.labels);
   const cast = ttsCast(settings);
-  // A mark whose spelling nobody in the cast has, on a line the translation already gave to somebody
-  // in it: very likely one more spelling of that same person (the body's own language, a nickname),
-  // not somebody new — learned for later floors (see `noteAutoSpeakerAliases`), and, right here, used
-  // to correct the mark's own spelling before it is laid over the translation's, so the correction
-  // holds everywhere a resolved speaker is used below, not only where a fresh resolve happens to ask
-  // for the translation's hint.
-  const discoveredAliases = discoverSpeakerAliases(utterances, { cast, hints: translationSpeakers, tagged: rawTagSpeakers });
+  // Matched against the cast to decide whether a mark still needs correcting, a guess from a floor
+  // before this one (`ttsCast`'s `includeLearned`) must not itself count as a voice already answering
+  // to the spelling — that is exactly the question `discoverSpeakerAliases` is answering.
+  const baseCast = ttsCast(settings, { includeLearned: false });
+  const voicedNames = new Set(ttsVoicesFor(settings).map(row => String(row?.name ?? '').trim()).filter(Boolean));
+  // A mark whose spelling nobody a voice answers to has, on a line the translation already gave to
+  // somebody who does: very likely one more spelling of that same person (the body's own language, a
+  // nickname), not somebody new — corrected here, per line, from that very line's own hint (or, failing
+  // that, a spelling learned from a floor before this one), so two lines marked alike but hinted for two
+  // different people each keep their own, and a later floor's own hint always outranks an earlier guess.
+  // What a floor's lines agree a spelling means is learned for floors after this one (`noteAutoSpeakerAliases`).
+  const { corrected: aliasedSpeakers, learnable: discoveredAliases } = discoverSpeakerAliases(utterances, {
+    cast: baseCast, hints: translationSpeakers, tagged: rawTagSpeakers, voiced: voicedNames, learned: autoSpeakerAliases(),
+  });
   noteAutoSpeakerAliases(discoveredAliases, floor.messageId);
-  const tagLabels = discoveredAliases.size
-    ? new Map([...tagged.labels].map(([id, label]) => [id, discoveredAliases.has(label.speaker) ? { ...label, speaker: discoveredAliases.get(label.speaker), speakerSource: 'hint' } : label]))
+  const tagLabels = aliasedSpeakers.size
+    ? new Map([...tagged.labels].map(([id, label]) => [id, aliasedSpeakers.has(id) ? { ...label, speaker: aliasedSpeakers.get(id), speakerSource: 'hint' } : label]))
     : tagged.labels;
   // It is laid over the translation's, and costs nothing.
   for (const [id, label] of tagLabels) reading.labels.set(id, { ...(reading.labels.get(id) ?? {}), ...label });
@@ -9887,9 +9905,14 @@ function speechRoster(settings = runtime.settings) {
     for (const alias of extra) claimed.add(alias);
     people.push({ name: clean, aliases: extra });
   };
-  for (const row of ttsVoicesFor(settings)) add(row.name, row.aliases);
+  const voiced = ttsVoicesFor(settings);
+  for (const row of voiced) add(row.name, row.aliases);
   for (const speaker of speakerPaletteFor(settings)) add(speaker.name, speaker.aliases);
-  for (const card of castCards(context)) add(card?.name);
+  // A card not itself voiced only widens the list when nothing else already defines one: once the
+  // voice table names its own people, a card written in another language is one of them under an
+  // alias — discoverSpeakerAliases (tts-speakers.js) is what makes that connection at reading time —
+  // not a person of their own the request should ask the model to keep spelling its own way.
+  if (!voiced.length) for (const card of castCards(context)) add(card?.name);
   return people.slice(0, 40);
 }
 
