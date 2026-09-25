@@ -198,6 +198,7 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
       ...(annotate.speakers && annotate.roster.length ? { roster: annotate.roster.map(entry => entry.name) } : {}),
       ...(annotate.emotions ? { emotions: annotate.emotionLabels } : {}),
       ...(annotate.voice ? { quotes: true, ...(annotate.directions ? { direction: true } : {}), tones: annotate.tones, sounds: annotate.sounds } : {}),
+      ...(annotate.effects ? { moves: true, ...(annotate.hasFragments ? { runs: true } : {}) } : {}),
     };
   }
   if (phase === 'style_repair') {
@@ -240,9 +241,14 @@ function annotationRequest(settings, phase, requestMeta) {
   const speakers = coloring?.speakers === true || reading;
   const emotions = coloring?.emotions === true || reading;
   if (!speakers && !emotions) return null;
+  // 特效字 only ever asks anything of the translator while speaker colouring itself is on — it is a
+  // sub-switch under it (design 「开关名称和位置」), never turned on by the reading alone.
+  const effects = coloring?.speakers === true && coloring?.effects === true;
   return {
     speakers,
     emotions,
+    effects,
+    hasFragments: Boolean(requestMeta?.hasFragments),
     roster: rosterEntries(requestMeta?.roster),
     // A name the roster lacks still earns a colour of its own and still reaches the reading; only
     // with both of those off is there nothing a name outside the roster could be used for.

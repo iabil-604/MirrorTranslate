@@ -79,6 +79,9 @@ import {
   normalizeConsole,
   normalizeConsolePresets,
   readAnnotationFields,
+  readMoveMark,
+  withoutCarriedColor,
+  splitPiecesByRuns,
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
@@ -184,6 +187,7 @@ import {
   oklchToSrgb,
   parseCssColor,
   resolveSegmentStyle,
+  resolveMoveStyle,
   spreadHues,
   srgbToOklch,
   toHex,
@@ -446,7 +450,8 @@ const CONTROL_CENTER_MARKUP = `
 <details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
 <details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
 <p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。</p>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringRhythm">情绪起伏（句内轻重变化）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringAutoSpeakers">名单外的说话人按名字自动取色</label></div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEffects">特效字（招式上色、搬运原文排版）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringRhythm">情绪起伏（句内轻重变化）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringAutoSpeakers">名单外的说话人按名字自动取色</label></div>
+<p class="jy-muted">「特效字」是「说话人着色」下的子开关：只有说话人着色也开着时才会生效，也才会向翻译多问招式名和原文自带的排版。原文里整行、整句、半句的加粗变色会尽量搬到译文，招式、技能、法宝的名字会按属性单独上色（同招同色，随主题重新计算），『』标出的名号既不套说话人色也不当台词念。</p>
 <div class="jy-form-grid"><label><span class="jy-label">对比度目标</span><input type="number" data-jy-field="coloringContrast" min="1.5" max="12" step="0.1"></label><label><span class="jy-label">彩度 <span data-jy-vividness-value></span></span><input type="range" data-jy-field="coloringVividness" min="0" max="100" step="5"></label></div>
 <div class="jy-processing-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="probe-theme">读取当前主题与壁纸</button><button type="button" class="jy-button" data-jy-action="add-speaker">添加角色</button></div>
 <div class="jy-band-report" data-jy-band-report></div>
@@ -983,6 +988,9 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   const reading = new Map();
   // Every lyric segment's id, across every region; collectTtsFloor reads this to skip them by default.
   const lyricIds = new Set();
+  // Segment id → that line's own layer-3 fragments (structural: format and `hidden` included); see
+  // segmentSource's own `fragmentsById`.
+  const fragmentsById = new Map();
   let paragraphs = 0;
   let nextId = 1;
   for (const region of extraction.regions) {
@@ -994,6 +1002,7 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     for (const [id, marked] of segmented.speech ?? []) speech.set(id, marked);
     for (const [id, text] of segmented.reading ?? []) reading.set(id, text);
     for (const id of segmented.lyricIds ?? []) lyricIds.add(id);
+    for (const [id, fragments] of segmented.fragmentsById ?? []) fragmentsById.set(id, fragments);
     paragraphs += segmented.paragraphs;
     nextId += segmented.segments.length;
   }
@@ -1040,6 +1049,7 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     speech,
     reading,
     lyricIds,
+    fragmentsById,
     paragraphs,
     // Whatever rules built `segments` above; a write carries this straight back onto the floor's
     // metadata so the next read agrees with it again. See segmentOptions.segmentationVersion.
@@ -1432,11 +1442,114 @@ function canonicalAnnotations(settings, annotations) {
  * paragraph cost the whole paragraph its colour. The emotion's typography covers the whole unit, so it
  * goes on only when the lines that name a mood agree on it.
  */
-function buildSegmentStyler(settings, reportedAnnotations) {
+// design §2 「同招同色怎么记」: at most one tier-3 (究极奥义) and this many tier-2 (必杀技/大招) per
+// floor, counted in reported order once every batch is back — a model asked one paragraph at a time
+// cannot see the whole floor to count for itself. 待确认: the exact numbers are this session's own
+// call (the design left the count to the code), sized off the preset's own "特效不超过三分之一台词"
+// spirit; 常夜灯 may want them tuned once a chat with real 特效字 output is on screen.
+const MOVE_TIER2_FLOOR_CAP = 3;
+const MOVE_TIER3_FLOOR_CAP = 1;
+
+/**
+ * A move's colour is fixed by its element, and an element stays fixed by the first floor that named
+ * it — never by whichever floor is rendering right now (design §2: "同名招式一律按首次的属性上色，模型
+ * 后来报了别的属性也不改"). `chatMoveIndex` is the whole chat's history (see `buildChatMoveIndex`);
+ * this floor's own moves are folded in afterwards, in segment order, so a name this chat has never
+ * used before still gets a colour the first time this floor uses it, and keeps it if this same floor
+ * repeats it in a later paragraph.
+ */
+function resolveMoveElementIndex(annotations, chatMoveIndex) {
+  const index = new Map(chatMoveIndex instanceof Map ? chatMoveIndex : []);
+  const ids = [...annotations.keys()].sort((left, right) => left - right);
+  for (const id of ids) {
+    for (const move of annotations.get(id)?.moves ?? []) {
+      if (move?.name && !index.has(move.name)) index.set(move.name, { element: move.element });
+    }
+  }
+  return index;
+}
+
+/** Every move occurrence in the floor, in reported order, each tier capped against its neighbours. */
+function capMoveTiersForFloor(annotations) {
+  const ids = [...annotations.keys()].sort((left, right) => left - right);
+  const occurrences = [];
+  for (const id of ids) {
+    (annotations.get(id)?.moves ?? []).forEach((move, position) => occurrences.push({ id, position, tier: move.tier }));
+  }
+  let tier3Used = 0;
+  const afterTier3 = occurrences.map(item => {
+    if (item.tier < 3) return item;
+    tier3Used += 1;
+    return tier3Used <= MOVE_TIER3_FLOOR_CAP ? item : { ...item, tier: 2 };
+  });
+  let tier2Used = 0;
+  const capped = afterTier3.map(item => {
+    if (item.tier < 2) return item;
+    tier2Used += 1;
+    return tier2Used <= MOVE_TIER2_FLOOR_CAP ? item : { ...item, tier: 1 };
+  });
+  return new Map(capped.map(item => [`${item.id}:${item.position}`, item.tier]));
+}
+
+/**
+ * Reads every past floor's own stored moves, first-seen element winning per name (design §2's "打开
+ * 聊天时扫一遍，建一张…索引" — done fresh from the chat's own record on every render rather than kept
+ * in memory across a reload, the same reason `autoSpeakerNames` could not be reused for this).
+ */
+function buildChatMoveIndex(chat = getContext().chat) {
+  const index = new Map();
+  if (!Array.isArray(chat)) return index;
+  for (const message of chat) {
+    if (!message || message.is_user || message.is_system) continue;
+    const stored = message.extra?.[MESSAGE_META_KEY]?.annotations;
+    if (!stored || typeof stored !== 'object') continue;
+    for (const value of Object.values(stored)) {
+      for (const raw of Array.isArray(value?.moves) ? value.moves : []) {
+        const move = readMoveMark(raw);
+        if (move && !index.has(move.name)) index.set(move.name, { element: move.element });
+      }
+    }
+  }
+  return index;
+}
+
+function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new Map()) {
   const coloring = activeColoring(settings);
   const band = coloring.band;
-  if (!band || (!coloring.speakers && !coloring.emotions) || !(reportedAnnotations instanceof Map) || !reportedAnnotations.size) return null;
+  const hasAnnotations = reportedAnnotations instanceof Map && reportedAnnotations.size > 0;
+  if (!band || (!coloring.speakers && !coloring.emotions) || !hasAnnotations) return null;
   const annotations = canonicalAnnotations(settings, reportedAnnotations);
+  // 特效字 sub-switch: moves and carried runs are only ever present on `annotations` when the request
+  // asked for them (prompts.js `composeAnnotationSection`), so this alone gates every move/run branch
+  // below without a separate settings read.
+  const moveElements = resolveMoveElementIndex(annotations, chatMoveIndex);
+  const moveTiers = capMoveTiersForFloor(annotations);
+  const moveStyleFor = (move, id, position) => {
+    const element = moveElements.get(move.name)?.element || move.element;
+    const tier = moveTiers.get(`${id}:${position}`) ?? move.tier;
+    const resolved = resolveMoveStyle({ element, name: move.name, tier, band, vividness: coloring.vividness });
+    return resolved ? { text: move.name, css: resolved.css } : null;
+  };
+  // Layer 3's carried fragments (design §2 item 3): the translator's own words for the numbered
+  // fragment, re-wrapped in that fragment's original tag. Colour still yields to a speaker's — the
+  // same simplification `format.open` already applies at layer 1 — everything else (weight, slant,
+  // struck-through, painted-invisible) carries as written.
+  const carriedRunsFor = (mark, fragments) => {
+    if (!Array.isArray(mark?.runs) || !mark.runs.length || !Array.isArray(fragments) || !fragments.length) return [];
+    return mark.runs.map((text, position) => {
+      const fragment = fragments[position];
+      if (!fragment?.format || !text) return null;
+      return {
+        text,
+        rawOpen: fragment.format.open,
+        rawClose: fragment.format.close,
+        // 字号二选一 (design §2 item 4): a fragment carried as <big>/<small> is its own size decision,
+        // so it must not also inherit whatever font-size the surrounding piece (an emotion's rhythm
+        // scale, most often) was already carrying — that would multiply the two instead of picking one.
+        dropSurroundingCss: /<(?:big|small)[\s>]/i.test(fragment.format.open),
+      };
+    }).filter(Boolean);
+  };
   // Every name the marks carry, the runs' own included: somebody named only on a run of a line that
   // another person opens still needs a colour. Each name counts once per line.
   const named = [...annotations.values()].flatMap(mark => [...new Set([
@@ -1475,16 +1588,34 @@ function buildSegmentStyler(settings, reportedAnnotations) {
       css: toInline(style.declarations.filter(item => item.startsWith('color:'))),
     };
   };
-  return (ids, texts = []) => {
-    // Each line with its speech cut out and a paint, or none, for every quoted run in it.
+  return (ids, texts = [], quoteFormatsByIndex = [], fragmentsByIndex = []) => {
+    // Each line with its speech cut out and a paint, or none, for every quoted run in it, plus layer
+    // 2's per-quote carried wrappers and layer 3's resolved runs (moves first, so a move name and a
+    // carried fragment that happen to overlap settle on the move's colour — `splitPiecesByRuns` places
+    // the longer, and only the first, of two runs whose text is the same, but a move is always looked
+    // for first regardless of length).
     const lines = ids.map((id, index) => {
       const text = String(texts[index] ?? '');
       const mark = annotations.get(id) ?? null;
       const parts = splitSpeechParts(text);
       const placed = placeQuoteMarks(parts.filter(part => part.spoken).map(part => part.text), mark);
-      return { id, text, mark, parts, paints: placed.map(runPaint) };
+      const fragments = fragmentsByIndex?.[index] ?? [];
+      const moveRuns = (Array.isArray(mark?.moves) ? mark.moves : [])
+        .map((move, position) => moveStyleFor(move, id, position)).filter(Boolean);
+      const carriedRuns = carriedRunsFor(mark, fragments);
+      return {
+        id, text, mark, parts,
+        paints: placed.map(runPaint),
+        quoteFormats: quoteFormatsByIndex?.[index] ?? [],
+        allRuns: [...moveRuns, ...carriedRuns],
+      };
     });
-    if (!lines.some(line => line.mark)) return null;
+    const hasRuns = lines.some(line => line.allRuns.length);
+    // A quoted run wrapped whole in a carried tag (design §2 item 2), even on a line with nobody's
+    // speaker paint on it: the narrated case ("一行两个人时说话人色还在" §9.9's own acceptance note has
+    // a sibling — a narrated line with nobody painted still has to carry its own quote's formatting).
+    const hasQuoteFormats = lines.some(line => line.quoteFormats.some(Boolean));
+    if (!lines.some(line => line.mark) && !hasRuns && !hasQuoteFormats) return null;
     const runs = lines.flatMap(line => line.paints);
     const painted = runs.filter(Boolean);
     const who = [...new Set(painted.map(paint => paint.speaker.name))];
@@ -1507,7 +1638,7 @@ function buildSegmentStyler(settings, reportedAnnotations) {
     const bare = lines.some(line => line.text.trim() && !line.parts.some(part => part.spoken) && !moodOf(line));
     const emotion = moods.length === 1 && !bare ? moods[0] : '';
     const intensity = emotion ? lines.find(line => moodOf(line) === emotion)?.mark?.intensity : undefined;
-    if (!sole && !paintsInside && !emotion) return null;
+    if (!sole && !paintsInside && !emotion && !hasRuns && !hasQuoteFormats) return null;
     const style = resolveSegmentStyle({
       speakerColor: sole?.source || sole?.base || '',
       name: sole?.name ?? '',
@@ -1518,7 +1649,7 @@ function buildSegmentStyler(settings, reportedAnnotations) {
     });
     // Emotion-only mode leaves the colour alone and changes weight and shape instead.
     const declarations = sole ? style.declarations : style.declarations.filter(item => !item.startsWith('color:'));
-    if (!declarations.length && !paintsInside) return null;
+    if (!declarations.length && !paintsInside && !hasRuns && !hasQuoteFormats) return null;
     // Two carriers on purpose. The inline style holds the fully resolved colour, including whatever
     // the emotion did to it. The classes carry the same information through the host's own
     // stylesheet, so a sanitiser that drops style attributes still leaves speakers distinguishable.
@@ -1534,29 +1665,48 @@ function buildSegmentStyler(settings, reportedAnnotations) {
     // The rhythm rides on inner spans so the outer one keeps the colour and the classes: a size step
     // inherits the speaker's colour instead of restating it, and a sanitiser that drops the inner
     // tags leaves the line whole and coloured.
-    const rhythm = translation => {
-      const contour = emphasisContour(translation, { emotion, intensity });
-      return contour?.map(piece => ({
-        text: piece.text,
-        css: piece.scale === 1 ? '' : `font-size:${piece.scale.toFixed(3)}em !important`,
-      })) ?? null;
-    };
     // Painted runs trade rhythm for getting the colour right: the contour reads a whole line at a
     // time, and a line cut into speech and narration is no longer one line to it. The assembler hands
     // over each line's id; a caller that does not is matched by the text.
     const byId = new Map(lines.map(line => [line.id, line]));
+    const withRuns = (id, pieces) => {
+      const line = byId.get(id);
+      return line?.allRuns.length ? splitPiecesByRuns(pieces, line.allRuns) : pieces;
+    };
+    const rhythm = (translation, id) => {
+      const contour = emphasisContour(translation, { emotion, intensity });
+      const pieces = contour?.map(piece => ({
+        text: piece.text,
+        css: piece.scale === 1 ? '' : `font-size:${piece.scale.toFixed(3)}em !important`,
+      })) ?? [{ text: translation }];
+      return withRuns(id, pieces);
+    };
     const paintSpeech = (translation, id) => {
       const line = byId.get(id) ?? lines.find(item => item.text === translation);
-      if (!line || line.text !== translation || !line.paints.some(Boolean)) return null;
+      if (!line || line.text !== translation) return null;
       let run = 0;
-      return line.parts.map(part => {
+      const pieces = line.parts.map(part => {
         if (!part.spoken) return { text: part.text };
         const paint = line.paints[run];
+        // Layer 2's own wrapper for this quoted run (design §2 item 2), colour deferred to the
+        // speaker's the same way layer 1's whole-line wrapper already defers (`withoutCarriedColor`).
+        const quoteFormat = line.quoteFormats[run];
         run += 1;
-        return paint ? { text: part.text, className: paint.className, css: paint.css } : { text: part.text };
+        const painted = paint ? { className: paint.className, css: paint.css } : {};
+        const carried = quoteFormat
+          ? { rawOpen: paint ? withoutCarriedColor(quoteFormat.open) : quoteFormat.open, rawClose: quoteFormat.close }
+          : {};
+        return { text: part.text, ...painted, ...carried };
       });
+      return withRuns(line.id, pieces);
     };
-    const emphasis = paintsInside ? paintSpeech : (coloring.rhythm === false ? null : rhythm);
+    // A unit with nothing to paint and no rhythm to give still has to carve out its moves and carried
+    // fragments (design §2 item 5: "旁白里的招式没有说话人色，直接用招式色") — the same `withRuns`
+    // wrapper the two paths above use, started from the plain translation instead of a coloured split.
+    const runsOnly = (translation, id) => withRuns(id, [{ text: translation }]);
+    const emphasis = (paintsInside || hasQuoteFormats) ? paintSpeech
+      : (coloring.rhythm !== false && emotion) ? rhythm
+        : hasRuns ? runsOnly : null;
     return {
       open: `<span class="${classes.join(' ')}"${label ? ` title="${escapeAttribute(label)}"` : ''}${inline ? ` style="${escapeAttribute(inline)}"` : ''}>`,
       close: '</span>',
@@ -1679,6 +1829,14 @@ function readStoredAnnotations(metadata) {
     // The reading's own marks, one per quoted run of the line, each with the characters that place it.
     const quotes = (Array.isArray(value.quotes) ? value.quotes : []).slice(0, 12).map(readQuoteMark).filter(Boolean);
     if (quotes.length) annotation.quotes = quotes;
+    // 特效字: the moves this item named, and the translated text of its carried-format runs, read back
+    // exactly as they were parsed out of the model's own answer (core.js `readAnnotation`).
+    const moves = (Array.isArray(value.moves) ? value.moves : []).slice(0, 6).map(readMoveMark).filter(Boolean);
+    if (moves.length) annotation.moves = moves;
+    if (Array.isArray(value.runs) && value.runs.length) {
+      const runs = value.runs.slice(0, 12).map(run => String(run ?? '').slice(0, 160));
+      if (runs.some(Boolean)) annotation.runs = runs;
+    }
     if (Object.keys(annotation).length) map.set(key, annotation);
   }
   return map;
@@ -1970,7 +2128,12 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
         signal,
         packet,
         phase,
-        { roster: state.roster ?? [], styles: state.styles ?? [], hasLyrics: pending.some(segment => state.lyricIds?.has(segment.id)) },
+        {
+          roster: state.roster ?? [],
+          styles: state.styles ?? [],
+          hasLyrics: pending.some(segment => state.lyricIds?.has(segment.id)),
+          hasFragments: pending.some(segment => segment.fragments?.length),
+        },
       );
       for (const [id, text] of recovered.translations) translations.set(id, text);
       for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
@@ -2185,7 +2348,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
   // Labels the model returned this run win over the ones already stored on the floor.
   const effectiveAnnotations = new Map([...latest.existingAnnotations, ...(annotations instanceof Map ? annotations : [])]);
   for (const id of effectiveAnnotations.keys()) if (!effectiveTranslations.has(id)) effectiveAnnotations.delete(id);
-  const styleFor = buildSegmentStyler(settings, effectiveAnnotations);
+  const styleFor = buildSegmentStyler(settings, effectiveAnnotations, buildChatMoveIndex());
   const bilingual = rebuildTaggedRegions(latest.extraction, region => region.mode === 'replace'
     ? assembleReplace(region.layout, effectiveTranslations, { allowMissing: !complete, styleFor })
     : assembleBilingual(
@@ -2682,7 +2845,8 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       if (!pending.length) return;
       const phase = seeded ? 'repair' : 'primary';
       const hasLyrics = pending.some(segment => snapshot.lyricIds?.has(segment.id));
-      const messages = buildTranslationMessages(pending, settings, packet, phase, { roster, styles, hasLyrics });
+      const hasFragments = pending.some(segment => segment.fragments?.length);
+      const messages = buildTranslationMessages(pending, settings, packet, phase, { roster, styles, hasLyrics, hasFragments });
       // Each batch thinks afresh; carrying the previous batch's thinking into this one would read as
       // the model having already written what it has not started.
       if (lanes === 1) {
@@ -2699,7 +2863,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
           segments: pending.length,
           error: safeError(error),
         });
-        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, hasLyrics });
+        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, hasLyrics, hasFragments });
         for (const [id, value] of recovered.translations) translations.set(id, value);
         for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
         updateTask({
@@ -3211,6 +3375,21 @@ function primaryTtsSide(settings = runtime.settings) {
   return ttsSides(settings)[0];
 }
 
+// 特效字 layer 3, the reading's half: `fragments` is that segment's own structural list
+// (segmentSource's `fragmentsById`, format and `hidden` included), `runs` the translator's answer for
+// each one, in the same order. Only a `hidden` fragment's own run is removed — its text is looked for
+// with a plain (non-regex) match, the same first-occurrence rule `splitPiecesByRuns` renders it with.
+function stripHiddenRuns(text, fragments, runs) {
+  if (!Array.isArray(fragments) || !fragments.length || !Array.isArray(runs) || !runs.length) return text;
+  let result = String(text ?? '');
+  fragments.forEach((fragment, position) => {
+    if (!fragment?.hidden) return;
+    const run = runs[position];
+    if (run) result = result.replace(run, '');
+  });
+  return result;
+}
+
 async function collectTtsFloor(messageId, settings = runtime.settings, sideOverride = null) {
   const context = getContext();
   const id = Number(messageId);
@@ -3277,7 +3456,16 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
       } else {
         lines = snapshot.segments
           .filter(segment => snapshot.existingTranslations.has(segment.id) && !lyricIds?.has(segment.id))
-          .map(segment => ({ lineId: segment.id, text: plainLineText(snapshot.existingTranslations.get(segment.id)) }))
+          .map(segment => {
+            const text = plainLineText(snapshot.existingTranslations.get(segment.id));
+            // 特效字 layer 3: a struck-through or painted-invisible run of the original (design §2 「朗读
+            // 怎么处理」) is dropped from what Fish hears — display keeps it, same as the original's own
+            // hidden runs already do via segmentSource's `reading` map; the translation has no such map
+            // of its own, so it is read off the stored `runs` here instead.
+            const fragments = snapshot.fragmentsById?.get(segment.id);
+            const runs = annotations.get(segment.id)?.runs;
+            return { lineId: segment.id, text: stripHiddenRuns(text, fragments, runs) };
+          })
           .filter(line => line.text);
         sources = new Map(snapshot.segments.map(segment => [segment.id, plainLineText(segment.text)]));
         source = 'translation';
@@ -8166,10 +8354,14 @@ function collectColoringFields(root, current) {
   const vividness = root.querySelector('[data-jy-field="coloringVividness"]');
   const rhythm = root.querySelector('[data-jy-field="coloringRhythm"]');
   const autoSpeakers = root.querySelector('[data-jy-field="coloringAutoSpeakers"]');
+  const effects = root.querySelector('[data-jy-field="coloringEffects"]');
   if (speakers) coloring.speakers = speakers.checked;
   if (emotions) coloring.emotions = emotions.checked;
   if (rhythm) coloring.rhythm = rhythm.checked;
   if (autoSpeakers) coloring.autoSpeakers = autoSpeakers.checked;
+  // A sub-switch under 说话人着色: read whatever the checkbox says, `normalizeColoring` (core.js)
+  // is what actually enforces "off when speakers is off" everywhere this is read.
+  if (effects) coloring.effects = effects.checked;
   if (contrast) coloring.minContrast = Number(contrast.value);
   if (vividness) coloring.vividness = Number(vividness.value) / 100;
   if (runtime.probedBand) {
@@ -8340,6 +8532,7 @@ function syncColoringFields(root, settings = runtime.settings) {
   setField(root, 'coloringEmotions', coloring.emotions);
   setField(root, 'coloringRhythm', coloring.rhythm);
   setField(root, 'coloringAutoSpeakers', coloring.autoSpeakers);
+  setField(root, 'coloringEffects', coloring.effects);
   setField(root, 'coloringContrast', coloring.minContrast);
   setField(root, 'coloringVividness', Math.round(coloring.vividness * 100));
   const value = root.querySelector('[data-jy-vividness-value]');
@@ -14694,6 +14887,11 @@ export const __testing = Object.freeze({
   withAbortTimeout,
   runInLanes,
   buildTranslationMessages,
+  buildSegmentStyler,
+  buildChatMoveIndex,
+  capMoveTiersForFloor,
+  resolveMoveElementIndex,
+  stripHiddenRuns,
   latestAssistantMessageId,
   readMessageSnapshot,
   restyleCurrentChat,

@@ -602,3 +602,94 @@ export function resolveSegmentStyle({ speakerColor, emotion, intensity = 1, band
   if (shape.letterSpacing * scale) declarations.push(`letter-spacing:${(shape.letterSpacing * scale).toFixed(3)}em`);
   return { emotion: key, intensity: level, declarations, css: declarations.join(';') };
 }
+
+// ---------------------------------------------------------------------------------------------
+// 招式上色（特效字）: the translator names a move, its element and how big a deal it is; every
+// other visual decision is made here, the same division of labour as speaker colouring above.
+//
+// Hue seeds below are read out of the author's own preset (声线排版总设定 §7.3/§8.4) with
+// `srgbToOklch` — only the hue survives, exactly like a speaker's hair colour: `adaptColorToBand`
+// re-solves lightness and chroma against the reader's actual background, so the same move keeps a
+// recognisable colour family in every theme without ever risking the preset's own fixed hex
+// (measured below DEFAULT_MIN_CONTRAST on plenty of real chat backgrounds).
+// ---------------------------------------------------------------------------------------------
+
+// One hue per attribute, keyed by every synonym the preset lists for it. A move whose element is
+// not in here (or has none) falls back to `fallbackHue(name)`, the same stable name-hash a speaker
+// with no registered colour already gets.
+export const MOVE_ELEMENT_HUES = Object.freeze({
+  火焰: 47.6, 爆炎: 47.6, 熔岩: 47.6, 火: 47.6,
+  真火: 41.1, 丹火: 41.1, 三昧真火: 41.1,
+  冰霜: 215.2, 寒气: 215.2, 雪: 215.2, 冰: 215.2,
+  水流: 259.8, 海潮: 259.8, 治愈: 259.8, 治愈之水: 259.8, 水: 259.8,
+  雷电: 86, 电光: 86, 雷: 86,
+  天雷: 293, 雷法: 293, 天劫: 293,
+  风: 149.6, 自然: 149.6, 植物: 149.6,
+  大地: 49, 岩石: 49, 重力: 49, 土: 49,
+  光明: 70.1, 神圣: 70.1, 祝福: 70.1, 光: 70.1,
+  黑暗: 292.7, 暗影: 292.7, 深渊: 292.7,
+  鲜血: 27.3, 诅咒: 27.3, 杀意: 27.3, 血: 27.3,
+  毒: 130.8, 腐蚀: 130.8, 瘴气: 130.8,
+  时间: 277.1, 空间: 277.1, 精神: 277.1, 幻术: 277.1, 时空: 277.1,
+  魅惑: 354.3, 爱意: 354.3, 樱花: 354.3,
+  科技: 182.5, 电子: 182.5, 数据: 182.5,
+  钢铁: 257.4, 剑技: 257.4, 纯物理: 257.4,
+  // 东方体系 (§8.4)，查不到再回落到上面的通用属性表。
+  道门金光: 75.8, 符箓: 75.8, 浩然正气: 75.8, 天道: 75.8, 道: 75.8,
+  佛光: 58.3, 梵音: 58.3, 金刚: 58.3, 舍利: 58.3, 佛: 58.3,
+  剑意: 221.7, 剑气: 221.7, 剑光: 221.7,
+  仙气: 163.2, 灵气: 163.2, 青木生机: 163.2, 丹药: 163.2, 仙: 163.2,
+  魔气: 16.9, 血煞: 16.9, 魔功: 16.9, 魔: 16.9,
+  九幽: 301.9, 鬼气: 301.9, 阴煞: 301.9, 邪祟: 301.9,
+});
+
+// A move's tier caps at 3 (究极奥义) whatever a small model answers; 0 and negative are folded up
+// to 1 rather than treated as "no tier", since the translator is always asked for one.
+export function normalizeMoveTier(value) {
+  const number = Math.round(Number(value));
+  return Number.isFinite(number) ? clamp(number, 1, 3) : 1;
+}
+
+/**
+ * The complete visual treatment for one move's name, given the tier code decided a gradient could
+ * not hold its own contrast (design decision, §8 item 6): tier 3 is bold, glow and one size step up
+ * instead, the same building blocks as tier 2 with the dial turned further, never a gradient.
+ *
+ * `color` and `-webkit-text-fill-color` are both written, and both `!important`: a speaker's outer
+ * wrapper already writes both important (index.js `resolvedSpeakerColors`'s `toInline`), and Chrome
+ * only repaints the glyph when the inner span states its own fill colour too — writing `color` alone
+ * still renders in the outer speaker's colour, with `-webkit-text-fill-color` inherited unchanged.
+ */
+export function resolveMoveStyle({ element = '', name = '', tier = 1, band, vividness = 0.7 } = {}) {
+  if (!band) return null;
+  const level = normalizeMoveTier(tier);
+  const key = String(element ?? '').trim();
+  const hue = Object.hasOwn(MOVE_ELEMENT_HUES, key) ? MOVE_ELEMENT_HUES[key] : fallbackHue(name || key);
+  const seed = toHex(oklchToSrgb({ l: band.lightness ?? 0.6, c: Math.max(0.06, (band.chromaMax ?? 0.2) * 0.8), h: hue }));
+  const adapted = adaptColorToBand(seed, band, { name: name || key, vividness });
+  // Every tier is bold — the preset's own template wraps every level in <b> — carried as a real
+  // declaration here (not a nested <b> tag) so it rides the same single inline style as the colour.
+  const declarations = [`color:${adapted.hex}`, `-webkit-text-fill-color:${adapted.hex}`, 'font-weight:700'];
+  let glow = '';
+  if (level >= 2) {
+    // The glow is decorative, not text: it never has to clear the contrast floor, only to sit a
+    // visible step away from the base colour, further out the further the text already sits from
+    // the background (band.direction already says which way that is).
+    const away = band.direction === 'light' ? 0.2 : -0.2;
+    const glowOklch = { l: clamp01(adapted.oklch.l + away), c: Math.min(MAX_CHROMA, adapted.oklch.c + 0.08), h: adapted.oklch.h };
+    glow = toHex(oklchToSrgb(glowOklch));
+    declarations.push(`text-shadow:0 0 ${level >= 3 ? 8 : 6}px ${glow}`);
+  }
+  // Tier 3 stands in for the preset's own gradient (design decision: 加粗 + 发光 + 大一号 代替渐变,
+  // never a gradient — a gradient's own contrast cannot be guaranteed against an arbitrary background).
+  if (level >= 3) declarations.push('font-size:1.12em');
+  return {
+    tier: level,
+    hex: adapted.hex,
+    glow,
+    bold: true,
+    big: level >= 3,
+    declarations,
+    css: declarations.map(item => `${item} !important`).join(';'),
+  };
+}

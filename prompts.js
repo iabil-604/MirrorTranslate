@@ -748,7 +748,7 @@ function rosterLine(roster) {
  * reading checks a mark against before Fish hears it, so a model that follows the rule is never
  * overruled.
  */
-export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], openRoster = true, emotionLabels = [], emotionGroups = null, voice = false, tones = [], toneCues = {}, quoteMarks = [], sounds = [], soundCues = {}, soundPlace = '', softMoods = [], styles = [], directions = false } = {}) {
+export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], openRoster = true, emotionLabels = [], emotionGroups = null, voice = false, tones = [], toneCues = {}, quoteMarks = [], sounds = [], soundCues = {}, soundPlace = '', softMoods = [], styles = [], directions = false, effects = false, hasFragments = false } = {}) {
   if (!speakers && !emotions) return '';
   const marks = (quoteMarks.length ? quoteMarks : ['「」', '『』', '“”', '""']).join(' ');
   const fields = [];
@@ -832,6 +832,19 @@ export function composeAnnotationSection({ speakers = false, emotions = false, r
       ? `写 direction 时要遵守下面这些角色的表达习惯和用户定下的规则（「默认」一条对所有人和旁白生效）：${styleLines.join('；')}`
       : `下面是各角色的说话习惯和用户定下的规则（「默认」一条对所有人生效）。它们决定 emotion 和 intensity 的整体取向，和上面的强度条件冲突时以它们为准；tone 和 sounds 仍然必须有原文依据；规则要求少写或不写 sounds、tone 时照做：${styleLines.join('；')}`);
     checks.push('quotes 的项数不多于译文里这一项的引号数');
+  }
+  // 特效字：招式只认不画（design §1）——模型只标出名字、属性、分量，颜色和发光都由代码算，逐字核对不
+  //到的名字或片段直接丢弃（design §2 item 4），所以这里只问「是什么」，不问「用什么颜色」。
+  if (effects) {
+    example.moves = [{ name: '<招式名>', element: '<属性>', tier: 1 }];
+    fields.push('moves（这一项的译文或旁白里出现的招式/技能/法宝名）');
+    rules.push('moves：译文正文或这一项紧挨着的旁白里，每出现一个招式、必杀技、法宝、咒语这类"有名字的招数"就写一项，找不到就不写这个字段。name 逐字抄这个名字在译文里实际写出的样子；element 写这一招的属性、流派或来源（火、冰、雷、剑气、道法、机械之类），写不出准确的就不写这一项；tier 是分量：1 普通招式，2 大招/必杀技/祭出法宝，3 整个故事最高潮的绝招，拿不准写 1。人物的口头禅、称号、普通武器和道具名字不算招式，不要写。招式名如果写在『』这类引号里，那是名号不是台词，quotes 里对应那一项要写 "type":"narration"，不要当成台词标注。');
+    if (hasFragments) {
+      example.runs = ['<译文里对应这处原文排版的字>'];
+      fields.push('runs（原文自带排版的片段，翻成了译文里的哪几个字）');
+      rules.push('runs：这一项如果带 fragments 字段，那是原文里本来就有特殊排版（加粗、变色、删除线之类）的几处片段，已经去掉了标签、只留文字，按原文出现的顺序编了号。runs 按同样的顺序，逐条写出 fragments 里第几条文字被译成了译文里的哪几个字，只填译文里实际写出的字，不加任何符号、标签或编号；这一项没有 fragments 字段就不写 runs，某一条在译文里找不到对应的字就跳过那一条，其余照写。');
+    }
+    checks.push('moves 和 runs 里的字都能在这一项的 text 里逐字找到');
   }
   if (checks.length) rules.push(`输出前整体核对一遍，不写出核对过程：${checks.join('；')}。`);
   return [

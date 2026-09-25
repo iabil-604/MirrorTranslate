@@ -428,6 +428,9 @@ export const MAX_CHANNEL_CONCURRENCY = 4;
 export const DEFAULT_COLORING = Object.freeze({
   speakers: false,
   emotions: false,
+  // 特效字 (design 声线排版/招式上色/搬运原文排版, folded together as one switch): a sub-switch of
+  // speakers, asked for and applied only while `speakers` is also on — see `normalizeColoring`.
+  effects: false,
   // WCAG AA for body text. The theme probe reports what a background can actually reach.
   minContrast: 4.5,
   // 0 keeps a character's own hair colour faithfully, 1 paints everyone at full strength.
@@ -1043,6 +1046,10 @@ export function normalizeColoring(value) {
   return {
     speakers: Boolean(source.speakers),
     emotions: Boolean(source.emotions),
+    // A sub-switch: on paper it out-lives `speakers` in storage, but every reader (prompts.js
+    // `annotationRequest`, index.js `buildSegmentStyler`) checks `speakers && effects`, so turning
+    // speaker colouring off silently turns this off with it, exactly like a sub-switch under it should.
+    effects: Boolean(source.effects),
     minContrast: clampNumber(source.minContrast, 1.5, 21, DEFAULT_COLORING.minContrast),
     vividness: clampNumber(source.vividness, 0, 1, DEFAULT_COLORING.vividness),
     autoSpeakers: source.autoSpeakers === undefined ? DEFAULT_COLORING.autoSpeakers : Boolean(source.autoSpeakers),
@@ -2465,6 +2472,30 @@ function unwrapLineForFormatting(line) {
   return body;
 }
 
+// The wrapper's own opening/closing tags when `body` really is wrapped whole in one to four nested
+// carryable tags, and really has text inside once they are peeled off — a body that is only tags has
+// nothing to carry, and a body with two sibling spans has no single wrapper to speak of. Shared by
+// `lineFormatting` (the whole line) and `lineQuoteFormats` (one quote's own content, §2 layer 2:
+// "整句引号内容被同一组标签包住"), which differ only in what substring of the line they hand in.
+function extractCarryableWrap(body) {
+  let content = body;
+  const opens = [];
+  const closes = [];
+  for (let depth = 0; depth < 4; depth += 1) {
+    const match = content.match(/^\s*<([A-Za-z][A-Za-z0-9]*)(?:\s[^<>]*?)?\s*>/);
+    if (!match) break;
+    const tag = match[1].toLowerCase();
+    if (!CARRYABLE_FORMAT_TAGS.has(tag)) break;
+    const closed = wrapperClosesAtEnd(content.slice(match[0].length), tag);
+    if (!closed) break;
+    opens.push(sanitizeFormatOpenTag(match[0], tag));
+    closes.unshift(`</${tag}>`);
+    content = closed.inner;
+  }
+  if (!opens.length || !stripStructuralTags(content).trim()) return null;
+  return { open: opens.join(''), close: closes.join('') };
+}
+
 /**
  * The presentation wrapper around a whole source line, ready to be re-applied to its translation.
  *
@@ -2472,22 +2503,108 @@ function unwrapLineForFormatting(line) {
  * tags has nothing to carry, and a line with two sibling spans has no single wrapper to speak of.
  */
 export function lineFormatting(line) {
-  let body = unwrapLineForFormatting(line);
-  const opens = [];
-  const closes = [];
-  for (let depth = 0; depth < 4; depth += 1) {
-    const match = body.match(/^\s*<([A-Za-z][A-Za-z0-9]*)(?:\s[^<>]*?)?\s*>/);
-    if (!match) break;
+  return extractCarryableWrap(unwrapLineForFormatting(line));
+}
+
+// The `<say>` shell peeled off, nothing else touched — unlike `unwrapLineForFormatting`, the outer
+// speech quotes stay on, because `lineQuoteFormats` needs to see every quote on the line, not just
+// treat the first and last as one wrapper around all of them.
+function sayShellInner(line) {
+  const trimmed = String(line ?? '').trim();
+  const say = trimmed.match(SAY_SHELL_RE);
+  return say ? say[1].trim() : trimmed;
+}
+
+/**
+ * Layer 2 of carrying the original's own typesetting into the translation (design §2 「原文自带的排版
+ * 怎么搬到译文」item 2): a line that is not wholly one carried wrapper (narration beside a quote, or
+ * more than one quote on the line — `lineFormatting` already returned null for it) can still have one
+ * or more of its own quotes entirely wrapped in carryable tags. No question is put to the translator
+ * for this layer: the k-th quote of the translation is simply given the k-th quote's own wrapper here,
+ * paired by order the same way `deriveLabelsForSide` already pairs quoted runs for speaker colouring.
+ *
+ * Returns one entry per quoted run of the line, in order — `null` for a run with nothing to carry —
+ * so the caller can zip it directly against `splitSpeechParts` run for run.
+ */
+export function lineQuoteFormats(line) {
+  const body = sayShellInner(line);
+  return splitSpeechParts(body)
+    .filter(part => part.spoken)
+    .map(part => extractCarryableWrap(part.text.slice(1, -1)));
+}
+
+// A tag this run's own wrapper carried in the original that means the words were not actually said
+// out loud (design §2 「朗读怎么处理」: "删除线...涂黑...朗读时按存下的 runs 把这几个字去掉"): struck
+// through, or painted the same colour as its own background ("隐形涂黑"). The reading drops a run
+// marked this way; the display still shows it struck through or blacked out as always.
+function isHiddenCarryTag(tag, openTag) {
+  if (tag === 's' || tag === 'del' || tag === 'strike') return true;
+  return tag === 'span' && /background(?:-color)?\s*:\s*currentcolor/i.test(String(openTag ?? ''));
+}
+
+// A fragment small enough, and specific enough, to be worth carrying on its own rather than as part
+// of a whole line or a whole quote — half a sentence bolded, a move name bolded inside a narrated
+// paragraph. Found by scanning for the first, outermost carryable tag at every position in turn, left
+// to right, non-overlapping; nothing about the scan requires the fragment to be the line's or the
+// quote's entire content, which is what tells this layer apart from the two above.
+const INLINE_FORMAT_OPEN_RE = /<([A-Za-z][A-Za-z0-9]*)((?:\s[^<>]*)?)>/g;
+
+/**
+ * Layer 3, the structural half (design §2 item 3 「行内片段」): every carryable-tagged fragment inside
+ * one line that is not the line's entire content, in the order it appears, with the fragment's own
+ * plain text (what gets numbered and sent to the translator to place in its own words) and the exact
+ * wrapper to re-apply around whatever the translator says that fragment became.
+ *
+ * The scan's cursor jumps past whatever a found fragment closed on, so a fragment already claimed —
+ * the whole body (`lineFormatting`'s job), or an outer tag this same scan just matched — is never
+ * matched a second time from a tag nested inside it: `<b>bold <i>and italic</i> more</b>` carries once,
+ * as the outer `<b>…</b>`, with the inner `<i>` left as plain text once `stripStructuralTags` runs on
+ * its own content — a known simplification (report §「anything left undone」), not a rendering bug.
+ */
+export function inlineFormatRuns(line) {
+  const body = sayShellInner(line);
+  const runs = [];
+  INLINE_FORMAT_OPEN_RE.lastIndex = 0;
+  let match;
+  while ((match = INLINE_FORMAT_OPEN_RE.exec(body))) {
     const tag = match[1].toLowerCase();
-    if (!CARRYABLE_FORMAT_TAGS.has(tag)) break;
-    const closed = wrapperClosesAtEnd(body.slice(match[0].length), tag);
-    if (!closed) break;
-    opens.push(sanitizeFormatOpenTag(match[0], tag));
-    closes.unshift(`</${tag}>`);
-    body = closed.inner;
+    if (!CARRYABLE_FORMAT_TAGS.has(tag)) continue;
+    const openTag = match[0];
+    const from = match.index + openTag.length;
+    const closed = wrapperClosesAtEndAnywhere(body, from, tag);
+    if (!closed) continue;
+    // The whole body, trimmed: `lineFormatting` already carries this one, as the whole line.
+    if (body.slice(match.index, closed.end) === body.trim()) {
+      INLINE_FORMAT_OPEN_RE.lastIndex = closed.end;
+      continue;
+    }
+    const text = stripStructuralTags(closed.inner).trim();
+    INLINE_FORMAT_OPEN_RE.lastIndex = closed.end;
+    if (!text) continue;
+    runs.push({
+      text,
+      format: { open: sanitizeFormatOpenTag(openTag, tag), close: `</${tag}>` },
+      hidden: isHiddenCarryTag(tag, openTag),
+    });
   }
-  if (!opens.length || !stripStructuralTags(body).trim()) return null;
-  return { open: opens.join(''), close: closes.join('') };
+  return runs;
+}
+
+// Like `wrapperClosesAtEnd`, but the closing tag only has to be found somewhere in `source` from
+// `from` onward — an inline fragment usually has more of the line after it, which is exactly the case
+// `wrapperClosesAtEnd` (built for a wrapper that has to reach the line's own end) refuses.
+function wrapperClosesAtEndAnywhere(source, from, tag) {
+  const pattern = new RegExp(`<(/?)${tag}(?:\\s[^<>]*?)?\\s*(/?)>`, 'gi');
+  pattern.lastIndex = from;
+  let depth = 1;
+  let match;
+  while ((match = pattern.exec(source))) {
+    if (match[2] === '/') continue;
+    depth += match[1] === '/' ? -1 : 1;
+    if (depth > 0) continue;
+    return { inner: source.slice(from, match.index), end: match.index + match[0].length };
+  }
+  return null;
 }
 
 function isClosingTagOnlyLine(value) {
@@ -2651,6 +2768,11 @@ export function segmentSource(text, options = {}) {
   // Every lyric segment's id, translated or not — collectTtsFloor reads this to skip them; the built-in
   // decorative and card-preserved lines never need it, since they hold no segment id to skip.
   const lyricIds = new Set();
+  // Segment id → that line's own layer-3 structural fragments (`inlineFormatRuns`, format and `hidden`
+  // included), the same list `segment.fragments` sent the translator the plain text of. Kept apart from
+  // `segment.fragments` because the reading (collectTtsFloor) needs `hidden` and `format`, which have no
+  // business riding in the request JSON a model reads.
+  const fragmentsById = new Map();
   let paragraphs = 0;
   let customPreservedLines = 0;
   let builtinPreservedLines = 0;
@@ -2699,6 +2821,10 @@ export function segmentSource(text, options = {}) {
     // further special-casing. Off (the default), splitCardRows is never called and this is the exact
     // array `physicalLines` already was.
     const rawLines = options.musicCardRules === true ? physicalLines.flatMap(splitCardRows) : physicalLines;
+    // What `lineFormatting`/`lineQuoteFormats`/`inlineFormatRuns` all read: a card row's own trailing
+    // <br> dropped first, so a wrapper's closing tag right before it still looks like it closes at the
+    // row's end.
+    const formatSource = raw => (raw.fromBr ? raw.text.replace(TRAILING_BR_RE, '') : raw.text);
     const lines = rawLines.map(line => {
       const sourceLine = replaceMaskedBlocks(line.text, blocks, 'restore');
       const withoutExcluded = replaceMaskedBlocks(line.text, blocks, 'remove');
@@ -2759,11 +2885,27 @@ export function segmentSource(text, options = {}) {
         semantic,
         lyric,
         closingTagOnly: isClosingTagOnlyLine(withoutExcluded),
-        // Read from the masked text so an excluded block inside the line cannot be mistaken for
-        // part of the wrapper; the tokens that stand in for it carry no angle brackets. A card row's
-        // own trailing <br> is dropped first — a wrapper's closing tag right before it would otherwise
-        // never look like it closes at the row's end.
-        format: lineFormatting(line.fromBr ? line.text.replace(TRAILING_BR_RE, '') : line.text),
+        // `format`/`quoteFormats`/`inlineFragments` are all read off the masked text (via
+        // `formatSource`) so an excluded block inside the line cannot be mistaken for part of a
+        // wrapper — the tokens standing in for it carry no angle brackets. A card row's own trailing
+        // <br> is dropped first, so a wrapper's closing tag right before it still looks like it closes
+        // at the row's end.
+        ...(() => {
+          const source = formatSource(line);
+          const format = lineFormatting(source);
+          // Layers 2 and 3 of carrying the original's own typesetting (design §2): one quote-shaped
+          // wrapper per quoted run, and every smaller tagged fragment. Both are cheap, structural reads
+          // of the original alone — no different from `format` — so both are always computed; only
+          // rendering and the translation request itself are gated on 特效字 (index.js, prompts.js).
+          // A whole line already covered by `format` is not reported again by `lineQuoteFormats` too —
+          // the ordinary case of one line, one quote, would otherwise wrap `<b>` around it twice, once
+          // from each layer.
+          return {
+            format,
+            quoteFormats: format ? [] : lineQuoteFormats(source),
+            inlineFragments: inlineFormatRuns(source),
+          };
+        })(),
       };
     });
     const firstSemantic = lines.findIndex(line => line.semantic);
@@ -2862,15 +3004,26 @@ export function segmentSource(text, options = {}) {
         const ids = [];
         const unitTexts = [];
         const unitFormats = [];
+        const unitQuoteFormats = [];
+        const unitFragments = [];
         for (const line of chunk) {
           if (!line.semantic) continue;
+          const fragments = line.inlineFragments ?? [];
           const segment = { id: startId + segments.length, text: line.translationText };
+          // Only present when this line actually has one: a segment with nothing to carry costs the
+          // request payload (and every reader of `segments` that is not this feature) nothing.
+          if (fragments.length) {
+            segment.fragments = fragments.map(fragment => fragment.text);
+            fragmentsById.set(segment.id, fragments);
+          }
           segments.push(segment);
           if (line.speech) speech.set(segment.id, line.speech);
           if (line.readingText !== line.translationText) reading.set(segment.id, line.readingText);
           ids.push(segment.id);
           unitTexts.push(segment.text);
           unitFormats.push(line.format ?? null);
+          unitQuoteFormats.push(line.quoteFormats ?? []);
+          unitFragments.push(fragments);
         }
         const sourceText = chunk.map((line, index) => `${line.source}${heldSeparator(line, index)}`).join('');
         if (ids.length) {
@@ -2881,6 +3034,12 @@ export function segmentSource(text, options = {}) {
             text: unitTexts.join('\n'),
             sourceText,
             formats: unitFormats,
+            // Aligned with `ids`/`formats`, one entry per line: layer 2's per-quote wrappers and layer
+            // 3's structural fragments (design §2). Both travel with the layout the same way `formats`
+            // already does — recomputed fresh from the original each time, never stored — so a restyle
+            // that re-runs `segmentSource` on the kept original sees them again without asking anybody.
+            quoteFormats: unitQuoteFormats,
+            fragments: unitFragments,
             // Every line of the unit in order, translatable or not: a replace-tag region rebuilds the
             // paragraph from these so what is not for translation stays where it stood.
             lineParts: chunk.map(line => ({ semantic: line.semantic, source: line.source, lead: line.lead, trail: line.trail })),
@@ -2926,6 +3085,7 @@ export function segmentSource(text, options = {}) {
     speech,
     reading,
     lyricIds,
+    fragmentsById,
   };
 }
 
@@ -3213,13 +3373,48 @@ export function readQuoteMark(entry) {
   return mark ? { ...(head ? { head } : {}), ...mark } : null;
 }
 
-// A line's mark, plus one mark per quoted run when the reading asked for them. Whatever is not a mark
-// is dropped without a word.
+// 1–3, whatever a model answers (see palette.js `normalizeMoveTier`, which clamps the same way for a
+// mark read back out of storage): core.js stays independent of palette.js's colour maths, so the
+// clamp is repeated here rather than imported.
+function clampMoveTier(value) {
+  const number = Math.round(Number(value));
+  return Number.isFinite(number) ? Math.min(3, Math.max(1, number)) : 1;
+}
+
+// One move (招式/技能/法宝) the translator named inside this item: what it is called, what it draws
+// on, and how big a deal it is. `element` and `tier` are free-form enough that a model rarely leaves
+// them out, so both default rather than dropping the whole move for want of one — the colour maths
+// (palette.js `resolveMoveStyle`) already falls back to a name-derived hue when `element` is empty.
+export function readMoveMark(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const name = exampleFree(entry.name ?? entry.move ?? entry.title).slice(0, 24);
+  if (!name) return null;
+  const element = exampleFree(entry.element ?? entry.attribute ?? entry.type).slice(0, 12);
+  return { name, element, tier: clampMoveTier(entry.tier ?? entry.level) };
+}
+
+// A run's own text is checked against the item's `text` before it is trusted anywhere (design §2
+// item 4: "找不到的丢掉"); this only shapes the raw string the model wrote, the same way `word()` above
+// shapes a stress or a pause.
+function readCarriedRunText(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
+// A line's mark, plus one mark per quoted run when the reading asked for them, this item's own moves
+// and the translated text of its carried-format runs (特效字 — see core.js `inlineFormatRuns`, which
+// is what numbered the fragments this answers, in the same order). Whatever is not a mark is dropped
+// without a word.
 function readAnnotation(object) {
   if (!object || typeof object !== 'object') return null;
   const fields = readAnnotationFields(object) ?? {};
   const quotes = (Array.isArray(object.quotes) ? object.quotes : []).slice(0, 12).map(readQuoteMark).filter(Boolean);
   if (quotes.length) fields.quotes = quotes;
+  const moves = (Array.isArray(object.moves) ? object.moves : []).slice(0, 6).map(readMoveMark).filter(Boolean);
+  if (moves.length) fields.moves = moves;
+  if (Array.isArray(object.runs) && object.runs.length) {
+    const runs = object.runs.slice(0, 12).map(readCarriedRunText);
+    if (runs.some(Boolean)) fields.runs = runs;
+  }
   return Object.keys(fields).length ? fields : null;
 }
 
@@ -3415,7 +3610,7 @@ export function assembleBilingual(layout, translationMap, options = {}) {
       continue;
     }
     pieces.push(renderSourceBlock(part.sourceText ?? part.text, options));
-    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''));
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''), part.quoteFormats, part.fragments);
     const body = translationUnitBody(part, ids, translationMap, options, decoration);
     if (body) {
       pieces.push(`\n${renderTranslationBlock(body, {
@@ -3494,11 +3689,11 @@ function translationUnitBody(part, ids, translationMap, options, decoration = {}
 // Speaker and emotion styling rides inside the same invisible affix markers the visible prefixes
 // use. That is the whole trick: nothing new has to learn how to strip it, the main model's prompt
 // never sees it, and a floor written with colouring on reads back identically with it off.
-function segmentDecoration(styleFor, ids, texts = []) {
+function segmentDecoration(styleFor, ids, texts = [], quoteFormats = [], fragments = []) {
   if (typeof styleFor !== 'function') return {};
   let decoration;
   try {
-    decoration = styleFor(ids, texts);
+    decoration = styleFor(ids, texts, quoteFormats, fragments);
   } catch {
     return {}; // A palette problem must never cost the reader their translation.
   }
@@ -3619,18 +3814,71 @@ function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) 
   pieces = liftSplitQuotes(pieces);
   // Nothing to carry means nothing to wrap: a line split into runs that all came back bare is the
   // line itself, and wrapping it would only add markers for a reader to strip later.
-  if (!pieces.some(piece => piece?.css || piece?.className)) return translation;
+  if (!pieces.some(piece => piece?.css || piece?.className || piece?.rawOpen || piece?.rawClose)) return translation;
   return pieces
     .map(piece => {
       const attributes = [
         piece.className ? `class="${piece.className}"` : '',
         piece.css ? `style="${piece.css}"` : '',
       ].filter(Boolean).join(' ');
-      return attributes
+      const inner = attributes
         ? `${wrap(`<span ${attributes}>`)}${piece.text}${wrap('</span>')}`
         : piece.text;
+      // `rawOpen`/`rawClose` are literal carried tags (layer 2's quote wrapper, §2 「原文自带的排版怎么
+      // 搬到译文」) wrapped OUTSIDE whatever colour span the piece already got — the same nesting layer
+      // 1's own `format.open`/`format.close` sit at around the whole line, just per-run instead.
+      return piece.rawOpen || piece.rawClose ? `${wrap(piece.rawOpen ?? '')}${inner}${wrap(piece.rawClose ?? '')}` : inner;
     })
     .join('');
+}
+
+/**
+ * Carves named runs out of a piece list, each run's own text found and given its own rendering while
+ * whatever piece it sat inside keeps its own `css`/`className` on the rest of its text. Used for both
+ * 招式 colouring and layer 3's carried inline fragments (design §2): the two differ only in what a
+ * `runs` entry carries — a colour (`css`) for a move, a literal tag pair (`rawOpen`/`rawClose`) for a
+ * carried fragment — not in how they are placed.
+ *
+ * Longer run texts are placed first, so a move name that is itself a substring of another run (rare,
+ * but not impossible) never steals characters that belong to the longer one. Only the first occurrence
+ * of each run's text is carved — a name mentioned twice in one segment is uncommon, and carving every
+ * occurrence would let one wrong `indexOf` match repaint the whole segment.
+ */
+export function splitPiecesByRuns(pieces, runs) {
+  const list = Array.isArray(runs) ? runs.filter(run => run?.text) : [];
+  if (!Array.isArray(pieces) || !pieces.length || !list.length) return pieces;
+  const ordered = [...list].sort((left, right) => right.text.length - left.text.length);
+  let result = pieces;
+  for (const run of ordered) {
+    let claimed = false;
+    const next = [];
+    for (const piece of result) {
+      const text = piece?.text ?? '';
+      const at = !claimed && !piece.runApplied ? text.indexOf(run.text) : -1;
+      if (at < 0) {
+        next.push(piece);
+        continue;
+      }
+      claimed = true;
+      if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
+      next.push({
+        text: run.text,
+        // A carried run that is itself a size change (a fragment carried as <big>/<small>, design §2
+        // "字号二选一") drops whatever font-size the piece it sat inside was already carrying — an
+        // emotion's rhythm scale, most often — instead of multiplying the two: `dropSurroundingCss`
+        // is only ever set for exactly that case (index.js `carriedRunsFor`).
+        css: run.css ?? (run.dropSurroundingCss ? '' : piece.css),
+        className: run.className ?? piece.className,
+        rawOpen: run.rawOpen,
+        rawClose: run.rawClose,
+        runApplied: true,
+      });
+      const rest = text.slice(at + run.text.length);
+      if (rest) next.push({ ...piece, text: rest });
+    }
+    result = next;
+  }
+  return result;
 }
 
 export function renderSourceBlock(source, options = {}) {
@@ -3681,7 +3929,7 @@ export function assembleReplace(layout, translationMap, options = {}) {
     }
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
     const sourceText = part.sourceText ?? part.text;
-    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''));
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''), part.quoteFormats, part.fragments);
     const byLine = Array.isArray(part.lineParts) && part.lineParts.length > 0;
     const body = !ids.some(id => translationMap.get(id)) ? ''
       : byLine ? replaceUnitBody(part, ids, translationMap, options, decoration)
@@ -3728,7 +3976,7 @@ export function assembleTranslationOnly(layout, translationMap, options = {}) {
       pieces.push(`${bareSource} (${String(translationMap.get(ids[0]))})${trailingBr ? trailingBr[1] : ''}`);
       continue;
     }
-    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''));
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''), part.quoteFormats, part.fragments);
     const formats = Array.isArray(part.formats) ? part.formats : [];
     const lineParts = Array.isArray(part.lineParts) && part.lineParts.length
       ? part.lineParts
