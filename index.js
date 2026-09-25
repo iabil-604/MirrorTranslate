@@ -153,10 +153,11 @@ import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSetting
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
 import {
-  VISUAL_FIELDS, isJingyiRegex,
+  VISUAL_FIELDS,
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, syncNativeRegex, readNativeRegexEdits,
+  dedupeManagedRegexScripts, planRegexCleanup,
 } from './processing.js?v=0.37.2';
 import {
   CORE_TRANSLATION_SPEC,
@@ -452,7 +453,7 @@ const CONTROL_CENTER_MARKUP = `
 <label class="jy-check"><input type="checkbox" data-jy-field="musicCardRules">音乐卡片</label><p class="jy-muted">手动开启，默认关闭。开启后，正文里以 <code>&lt;br&gt;</code> 分隔的卡片行按行拆开处理：NOW PLAYING 这类固定文案、已经写成「原文 (中文)」的行自动保留；命中上面歌词规则或排除在保留规则之外的其余 <code>&lt;br&gt;</code> 行按歌词处理。只按这一种卡片的样子写的，遇到别的卡片格式效果不对时，把歌名、歌手这类行加进「原样保留白名单」。</p></details>
 <details class="jy-advanced"><summary>段落前后缀</summary><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></details>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层里的朗读按钮</span><select data-jy-field="floorButtons"><option value="line">每段一个（默认，手机也有）</option><option value="sentence">每段一个，再加每句一个</option><option value="off">不显示，只在悬浮窗里点</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
-<details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button><button type="button" class="jy-text-button" data-jy-action="dedupe-processing-regex">删除多余正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p></details>
+<details class="jy-advanced"><summary>绑定正则 <span data-jy-processing-regex-count></span></summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p><div class="jy-processing-toolbar"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="dedupe-processing-regex">删除多余正则</button></div></details>
 <details class="jy-advanced" data-jy-coloring><summary>说话人着色与情绪排版</summary>
 <p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。</p>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEffects">特效字（招式上色、搬运原文排版）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringRhythm">情绪起伏（句内轻重变化）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringAutoSpeakers">名单外的说话人按名字自动取色</label></div>
@@ -800,7 +801,23 @@ function saveSettings(next) {
   // pointed at the old id along with it: the entry is the voice, the id is where it lives today.
   runtime.settings = followVoiceLibrary(previous.voiceLibrary, captureProcessingProfile(normalizeProcessingSettings(next)));
   const active = getActiveProcessingProfile(runtime.settings);
-  const previousRules = getActiveProcessingProfile(previous).regexScripts;
+  const previousActive = getActiveProcessingProfile(previous);
+  const previousRules = previousActive.regexScripts;
+  // Most calls here never meant to touch the bound regex at all -- a floating-window toggle, a theme
+  // switch, a quick picker -- and built `next` from runtime.settings as it already stood, regexScripts
+  // included. Only collectSettings (save-processing, the connection/prompt pages' own save-settings
+  // action, the dedupe button) reads 酒馆's native list back into regexScripts before calling this; every
+  // other caller's regexScripts is simply stale the moment the reader edits a bound rule in 酒馆's own
+  // regex editor, and this used to overwrite that edit right back to the old version on the very next
+  // save of any kind. Reading it back here too, but only when nothing about this save already intended a
+  // regexScripts change (same profile selected, regexScripts identical to what was last persisted), so a
+  // caller that DID deliberately change regexScripts -- importing a rule, removing one, the dedupe button
+  // itself -- is never silently undone by a readback of the not-yet-resynced native list.
+  if (runtime.nativeRegexInstalled && previous.selectedProcessingProfileId === runtime.settings.selectedProcessingProfileId
+    && JSON.stringify(previousRules) === JSON.stringify(active.regexScripts)) {
+    const nativeEdits = readNativeRegexEdits(context.extensionSettings.regex, active);
+    if (nativeEdits.length) active.regexScripts = nativeEdits;
+  }
   const visualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
     || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
   // A change of look re-renders translations already written; the reply being generated is still owed one.
@@ -10627,21 +10644,29 @@ function createControlCenter(rootDocument = document) {
         // Opening any of our rules in 酒馆's own regex editor and clicking Save, even with nothing
         // changed, strips the marker we hang identity on (the editor rebuilds the object from its own
         // form fields); 镜译 no longer recognises that copy and installs a fresh one beside it on the
-        // next sync, leaving the old one behind for good. This button does exactly what a normal save
-        // already does (collapse back to the one copy each rule in the active profile needs), just on
-        // demand and with a count instead of waiting for some other change to trigger it. isJingyiRegex
-        // only matches our own id prefix, so a reader's own rules are never touched. Destructive, so it
-        // asks first, same as the other bulk-remove buttons on this page.
+        // next sync, leaving the old one behind for good. Batch export-then-reimport can also leave a
+        // profile's own regexScripts holding several differently-id'd copies of what is really one
+        // rule, from before native edits were read back by id -- a plain sync never converges that,
+        // since by then each id is genuinely something the profile asks for, so this button first
+        // collapses byte-identical duplicates within the profile itself. Counts removal and
+        // installation separately rather than a before/after difference, so an equal number of each
+        // does not net to a false "nothing to clean", and a reader who has deleted more of the fixed
+        // rules than there are surplus copies never sees a negative count. Claims a rule as 镜译's own
+        // by its marker or its id prefix (see isJingyiRegex), never by name alone, so a reader's own
+        // rule is never touched even when it happens to share a name. Destructive, so it asks first,
+        // same as the other bulk-remove buttons on this page.
         const currentRegex = getContext().extensionSettings.regex ?? [];
-        const before = currentRegex.filter(isJingyiRegex).length;
         const next = collectSettings(root);
-        const after = syncNativeRegex(currentRegex, getActiveProcessingProfile(next)).filter(isJingyiRegex).length;
-        const removed = before - after;
-        if (!removed) throw new Error('没有发现多余的镜译正则。');
-        if (typeof globalThis.confirm === 'function'
-          && !globalThis.confirm(`删除 ${removed} 条多余的镜译正则，只留当前方案需要的 ${after} 条？其他正则不受影响。`)) return;
-        saveSettings(next);
-        toast('success', `已删除 ${removed} 条多余的镜译正则，当前方案需要的 ${after} 条都还在。`);
+        const active = getActiveProcessingProfile(next);
+        active.regexScripts = dedupeManagedRegexScripts(active.regexScripts);
+        const { expected, toRemove, toInstall } = planRegexCleanup(currentRegex, active);
+        if (!toRemove && !toInstall) throw new Error('没有发现多余的镜译正则。');
+        const message = toInstall
+          ? `删除 ${toRemove} 条多余的镜译正则，补上 ${toInstall} 条缺失的固定正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`
+          : `删除 ${toRemove} 条多余的镜译正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`;
+        if (typeof globalThis.confirm === 'function' && !globalThis.confirm(message)) return;
+        await persistProcessing(root, next);
+        toast('success', `已整理镜译正则：删除 ${toRemove} 条，补上 ${toInstall} 条，当前方案需要的 ${expected.length} 条都在。`);
       } else if (action === 'adopt-speakers') {
         // Every reported name the palette has not got yet, with no colour of its own. The hue each
         // one already has is name-derived, so nothing on screen moves until a real hair colour is

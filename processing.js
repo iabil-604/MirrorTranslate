@@ -284,34 +284,128 @@ const PROMPT_GUARD_RULES = Object.freeze([
   },
 ]);
 
-export function readNativeRegexEdits(existing, profile) {
-  const matches = (Array.isArray(existing) ? existing : [])
-    .map(rule => {
-      // The marker is read first since a still-marked rule already carries this pair; the id is only
-      // parsed when the marker is gone, so an edit the reader made in 酒馆's own editor right before
-      // it silently stripped the marker is still picked up instead of quietly lost.
-      const marked = rule?.[REGEX_OWNER_KEY]?.owner === MODULE_ID;
-      const pair = marked ? rule[REGEX_OWNER_KEY] : parseManagedRegexId(rule?.id);
-      return pair && pair.profileId === profile.id ? { rule, ruleId: pair.ruleId, marked } : null;
-    })
-    .filter(Boolean);
-  // A reader who is only now upgrading past the marker-loss bug (see isJingyiRegex above) still has
-  // every orphan the old code left behind sitting in the native list, all sharing one deterministic id
-  // with the one live copy -- so more than one match above can carry the very same ruleId. Folding all
-  // of them into the profile as if they were distinct rules would bake the duplication permanently into
-  // 镜译's own saved data instead of just the native mirror, which no later sync could ever clean up
-  // again (syncNativeRegex would keep regenerating one native copy per profile entry). Kept to one
-  // match per ruleId here, before it ever reaches the profile; the still-marked copy wins when there is
-  // one, since that is the one 酒馆 currently treats as live, otherwise the first orphan encountered.
-  const byRuleId = new Map();
-  for (const item of matches) {
-    const current = byRuleId.get(item.ruleId);
-    if (!current || (item.marked && !current.marked)) byRuleId.set(item.ruleId, item);
+// Content, not identity: two regex objects that would behave the same way regardless of which id or
+// scriptName they happen to carry. Used to tell an actual edit apart from a copy that merely lost its
+// marker or its id, and to fold byte-identical duplicates back into one without touching anything a
+// reader wrote on purpose. minDepth/maxDepth are read through the same NaN-tolerant lens normalizeNativeRegex
+// validates against (酒馆's own editor writes parseInt('') = NaN for a blank depth field, never null).
+function regexScriptContentKey(rule) {
+  const depth = value => (Number.isInteger(value) ? value : null);
+  return JSON.stringify({
+    scriptName: rule.scriptName, findRegex: rule.findRegex, replaceString: rule.replaceString,
+    trimStrings: rule.trimStrings ?? [], placement: [...(rule.placement ?? [])].sort((a, b) => a - b),
+    disabled: Boolean(rule.disabled), markdownOnly: Boolean(rule.markdownOnly), promptOnly: Boolean(rule.promptOnly),
+    runOnEdit: Boolean(rule.runOnEdit), substituteRegex: rule.substituteRegex ?? 0,
+    minDepth: depth(rule.minDepth), maxDepth: depth(rule.maxDepth),
+  });
+}
+
+// Same scriptName/findRegex/replaceString/placement/flags, whatever id or scriptName prefix each one
+// carries: collapses a profile's own regexScripts list back to one entry per distinct rule. Exists for
+// the state a reader can already be sitting on from before this file's id-based recognition landed --
+// 酒馆's own regex panel assigns a fresh id on every import (see isJingyiRegex above), so a batch
+// export-then-reimport of 镜译's rules used to leave the *profile itself* holding N differently-id'd
+// copies of what is really one rule; no amount of re-syncing the native mirror converges that away, since
+// each of the N ids is, by that point, genuinely something the profile asks for. Order-preserving: the
+// first-seen copy of each distinct rule survives.
+export function dedupeManagedRegexScripts(regexScripts) {
+  const seen = new Set();
+  const kept = [];
+  for (const rule of regexScripts) {
+    const key = regexScriptContentKey(rule);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(rule);
   }
+  return kept;
+}
+
+export function readNativeRegexEdits(existing, profile) {
+  const managedId = ruleId => `${MODULE_ID}:${profile.id}:${ruleId}`;
   const namePrefix = `镜译 · ${profile.name} · `;
-  return [...byRuleId.values()].map(({ rule, ruleId }) =>
-    normalizeNativeRegex({ ...rule, id: ruleId,
-      scriptName: rule.scriptName.startsWith(namePrefix) ? rule.scriptName.slice(namePrefix.length) : rule.scriptName }));
+  const stripName = name => (name?.startsWith(namePrefix) ? name.slice(namePrefix.length) : name);
+  // The marker is read first since a still-marked rule already carries this pair; the id is only parsed
+  // when the marker is gone, so an edit the reader made in 酒馆's own editor right before it silently
+  // stripped the marker is still picked up instead of quietly lost. A candidate whose own id equals the
+  // one 镜译 minted for this ruleId (`sameId`) occupies that one deterministic slot -- an in-place edit
+  // keeps this id even once the marker is gone, because 酒馆's editor reuses `existingId` on Save. A
+  // candidate under any other id (`variant`) only got here through its marker, which survives 酒馆's own
+  // "export, then re-import" (a fresh uuid, everything else including the marker untouched) -- that is a
+  // reader's deliberate copy, not an edit of the existing slot.
+  const groups = new Map();
+  for (const rule of Array.isArray(existing) ? existing : []) {
+    const marked = rule?.[REGEX_OWNER_KEY]?.owner === MODULE_ID;
+    const pair = marked ? rule[REGEX_OWNER_KEY] : parseManagedRegexId(rule?.id);
+    if (!pair || pair.profileId !== profile.id) continue;
+    const bucket = groups.get(pair.ruleId) || { sameId: [], variant: [] };
+    (rule.id === managedId(pair.ruleId) ? bucket.sameId : bucket.variant).push({ rule, marked });
+    groups.set(pair.ruleId, bucket);
+  }
+
+  const existingById = new Map(profile.regexScripts.map(rule => [rule.id, rule]));
+  // minDepth/maxDepth: 酒馆's own editor writes parseInt(String(value ?? '')) on every Save, which is
+  // NaN whenever the field was left blank (every fixed and profile-bound rule ships with minDepth/
+  // maxDepth null, so the field always starts blank) -- not null, and never was. Left uncoerced, a rule
+  // the reader opened and saved with nothing changed at all fails normalizeNativeRegex's own
+  // Number.isInteger check and would otherwise take the whole read down with it.
+  const toCandidate = (rule, ruleId) => ({
+    ...rule, id: ruleId, scriptName: stripName(rule.scriptName),
+    minDepth: Number.isInteger(rule.minDepth) ? rule.minDepth : null,
+    maxDepth: Number.isInteger(rule.maxDepth) ? rule.maxDepth : null,
+  });
+  // 酒馆's own editor can save a copy that fails our validation on its own -- every "Affects" box
+  // unchecked, an emptied find pattern -- 酒馆 only warns and saves anyway. `fallback` keeps one bad
+  // native copy from failing the whole read: for the one deterministic slot a ruleId already occupies,
+  // it is the profile's own already-saved version of that same rule; a variant under a fresh id has no
+  // saved version of its own to fall back to, and is simply dropped rather than resurrecting a stale
+  // copy of some other rule under its id.
+  const tryNormalize = (candidate, fallback) => {
+    try { return normalizeNativeRegex(candidate); } catch { return fallback ?? null; }
+  };
+
+  const edits = [];
+  for (const [ruleId, { sameId, variant }] of groups) {
+    if (sameId.length) {
+      const markedOne = sameId.find(item => item.marked);
+      const baseline = markedOne ? toCandidate(markedOne.rule, ruleId) : existingById.get(ruleId);
+      const differing = sameId.find(item => !item.marked
+        && (!baseline || regexScriptContentKey(toCandidate(item.rule, ruleId)) !== regexScriptContentKey(baseline)));
+      const winner = differing || markedOne || sameId[0];
+      const normalized = tryNormalize(toCandidate(winner.rule, ruleId), existingById.get(ruleId));
+      if (normalized) edits.push(normalized);
+    }
+    const seenVariants = new Set();
+    for (const item of variant) {
+      const candidate = toCandidate(item.rule, processingId());
+      const key = regexScriptContentKey(candidate);
+      if (seenVariants.has(key)) continue;
+      seenVariants.add(key);
+      const normalized = tryNormalize(candidate, null);
+      if (normalized) edits.push(normalized);
+    }
+  }
+  return edits;
+}
+
+// What the "删除多余正则" button needs, split so removal and installation are counted separately: net
+// list-length arithmetic (before - after) mixes the two, so an equal number of surplus copies and
+// missing fixed rules nets to zero and the button reports nothing to clean, and a reader who has
+// deleted more fixed rules than there are surplus copies sees a negative count. `expected` is exactly
+// what syncNativeRegex would install for this profile alone (fixed rules plus one native copy per
+// regexScripts entry); toRemove counts existing 镜译 rules that are not the one kept copy of an expected
+// id; toInstall counts expected ids missing from the native list entirely.
+export function planRegexCleanup(existingRegex, profile) {
+  const existingJingyi = (Array.isArray(existingRegex) ? existingRegex : []).filter(isJingyiRegex);
+  const expected = syncNativeRegex([], profile).filter(isJingyiRegex);
+  const expectedIds = new Set(expected.map(rule => rule.id));
+  const seen = new Set();
+  let toRemove = 0;
+  for (const rule of existingJingyi) {
+    if (expectedIds.has(rule.id) && !seen.has(rule.id)) { seen.add(rule.id); continue; }
+    toRemove++;
+  }
+  const toInstall = expected.filter(rule => !existingJingyi.some(item => item.id === rule.id)).length;
+  return { expected, toRemove, toInstall };
 }
 
 // Every block container a card template plausibly uses — the same range the reading's own BREAK_RE

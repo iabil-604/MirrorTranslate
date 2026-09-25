@@ -97,6 +97,8 @@ label { min-width: 0; }
 .jy-button-primary:hover { background: var(--jy-accent); color: var(--jy-on-accent); filter: brightness(.94); }
 .jy-text-button { border: 0; background: transparent; color: var(--jy-accent); padding: 8px 4px; font-size: 12px; text-align: left; }
 .jy-text-button:hover { text-decoration: underline; }
+/* 危险操作的文字按钮：无边框沿用 .jy-text-button，字色换成 --jy-error（DESIGN.md §9.1/§15.4）。 */
+.jy-text-button-danger { color: var(--jy-error); }
 .jy-icon-button { display: inline-grid; place-items: center; height: 30px; min-width: 30px; border: 1px solid var(--jy-line); border-radius: var(--jy-radius-sm); color: var(--jy-accent); background: transparent; font-size: 16px; transition: background var(--jy-hover), border-color var(--jy-hover); }
 .jy-badge { display: inline-block; max-width: 100%; border: 1px solid var(--jy-line); border-radius: 4px; background: var(--jy-accent-soft); color: var(--jy-muted); font-size: 10px; line-height: 1.5; padding: 3px 7px; overflow-wrap: anywhere; }
 .jy-desk { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(0,1fr); gap: 20px; padding-bottom: 18px; }

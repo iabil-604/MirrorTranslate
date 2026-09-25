@@ -838,6 +838,26 @@ test('manifest and entry describe a native extension without TavernHelper calls'
   assert.doesNotMatch(hostCss, /(^|\n)\s*(?:input|select|textarea|button)\b/m);
 });
 
+// DESIGN.md §15.4（常夜灯 2026-09-26 批准）：危险操作是红字文字按钮，放在自己那组的末尾。「删除多余正则」是
+// 「绑定正则」组里唯一的破坏性操作，是这一条实际适用的地方（§9.1 的 .jy-text-button 本身只是 --jy-accent）。
+test('the "删除多余正则" button is a red text button at the end of its own group, per DESIGN.md §9.1/§15.4', () => {
+  const entry = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
+  const group = entry.match(/<details class="jy-advanced"><summary>绑定正则[\s\S]*?<\/details>/)?.[0];
+  assert.ok(group, '找到「绑定正则」这一组的标记');
+  const button = group.match(/<button[^>]*data-jy-action="dedupe-processing-regex"[^>]*>删除多余正则<\/button>/)?.[0];
+  assert.ok(button, '找到「删除多余正则」按钮本身');
+  assert.match(button, /class="jy-text-button jy-text-button-danger"/, '无边框的文字按钮，字色走危险色');
+  // 组内唯一另一个按钮是「导入正则」；危险操作要排在它之后，也排在正则列表和状态行之后（组的末尾）。
+  assert.ok(group.indexOf('导入正则') < group.indexOf('删除多余正则'), '排在「导入正则」之后');
+  assert.ok(group.indexOf('data-jy-processing-regex-list') < group.indexOf('删除多余正则'), '排在正则列表之后');
+  assert.ok(group.indexOf('data-jy-native-regex-status') < group.indexOf('删除多余正则'), '排在状态行之后，即组的末尾');
+
+  const hostCss = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+  const rule = hostCss.match(/\.jy-text-button-danger\s*\{[^}]*\}/)?.[0];
+  assert.ok(rule, '.jy-text-button-danger 的样式规则存在');
+  assert.match(rule, /color:\s*var\(--jy-error\)/, '危险文字按钮的字色是 --jy-error（DESIGN.md §9.1）');
+});
+
 test('manifest files, lifecycle exports, and capability snapshot are self-consistent', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
   const entryPath = manifest.js.split('?')[0];

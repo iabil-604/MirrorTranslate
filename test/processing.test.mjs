@@ -9,8 +9,9 @@ import {
   normalizeProcessingSettings, normalizeProcessingProfile, processingSnapshot, getActiveProcessingProfile, makeBuiltinReadingProfile,
   selectProcessingProfile, captureProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, syncNativeRegex, readNativeRegexEdits, compileNativeRegex, isJingyiRegex, REGEX_OWNER_KEY,
+  dedupeManagedRegexScripts, planRegexCleanup,
 } from '../processing.js';
-import { __testing } from '../index.js';
+import { __testing, onDisable } from '../index.js';
 
 const visible = text => text.replace(/[\u200b\u200c\u2060-\u2064]/g, '');
 
@@ -293,15 +294,19 @@ test('a picture on a line of its own is left as it is, shown once, and the text 
 // with it outright (saveRegexScript: array[existingScriptIndex] = regexScript); the new object only
 // carries fields the editor's own form knows about, so jingyi_managed is gone, wholesale. The id
 // survives, since the editor keeps the same existingId for a script it already knows. The fixtures
-// below replay exactly that replacement, with the same field set the editor actually builds.
+// below replay exactly that replacement, with the same field set the editor actually builds -- minDepth/
+// maxDepth included: the editor fills the field with `existingScript.minDepth ?? ''` (SillyTavern
+// 1.18.0, extensions/regex/index.js:788-789) and reads it back with `parseInt(String(...))` on Save
+// (index.js:866-867), so a null depth -- every fixed and profile-bound rule 镜译 writes -- round-trips
+// as parseInt('') = NaN, never null, whether or not the reader actually touched that field.
 function simulateNativeEditorSave(script) {
   return {
     id: script.id, scriptName: script.scriptName, findRegex: script.findRegex, replaceString: script.replaceString,
     trimStrings: script.trimStrings ?? [], placement: script.placement ?? [], disabled: script.disabled ?? false,
     markdownOnly: script.markdownOnly ?? false, promptOnly: script.promptOnly ?? false, runOnEdit: script.runOnEdit ?? false,
     substituteRegex: script.substituteRegex ?? 0,
-    minDepth: Number.isFinite(script.minDepth) ? script.minDepth : null,
-    maxDepth: Number.isFinite(script.maxDepth) ? script.maxDepth : null,
+    minDepth: parseInt(String(script.minDepth ?? '')),
+    maxDepth: parseInt(String(script.maxDepth ?? '')),
   };
 }
 
@@ -481,4 +486,169 @@ test('sync collapses a list mixing 镜译 duplicates, a rule from a since-delete
 
   const again = syncNativeRegex(cleaned, profile);
   assert.deepEqual(again, cleaned, 'idempotent: syncing an already-clean list changes nothing further');
+});
+
+test('a native copy that fails our own validation outright -- every "Affects" checkbox unchecked, exactly what 酒馆 itself only warns about and saves anyway -- falls back to the profile\'s already-saved version of just that one rule, instead of losing every other valid edit alongside it', () => {
+  const settings = normalizeProcessingSettings();
+  const active = getActiveProcessingProfile(settings);
+  active.regexScripts = importNativeRegex([
+    { scriptName: '第一条', findRegex: '/one/g', replaceString: '一', placement: [2] },
+    { scriptName: '第二条', findRegex: '/two/g', replaceString: '二', placement: [2] },
+  ]);
+  const [ruleOneId, ruleTwoId] = active.regexScripts.map(rule => rule.id);
+  let list = syncNativeRegex([], active);
+
+  // The reader genuinely edits the first rule in 酒馆's own editor...
+  const i1 = list.findIndex(rule => rule.scriptName === `镜译 · ${active.name} · 第一条`);
+  list[i1] = simulateNativeEditorSave({ ...list[i1], replaceString: '壹' });
+  // ...and on the second, unchecks every "Affects" box and saves anyway.
+  const i2 = list.findIndex(rule => rule.scriptName === `镜译 · ${active.name} · 第二条`);
+  list[i2] = simulateNativeEditorSave({ ...list[i2], placement: [] });
+
+  const edits = readNativeRegexEdits(list, active);
+  assert.equal(edits.length, 2, 'both rules still come back -- the broken one is not simply dropped, and does not take the whole read down with it');
+  assert.equal(edits.find(rule => rule.id === ruleOneId).replaceString, '壹', 'the valid edit on the other rule survives alongside the broken one');
+  assert.deepEqual(edits.find(rule => rule.id === ruleTwoId), active.regexScripts[1], 'the broken copy falls back to the profile\'s own already-saved version of that rule');
+});
+
+test('initializeSettings and onDisable do not crash on the copy 酒馆\'s own editor leaves after any "open the rule, click Save" -- even with nothing changed at all, since every fixed and profile-bound rule ships with blank depth fields', () => {
+  const previousHost = globalThis.SillyTavern;
+  try {
+    const settings = normalizeProcessingSettings();
+    const profile = makeBuiltinReadingProfile(settings, 'cute');
+    settings.processingProfiles = [profile];
+    settings.selectedProcessingProfileId = profile.id;
+    const list = syncNativeRegex([], profile);
+    const index = list.findIndex(rule => rule.scriptName === `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`);
+    list[index] = simulateNativeEditorSave(list[index]); // opened, nothing touched, saved
+    const context = { extensionSettings: { [MODULE_ID]: settings, regex: list }, saveSettingsDebounced: () => {} };
+    globalThis.SillyTavern = { getContext: () => context };
+    assert.doesNotThrow(() => __testing.initializeSettings(), '整个扩展不因为一条原生规则读不回来就起不来');
+    assert.doesNotThrow(() => onDisable());
+  } finally {
+    globalThis.SillyTavern = previousHost;
+    __testing.configureForTest({ initialized: false });
+  }
+});
+
+test('readNativeRegexEdits prefers a reader\'s real edit over a merely-regenerated marked copy of the same rule, and only falls back to the marked copy when the two actually agree', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  const list = syncNativeRegex([], profile);
+  const ruleName = `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  const index = list.findIndex(rule => rule.scriptName === ruleName);
+
+  // The old marker-loss bug's own aftermath: the reader's real edit sits in an unmarked copy (酒馆's
+  // editor stripped its marker on Save), alongside a stale, still-marked copy the old code kept
+  // regenerating from the profile's untouched original.
+  const edited = simulateNativeEditorSave({ ...list[index], replaceString: '<p>读者真的改过</p>' });
+  const stale = { ...list[index] };
+  const mixed = [...list.slice(0, index), edited, stale, ...list.slice(index + 1)];
+
+  const edits = readNativeRegexEdits(mixed, profile);
+  assert.equal(edits.length, 1);
+  assert.equal(edits[0].replaceString, '<p>读者真的改过</p>', 'the reader\'s real edit wins over the stale marked copy, not the other way around');
+});
+
+test('dedupeManagedRegexScripts collapses a profile\'s own regexScripts back to one entry per distinct rule regardless of id -- the state a batch export-then-reimport used to bake permanently into the profile, before native edits were ever read back by id', () => {
+  const settings = normalizeProcessingSettings();
+  const active = getActiveProcessingProfile(settings);
+  const base = { scriptName: '可爱风', findRegex: '/x/g', replaceString: 'y', placement: [2] };
+  // 酒馆's own import always mints a fresh id (extensions/regex/index.js:1506), regardless of what the
+  // exported JSON's id was -- so N re-imports of the very same exported rule leave N differently-id'd,
+  // but otherwise identical, entries sitting in the profile's own regexScripts.
+  active.regexScripts = importNativeRegex([base, base, base]);
+  assert.equal(active.regexScripts.length, 3);
+  assert.notEqual(active.regexScripts[0].id, active.regexScripts[1].id);
+
+  const deduped = dedupeManagedRegexScripts(active.regexScripts);
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0].id, active.regexScripts[0].id, 'order-preserving: the first copy survives');
+});
+
+test('planRegexCleanup counts removal and installation separately, so an equal number of each never nets to a false "nothing to clean" and a reader who deleted more fixed rules than there are surplus copies never sees a negative count', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  const full = syncNativeRegex([], profile);
+  const ruleName = `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  const ruleCopy = full.find(rule => rule.scriptName === ruleName);
+  // The reader has deleted two of the fixed rules directly in 酒馆's own panel (its own findIndex(id)
+  // picks the first match, so this really does remove the one live copy), and a surplus copy of the
+  // profile's own bound rule sits alongside the rest.
+  const withoutTwoFixed = full.filter(rule => !([`${MODULE_ID}:prompt-affix`, `${MODULE_ID}:prompt-boundaries`].includes(rule.id)));
+  const polluted = [...withoutTwoFixed, { ...ruleCopy }];
+
+  const { expected, toRemove, toInstall } = planRegexCleanup(polluted, profile);
+  assert.equal(toRemove, 1, 'the one surplus copy');
+  assert.equal(toInstall, 2, 'the two deleted fixed rules');
+  assert.equal(expected.length, full.length);
+
+  const oldNetDiff = polluted.filter(isJingyiRegex).length - syncNativeRegex(polluted, profile).filter(isJingyiRegex).length;
+  assert.equal(oldNetDiff, -1, 'the before-minus-after arithmetic this replaces would have shown a negative count here');
+});
+
+test('a re-imported copy of a bound rule -- 酒馆 mints it a fresh id but leaves the marker\'s profileId/ruleId untouched -- becomes its own new rule in the profile when its content actually differs, instead of silently vanishing', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  const list = syncNativeRegex([], profile);
+  const ruleName = `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  const original = list.find(rule => rule.scriptName === ruleName);
+  // The reader exports this rule, hand-edits the exported JSON's colours, and re-imports it: 酒馆's own
+  // import (extensions/regex/index.js:1506) assigns a fresh id, but every other field -- the marker
+  // included -- survives untouched.
+  const variant = { ...original, id: 'reimported-uuid-1234', replaceString: '<p style="color:blue">改过配色</p>' };
+  const withVariant = [...list, variant];
+
+  const edits = readNativeRegexEdits(withVariant, profile);
+  assert.equal(edits.length, 2, 'the original rule and the reader\'s variant both survive');
+  const variantEdit = edits.find(rule => rule.replaceString === '<p style="color:blue">改过配色</p>');
+  assert.ok(variantEdit, 'the variant\'s content made it through');
+  const originalEdit = edits.find(rule => rule !== variantEdit);
+  assert.notEqual(variantEdit.id, originalEdit.id, 'minted as a genuinely new rule, not merged into the original\'s slot');
+
+  // Re-importing the exact same variant a second time collapses back to one copy of it, same as any
+  // other content-identical duplicate.
+  const edits2 = readNativeRegexEdits([...withVariant, { ...variant, id: 'reimported-uuid-5678' }], profile);
+  assert.equal(edits2.length, 2, 'two copies of the same variant still count as one');
+});
+
+test('saveSettings reads a reader\'s still-pending native-editor edit into the active profile when this particular save was never going to touch regexScripts itself, but never overwrites a save that changed regexScripts on purpose', () => {
+  const previousHost = globalThis.SillyTavern;
+  try {
+    const settings = normalizeProcessingSettings();
+    const profile = makeBuiltinReadingProfile(settings, 'cute');
+    settings.processingProfiles = [profile];
+    settings.selectedProcessingProfileId = profile.id;
+    const context = { extensionSettings: { [MODULE_ID]: settings, regex: [] }, saveSettingsDebounced: () => {} };
+    globalThis.SillyTavern = { getContext: () => context };
+
+    __testing.configureForTest({ initialized: false });
+    __testing.initializeSettings();
+    const ruleName = `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+    const index = context.extensionSettings.regex.findIndex(rule => rule.scriptName === ruleName);
+    assert.ok(index >= 0);
+    context.extensionSettings.regex[index] = simulateNativeEditorSave({ ...context.extensionSettings.regex[index], replaceString: '<p>读者在酒馆里改的样式</p>' });
+
+    // An unrelated save -- a floating-window toggle, a theme switch -- built from the settings exactly as
+    // they already stand: it never meant to touch regexScripts at all.
+    const before = __testing.configureForTest({});
+    __testing.saveSettings({ ...before, showFloatingButton: !before.showFloatingButton });
+    const afterIncidental = __testing.configureForTest({});
+    const activeAfterIncidental = afterIncidental.processingProfiles.find(item => item.id === afterIncidental.selectedProcessingProfileId);
+    assert.equal(activeAfterIncidental.regexScripts[0].replaceString, '<p>读者在酒馆里改的样式</p>',
+      'an incidental save picks up the reader\'s pending native edit instead of clobbering it with the old content');
+
+    // A save that DID deliberately change regexScripts (removing a bound rule, the dedupe button, an
+    // import) must not be undone by a stray readback of the native list, which has not been resynced yet.
+    const current = __testing.configureForTest({});
+    const active = current.processingProfiles.find(item => item.id === current.selectedProcessingProfileId);
+    const deliberate = { ...active, regexScripts: [] };
+    __testing.saveSettings({ ...current, processingProfiles: current.processingProfiles.map(item => (item.id === deliberate.id ? deliberate : item)) });
+    const afterDeliberate = __testing.configureForTest({});
+    const activeAfterDeliberate = afterDeliberate.processingProfiles.find(item => item.id === afterDeliberate.selectedProcessingProfileId);
+    assert.equal(activeAfterDeliberate.regexScripts.length, 0, 'a deliberate regexScripts change is never silently reverted by the readback');
+  } finally {
+    globalThis.SillyTavern = previousHost;
+    __testing.configureForTest({ initialized: false });
+  }
 });
