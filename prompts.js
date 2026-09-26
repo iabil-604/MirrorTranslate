@@ -748,7 +748,7 @@ function rosterLine(roster) {
  * reading checks a mark against before Fish hears it, so a model that follows the rule is never
  * overruled.
  */
-export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], openRoster = true, emotionLabels = [], emotionGroups = null, voice = false, tones = [], toneCues = {}, quoteMarks = [], sounds = [], soundCues = {}, soundPlace = '', softMoods = [], styles = [], directions = false, effects = false, hasFragments = false } = {}) {
+export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], openRoster = true, emotionLabels = [], emotionGroups = null, voice = false, tones = [], toneCues = {}, quoteMarks = [], sounds = [], soundCues = {}, soundPlace = '', softMoods = [], styles = [], directions = false, effects = false, hasFragments = false, knownMoves = [] } = {}) {
   if (!speakers && !emotions) return '';
   const marks = (quoteMarks.length ? quoteMarks : ['「」', '『』', '“”', '""']).join(' ');
   const fields = [];
@@ -839,6 +839,12 @@ export function composeAnnotationSection({ speakers = false, emotions = false, r
     example.moves = [{ name: '<招式名>', element: '<属性>', tier: 1 }];
     fields.push('moves（这一项的译文或旁白里出现的招式/技能/法宝名）');
     rules.push('moves：译文正文或这一项紧挨着的旁白里，每出现一个招式、必杀技、法宝、咒语这类"有名字的招数"就写一项，找不到就不写这个字段。name 逐字抄这个名字在译文里实际写出的样子；element 写这一招的属性、流派或来源（火、冰、雷、剑气、道法、机械之类），写不出准确的就不写这一项；tier 是分量：1 普通招式，2 大招/必杀技/祭出法宝，3 整个故事最高潮的绝招，拿不准写 1。人物的口头禅、称号、普通武器和道具名字不算招式，不要写。招式名如果写在『』这类引号里，那是名号不是台词，quotes 里对应那一项要写 "type":"narration"，不要当成台词标注。');
+    if (Array.isArray(knownMoves) && knownMoves.length) {
+      // Told once per request rather than left to guess again each time (design §2 「同招同色」): the
+      // colour is fixed to whichever element a name was FIRST given, so a later floor naming a
+      // different one for a move already on this list is wasted — the code keeps the first anyway.
+      rules.push(`这个故事前面已经出现过下面这些招式，属性已经定下来了，这次再写到同一个名字，element 要照抄这里的属性，不要换一个：${knownMoves.map(({ name, element }) => `${name}→${element}`).join('、')}。`);
+    }
     if (hasFragments) {
       example.runs = ['<译文里对应这处原文排版的字>'];
       fields.push('runs（原文自带排版的片段，翻成了译文里的哪几个字）');
