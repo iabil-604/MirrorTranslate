@@ -3646,6 +3646,11 @@ async function fetchChannelModels(channelId = null) {
   const context = getContext();
   if (typeof context.getRequestHeaders !== 'function') throw new Error('当前 SillyTavern 不提供模型列表请求接口。');
   const channel = runtime.settings.channels.find(item => item.id === channelId) ?? getActiveChannel(runtime.settings);
+  // The id, not the object: the request below can take a while, long enough for something else to have
+  // saved meanwhile and replaced every channel object with a fresh one (saveSettings always rebuilds the
+  // whole array — review finding index.js:11734). Writing the result onto this captured `channel` afterward
+  // would land on an orphaned copy nothing reads any more, and the fetched list would silently vanish.
+  const targetId = channel.id;
   if (!channel.url) throw new Error('请先填写这条连接的地址。');
   updateTask({ status: 'running', title: '正在读取模型列表', message: `连接 ${channel.name}…`, progress: 35 });
   try {
@@ -3669,13 +3674,16 @@ async function fetchChannelModels(channelId = null) {
     });
     const models = parseModelListResponse(data);
     if (!models.length) throw new Error('接口已响应，但没有返回可用模型。');
-    channel.models = models;
+    // Re-found by id from the current settings, not the `channel` object captured before the request.
+    const live = runtime.settings.channels.find(item => item.id === targetId);
+    if (!live) throw new Error('这条连接已经被删除。');
+    live.models = models;
     saveSettings(runtime.settings);
     updateTask({
       status: 'success',
       title: '模型列表已更新',
-      message: channel.model
-        ? `已读取 ${models.length} 个模型；当前仍使用 ${channel.model}。`
+      message: live.model
+        ? `已读取 ${models.length} 个模型；当前仍使用 ${live.model}。`
         : `已读取 ${models.length} 个模型，请从完整列表中选择。`,
       progress: 100,
     });
@@ -8481,14 +8489,22 @@ function focusIdentity(element) {
  */
 function withFocusPreserved(root, render) {
   const doc = root?.ownerDocument || (typeof document !== 'undefined' ? document : null);
-  const active = root?.getRootNode?.().activeElement ?? doc?.activeElement;
+  const rootNode = root?.getRootNode?.();
+  const active = rootNode?.activeElement ?? doc?.activeElement;
   const inside = active && typeof root.contains === 'function' && root.contains(active);
   const selector = inside ? focusIdentity(active) : null;
   const caret = inside && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
   const result = render();
   if (selector) {
     const next = root.querySelector(selector);
-    if (next && next !== active && typeof next.focus === 'function') {
+    // Checked against whatever is focused *now* (render() may have already dropped it — moving a
+    // focused node to a new parent, which renderChannelCards does with the shared channel-detail
+    // editor, clears focus on its own), not against the pre-render `active` reference: that guard let
+    // a render which only moved the identical node skip refocusing it, since `next === active` looked
+    // like nothing needed doing even though the browser itself had already blurred it (review finding
+    // index.js:12541).
+    const current = rootNode?.activeElement ?? doc?.activeElement;
+    if (next && current !== next && typeof next.focus === 'function') {
       next.focus({ preventScroll: true });
       if (caret && typeof next.setSelectionRange === 'function') {
         try { next.setSelectionRange(caret[0], caret[1]); } catch { /* not a text-selectable input */ }
@@ -8496,6 +8512,27 @@ function withFocusPreserved(root, render) {
     }
   }
   return result;
+}
+
+// 翻译规则's own field-settle autosave (review finding index.js:12538) used to resync one tick later
+// (`setTimeout(0)`), on the assumption that a pending click would already have been dispatched by then —
+// true only for a synthesized touch tap, where mousedown/mouseup/click land back to back in the same
+// tick. A real mouse's mouseup follows 50-150ms later, long after that timer already fired and rebuilt
+// the very editor panel the click or Tab was headed for. Waiting for the next 'click' on `root` instead
+// works because the existing delegated click handler is always registered on `root` first (module setup,
+// long before any field ever settles) and so always runs before this one-shot listener does. A fallback
+// timer covers the one path with no click at all — Tab, or clicking outside the panel.
+function scheduleFieldResync(root, run, { fallbackMs = 500 } = {}) {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(fallback);
+    root.removeEventListener('click', finish);
+    run();
+  };
+  const fallback = setTimeout(finish, fallbackMs);
+  root.addEventListener('click', finish);
 }
 
 function makePromptTextarea(doc, field, value, rows = 10, placeholder = '') {
@@ -9229,8 +9266,26 @@ function renderDeskConnections(root, settings) {
   list.replaceChildren(...rows);
 }
 
-/** DESIGN §15.2 正常模式 · 翻译台: everything the page shows besides the fields data-jy-field already syncs. */
-function syncDeskFields(root, settings) {
+// A desk-channel-field settling (API 基础地址/密钥/当前模型 inside the expanded API Key 卡 row) can only
+// have changed that row's own model name — the row's summary <small> next to its name (buildDeskConnectionRow);
+// nothing else the row shows (name, checkboxes) is one of its fields. Called instead of renderDeskConnections
+// so the field's own row, its toggle and its 「测试这条连接」/「删除」 buttons are never replaced (review
+// finding index.js:12396 — the same swallowed-click/lost-Tab bug renderChannelCards had at index.js:12376).
+function syncDeskConnectionSummary(root, settings) {
+  const expandedId = runtime.deskExpandedChannelId;
+  if (!expandedId) return;
+  const channel = settings.channels.find(item => item.id === expandedId);
+  if (!channel) return;
+  const open = root.querySelector(`[data-jy-action="desk-toggle-channel"][data-jy-channel-id="${expandedId}"]`);
+  const small = open?.querySelector('small');
+  if (small) small.textContent = channel.model || '未设置模型';
+}
+
+/** DESIGN §15.2 正常模式 · 翻译台: everything the page shows besides the fields data-jy-field already syncs.
+ * `rebuildList: false` skips renderDeskConnections for a field settling inside the open row's own form —
+ * not one of the list's real structural changes (add, delete, or (de)expand a row) — and updates just that
+ * row's own summary instead. */
+function syncDeskFields(root, settings, { rebuildList = true } = {}) {
   if (!root.querySelector('[data-jy-preset-grid]')) return;
   renderPresetCards(root, settings);
   const drift = presetDrift(settings);
@@ -9264,7 +9319,8 @@ function syncDeskFields(root, settings) {
   if (fishCard) fishCard.dataset.missing = String(fishMissing);
   setText(root, '[data-jy-desk-mode-help]', DESK_TTS_MODE_HELP[tts.mode] || '');
 
-  renderDeskConnections(root, settings);
+  if (rebuildList) renderDeskConnections(root, settings);
+  else syncDeskConnectionSummary(root, settings);
 }
 
 /** A 微调-only select bound to a prompt profile's own mode field (styleMode/honorificMode/punctuationMode). */
@@ -9316,6 +9372,28 @@ function syncFinetuneFields(root, settings) {
   if (styleSelect) styleSelect.value = detectBuiltinReadingStyle(getActiveProcessingProfile(settings)) ?? '';
 }
 
+/** DESIGN §15.2 正常模式 API Key 卡的「用在」勾选框 (review finding index.js:12386): collectSettings(root)
+ * reads every page at once, so an invalid field left elsewhere (排除标签 filled with '<<<', say) can fail
+ * this save even though the box the reader just clicked is perfectly fine. Resyncing on that failure the
+ * way the success path does would reset whatever the reader is still mid-editing on that other page — the
+ * same reasoning 模型连接/翻译规则's own autosaves already follow (index.js:12617, 12524) — so only the one
+ * checkbox actually touched is put back, leaving everything else exactly as it was. */
+function applyDeskUseChange(root, input) {
+  const use = input.dataset.jyDeskUse;
+  const channelId = input.dataset.jyDeskUseChannel;
+  try {
+    saveSettings(setConnectionUse(collectSettings(root), use, input.checked ? channelId : 'follow'));
+  } catch (error) {
+    input.checked = !input.checked;
+    toast('error', safeError(error));
+    return;
+  }
+  // renderDeskConnections (inside syncFields) replaces every row, including the very checkbox a
+  // keyboard user just pressed Space on; withFocusPreserved keeps Tab/Space working on it afterward
+  // instead of dropping to <body> (review finding index.js:12541).
+  withFocusPreserved(root, () => syncFields(root, runtime.settings));
+}
+
 /** Collects the desk API Key card's own expanded-channel form, kept apart from [data-jy-channel-field]
  * (the 模型连接 page's form) so the two cards can have different connections open without either one's
  * edits leaking into the other's channel. */
@@ -9338,17 +9416,25 @@ function collectDeskChannelFields(root, current) {
 
 /** Shared by 「模型连接」页's delete-channel and the API Key 卡's own per-row delete: same confirm, same
  * reassignment, same toast — only where the id being deleted comes from differs. */
-async function deleteChannel(root, id) {
-  const next = collectSettings(root);
-  if (next.channels.length <= 1) throw new Error('至少保留一条连接。');
-  const channel = next.channels.find(item => item.id === id);
-  const usingFeatures = channelUsesPointingAt(next, id).map(use => CONNECTION_USE_LABELS[use]);
+async function deleteChannel(root, id, { confirm = confirmDestructive } = {}) {
+  // Read only for the confirm dialog's own wording — collectSettings(root) is a snapshot of this
+  // instant, and confirm's await can span whatever else gets saved while it is open (a model-list fetch
+  // finishing, another field settling elsewhere). `next` further down is collected fresh, after that
+  // await resolves, so deleting from it can never silently discard a save that landed in between
+  // (review finding index.js:11734 — saveSettings always replaces runtime.settings whole).
+  const preview = collectSettings(root);
+  if (preview.channels.length <= 1) throw new Error('至少保留一条连接。');
+  const previewChannel = preview.channels.find(item => item.id === id);
+  const usingFeatures = channelUsesPointingAt(preview, id).map(use => CONNECTION_USE_LABELS[use]);
   const usingNote = usingFeatures.length ? `${usingFeatures.join('、')}正在用这条连接，删除后会自动切换到跟随酒馆。` : '';
-  if (!await confirmDestructive({
+  if (!await confirm({
     title: '删除这条连接',
-    message: `${usingNote}「${channel?.name || '这条连接'}」连同填写的地址和密钥一起删除，不能撤销。真的要删除吗？`,
+    message: `${usingNote}「${previewChannel?.name || '这条连接'}」连同填写的地址和密钥一起删除，不能撤销。真的要删除吗？`,
     confirmLabel: '删除连接',
   })) return false;
+  const next = collectSettings(root);
+  if (next.channels.length <= 1) throw new Error('至少保留一条连接。');
+  if (!next.channels.some(item => item.id === id)) throw new Error('这条连接已经不在了。');
   const { settings: reassigned, moved } = reassignConnectionUsesOnDelete(next, id);
   reassigned.channels = reassigned.channels.filter(item => item.id !== id);
   if (reassigned.selectedChannelId === id) reassigned.selectedChannelId = reassigned.channels[0].id;
@@ -9388,7 +9474,15 @@ function syncChannelFields(root, settings, { rebuildCards = true } = {}) {
   } else {
     const openCard = [...root.querySelectorAll('[data-jy-channel-card]')].find(card => card.dataset.jyChannelCard === editing);
     const heading = openCard?.querySelector('h2');
-    if (heading) heading.textContent = channel.name || DEFAULT_CHANNEL.name;
+    const label = channel.name || DEFAULT_CHANNEL.name;
+    if (heading) heading.textContent = label;
+    // Read out to a screen reader as "<name> · 翻译" (review finding style.css:270); it must follow a
+    // rename here too, not wait for something that actually rebuilds the cards (review finding
+    // index.js:12626). Matched by which connection each checkbox belongs to rather than walked from
+    // openCard's own children, since only the open card ever holds one for this id.
+    for (const use of root.querySelectorAll('[data-jy-channel-use]')) {
+      if (use.dataset.jyChannelUseChoice === editing) use.setAttribute('aria-label', `${label} · ${CONNECTION_USE_LABELS[use.dataset.jyChannelUse]}`);
+    }
   }
   root.dataset.jyEditingChannelId = channel.id;
   syncChannelFoldSummaries(root, channel);
@@ -10594,6 +10688,21 @@ async function renderTtsUsage(root) {
 // a library voice or a narrator language and then committing any other field on the page — including
 // that same row's own next field — used to drop the unfinished row, and Tab off a 音色 name used to
 // land on <body> because the row it came from was gone).
+// 朗读分析/深度分析's own connection pickers — every instance, main and 微调's own mirrored copy (DESIGN
+// §15.3) — pulled out of syncTtsFields so a connection's name/model settling on 模型连接 (review finding
+// index.js:12626) can refresh just these two selects and the fold summary below without running the rest
+// of syncTtsFields against the 朗读 page while the reader is looking at an entirely different one.
+function fillTtsChannelPickers(root, settings) {
+  const tts = ttsSettings(settings);
+  // The reading's own choice of connection, and the deep reading's: the host's own or a saved one.
+  // Nothing here follows the translation; an old 「follow the translation」 was pinned when read.
+  const analysisChoice = resolveFeatureChannel(tts.analysisChannelId, settings);
+  // Two instances of each select exist once 微调 (DESIGN §15.3) mirrors them: every one on screen or
+  // off gets filled, not just whichever happens to come first in the document.
+  for (const analysisSelect of root.querySelectorAll('[data-jy-tts-field="analysisChannelId"]')) fillChannelPicker(analysisSelect, settings, analysisChoice);
+  for (const deepSelect of root.querySelectorAll('[data-jy-tts-field="deepChannelId"]')) fillChannelPicker(deepSelect, settings, tts.deepChannelId || '', { lead: { value: '', text: `和朗读分析用同一条：${channelLabel(settings, analysisChoice, { short: true })}` } });
+}
+
 function syncTtsFields(root, settings = runtime.settings, { renderLists = true } = {}) {
   if (!root.querySelector('[data-jy-page="tts"]')) return;
   const tts = ttsSettings(settings);
@@ -10622,13 +10731,7 @@ function syncTtsFields(root, settings = runtime.settings, { renderLists = true }
     element.value = tts.prompts[element.dataset.jyTtsPrompt] ?? '';
     element.placeholder = TTS_PROMPT_DEFAULTS[element.dataset.jyTtsPrompt] ?? '';
   }
-  // The reading's own choice of connection, and the deep reading's: the host's own or a saved one.
-  // Nothing here follows the translation; an old 「follow the translation」 was pinned when read.
-  const analysisChoice = resolveFeatureChannel(tts.analysisChannelId, settings);
-  // Two instances of each select exist once 微调 (DESIGN §15.3) mirrors them: every one on screen or
-  // off gets filled, not just whichever happens to come first in the document.
-  for (const analysisSelect of root.querySelectorAll('[data-jy-tts-field="analysisChannelId"]')) fillChannelPicker(analysisSelect, settings, analysisChoice);
-  for (const deepSelect of root.querySelectorAll('[data-jy-tts-field="deepChannelId"]')) fillChannelPicker(deepSelect, settings, tts.deepChannelId || '', { lead: { value: '', text: `和朗读分析用同一条：${channelLabel(settings, analysisChoice, { short: true })}` } });
+  fillTtsChannelPickers(root, settings);
   setText(root, '[data-jy-tts-title="narrator"]', tts.narratorTitle ? `· ${tts.narratorTitle}` : '');
   setText(root, '[data-jy-tts-title="dialogue"]', tts.dialogueTitle ? `· ${tts.dialogueTitle}` : '');
   syncTtsPickers(root, settings);
@@ -11269,6 +11372,32 @@ async function persistProcessing(root, settings) {
   syncFields(root, runtime.settings);
 }
 
+/** DESIGN §15.4「删除方案」(正文处理): `preview` below is read only for the confirm dialog's own wording —
+ * collectSettings(root) is a snapshot of this instant, and confirm's await can span whatever else gets
+ * saved while it is open (a slow 拉取模型 finishing, another field settling elsewhere). `next` is
+ * collected fresh once that await resolves, so deleting from it can never silently discard a save that
+ * landed in between (review finding index.js:11734 — persistProcessing/saveSettings always replace
+ * runtime.settings whole). */
+async function deleteProcessingProfile(root, { confirm = confirmDestructive } = {}) {
+  const preview = collectSettings(root);
+  if (preview.processingProfiles.length <= 1) throw new Error('至少保留一个正文方案。');
+  const removedId = preview.selectedProcessingProfileId;
+  const removedProfile = preview.processingProfiles.find(item => item.id === removedId);
+  if (!await confirm({
+    title: '删除正文方案',
+    message: `「${removedProfile?.name || '这个方案'}」连同绑定的正则一起删除，不能撤销。真的要删除吗？`,
+    confirmLabel: '删除方案',
+  })) return false;
+  const next = collectSettings(root);
+  if (next.processingProfiles.length <= 1) throw new Error('至少保留一个正文方案。');
+  if (!next.processingProfiles.some(item => item.id === removedId)) throw new Error('这个正文方案已经不在了。');
+  const selected = selectProcessingProfile(next, next.processingProfiles.find(item => item.id !== removedId).id);
+  selected.processingProfiles = selected.processingProfiles.filter(item => item.id !== removedId);
+  await persistProcessing(root, selected);
+  toast('success', '正文方案已删除。');
+  return true;
+}
+
 function addProcessingProfile(settings, profile) {
   if (settings.processingProfiles.length >= 40) throw new Error('最多保存 40 套正文方案，请先删除不用的方案。');
   const baseName = profile.name;
@@ -11805,19 +11934,7 @@ function createControlCenter(rootDocument = document) {
         downloadProcessingProfile(getActiveProcessingProfile(collectSettings(root)));
         toast('success', '已导出正文方案，包含设置和绑定的完整正则。');
       } else if (action === 'delete-processing') {
-        const next = collectSettings(root);
-        if (next.processingProfiles.length <= 1) throw new Error('至少保留一个正文方案。');
-        const removed = next.selectedProcessingProfileId;
-        const removedProfile = next.processingProfiles.find(item => item.id === removed);
-        if (!await confirmDestructive({
-          title: '删除正文方案',
-          message: `「${removedProfile?.name || '这个方案'}」连同绑定的正则一起删除，不能撤销。真的要删除吗？`,
-          confirmLabel: '删除方案',
-        })) return;
-        const selected = selectProcessingProfile(next, next.processingProfiles.find(item => item.id !== removed).id);
-        selected.processingProfiles = selected.processingProfiles.filter(item => item.id !== removed);
-        await persistProcessing(root, selected);
-        toast('success', '正文方案已删除。');
+        await deleteProcessingProfile(root);
       } else if (action === 'dedupe-processing-regex') {
         // Opening any of our rules in 酒馆's own regex editor and clicking Save, even with nothing
         // changed, strips the marker we hang identity on (the editor rebuilds the object from its own
@@ -11838,12 +11955,17 @@ function createControlCenter(rootDocument = document) {
         // prefix (see isJingyiRegex), never by name alone, so a reader's own rule is never touched
         // even when it happens to share a name. Destructive, so it asks first, same as the other
         // bulk-remove buttons on this page.
-        const currentRegex = getContext().extensionSettings.regex ?? [];
-        const next = collectSettings(root);
         const engine = runtime.hostRegex || await loadHostRegex();
-        const plan = buildRegexCleanupPlan({ next, currentRegex, engine });
-        if (!plan) throw new Error('没有发现多余的镜译正则。');
-        if (!await confirmDestructive({ title: '删除多余正则', message: plan.message, confirmLabel: '删除多余正则' })) return;
+        // Read only for the confirm dialog's own wording (review finding index.js:11734): `next`/`plan`
+        // are rebuilt below, after the confirm resolves, from whatever is current then — collectSettings
+        // and 酒馆's own regex list can each have moved on while the dialog was open, and persisting this
+        // earlier snapshot would silently discard that.
+        const preview = buildRegexCleanupPlan({ next: collectSettings(root), currentRegex: getContext().extensionSettings.regex ?? [], engine });
+        if (!preview) throw new Error('没有发现多余的镜译正则。');
+        if (!await confirmDestructive({ title: '删除多余正则', message: preview.message, confirmLabel: '删除多余正则' })) return;
+        const next = collectSettings(root);
+        const plan = buildRegexCleanupPlan({ next, currentRegex: getContext().extensionSettings.regex ?? [], engine });
+        if (!plan) throw new Error('这些正则已经清理过了。');
         await persistProcessing(root, next);
         await applyScopedRegexCleanup(plan, engine);
         toast('success', `已整理镜译正则：删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条，当前方案需要的 ${plan.expected.length} 条都在。`);
@@ -11942,30 +12064,39 @@ function createControlCenter(rootDocument = document) {
         syncFields(root, runtime.settings);
         toast('success', '已复制为新的翻译方案。');
       } else if (action === 'delete-prompt-profile') {
-        const next = collectSettings(root);
-        if (next.promptProfiles.length <= 1) throw new Error('至少保留一个翻译方案。');
-        const active = getActivePromptProfile(next);
+        // Read only for the confirm dialog's own wording (review finding index.js:11734): `next` below
+        // is collected fresh once confirm resolves, so a save that landed while it was open is not
+        // silently discarded by this one.
+        const preview = collectSettings(root);
+        if (preview.promptProfiles.length <= 1) throw new Error('至少保留一个翻译方案。');
+        const removedId = preview.selectedPromptProfileId;
+        const removedName = getActivePromptProfile(preview).name;
         if (!await confirmDestructive({
           title: '删除当前方案',
-          message: `「${active.name}」的术语表和自定义规则一起删除，不能撤销。真的要删除吗？`,
+          message: `「${removedName}」的术语表和自定义规则一起删除，不能撤销。真的要删除吗？`,
           confirmLabel: '删除方案',
         })) return;
-        next.promptProfiles = next.promptProfiles.filter(profile => profile.id !== next.selectedPromptProfileId);
+        const next = collectSettings(root);
+        if (next.promptProfiles.length <= 1) throw new Error('至少保留一个翻译方案。');
+        if (!next.promptProfiles.some(profile => profile.id === removedId)) throw new Error('这个翻译方案已经不在了。');
+        next.promptProfiles = next.promptProfiles.filter(profile => profile.id !== removedId);
         next.selectedPromptProfileId = next.promptProfiles[0].id;
         saveSettings(next);
         syncFields(root, runtime.settings);
         toast('success', '当前翻译方案已删除。');
       } else if (action === 'reset-prompt-profile') {
-        const next = collectSettings(root);
-        const active = getActivePromptProfile(next);
+        const preview = collectSettings(root);
+        const targetId = preview.selectedPromptProfileId;
+        const targetName = getActivePromptProfile(preview).name;
         if (!await confirmDestructive({
           title: '恢复当前方案',
-          message: `「${active.name}」的术语表和自定义规则会恢复成默认，改过的内容不能撤销。真的要恢复原样吗？`,
+          message: `「${targetName}」的术语表和自定义规则会恢复成默认，改过的内容不能撤销。真的要恢复原样吗？`,
           confirmLabel: '恢复原样',
         })) return;
-        const reset = normalizePromptProfile({ ...DEFAULT_PROMPT_PROFILE, id: active.id, name: active.name }, active.id);
-        const index = next.promptProfiles.findIndex(profile => profile.id === active.id);
-        next.promptProfiles[index] = reset;
+        const next = collectSettings(root);
+        const index = next.promptProfiles.findIndex(profile => profile.id === targetId);
+        if (index < 0) throw new Error('这个翻译方案已经不在了。');
+        next.promptProfiles[index] = normalizePromptProfile({ ...DEFAULT_PROMPT_PROFILE, id: targetId, name: targetName }, targetId);
         saveSettings(next);
         syncFields(root, runtime.settings);
         toast('success', '当前翻译方案已恢复默认。');
@@ -12174,21 +12305,19 @@ function createControlCenter(rootDocument = document) {
         saveSettings(collectSettings(root));
         syncTtsFields(root, runtime.settings);
       } else if (action === 'tts-import-worldbook') {
-        const next = collectSettings(root);
+        const snapshot = collectSettings(root);
         setText(root, '[data-jy-tts-save-note]', '正在读角色卡和世界书、识别角色…');
         let found;
         try {
-          found = await importCastFromWorldbook(next);
+          found = await importCastFromWorldbook(snapshot);
         } finally {
           setText(root, '[data-jy-tts-save-note]', '');
         }
         const { cast, dropped } = found;
-        const characterKey = ttsVoicesKey(next);
-        const existing = ttsVoicesFor(next);
         // Somebody already in the table under any spelling is the same somebody: a row is not added
         // for 桜井 next to the 樱井 who has 桜井 among her aliases.
-        const known = new Set(voiceRosterNames(existing).map(spelling => spelling.toLowerCase()));
-        const fresh = cast.filter(person => ![person.name, ...person.aliases].some(spelling => known.has(spelling.toLowerCase())));
+        const knownAtScan = new Set(voiceRosterNames(ttsVoicesFor(snapshot)).map(spelling => spelling.toLowerCase()));
+        const fresh = cast.filter(person => ![person.name, ...person.aliases].some(spelling => knownAtScan.has(spelling.toLowerCase())));
         if (!fresh.length) {
           throw new Error(cast.length
             ? `识别出的 ${cast.length} 个角色都已经在表里了。`
@@ -12197,8 +12326,20 @@ function createControlCenter(rootDocument = document) {
         const chosen = await askCastPicks(fresh, { already: cast.length - fresh.length, dropped });
         if (!chosen) return;
         if (!chosen.length) throw new Error('一个都没勾，角色表没有变。');
+        // Re-collected only now: the scan above and the picker dialog just now are both awaits, long
+        // enough between them for something else to have saved meanwhile — saving over that with the
+        // snapshot taken before either would silently discard it (review finding index.js:11734).
+        // Filtered against the roster as it stands now too, so nobody the reader just picked is added
+        // twice if they showed up there in the meantime.
+        const next = collectSettings(root);
+        const characterKey = ttsVoicesKey(next);
+        const existing = ttsVoicesFor(next);
+        const knownNow = new Set(voiceRosterNames(existing).map(spelling => spelling.toLowerCase()));
         // Unlocked: no voice of their own, so they read in the dialogue default until given one.
-        const added = chosen.map(person => ({ name: person.name, aliases: person.aliases, voiceId: '', voices: {}, locked: false, title: '' }));
+        const added = chosen
+          .filter(person => ![person.name, ...person.aliases].some(spelling => knownNow.has(spelling.toLowerCase())))
+          .map(person => ({ name: person.name, aliases: person.aliases, voiceId: '', voices: {}, locked: false, title: '' }));
+        if (!added.length) throw new Error('选的角色都已经在表里了。');
         next.ttsVoices = { ...(next.ttsVoices || {}), [characterKey]: [...existing, ...added] };
         saveSettings(next);
         renderTtsVoiceList(root, runtime.settings);
@@ -12208,15 +12349,21 @@ function createControlCenter(rootDocument = document) {
         // confirm; this one still used the browser's own native confirm() — different styling, theme
         // and Esc behaviour, and skipped confirmation outright on a host that blocks confirm() (review
         // finding index.js:11537/11542).
+        // `preview` is read only for the confirm dialog's own count — `next` below is collected fresh
+        // once confirm resolves, so a save that landed while it was open is not silently discarded by
+        // this one (review finding index.js:11734).
+        const preview = collectSettings(root);
+        const previewCount = ttsVoicesFor(preview).length;
+        if (!previewCount) throw new Error('角色表已经是空的。');
+        if (!await confirmDestructive({
+          title: '清空角色表',
+          message: `清空这张角色表（${previewCount} 行）？音色库和旁白、对白默认音色不受影响，不能撤销。`,
+          confirmLabel: '清空角色表',
+        })) return;
         const next = collectSettings(root);
         const characterKey = ttsVoicesKey(next);
         const count = ttsVoicesFor(next).length;
         if (!count) throw new Error('角色表已经是空的。');
-        if (!await confirmDestructive({
-          title: '清空角色表',
-          message: `清空这张角色表（${count} 行）？音色库和旁白、对白默认音色不受影响，不能撤销。`,
-          confirmLabel: '清空角色表',
-        })) return;
         next.ttsVoices = { ...(next.ttsVoices || {}) };
         if (characterKey === worldInfoCharacterKey()) delete next.ttsVoices[characterKey];
         else next.ttsVoices[characterKey] = [];
@@ -12226,17 +12373,24 @@ function createControlCenter(rootDocument = document) {
         toast('success', `已清空 ${count} 行角色表。`);
       } else if (action === 'tts-prune-voices') {
         // Rows that never got a voice of their own: the leftovers of a bad import, most of the time.
+        // Same reasoning as tts-clear-voices just above (review finding index.js:11734): `preview` is
+        // read only for the confirm dialog's own counts, `next` is collected fresh after confirm.
+        const preview = collectSettings(root);
+        const previewExisting = ttsVoicesFor(preview);
+        const previewKept = previewExisting.filter(row => row.voiceId || Object.keys(row.voices ?? {}).length);
+        const previewRemoved = previewExisting.length - previewKept.length;
+        if (!previewRemoved) throw new Error('没有可删的行：每个角色都绑了音色。');
+        if (!await confirmDestructive({
+          title: '删掉没绑音色的行',
+          message: `删掉 ${previewRemoved} 个没绑音色的角色，保留 ${previewKept.length} 个绑了音色的？不能撤销。`,
+          confirmLabel: '删掉这些行',
+        })) return;
         const next = collectSettings(root);
         const characterKey = ttsVoicesKey(next);
         const existing = ttsVoicesFor(next);
         const kept = existing.filter(row => row.voiceId || Object.keys(row.voices ?? {}).length);
         const removed = existing.length - kept.length;
         if (!removed) throw new Error('没有可删的行：每个角色都绑了音色。');
-        if (!await confirmDestructive({
-          title: '删掉没绑音色的行',
-          message: `删掉 ${removed} 个没绑音色的角色，保留 ${kept.length} 个绑了音色的？不能撤销。`,
-          confirmLabel: '删掉这些行',
-        })) return;
         next.ttsVoices = { ...(next.ttsVoices || {}), [characterKey]: kept };
         saveSettings(next);
         renderTtsVoiceList(root, runtime.settings);
@@ -12299,28 +12453,34 @@ function createControlCenter(rootDocument = document) {
         renderTtsVoiceList(root, runtime.settings);
         toast('success', `已加入 ${added.length} 个说话人，填上 Voice ID 就能用。`);
       } else if (action === 'tts-lookup-voices') {
-        const next = collectSettings(root);
-        const tts = ttsSettings(next);
+        const snapshot = collectSettings(root);
+        const tts = ttsSettings(snapshot);
         requireFishKey(tts);
         const ids = [...new Set([
           tts.narratorVoice, tts.dialogueVoice, ...Object.values(tts.narratorVoices),
-          ...ttsVoicesFor(next).flatMap(item => [item.voiceId, ...Object.values(item.voices ?? {})]),
-          ...normalizeVoiceLibrary(next.voiceLibrary).map(item => item.voiceId),
+          ...ttsVoicesFor(snapshot).flatMap(item => [item.voiceId, ...Object.values(item.voices ?? {})]),
+          ...normalizeVoiceLibrary(snapshot.voiceLibrary).map(item => item.voiceId),
         ].filter(Boolean))];
         if (!ids.length) throw new Error('还没有填任何 Voice ID。');
         const titles = new Map();
         const failures = [];
         for (const id of ids) {
           try {
-            titles.set(id, await lookupFishVoiceTitle(id, next));
+            titles.set(id, await lookupFishVoiceTitle(id, snapshot));
           } catch (error) {
             failures.push(`${id.slice(0, 8)}…：${safeError(error)}`);
           }
         }
+        // Re-collected only now: each Voice ID above is its own request, so this loop can run for a
+        // while — long enough to span whatever else got saved meanwhile, and saving over that with the
+        // snapshot taken before the loop would silently discard it (review finding index.js:11734). The
+        // titles are keyed by Voice ID, so they still apply cleanly to whatever the fresh settings hold.
+        const next = collectSettings(root);
+        const freshTts = ttsSettings(next);
         next.tts = normalizeTts({
-          ...tts,
-          narratorTitle: titles.get(tts.narratorVoice) ?? tts.narratorTitle,
-          dialogueTitle: titles.get(tts.dialogueVoice) ?? tts.dialogueTitle,
+          ...freshTts,
+          narratorTitle: titles.get(freshTts.narratorVoice) ?? freshTts.narratorTitle,
+          dialogueTitle: titles.get(freshTts.dialogueVoice) ?? freshTts.dialogueTitle,
         });
         const voices = ttsVoicesFor(next).map(item => ({ ...item, title: titles.get(item.voiceId) ?? item.title }));
         if (voices.length) next.ttsVoices = { ...(next.ttsVoices || {}), [ttsVoicesKey(next)]: voices };
@@ -12457,23 +12617,21 @@ function createControlCenter(rootDocument = document) {
       return;
     }
     if (event.target.matches('[data-jy-desk-use]')) {
-      const use = event.target.dataset.jyDeskUse;
-      const channelId = event.target.dataset.jyDeskUseChannel;
-      try {
-        const next = setConnectionUse(collectSettings(root), use, event.target.checked ? channelId : 'follow');
-        saveSettings(next);
-        syncFields(root, runtime.settings);
-      } catch (error) { toast('error', safeError(error)); }
+      applyDeskUseChange(root, event.target);
       return;
     }
     if (event.target.matches('[data-jy-desk-channel-field]')) {
       try {
         saveSettings(collectSettings(root));
-        // renderDeskConnections (inside syncFields) rebuilds this very row's form; without
-        // withFocusPreserved, Tab from 地址 to 密钥 lands on <body> instead (review finding
-        // index.js:11759/9054's evidence).
-        withFocusPreserved(root, () => syncFields(root, runtime.settings));
-      } catch (error) { toast('error', safeError(error)); }
+      } catch (error) { toast('error', safeError(error)); return; }
+      // syncFields() would run renderDeskConnections and replace every row — its toggle, its 用在
+      // checkboxes, and 「测试这条连接」/「删除」 — so a blur-time change mid-mousedown/mid-Tab swallows
+      // whatever the pointer or Tab was headed for next (review finding index.js:12396, the same
+      // swallowed-click bug renderChannelCards had at index.js:12376). Only the open row's own model
+      // name can actually have changed from a field settling here; nothing else needs rebuilding until
+      // something really does add, delete or (de)expand a row, and leaving the form's own nodes alone
+      // is exactly what keeps Tab moving from 地址 to 密钥 instead of landing on <body>.
+      syncDeskFields(root, runtime.settings, { rebuildList: false });
       return;
     }
     if (event.target.matches('[data-jy-finetune-profile-field]')) {
@@ -12578,7 +12736,11 @@ function createControlCenter(rootDocument = document) {
       const modelInput = root.querySelector('[data-jy-channel-field="model"]');
       if (modelInput) modelInput.value = event.target.value;
       saveSettings(collectSettings(root));
-      syncFields(root, runtime.settings);
+      // renderChannelCards (inside syncFields) re-appends the shared channel-detail node into a new
+      // card; moving a focused node this way drops focus on its own, and withFocusPreserved's fixed
+      // guard (review finding index.js:12541) is what actually catches that and puts it back — a plain
+      // syncFields() here left keyboard focus on <body> after ↓ changed the model.
+      withFocusPreserved(root, () => syncFields(root, runtime.settings));
       return;
     }
     if (event.target.matches('[data-jy-profile-field="styleMode"], [data-jy-profile-field="leaningMode"], [data-jy-profile-field="honorificMode"], [data-jy-profile-field="nameMode"], [data-jy-profile-field="punctuationMode"]')) {
@@ -12605,10 +12767,14 @@ function createControlCenter(rootDocument = document) {
       // mouse is already headed for (「恢复此项默认」、术语表旁的「移除」…). A browser only synthesizes
       // 'click' when mousedown and mouseup land on the same element, so rebuilding that element
       // between the two — which used to happen synchronously right here — silently ate the click
-      // (review finding index.js:11889). One tick later, the pending click has already been
-      // dispatched to the (still-live) old node; withFocusPreserved then puts focus and caret back on
-      // the field so Tab keeps working too (index.js:11759).
-      setTimeout(() => withFocusPreserved(root, () => syncFields(root, runtime.settings)), 0);
+      // (review finding index.js:11889). A `setTimeout(0)` used to stand in for "after that click", but
+      // a real mouseup follows 50-150ms later — long after a 0ms timer already fired, so the very node
+      // it was meant to wait for was already gone by the time the click or mouseup arrived (review
+      // finding index.js:12538). Waiting for the click itself (or, lacking one — Tab with no click,
+      // clicking outside the panel — a fallback timer) lets that interaction land on the still-live
+      // element first; withFocusPreserved then puts focus and caret back on the field so Tab keeps
+      // working too (index.js:11759).
+      scheduleFieldResync(root, () => withFocusPreserved(root, () => syncFields(root, runtime.settings)));
       return;
     }
     if (event.target.matches('[data-jy-channel-use]')) {
@@ -12622,7 +12788,11 @@ function createControlCenter(rootDocument = document) {
           toast('error', safeError(error));
         }
       }
-      syncFields(root, runtime.settings);
+      // renderChannelCards (inside syncFields) replaces every card's head, including the very checkbox
+      // a keyboard user just pressed Space on; withFocusPreserved's fixed guard (review finding
+      // index.js:12541) is what actually catches that and puts focus back, instead of leaving it on
+      // <body> once the render moves on.
+      withFocusPreserved(root, () => syncFields(root, runtime.settings));
       return;
     }
     if (event.target.matches('[data-jy-translation-channel]')) {
@@ -12701,6 +12871,15 @@ function createControlCenter(rootDocument = document) {
       syncChannelFields(root, runtime.settings, { rebuildCards: false });
       syncDeskFields(root, runtime.settings);
       syncFinetuneFields(root, runtime.settings);
+      // The above left several other things showing a renamed/re-modeled connection's old name (review
+      // finding index.js:12626): the advanced 翻译台's own summary line ([data-jy-channel-summary], only
+      // ever set by updateSummary) and the 朗读/微调 connection pickers plus 深度分析's fold summary (only
+      // ever set by syncTtsFields, which is not called on this fast path since most of it belongs to the
+      // 朗读 page and would touch fields the reader might be mid-editing there — this pulls out just the
+      // two pickers and the fold, both on pages that are hidden right now).
+      updateSummary(root, runtime.settings);
+      fillTtsChannelPickers(root, runtime.settings);
+      syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
     if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEffects"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringAutoSpeakers"], [data-jy-field="coloringContrast"]')) {
@@ -16774,6 +16953,19 @@ export const __testing = Object.freeze({
   renderChannelCards,
   syncChannelFields,
   collectDeskChannelFields,
+  syncDeskFields,
+  syncDeskConnectionSummary,
+  applyDeskUseChange,
+  fillTtsChannelPickers,
+  syncTtsFoldSummaries,
+  syncTtsFields,
+  updateSummary,
+  scheduleFieldResync,
+  deleteChannel,
+  deleteProcessingProfile,
+  fetchChannelModels,
+  collectSettings,
+  syncFields,
   focusIdentity,
   withFocusPreserved,
   syncTtsFeatureVisibility,
