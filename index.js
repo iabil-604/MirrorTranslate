@@ -1193,7 +1193,11 @@ async function restyleCurrentChat(settings) {
   // must not undo that by reloading out from under it. `updateMessageBlock` is the same fallback already
   // used while a main reply is generating, and it draws these same changes just as well.
   if (!runtime.mainGenerationActive && !runtime.inflight.size && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
-  else for (const [id, message] of chat.entries()) context.updateMessageBlock?.(id, message);
+  // Only the floors this pass actually rewrote need drawing again; a long chat has far more that did not.
+  else for (const { message } of changes) {
+    const id = chat.indexOf(message);
+    if (id >= 0) context.updateMessageBlock?.(id, message);
+  }
 }
 
 function getCurrentChatId(context = getContext()) {

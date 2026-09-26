@@ -1960,3 +1960,21 @@ test('at retries 0, a streamed echo is still confirmed through one free whole-re
   assert.match(message.mes, /ドキドキ/);
   assert.equal(message.extra[MESSAGE_META_KEY].complete, true, 'no longer stuck partial forever just because retries is 0');
 });
+
+test('a restyle while a floor is still translating redraws only the floors it rewrote and never reloads the chat', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; __testing.configureForTest({ inflight: new Map() }); });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: { translationPrefix: '<jy-t>', translationSuffix: '</jy-t>' } });
+  context.chat.push({ mes: 'こんにちは', is_user: true, extra: {} });
+  context.chat.push(await translatedFloor('雨が降っている。', [[1, '下雨了。']], settings));
+  context.chat.push({ mes: 'まだ訳していない。', extra: {} });
+  const drawn = [];
+  let reloads = 0;
+  context.updateMessageBlock = id => { drawn.push(id); };
+  context.reloadCurrentChat = async () => { reloads += 1; };
+  __testing.configureForTest({ inflight: new Map([[2, { promise: new Promise(() => {}), controller: new AbortController() }]]) });
+  await __testing.restyleCurrentChat({ ...settings, translationPrefix: '【', translationSuffix: '】' });
+  assert.equal(reloads, 0, '有楼层在翻译时不整页重载');
+  assert.deepEqual(drawn, [1], '只重绘这次改写过的那一楼');
+});
