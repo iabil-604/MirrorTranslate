@@ -14,11 +14,14 @@ import {
   fallbackHue,
   isNeutralColor,
   meetsContrast,
+  MOVE_ELEMENT_HUES,
   normalizeEmotion,
   normalizeIntensity,
+  normalizeMoveElementKey,
   oklchToSrgb,
   parseCssColor,
   relativeLuminance,
+  resolveMoveStyle,
   resolveSegmentStyle,
   splitClauses,
   spreadHues,
@@ -317,4 +320,63 @@ test('a translation that carries its own markup is never cut apart', () => {
 
   // The same line without markup still gets its rhythm, so the guard is about tags, not punctuation.
   assert.ok(emphasisContour('明日香，等一下！先和初号机迎击！', { emotion: 'shout', intensity: 2 }));
+});
+
+test('a move element with a descriptive suffix, a full-width spelling or an English name resolves to the same table entry as its plain Chinese synonym', () => {
+  assert.equal(normalizeMoveElementKey('火属性'), '火');
+  assert.equal(normalizeMoveElementKey('火系'), '火');
+  assert.equal(normalizeMoveElementKey('火之力'), '火');
+  assert.equal(normalizeMoveElementKey('冰魔法'), '冰');
+  assert.equal(normalizeMoveElementKey('　火　'), '火', '首尾的全角空格先要修掉');
+  assert.equal(normalizeMoveElementKey('Ｆｉｒｅ'), '火焰', '全角英文按半角处理后再查英文对照表');
+  assert.equal(normalizeMoveElementKey('fire'), '火焰');
+  assert.equal(normalizeMoveElementKey('FIRE'), '火焰', '大小写不敏感');
+  assert.equal(normalizeMoveElementKey(''), '');
+  assert.equal(normalizeMoveElementKey('不存在的属性'), '', '查不到就交回调用者去按名字取哈希色');
+  // A suffix stripped down to nothing, or down to something still not in the table, is not a match.
+  assert.equal(normalizeMoveElementKey('系'), '');
+  assert.equal(normalizeMoveElementKey('之力之力'), '');
+});
+
+test('every element word the annotation prompt\'s own example uses (prompts.js) resolves to a real hue, not the name hash', () => {
+  // prompts.js's `moves` field example: 「element 写这一招的属性、流派或来源（火、冰、雷、剑气、道法、机械之类）」。
+  for (const element of ['火', '冰', '雷', '剑气', '道法', '机械']) {
+    const key = normalizeMoveElementKey(element);
+    assert.ok(key, `「${element}」应该能解析到色相表里的一个键`);
+    assert.ok(Object.hasOwn(MOVE_ELEMENT_HUES, key), `「${element}」解析出的键 ${key} 应该在表里`);
+  }
+});
+
+test('a stacked or English descriptive suffix keeps stripping, and retries the table and the alias after each strip', () => {
+  // 雷系魔法: 魔法 strips to 雷系, then 系 strips to 雷 -- a real table entry only after two strips.
+  assert.equal(normalizeMoveElementKey('雷系魔法'), '雷');
+  // 冰属性魔法: 魔法 strips to 冰属性, then 属性 strips to 冰.
+  assert.equal(normalizeMoveElementKey('冰属性魔法'), '冰');
+  // "fire magic": the English suffix strips as a trailing word, then "fire" resolves through the alias
+  // table exactly like the bare word already does.
+  assert.equal(normalizeMoveElementKey('fire magic'), '火焰');
+  assert.equal(normalizeMoveElementKey('ICE ELEMENT'), '冰霜');
+});
+
+test('an element name that is an inherited object property never resolves through the alias table', () => {
+  // MOVE_ELEMENT_ALIASES is a plain object; a bracket lookup with no own-property guard would resolve
+  // these to Object's own constructor/prototype instead of refusing them like any other unknown name.
+  for (const probe of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+    assert.equal(normalizeMoveElementKey(probe), '', `「${probe}」不是属性名`);
+    const band = computeSafeBand(['#ffffff']);
+    const style = resolveMoveStyle({ element: probe, name: '红莲拳', tier: 1, band });
+    assert.match(style.hex, /^#[0-9a-f]{6}$/i, `${probe} 应该回退到按招式名取哈希色，而不是算出无效颜色`);
+  }
+});
+
+test('resolveMoveStyle gives a normalized element the same colour as its table synonym, and an unresolved one its own name hash instead', () => {
+  const band = computeSafeBand(['#ffffff']);
+  const plain = resolveMoveStyle({ element: '火', name: '红莲拳', tier: 1, band });
+  const suffixed = resolveMoveStyle({ element: '火属性', name: '红莲拳', tier: 1, band });
+  const english = resolveMoveStyle({ element: 'Fire', name: '红莲拳', tier: 1, band });
+  assert.equal(suffixed.hex, plain.hex, '「火属性」应该和「火」同色');
+  assert.equal(english.hex, plain.hex, '"Fire" 应该和「火」同色');
+  const unresolved = resolveMoveStyle({ element: '不存在的属性', name: '红莲拳', tier: 1, band });
+  const byNameOnly = resolveMoveStyle({ element: '', name: '红莲拳', tier: 1, band });
+  assert.equal(unresolved.hex, byNameOnly.hex, '解析不到的属性回退到招式名自身的哈希色，和完全没写属性一样');
 });
