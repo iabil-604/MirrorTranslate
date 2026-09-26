@@ -1558,6 +1558,52 @@ test('real ん-interjections and moans not on the short allow-list are still acc
   assert.equal(isShortExactEcho('ああん', 'ああん'), true);
 });
 
+test('a drawn-out vowel spelled with a full-size vowel kana or a ゃ/ゅ/ょ glide is recognised the same as ー or a small kana, on a second sighting', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // はあ/ひい/へえ/くう double a full-size vowel kana instead of ー or a small one (ぁぃぅぇぉ) — the same
+  // gasp, just spelled a third way. Each of these carries two real morae once the vowel counts as one
+  // (は+あ, ひ+い, へ+え, く+う), so — same as ううん's own two real morae — the first sighting still asks
+  // for a translation; only a second identical echo is believed.
+  for (const line of ['はあん', 'はあん……', 'ひいん', 'へえん', 'くうん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a drawn-out vowel gasp spelled with a full-size vowel kana`);
+  }
+  // ひゃあ/きゅう elongate a ゃ/ゅ/ょ glide's own vowel (a/u/o) rather than a plain mora's.
+  for (const line of ['ひゃあん', 'きゃあん', 'きゅうん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} draws out a glide's own vowel, same as a plain mora's`);
+  }
+});
+
+test('on a second sighting, a hiragana-only bare ん beside its own real morae with nothing else decorating it is accepted as a moan, never the katakana name shape', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // A single vowel mora, a glide's own mora, or two real morae touching directly, all hiragana and
+  // nothing else beside the ん — no marker needed once the model has said it twice.
+  for (const line of ['あん！', 'あん……', '「あん……」', 'ん、あん', 'あんん', 'ひゃん！', 'きゃん！', 'うふん', 'あはん', 'はうん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a hiragana moan, accepted on a second identical echo`);
+  }
+  // The identical letter-for-letter shape, but a single plain は/か行 mora rather than a vowel or a
+  // glide, still reads as an ordinary word (けん, かん, はん, こん…) and is never accepted this way.
+  for (const line of ['けん', 'かん', 'はん', 'こん']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} is an ordinary word, not a moan, even hiragana and even on a second sighting`);
+  }
+});
+
+test('a marker beside one bare ん never forgives an unrelated name or word earlier in the same line', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // ええ/ああ/おお/はぁ/あぁ each carry a marker or a doubled vowel of their own, but it sits beside a
+  // comma and an entirely different word — a name's own ん, untouched by any of it — so the line as a
+  // whole still needs translation, on a second sighting exactly as much as on a first.
+  for (const line of ['ええ、ケン', 'ああ、アン！', 'おお、ケン', 'はぁ、ケン', 'あぁ、アン']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} pairs an unrelated marker with a name's own ん — the marker must not reach across the comma`);
+  }
+  // オーエン/ハーケン/ホーキン/コーエン and けっこん/はっけん！ all carry ー or っ somewhere in them, but never
+  // touching their own ん directly (a real mora always sits between the marker and the ん) — the same
+  // reason the reviewer's own two-mora-plus-ん test above already covers on the first sighting; here it
+  // must hold on the second sighting too.
+  for (const line of ['オーエン', 'ハーケン', 'ホーキン', 'コーエン', 'けっこん', 'はっけん！']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} has no marker directly beside its own ん`);
+  }
+});
+
 test('a floor that fits one batch is spread evenly across parallel lanes', () => {
   const segments = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
   assert.equal(planTranslationBatches(segments, { maxChars: 48000 }).length, 1);
