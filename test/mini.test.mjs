@@ -127,3 +127,13 @@ test('片段跳转: the host\'s own delete-message mode is recognised, checkbox 
     globalThis.document = before;
   }
 });
+
+// DESIGN §14 片段跳转 · 减少动态效果: style.css kills every animation under prefers-reduced-motion
+// (`*, *::before, *::after { animation: none !important }`), which used to leave the jump highlight's
+// own animation-only .jy-mini-row-jump with nothing to show at all (review finding style.css:975).
+// focusRow (inside openMiniWindow, which needs a real window to construct) reads this pure plan to
+// decide which class to use and how to clear it, so the decision is testable without a DOM.
+test('segmentJumpHighlightPlan: normal motion animates and clears on animationend; reduced motion holds a static background for ~2s instead', () => {
+  assert.deepEqual(__testing.segmentJumpHighlightPlan(false), { className: 'jy-mini-row-jump', clearAfterMs: null });
+  assert.deepEqual(__testing.segmentJumpHighlightPlan(true), { className: 'jy-mini-row-jump-static', clearAfterMs: 2000 });
+});

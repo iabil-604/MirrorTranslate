@@ -110,6 +110,8 @@ import {
   fishParamsFoldSummary,
   consoleFoldSummary,
   voiceLibraryFoldSummary,
+  channelRequestFoldSummary,
+  channelPostscriptFoldSummary,
 } from './core.js?v=0.38.0';
 import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.38.0';
 import {
@@ -563,6 +565,7 @@ const CONTROL_CENTER_MARKUP = `
  </div>
 </section>
 <div data-jy-channel-cards></div>
+<div data-jy-channel-detail-holder hidden></div>
 <div class="jy-connection-form" data-jy-channel-detail hidden>
  <label><span class="jy-label">连接名称</span><input type="text" data-jy-channel-field="name" placeholder="给这个连接起个名字"></label>
  <div class="jy-form-grid jy-form-grid-tight">
@@ -573,9 +576,9 @@ const CONTROL_CENTER_MARKUP = `
  <div class="jy-model-picker"><input type="search" data-jy-model-search aria-label="搜索模型" placeholder="搜索模型名称"><select id="jy-api-model-select" data-jy-model-select aria-describedby="jy-api-model-help"><option value="">先拉取模型列表</option></select></div>
  <label><span class="jy-label">当前模型（也可手动填写）</span><input type="text" data-jy-channel-field="model" placeholder="模型名称" autocomplete="off"></label>
  <p id="jy-api-model-help" class="jy-muted" data-jy-model-help></p>
- <details class="jy-advanced"><summary>请求参数</summary><div class="jy-form-grid">
+ <details class="jy-fold" data-jy-fold="channel-request"><summary><h2>请求参数</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-grid">
  <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
- </div></details><details class="jy-advanced"><summary>这条连接的后置提示词（附在每次请求的最末尾）</summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存；一本都不开则节约模式下完全不带世界书。</p></details>
+ </div></details><details class="jy-fold" data-jy-fold="channel-postscript"><summary><h2>这条连接的后置提示词（附在每次请求的最末尾）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存；一本都不开则节约模式下完全不带世界书。</p></details>
  <div class="jy-actions"><span class="jy-actions-spacer"></span><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="delete-channel">删除这条连接</button></div>
 </div>
 </section>
@@ -8722,8 +8725,12 @@ function channelUsers(settings = runtime.settings) {
   ];
 }
 
-/** The connection the page is editing: the one last opened, else the translation's, else the first. */
+/** The connection the page is editing: the one last opened, else the translation's, else the first.
+ * `runtime.editingChannelId === ''` is a real, explicit state — every card collapsed to its one-line
+ * summary (DESIGN §15.2/§15.4, review finding index.js:8763) — so it must not fall back to the
+ * translation's connection the way `null` (nothing chosen yet) or a deleted channel's id does. */
 function editingChannelId(settings = runtime.settings) {
+  if (runtime.editingChannelId === '') return '';
   const channels = Array.isArray(settings?.channels) ? settings.channels : [];
   if (channels.some(channel => channel.id === runtime.editingChannelId)) return runtime.editingChannelId;
   const translation = translationChannelChoice(settings);
@@ -8764,8 +8771,10 @@ function renderChannelCards(root, settings, editing) {
   fillChannelUseRow(root.querySelector('[data-jy-channel-use-row="follow"]'), settings, 'follow', '跟随酒馆');
   const host = root.querySelector('[data-jy-channel-cards]');
   const detail = root.querySelector('[data-jy-channel-detail]');
+  const detailHolder = root.querySelector('[data-jy-channel-detail-holder]');
   if (!host) return;
   const doc = host.ownerDocument;
+  let editingCard = null;
   host.replaceChildren(...settings.channels.map(channel => {
     const isEditing = channel.id === editing;
     const card = doc.createElement('section');
@@ -8803,21 +8812,31 @@ function renderChannelCards(root, settings, editing) {
     chevron.className = 'jy-channel-card-chevron';
     chevron.dataset.jyAction = 'edit-channel';
     chevron.dataset.jyChannelId = channel.id;
-    // Activating this while the card is already open does nothing — exactly one card is open at a
-    // time, switched by opening a different one, never by collapsing to none — so the label must not
-    // promise a 收起 action it cannot perform (review finding index.js:8614: aria-expanded stayed
-    // true and nothing happened).
-    chevron.setAttribute('aria-label', isEditing ? '这条连接的设置（已展开）' : '展开这条连接');
+    // Clicking this on an open card now really collapses it — every card can collapse to its
+    // one-line summary, not just switch to a different one (DESIGN §15.2/§15.4) — so the label says
+    // the real action instead of the placeholder wording from when collapsing wasn't wired up yet
+    // (review finding index.js:8614: aria-expanded stayed true and nothing happened).
+    chevron.setAttribute('aria-label', isEditing ? '收起这条连接' : '展开这条连接');
     chevron.setAttribute('aria-expanded', String(isEditing));
     chevron.textContent = isEditing ? '▾' : '▸';
     head.appendChild(chevron);
     card.appendChild(head);
-    if (isEditing && detail) {
-      detail.hidden = false;
-      card.appendChild(detail);
-    }
+    if (isEditing) editingCard = card;
     return card;
   }));
+  // The shared detail-editor node moves into whichever card is open; with none open it parks in a
+  // hidden holder instead of being left attached to a card `replaceChildren` just discarded above,
+  // which would silently detach it from `root` for good (review finding index.js:8763: collapsing
+  // the last open card lost the editor node).
+  if (detail) {
+    if (editingCard) {
+      detail.hidden = false;
+      editingCard.appendChild(detail);
+    } else if (detailHolder) {
+      detail.hidden = true;
+      detailHolder.appendChild(detail);
+    }
+  }
 }
 
 // Display copy for DESIGN §15.2's four one-click packages — the fields a package actually sets live
@@ -9100,6 +9119,14 @@ async function deleteChannel(root, id) {
   return true;
 }
 
+// DESIGN §15.4 折叠组: 模型连接 每条连接卡内「请求参数」「后置提示词」的收起摘要 — the shared detail editor
+// only ever holds one channel at a time, so this reflects whichever one that currently is (the pure
+// formatting lives in core.js, same split as syncProcessingFoldSummaries/syncTtsFoldSummaries).
+function syncChannelFoldSummaries(root, channel) {
+  setText(root, '[data-jy-fold="channel-request"] [data-jy-fold-summary]', channelRequestFoldSummary(channel));
+  setText(root, '[data-jy-fold="channel-postscript"] [data-jy-fold-summary]', channelPostscriptFoldSummary(channel));
+}
+
 function syncChannelFields(root, settings) {
   const editing = editingChannelId(settings);
   runtime.editingChannelId = editing;
@@ -9108,6 +9135,7 @@ function syncChannelFields(root, settings) {
   renderChannelCards(root, settings, editing);
   const channel = settings.channels.find(item => item.id === editing) ?? getActiveChannel(settings);
   root.dataset.jyEditingChannelId = channel.id;
+  syncChannelFoldSummaries(root, channel);
   for (const element of root.querySelectorAll('[data-jy-channel-field]')) {
     const key = element.dataset.jyChannelField;
     if (element.type === 'checkbox') element.checked = channel[key] === true;
@@ -11434,7 +11462,9 @@ function createControlCenter(rootDocument = document) {
       } catch (error) {
         toast('error', safeError(error));
       }
-      runtime.editingChannelId = id;
+      // Clicking the card that is already open collapses it instead of doing nothing — every card
+      // can collapse to its one-line summary (DESIGN §15.2/§15.4; review finding index.js:8763).
+      runtime.editingChannelId = editingChannelId(runtime.settings) === id ? '' : id;
       // renderChannelCards (inside syncFields) rebuilds every card, including the toggle/chevron a
       // keyboard user just activated (review finding index.js:11759's "Enter on .jy-channel-card-
       // chevron" case).
@@ -13002,6 +13032,22 @@ function saveMiniSize(size) {
   }
 }
 
+/**
+ * DESIGN §14 片段跳转 · 减少动态效果: which class the jump highlight (`focusRow`, inside
+ * `openMiniWindow`) applies, and how it gets cleared afterward. The animated version relies on
+ * `animationend`, but the global `prefers-reduced-motion: reduce` rule (style.css) sets
+ * `animation: none !important` on everything — that used to suppress `.jy-mini-row-jump` entirely,
+ * leaving no highlight at all (review finding style.css:975) — so reduced motion instead gets a plain
+ * static background (`.jy-mini-row-jump-static`, same colour as the animation's start) that JS clears
+ * with a timeout instead of waiting for an event that would never fire. Pure so it is testable without
+ * a DOM; the class name and duration are all `focusRow` needs from it.
+ */
+function segmentJumpHighlightPlan(reducedMotion) {
+  return reducedMotion
+    ? { className: 'jy-mini-row-jump-static', clearAfterMs: 2000 }
+    : { className: 'jy-mini-row-jump', clearAfterMs: null };
+}
+
 // The assistant floors of the chat, in order, for the window's floor arrows.
 function assistantFloorIds(context = getContext()) {
   const chat = Array.isArray(context?.chat) ? context.chat : [];
@@ -13476,17 +13522,19 @@ async function openMiniWindow() {
     rowsList.hidden = !viewRows.length;
   };
   // Segment jump lands here once the floor it asked for is on screen: the row scrolls into view and
-  // flashes once, DESIGN.md §8.3/§9.7 (jump highlight) — a one-shot cue, not a state, so the class
-  // is removed again once its animation ends rather than left sitting on the row.
+  // flashes once, DESIGN.md §8.3/§9.7/§14 (jump highlight) — a one-shot cue, not a state, so the
+  // class is removed again once it has shown rather than left sitting on the row.
   const focusRow = id => {
     const row = rowsList.querySelector(`[data-id="${id}"]`);
     if (!row) return;
     const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
     row.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
-    row.classList.remove('jy-mini-row-jump');
+    const { className, clearAfterMs } = segmentJumpHighlightPlan(reduced);
+    row.classList.remove('jy-mini-row-jump', 'jy-mini-row-jump-static');
     void row.offsetWidth;
-    row.classList.add('jy-mini-row-jump');
-    row.addEventListener('animationend', () => row.classList.remove('jy-mini-row-jump'), { once: true });
+    row.classList.add(className);
+    if (clearAfterMs) globalThis.setTimeout(() => row.classList.remove(className), clearAfterMs);
+    else row.addEventListener('animationend', () => row.classList.remove(className), { once: true });
   };
   const renderFloorActions = () => {
     const running = viewRunning;
@@ -16279,11 +16327,12 @@ if (typeof document !== 'undefined') {
 
 // A test-only seam. `saveSettings` reaches into the DOM for the floating entry and the panel, which
 // a headless run has none of, so tests place settings and the lore cache directly.
-function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId } = {}) {
+function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId, editingChannelId: editingChannelIdOverride } = {}) {
   if (settings) runtime.settings = { ...runtime.settings, ...settings };
   if (worldInfoEntries !== undefined) runtime.wiEntries = worldInfoEntries;
   if (initialized !== undefined) runtime.initialized = initialized === true;
   if (deskExpandedChannelId !== undefined) runtime.deskExpandedChannelId = deskExpandedChannelId;
+  if (editingChannelIdOverride !== undefined) runtime.editingChannelId = editingChannelIdOverride;
   return runtime.settings;
 }
 
@@ -16300,6 +16349,7 @@ export const __testing = Object.freeze({
   locateDialogueSourceAnchors,
   chatInDeleteMode,
   handleSegmentJumpClick,
+  segmentJumpHighlightPlan,
   latestAssistantMessageId,
   readMessageSnapshot,
   restyleCurrentChat,
@@ -16374,6 +16424,7 @@ export const __testing = Object.freeze({
   applyTranslationChoice,
   channelUsers,
   editingChannelId,
+  renderChannelCards,
   collectDeskChannelFields,
   focusIdentity,
   withFocusPreserved,

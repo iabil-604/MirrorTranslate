@@ -89,6 +89,8 @@ import {
   fishParamsFoldSummary,
   consoleFoldSummary,
   voiceLibraryFoldSummary,
+  channelRequestFoldSummary,
+  channelPostscriptFoldSummary,
   DEFAULT_CONSOLE,
 } from '../core.js';
 import {
@@ -2309,4 +2311,47 @@ test('voiceLibraryFoldSummary counts voices with a usable id and reads "空" for
     ]),
     '2 个音色',
   );
+});
+
+// --- channelRequestFoldSummary / channelPostscriptFoldSummary ---------------------------------
+// DESIGN §15.4: 模型连接 每条连接卡的「请求参数」「后置提示词」became .jy-fold groups, matching every
+// other advanced-mode fold's collapsed-row summary (review: they used to be plain <details> with no
+// summary at all, so a collapsed card said nothing about what was actually set).
+
+test('channelRequestFoldSummary always reads timeout/limit/temperature, falling back to DEFAULT_CHANNEL for a bare object', () => {
+  assert.equal(channelRequestFoldSummary({}), '超时 240s · 上限 60000 tokens · 温度 0.15');
+  assert.equal(
+    channelRequestFoldSummary({ timeoutSec: 60, maxTokens: 4096, temperature: 1 }),
+    '超时 60s · 上限 4096 tokens · 温度 1',
+  );
+});
+
+test('channelRequestFoldSummary only lists 并发/推理强度/排除参数/节约模式 when actually set', () => {
+  assert.equal(
+    channelRequestFoldSummary({ timeoutSec: 240, maxTokens: 60000, temperature: 0.15, concurrency: 1 }),
+    '超时 240s · 上限 60000 tokens · 温度 0.15',
+    '并发批次为 1（默认）时不单独列出',
+  );
+  assert.equal(
+    channelRequestFoldSummary({
+      timeoutSec: 240,
+      maxTokens: 60000,
+      temperature: 0.15,
+      concurrency: 3,
+      reasoningEffort: 'high',
+      excludeParams: ['temperature', 'top_p'],
+      tokenSaving: true,
+    }),
+    '超时 240s · 上限 60000 tokens · 温度 0.15 · 并发 3 · 推理强度 high · 排除 2 项 · 节约 token 模式',
+  );
+});
+
+test('channelPostscriptFoldSummary reads role and whether the postscript text is set, with its length', () => {
+  assert.equal(channelPostscriptFoldSummary({}), 'user · 未设置');
+  assert.equal(channelPostscriptFoldSummary({ postscriptRole: 'system', postscript: '  ' }), 'system · 未设置', '只有空白也算未设置');
+  assert.equal(
+    channelPostscriptFoldSummary({ postscriptRole: 'system', postscript: '直接输出结果，不要输出任何思考过程。' }),
+    'system · 已设置（18 字）',
+  );
+  assert.equal(channelPostscriptFoldSummary({ postscriptRole: 'bogus', postscript: '' }), 'user · 未设置', '未知身份回退到 user');
 });
