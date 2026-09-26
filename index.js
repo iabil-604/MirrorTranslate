@@ -3494,7 +3494,9 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
       const floor = readFloor(view);
       if (!floor.stripped) continue;
       if (floor.diverged) edited += 1;
-      swipes.push({ index, record: floor.metadata, text: floor.metadata.mirror });
+      // `text` is this page's bilingual content as read just now — kept alongside the plan so the
+      // write-back can tell whether this exact page is still what it was when the plan was built.
+      swipes.push({ index, record: floor.metadata, text: floor.metadata.mirror, before: text });
     }
     if (swipes.length) plan.push({ messageId, message, current, swipes });
   }
@@ -3511,6 +3513,25 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
   // than writing this plan's text into whatever is showing now.
   if (getCurrentChatId() !== chatId || runtime.mainGenerationActive) {
     throw new Error('放回原文的时候聊天变了，请重新点一次「恢复本聊天的原文」。');
+  }
+  // A swipe during the wait only moves pages around — script.js copies the live page into its own
+  // swipes[] slot before switching, so each page's own content, wherever it now sits, still matches
+  // what this plan read for it (the swipe-during-confirm case above). A main generation (「继续」) that
+  // finishes on a page while the dialog is still open is different: it changes that page's own content
+  // in place, and runtime.mainGenerationActive is already back to false by the time the dialog resolves,
+  // same as after any other finished generation. Every planned page is checked against what was read for
+  // it when the plan was built before anything is written; a mismatch on any page cancels the whole
+  // restore instead of overwriting whichever page changed with the stale bilingual text.
+  for (const { message, swipes } of plan) {
+    const liveCurrent = Number(message.swipe_id ?? 0);
+    for (const { index, before } of swipes) {
+      const live = index === liveCurrent
+        ? message.mes
+        : (Array.isArray(message.swipes) && index < message.swipes.length ? message.swipes[index] : undefined);
+      if (live !== before) {
+        throw new Error('放回原文的时候有一楼的内容被改过，请重新点一次「恢复本聊天的原文」。');
+      }
+    }
   }
   const changes = [];
   for (const { message, swipes } of plan) {

@@ -332,3 +332,45 @@ test('the okurigana widening never moves a word already found whole, and never f
   // trigger the Japanese-only extension just because kanji also happens to be Han script in Chinese.
   assert.equal(pauseDisplay('你别靠这么近会让人看见的。', '近'), '近', '近 is a complete Chinese word; nothing here may widen it as if it were an okurigana stem');
 });
+
+test('the okurigana widening covers common Japanese conjugations generally, past the two shapes (聞こえた, 寂しく) it was first tested against', () => {
+  // Intl.Segmenter often groups a whole run of okurigana into one multi-character segment rather than
+  // single kana (寝ていた -> 寝|てい|た). A pause anchored on いた sits inside that two-character てい
+  // segment, which the old code refused to widen past at all because it was not exactly one character.
+  const sleepText = '寝ていたけど、物音で目が覚めた。';
+  assert.equal(pauseDisplay(sleepText, 'いた'), '寝ていた', 'widens left across a multi-character okurigana segment (てい) directly off its kanji stem (寝)');
+  // Same shape on a different verb: べた is its own two-character segment, not a lone kana.
+  const ateText = '本当に食べたかったのに、我慢した。';
+  assert.equal(pauseDisplay(ateText, 'た'), '食べた', 'widens left through a multi-character okurigana segment (べた) back to its kanji stem (食)');
+  // On the right, the old code crossed exactly one following segment (聞こ). A longer conjugation needs
+  // more than one hop (こ, え, た) before it reaches a real word boundary — here the trailing けど.
+  const heardText = '全部聞こえたけど、無視したいだけ。';
+  assert.equal(stressDisplay(heardText, '聞'), '聞こえた', 'keeps absorbing okurigana segments past the first one, all the way to the end of the conjugation');
+  // Same idea one hiragana hop deeper (さ, then ない), stopping before the trailing から.
+  const forgiveText = '絶対に許さないから、覚悟しておいて。';
+  assert.equal(stressDisplay(forgiveText, '許'), '許さない', 'keeps absorbing across more than one hop, still stopping at a trailing particle (から)');
+  // って closes the sentence the same way から and けど do above.
+  const goText = '私は行かないって。';
+  assert.equal(stressDisplay(goText, '行'), '行かない', 'stops at って the same way it stops at から and けど, instead of only crossing the first segment (行か)');
+});
+
+test('the wider okurigana rules still stop at a real word boundary instead of chaining into an unrelated word or particle', () => {
+  // こと is preceded by hiragana (った), not a kanji segment, so the new multi-character allowance on
+  // the left must not fire for it — same expectation as the existing whole-word test above, restated
+  // here because it is exactly what the wider left-side rule must keep rejecting.
+  const gotchaText = '彼らが言ったことは全部聞こえたけど、無視したいだけ。';
+  assert.equal(pauseDisplay(gotchaText, 'こと'), 'こと', 'preceded by hiragana rather than a kanji stem, so it is left exactly where it was found');
+  // なんか is pure hiragana and sits right after しく, but it is a separate word (a particle), not more
+  // of the same conjugation, so the right-side widening must stop before it even though it never hits
+  // OKURIGANA_MARGIN or a non-hiragana character.
+  const sadText = '別に、寂しくなんかないし。';
+  assert.equal(stressDisplay(sadText, '寂'), '寂しく', 'stops before なんか instead of chaining into the next word');
+});
+
+test('a stress on a kanji stem takes its first okurigana segment even when that segment looks like a particle', () => {
+  assert.equal(stressDisplay('ちょっと待ってくれ。', '待'), '待ってくれ', 'te-form: って right after the stem is its conjugation');
+  assert.equal(stressDisplay('全部話してよ。', '話'), '話して', 'し right after the stem, then stops at よ');
+  assert.equal(stressDisplay('みんな笑わないで。', '笑'), '笑わない', 'a-row negative: わ right after the stem');
+  assert.equal(stressDisplay('もう死にたい。', '死'), '死にたい', 'に right after the stem');
+  assert.equal(stressDisplay('猫が好きだ。', '猫'), '猫', 'a case particle is never okurigana, so a noun stays itself');
+});

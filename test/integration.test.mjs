@@ -1292,6 +1292,34 @@ test('a swipe while 恢复本聊天的原文’s confirm is open puts back which
   assert.equal(message.swipes[1], mirror1);
 });
 
+test('恢复本聊天的原文: a 继续 that finishes on this floor while the confirm dialog is still open is not overwritten by the stale bilingual text once confirmed', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context } = translationOnlyHost([
+    [{ id: 1, text: '是的。' }, { id: 2, text: '风很大。' }],
+  ]);
+  const message = context.chat[0];
+  await __testing.startTranslation(0, { quiet: true });
+  const mes = message.mes;
+  const mirror = message.extra[MESSAGE_META_KEY].mirror;
+
+  // While the confirm dialog waits, a main generation («继续») finishes on this exact page and appends
+  // to it — the same effect a real continuation has on message.mes and, once it lands, on this page's
+  // own entry in message.swipes. runtime.mainGenerationActive is already back to false by the time the
+  // dialog resolves, same as after any other finished generation.
+  const ask = async () => {
+    message.mes = `${mes}\n续写的一段。`;
+    message.swipes[0] = message.mes;
+    return true;
+  };
+
+  await assert.rejects(__testing.restoreChatOriginals({ ask }), /改过|重新点/, '放回原文中止，而不是把续写内容换成确认前读到的双语文本');
+  // Nothing was written: the continuation survives, and so does the translation record it still needs.
+  assert.equal(message.mes, `${mes}\n续写的一段。`);
+  assert.equal(message.swipes[0], message.mes);
+  assert.equal(message.extra[MESSAGE_META_KEY].mirror, mirror);
+});
+
 test('世界书开关: only the books switched on bring their ticked entries, and a card saved before keeps its picks', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });

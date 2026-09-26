@@ -302,9 +302,15 @@ function anchorBackward(text, end) {
 //
 // Without a dictionary, Intl.Segmenter tells Japanese words apart mostly by script: 全部, こと, しく each
 // come back whole, but a kanji stem gets cut away from the hiragana conjugation right after it (聞こえた
-// -> 聞|こ|え|た), so wordBoundsAt alone hands back just the stem's own single character. extendOkurigana
-// continues across exactly that boundary — and only that one: a segment already more than one character
-// (全部, こと) is a whole word already and is left where wordBoundsAt put it.
+// -> 聞|こ|え|た), so wordBoundsAt alone hands back just the stem's own single character — and a longer
+// conjugation (寝ていた -> 寝|てい|た, 食べた -> 食|べた) still leaves the stem cut off from a multi-character
+// okurigana segment right next to it. extendOkurigana widens across any run of segments shaped like that:
+// on the right, every further hiragana segment gets absorbed in turn (聞こえた, 許さない), stopping at a
+// segment that is a known particle or conjunction (けど, から, って, なんか, …) rather than more of the
+// same word, at anything that is not pure hiragana, or once OKURIGANA_MARGIN segments have been crossed;
+// on the left, a segment already more than one character is only widened past when it hangs directly off
+// a kanji segment (べた off 食, てい off 寝) — otherwise (こと after った) it is a whole word already and is
+// left exactly where wordBoundsAt put it, same as before.
 // ---------------------------------------------------------------------------------------------
 
 const DISPLAY_WORD_RE = /[\p{L}\p{N}]/u;
@@ -312,6 +318,20 @@ const DISPLAY_MARGIN = 6;
 const HAN_RUN_RE = /^\p{Script=Han}+$/u;
 const HIRAGANA_RUN_RE = /^\p{Script=Hiragana}+$/u;
 const OKURIGANA_MARGIN = 4;
+// Particles and conjunctions that close off a conjugated word instead of continuing it — encountering
+// one of these while absorbing hiragana segments to the right of a kanji stem stops the widening just
+// before it, the same way a segment that is not pure hiragana already stops it.
+const OKURIGANA_STOP_WORDS = new Set([
+  'は', 'が', 'を', 'に', 'で', 'と', 'も', 'の', 'から', 'けど', 'けれど', 'ので', 'のに',
+  'し', 'な', 'ね', 'よ', 'わ', 'って', 'とか', 'だけ', 'より', 'まで', 'へ', 'や', 'なんか', 'など', 'でも', 'しか',
+]);
+// The first segment right after a kanji stem is its okurigana far more often than not, even when it
+// looks like a particle (待|って, 話|し|て, 笑|わ|ない, 死|に|たい): only these, which never spell a
+// conjugation, stop that first step.
+const NEVER_OKURIGANA = new Set([
+  'は', 'が', 'を', 'の', 'へ', 'や', 'も', 'から', 'けど', 'けれど', 'ので', 'のに', 'より', 'まで',
+  'とか', 'だけ', 'など', 'しか', 'なんか',
+]);
 
 // Word segmentation does not depend on locale for the languages this extension reads (Chinese, Japanese,
 // English all come out the same either way), so one shared segmenter covers all of them. Older runtimes
@@ -339,14 +359,24 @@ function wordBoundsAt(source, at) {
 }
 
 /** A stress's own end, pushed further right across an okurigana run the segmenter cut away from its
- * kanji stem — the stem's trailing hiragana conjugation, one segment's worth, never a second one. */
+ * kanji stem — every further hiragana segment in a row, not just the first, stopping at whichever comes
+ * first: a segment that is not pure hiragana, a known trailing particle or conjunction (OKURIGANA_STOP_WORDS,
+ * け, から, って, なんか, …) that is a separate word rather than more of the same conjugation, or the margin. */
 function extendOkuriganaRight(source, bounds) {
   if (bounds.end - bounds.start !== 1) return bounds.end;
   const seed = source[bounds.start];
   if (!HAN_RUN_RE.test(seed) && !HIRAGANA_RUN_RE.test(seed)) return bounds.end;
-  const next = wordBoundsAt(source, bounds.end);
-  if (next && next.start === bounds.end && HIRAGANA_RUN_RE.test(source.slice(next.start, next.end))) return next.end;
-  return bounds.end;
+  const seedIsHan = HAN_RUN_RE.test(seed);
+  let end = bounds.end;
+  for (let steps = 0; steps < OKURIGANA_MARGIN; steps += 1) {
+    const next = wordBoundsAt(source, end);
+    if (!next || next.start !== end) break;
+    const chunk = source.slice(next.start, next.end);
+    const stops = steps === 0 && seedIsHan ? NEVER_OKURIGANA : OKURIGANA_STOP_WORDS;
+    if (!HIRAGANA_RUN_RE.test(chunk) || stops.has(chunk)) break;
+    end = next.end;
+  }
+  return end;
 }
 
 /** A pause's own start, pulled further left across the same kind of cut: any hiragana run right before
@@ -354,11 +384,20 @@ function extendOkuriganaRight(source, bounds) {
  * whatever came before that. The seed itself must be hiragana, never a kanji: a kanji anchor already
  * standing alone is a complete Chinese word as often as it is a cut-off Japanese one (近, 喝), and
  * nothing here can tell those apart — only a hiragana seed is the okurigana's own signature.
+ *
+ * The segment the anchor itself sits in (the seed) is not always a single kana — Intl.Segmenter groups
+ * a whole run of okurigana together as often as not (寝ていた -> 寝|てい|た, so the seed for a pause
+ * anchored on いた is the two-character segment てい). A seed longer than one character only counts as
+ * okurigana, rather than a whole word already sitting on its own (こと after 言った), when it hangs
+ * directly off a kanji segment; the loop below then finds that same kanji segment on its first step.
  */
 function extendOkuriganaLeft(source, bounds) {
-  if (bounds.end - bounds.start !== 1) return bounds.start;
-  const seed = source[bounds.start];
+  const seed = source.slice(bounds.start, bounds.end);
   if (!HIRAGANA_RUN_RE.test(seed)) return bounds.start;
+  if (seed.length > 1) {
+    const stem = wordBoundsAt(source, bounds.start - 1);
+    if (!stem || stem.end !== bounds.start || !HAN_RUN_RE.test(source.slice(stem.start, stem.end))) return bounds.start;
+  }
   let start = bounds.start;
   for (let steps = 0; start > 0 && steps < OKURIGANA_MARGIN; steps += 1) {
     const prev = wordBoundsAt(source, start - 1);
