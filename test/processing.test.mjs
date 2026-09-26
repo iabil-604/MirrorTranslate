@@ -9,7 +9,7 @@ import {
   normalizeProcessingSettings, normalizeProcessingProfile, processingSnapshot, getActiveProcessingProfile, makeBuiltinReadingProfile,
   selectProcessingProfile, captureProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, syncNativeRegex, readNativeRegexEdits, compileNativeRegex, isJingyiRegex, REGEX_OWNER_KEY,
-  dedupeManagedRegexScripts, planRegexCleanup, detectBuiltinReadingStyle,
+  dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup, detectBuiltinReadingStyle,
 } from '../processing.js';
 import { __testing, onDisable } from '../index.js';
 
@@ -681,4 +681,134 @@ test('saveSettings reads a reader\'s still-pending native-editor edit into the a
     globalThis.SillyTavern = previousHost;
     __testing.configureForTest({ initialized: false });
   }
+});
+
+test('planScopedRegexCleanup removes only rules isJingyiRegex claims from a character-scoped or preset regex list, keeping the reader\'s own rules and their order untouched', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  const full = syncNativeRegex([], profile);
+  // A rule 酒馆's own "移到角色 / 预设" carried out of the global list -- 镜译 never installed it here on
+  // purpose, but it is still unmistakably 镜译's own by id prefix.
+  const movedBoundRule = { ...full.find(rule => rule.scriptName === `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`) };
+  const readerA = { id: 'user-a', scriptName: '读者规则甲', findRegex: '/a/g', replaceString: '' };
+  const readerB = { id: 'user-b', scriptName: '读者规则乙', findRegex: '/b/g', replaceString: '' };
+
+  const { kept, toRemove } = planScopedRegexCleanup([readerA, movedBoundRule, readerB]);
+  assert.equal(toRemove, 1);
+  assert.deepEqual(kept, [readerA, readerB], 'only the 镜译-owned copy is removed; the reader\'s own rules and their relative order survive');
+});
+
+test('planScopedRegexCleanup treats a missing or already-clean list as nothing to remove', () => {
+  assert.deepEqual(planScopedRegexCleanup(undefined), { kept: [], toRemove: 0 });
+  assert.deepEqual(planScopedRegexCleanup([]), { kept: [], toRemove: 0 });
+  const readerOnly = [{ id: 'user-a', scriptName: '读者规则', findRegex: '/a/g', replaceString: '' }];
+  assert.deepEqual(planScopedRegexCleanup(readerOnly), { kept: readerOnly, toRemove: 0 });
+});
+
+test('buildRegexCleanupPlan folds a character-scoped and a preset regex cleanup into the same plan as the global one, reporting how many are removed from each scope', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  settings.processingProfiles = [profile];
+  settings.selectedProcessingProfileId = profile.id;
+  const full = syncNativeRegex([], profile); // nothing missing or surplus globally
+  const movedBoundRule = { ...full.find(rule => rule.scriptName === `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`) };
+  const movedFixedA = { ...full.find(rule => rule.id === `${MODULE_ID}:prompt-affix`) };
+  const movedFixedB = { ...full.find(rule => rule.id === `${MODULE_ID}:prompt-boundaries`) };
+  const readerScoped = { id: 'user-scoped', scriptName: '角色自己的规则', findRegex: '/z/g', replaceString: '' };
+
+  const engine = {
+    SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 },
+    getScriptsByType(type) {
+      if (type === 1) return [readerScoped, movedBoundRule];
+      if (type === 2) return [movedFixedA, movedFixedB];
+      return [];
+    },
+  };
+
+  const plan = __testing.buildRegexCleanupPlan({ next: settings, currentRegex: full, engine });
+  assert.ok(plan, '两个额外范围各有一条需要清理，加上没有任何全局缺口，整体仍然算有事可做');
+  assert.equal(plan.toRemove, 0, '全局本身没有多余或缺失');
+  assert.equal(plan.toInstall, 0);
+  assert.equal(plan.scopedRemove, 1);
+  assert.equal(plan.presetRemove, 2);
+  assert.equal(plan.totalRemove, 3);
+  assert.deepEqual(plan.scopedPlan.kept, [readerScoped], '角色自己的规则不受影响');
+  assert.equal(plan.presetPlan.kept.length, 0);
+  assert.match(plan.message, /全局 0 条/);
+  assert.match(plan.message, /角色绑定 1 条/);
+  assert.match(plan.message, /预设绑定 2 条/);
+});
+
+test('buildRegexCleanupPlan skips a scope the host cannot give an answer for -- no engine at all, or one scope throwing (no character selected) -- without blocking the other scopes or the global cleanup', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  settings.processingProfiles = [profile];
+  settings.selectedProcessingProfileId = profile.id;
+  const full = syncNativeRegex([], profile);
+  const ruleName = `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  const ruleCopy = full.find(rule => rule.scriptName === ruleName);
+  // A surplus global copy, exactly like the plain planRegexCleanup case, so there is still something
+  // for the button to report even with every extra scope unavailable.
+  const polluted = [...full, { ...ruleCopy }];
+
+  const planNoEngine = __testing.buildRegexCleanupPlan({ next: settings, currentRegex: polluted, engine: null });
+  assert.ok(planNoEngine);
+  assert.equal(planNoEngine.toRemove, 1);
+  assert.equal(planNoEngine.scopedPlan, null);
+  assert.equal(planNoEngine.presetPlan, null);
+  assert.equal(planNoEngine.totalRemove, 1);
+  assert.doesNotMatch(planNoEngine.message, /角色绑定|预设绑定/, '没有引擎时，弹窗文案和改动前完全一样，不提额外范围');
+  assert.match(planNoEngine.message, /^删除 1 条多余的镜译正则/);
+
+  const movedFixed = { ...full.find(rule => rule.id === `${MODULE_ID}:prompt-affix`) };
+  const engineScopedUnavailable = {
+    SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 },
+    getScriptsByType(type) {
+      if (type === 1) throw new Error('没有选中角色'); // 旧宿主 / 未选中角色时的真实行为之一
+      if (type === 2) return [movedFixed];
+      return [];
+    },
+  };
+  const planPartial = __testing.buildRegexCleanupPlan({ next: settings, currentRegex: polluted, engine: engineScopedUnavailable });
+  assert.ok(planPartial);
+  assert.equal(planPartial.scopedPlan, null, '读不到的范围被静默跳过，不算作错误');
+  assert.equal(planPartial.presetPlan.toRemove, 1);
+  assert.equal(planPartial.toRemove, 1, '全局清理不受角色范围失败影响');
+  assert.equal(planPartial.totalRemove, 2);
+  assert.match(planPartial.message, /预设绑定 1 条/);
+  assert.doesNotMatch(planPartial.message, /角色绑定/);
+});
+
+test('buildRegexCleanupPlan reports nothing to do when every scope the engine can see is already clean', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  settings.processingProfiles = [profile];
+  settings.selectedProcessingProfileId = profile.id;
+  const full = syncNativeRegex([], profile);
+  const engine = { SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 }, getScriptsByType: () => [] };
+  assert.equal(__testing.buildRegexCleanupPlan({ next: settings, currentRegex: full, engine }), null);
+});
+
+test('applyScopedRegexCleanup saves back only the scopes that actually had something removed, and never touches the host at all when there is no engine', async () => {
+  const calls = [];
+  const engine = {
+    SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 },
+    async saveScriptsByType(scripts, type) { calls.push({ scripts, type }); },
+  };
+
+  const planBoth = { scopedPlan: { kept: ['a'], toRemove: 1 }, presetPlan: { kept: ['b'], toRemove: 2 } };
+  await __testing.applyScopedRegexCleanup(planBoth, engine);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], { scripts: ['a'], type: 1 });
+  assert.deepEqual(calls[1], { scripts: ['b'], type: 2 });
+
+  calls.length = 0;
+  const planScopedOnly = { scopedPlan: { kept: ['a'], toRemove: 1 }, presetPlan: { kept: ['b', 'c'], toRemove: 0 } };
+  await __testing.applyScopedRegexCleanup(planScopedOnly, engine);
+  assert.equal(calls.length, 1, '没有可删的范围不写回，即使那个范围本身是可用的');
+  assert.equal(calls[0].type, 1);
+
+  calls.length = 0;
+  await __testing.applyScopedRegexCleanup(planBoth, null);
+  assert.equal(calls.length, 0, '没有引擎就完全不写');
 });

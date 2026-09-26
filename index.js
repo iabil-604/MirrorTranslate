@@ -181,7 +181,7 @@ import {
   normalizeProcessingSettings, getActiveProcessingProfile,
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
-  dedupeManagedRegexScripts, planRegexCleanup,
+  dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
 } from './processing.js?v=0.38.0';
 import {
   CORE_TRANSLATION_SPEC,
@@ -11314,6 +11314,57 @@ function deepClonePromptValue(value) {
   return value && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value;
 }
 
+// isJingyiRegex-only removal for a scope 镜译 never installs into on purpose (planScopedRegexCleanup
+// in processing.js): 镜译 only ever writes its own rules to the global list, so any of its rules found
+// in a character's scoped regex or a preset's regex got there through the reader's own "移到角色 /
+// 预设" and are always orphaned duplicates. Returns null when the scope cannot be read at all -- an
+// older host without this engine module, no character selected, no preset manager -- so a scope that
+// will not cooperate is left out of the cleanup silently instead of surfacing as an error.
+function scopedJingyiRegexPlan(engine, scriptType) {
+  if (!engine || scriptType === undefined || typeof engine.getScriptsByType !== 'function') return null;
+  try {
+    return planScopedRegexCleanup(engine.getScriptsByType(scriptType));
+  } catch {
+    return null;
+  }
+}
+
+// Everything "删除多余正则" needs in order to decide whether there is anything to do and what to tell
+// the reader before asking, computed without writing anything -- applyScopedRegexCleanup below is the
+// only part that saves. `engine` is 酒馆's own regex engine module (SCRIPT_TYPES/getScriptsByType/
+// saveScriptsByType), or null on a host that does not have it; either way the global cleanup below is
+// never blocked by it. Returns null when there is truly nothing to clean anywhere the button can see.
+function buildRegexCleanupPlan({ next, currentRegex, engine }) {
+  const active = getActiveProcessingProfile(next);
+  active.regexScripts = dedupeManagedRegexScripts(active.regexScripts);
+  const { expected, toRemove, toInstall } = planRegexCleanup(currentRegex, active);
+  const scopedPlan = scopedJingyiRegexPlan(engine, engine?.SCRIPT_TYPES?.SCOPED);
+  const presetPlan = scopedJingyiRegexPlan(engine, engine?.SCRIPT_TYPES?.PRESET);
+  const scopedRemove = scopedPlan?.toRemove ?? 0;
+  const presetRemove = presetPlan?.toRemove ?? 0;
+  const totalRemove = toRemove + scopedRemove + presetRemove;
+  if (!totalRemove && !toInstall) return null;
+  const scopeParts = [];
+  if (scopedPlan) scopeParts.push(`角色绑定 ${scopedRemove} 条`);
+  if (presetPlan) scopeParts.push(`预设绑定 ${presetRemove} 条`);
+  const removalClause = scopeParts.length
+    ? `删除多余的镜译正则：全局 ${toRemove} 条、${scopeParts.join('、')}`
+    : `删除 ${toRemove} 条多余的镜译正则`;
+  const message = toInstall
+    ? `${removalClause}，补上 ${toInstall} 条缺失的固定正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`
+    : `${removalClause}，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`;
+  return { active, expected, toRemove, toInstall, scopedPlan, presetPlan, scopedRemove, presetRemove, totalRemove, message };
+}
+
+// The one part of "删除多余正则" that writes to the host's scoped/preset regex lists, called only
+// after the reader has confirmed. A scope buildRegexCleanupPlan could not read is left untouched here
+// too, and a scope with nothing to remove is never saved back for no reason.
+async function applyScopedRegexCleanup(plan, engine) {
+  if (!engine) return;
+  if (plan.scopedPlan?.toRemove) await engine.saveScriptsByType(plan.scopedPlan.kept, engine.SCRIPT_TYPES.SCOPED);
+  if (plan.presetPlan?.toRemove) await engine.saveScriptsByType(plan.presetPlan.kept, engine.SCRIPT_TYPES.PRESET);
+}
+
 function createControlCenter(rootDocument = document) {
   const container = rootDocument.createElement('div');
   container.innerHTML = CONTROL_CENTER_MARKUP;
@@ -11476,25 +11527,27 @@ function createControlCenter(rootDocument = document) {
         // profile's own regexScripts holding several differently-id'd copies of what is really one
         // rule, from before native edits were read back by id -- a plain sync never converges that,
         // since by then each id is genuinely something the profile asks for, so this button first
-        // collapses byte-identical duplicates within the profile itself. Counts removal and
-        // installation separately rather than a before/after difference, so an equal number of each
-        // does not net to a false "nothing to clean", and a reader who has deleted more of the fixed
-        // rules than there are surplus copies never sees a negative count. Claims a rule as 镜译's own
-        // by its marker or its id prefix (see isJingyiRegex), never by name alone, so a reader's own
-        // rule is never touched even when it happens to share a name. Destructive, so it asks first,
-        // same as the other bulk-remove buttons on this page.
+        // collapses byte-identical duplicates within the profile itself. 酒馆's own "移到角色 / 预设"
+        // can also carry a 镜译 rule out of the global list into the current character's scoped regex
+        // or the current preset's regex; 镜译 only ever reinstalls a global copy on the next sync, so
+        // the moved copy is always a second, orphaned duplicate there too -- both extra scopes are
+        // read and cleaned through 酒馆's own regex engine (engine.js, the same module already loaded
+        // on activate for restoreStrippedFloors). Counts removal and installation separately rather
+        // than a before/after difference, so an equal number of each does not net to a false "nothing
+        // to clean", and a reader who has deleted more of the fixed rules than there are surplus
+        // copies never sees a negative count. Claims a rule as 镜译's own by its marker or its id
+        // prefix (see isJingyiRegex), never by name alone, so a reader's own rule is never touched
+        // even when it happens to share a name. Destructive, so it asks first, same as the other
+        // bulk-remove buttons on this page.
         const currentRegex = getContext().extensionSettings.regex ?? [];
         const next = collectSettings(root);
-        const active = getActiveProcessingProfile(next);
-        active.regexScripts = dedupeManagedRegexScripts(active.regexScripts);
-        const { expected, toRemove, toInstall } = planRegexCleanup(currentRegex, active);
-        if (!toRemove && !toInstall) throw new Error('没有发现多余的镜译正则。');
-        const message = toInstall
-          ? `删除 ${toRemove} 条多余的镜译正则，补上 ${toInstall} 条缺失的固定正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`
-          : `删除 ${toRemove} 条多余的镜译正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`;
-        if (!await confirmDestructive({ title: '删除多余正则', message, confirmLabel: '删除多余正则' })) return;
+        const engine = runtime.hostRegex || await loadHostRegex();
+        const plan = buildRegexCleanupPlan({ next, currentRegex, engine });
+        if (!plan) throw new Error('没有发现多余的镜译正则。');
+        if (!await confirmDestructive({ title: '删除多余正则', message: plan.message, confirmLabel: '删除多余正则' })) return;
         await persistProcessing(root, next);
-        toast('success', `已整理镜译正则：删除 ${toRemove} 条，补上 ${toInstall} 条，当前方案需要的 ${expected.length} 条都在。`);
+        await applyScopedRegexCleanup(plan, engine);
+        toast('success', `已整理镜译正则：删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条，当前方案需要的 ${plan.expected.length} 条都在。`);
       } else if (action === 'adopt-speakers') {
         // Every reported name the palette has not got yet, with no colour of its own. The hue each
         // one already has is name-derived, so nothing on screen moves until a real hair colour is
@@ -15844,13 +15897,22 @@ export function interceptGeneration(chat, _contextSize, _abort, type) {
   return interceptGenerationChat(chat);
 }
 
+// Fired once on activate to warm the cache for restoreStrippedFloors below, and awaited again by
+// the "删除多余正则" handler so a click that lands before that warm-up resolves still gets the real
+// engine instead of racing it. The same module namespace carries getScriptsByType/saveScriptsByType/
+// SCRIPT_TYPES alongside getRegexedString, so one cached import serves both callers.
+let hostRegexPromise = null;
 function loadHostRegex() {
-  if (runtime.hostRegex) return;
-  import('/scripts/extensions/regex/engine.js')
-    .then(engine => {
-      if (typeof engine?.getRegexedString === 'function') runtime.hostRegex = engine;
-    })
-    .catch(() => {});
+  if (runtime.hostRegex) return Promise.resolve(runtime.hostRegex);
+  if (!hostRegexPromise) {
+    hostRegexPromise = import('/scripts/extensions/regex/engine.js')
+      .then(engine => {
+        if (typeof engine?.getRegexedString === 'function') runtime.hostRegex = engine;
+        return runtime.hostRegex;
+      })
+      .catch(() => null);
+  }
+  return hostRegexPromise;
 }
 
 /**
@@ -16278,12 +16340,16 @@ if (typeof document !== 'undefined') {
 }
 
 // A test-only seam. `saveSettings` reaches into the DOM for the floating entry and the panel, which
-// a headless run has none of, so tests place settings and the lore cache directly.
-function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId } = {}) {
+// a headless run has none of, so tests place settings and the lore cache directly. `regexEngine`
+// stands in for the module loadHostRegex would otherwise dynamically import from the host -- a path
+// that does not resolve outside a real browser -- so a mocked SCRIPT_TYPES/getScriptsByType/
+// saveScriptsByType can be exercised without ever reaching the real import.
+function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine } = {}) {
   if (settings) runtime.settings = { ...runtime.settings, ...settings };
   if (worldInfoEntries !== undefined) runtime.wiEntries = worldInfoEntries;
   if (initialized !== undefined) runtime.initialized = initialized === true;
   if (deskExpandedChannelId !== undefined) runtime.deskExpandedChannelId = deskExpandedChannelId;
+  if (regexEngine !== undefined) runtime.hostRegex = regexEngine;
   return runtime.settings;
 }
 
@@ -16309,6 +16375,8 @@ export const __testing = Object.freeze({
   renumberSwipeRecords,
   initializeSettings,
   configureForTest,
+  buildRegexCleanupPlan,
+  applyScopedRegexCleanup,
   startTranslation,
   translateMessageStreaming,
   worldInfoKeyMatches,
