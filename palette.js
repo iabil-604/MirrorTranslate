@@ -653,6 +653,11 @@ export const MOVE_ELEMENT_HUES = Object.freeze({
 // unpredictable hue instead of the family the table already assigns it.
 const MOVE_ELEMENT_SUFFIXES = Object.freeze(['属性', '系', '之力', '魔法', '元素', '属']);
 
+// The English equivalent of the same descriptive suffixes, stripped as a trailing word ("fire magic")
+// rather than a bare substring, since English names their attribute with a space instead of tacking a
+// character straight on.
+const MOVE_ELEMENT_ENGLISH_SUFFIXES = Object.freeze(['magic', 'element', 'attribute', 'type', 'style', 'power']);
+
 // Common English names for the same attributes, so an answer given in English keeps the same hue as
 // its Chinese synonym instead of hashing to something unrelated. Matched case-insensitively.
 const MOVE_ELEMENT_ALIASES = Object.freeze({
@@ -681,19 +686,41 @@ function toHalfWidth(value) {
     .replace(/　/g, ' ');
 }
 
-// The table key an element name resolves to, after trimming, width-folding, an English alias and a
-// descriptive suffix are each tried in turn — or '' when none of that lands on a real entry, which
-// leaves the caller to fall back to the name's own hash exactly as it already did.
-export function normalizeMoveElementKey(element) {
-  const trimmed = toHalfWidth(element).trim();
-  if (!trimmed) return '';
-  if (Object.hasOwn(MOVE_ELEMENT_HUES, trimmed)) return trimmed;
-  const aliased = MOVE_ELEMENT_ALIASES[trimmed.toLowerCase()];
-  if (aliased) return aliased;
+// One descriptive suffix stripped off `value`, Chinese first (a bare substring, "属性"/"系"/…) then
+// English (a trailing word, "magic"/"type"/…); `value` itself when nothing strips, so the caller's own
+// loop knows to stop.
+function stripOneMoveElementSuffix(value) {
   for (const suffix of MOVE_ELEMENT_SUFFIXES) {
-    if (trimmed.length <= suffix.length || !trimmed.endsWith(suffix)) continue;
-    const stripped = trimmed.slice(0, -suffix.length);
-    if (Object.hasOwn(MOVE_ELEMENT_HUES, stripped)) return stripped;
+    if (value.length > suffix.length && value.endsWith(suffix)) return value.slice(0, -suffix.length);
+  }
+  const lower = value.toLowerCase();
+  for (const suffix of MOVE_ELEMENT_ENGLISH_SUFFIXES) {
+    const withSpace = ` ${suffix}`;
+    if (lower.length > withSpace.length && lower.endsWith(withSpace)) return value.slice(0, value.length - withSpace.length).trim();
+  }
+  return value;
+}
+
+// The table key an element name resolves to, after trimming and width-folding: the table itself, an
+// English alias, and a descriptive suffix are each tried in turn, stripping one more suffix and trying
+// both again whenever nothing yet matches — a small model stacks these freely (「雷系魔法」「冰属性魔
+// 法」「fire magic」) — until the value stops shrinking. '' when none of that ever lands on a real entry,
+// which leaves the caller to fall back to the name's own hash exactly as it already did.
+//
+// `Object.hasOwn` guards both lookups: a plain object indexed by a model-supplied key would otherwise
+// resolve an inherited property name ("constructor", "__proto__") to a function or a prototype instead
+// of refusing the key the way an unknown element already is.
+export function normalizeMoveElementKey(element) {
+  let current = toHalfWidth(element).trim();
+  const seen = new Set();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (Object.hasOwn(MOVE_ELEMENT_HUES, current)) return current;
+    const key = current.toLowerCase();
+    if (Object.hasOwn(MOVE_ELEMENT_ALIASES, key)) return MOVE_ELEMENT_ALIASES[key];
+    const stripped = stripOneMoveElementSuffix(current);
+    if (stripped === current) break;
+    current = stripped;
   }
   return '';
 }

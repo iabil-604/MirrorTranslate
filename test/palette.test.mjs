@@ -347,6 +347,28 @@ test('every element word the annotation prompt\'s own example uses (prompts.js) 
   }
 });
 
+test('a stacked or English descriptive suffix keeps stripping, and retries the table and the alias after each strip', () => {
+  // 雷系魔法: 魔法 strips to 雷系, then 系 strips to 雷 -- a real table entry only after two strips.
+  assert.equal(normalizeMoveElementKey('雷系魔法'), '雷');
+  // 冰属性魔法: 魔法 strips to 冰属性, then 属性 strips to 冰.
+  assert.equal(normalizeMoveElementKey('冰属性魔法'), '冰');
+  // "fire magic": the English suffix strips as a trailing word, then "fire" resolves through the alias
+  // table exactly like the bare word already does.
+  assert.equal(normalizeMoveElementKey('fire magic'), '火焰');
+  assert.equal(normalizeMoveElementKey('ICE ELEMENT'), '冰霜');
+});
+
+test('an element name that is an inherited object property never resolves through the alias table', () => {
+  // MOVE_ELEMENT_ALIASES is a plain object; a bracket lookup with no own-property guard would resolve
+  // these to Object's own constructor/prototype instead of refusing them like any other unknown name.
+  for (const probe of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+    assert.equal(normalizeMoveElementKey(probe), '', `「${probe}」不是属性名`);
+    const band = computeSafeBand(['#ffffff']);
+    const style = resolveMoveStyle({ element: probe, name: '红莲拳', tier: 1, band });
+    assert.match(style.hex, /^#[0-9a-f]{6}$/i, `${probe} 应该回退到按招式名取哈希色，而不是算出无效颜色`);
+  }
+});
+
 test('resolveMoveStyle gives a normalized element the same colour as its table synonym, and an unresolved one its own name hash instead', () => {
   const band = computeSafeBand(['#ffffff']);
   const plain = resolveMoveStyle({ element: '火', name: '红莲拳', tier: 1, band });

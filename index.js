@@ -83,6 +83,7 @@ import {
   readMoveMark,
   withoutCarriedColor,
   splitPiecesByRuns,
+  recolorMoveSpans,
   MARK_TAGS,
   RECOMMENDED_MARKS,
   FLOOR_BUTTON_MODES,
@@ -991,8 +992,19 @@ function saveSettings(next) {
     const nativeEdits = readNativeRegexEdits(context.extensionSettings.regex, active);
     if (nativeEdits.length) active.regexScripts = nativeEdits;
   }
+  // 取色 (runThemeProbe) only ever changes `coloring.band`, and 特效字/vividness live under the same
+  // object — none of those are in VISUAL_FIELDS (the four affix strings), so without this a floor's
+  // move colours would never be recomputed after a theme or background change, only after an affix or
+  // regex edit that happened to be saved alongside it.
+  const coloringBefore = normalizeColoring(previous.coloring);
+  const coloringAfter = normalizeColoring(runtime.settings.coloring);
+  const coloringChanged = coloringBefore.speakers !== coloringAfter.speakers
+    || coloringBefore.effects !== coloringAfter.effects
+    || coloringBefore.vividness !== coloringAfter.vividness
+    || JSON.stringify(coloringBefore.band) !== JSON.stringify(coloringAfter.band);
   const visualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
-    || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
+    || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts)
+    || coloringChanged;
   // A change of look re-renders translations already written; the reply being generated is still owed one.
   if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || visualChanged) cancelPendingWork({ gate: false });
   context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, active);
@@ -1072,6 +1084,21 @@ async function restyleCurrentChat(settings) {
       translation_prefix: settings.translationPrefix, translation_suffix: settings.translationSuffix,
     } };
   };
+  // A 只留译文 floor's shown text (assembleTranslationOnly) carries a move's own span directly, with
+  // none of the translation markers restyleBilingual looks for — its colour is recomputed straight on
+  // the text instead, the same recolorMoveSpans a marked block already gets. `meta` is whatever record
+  // (if any) this exact text was written under; passing none for a swipe that owns no record of its own
+  // leaves it alone, same as restyleBilingual already does above.
+  const restyleStrippedShown = (text, meta) => (meta?.stripped === true ? recolorMoveSpans(text, settings) : text);
+  // readFloor (core.js) tells an untouched stripped floor from a hand-edited one by projection_hash
+  // matching what is actually shown; any restyle that changes a stripped record's own text has to keep
+  // that fingerprint in step, or the very next read would call a floor nobody touched "diverged".
+  const refreshStrippedHash = (text, extra) => {
+    const meta = extra?.[MESSAGE_META_KEY];
+    if (meta?.stripped !== true) return extra;
+    const hash = hashTextSync(text);
+    return meta.projection_hash === hash ? extra : { ...extra, [MESSAGE_META_KEY]: { ...meta, projection_hash: hash } };
+  };
   for (const message of chat) {
     // Hidden floors are system messages to the host and still shown, with their affixes.
     if (!message || message.is_user || typeof message.mes !== 'string') continue;
@@ -1082,16 +1109,21 @@ async function restyleCurrentChat(settings) {
     const record = message.extra?.[MESSAGE_META_KEY];
     const ownRecord = !Array.isArray(message.swipes) || Boolean(message.swipe_info?.[shown])
       || !(Number(record?.schema_version) >= 4) || Number(record?.swipe_id) === shown;
-    const next = { mes: restyleBilingual(message.mes, settings, ownRecord ? record : undefined), extra: message.extra };
+    const usedRecord = ownRecord ? record : undefined;
+    const mes = restyleStrippedShown(restyleBilingual(message.mes, settings, usedRecord), usedRecord);
+    const next = { mes, extra: message.extra };
     if (next.mes !== message.mes) next.extra = updateExtra(message.extra, next.mes);
+    next.extra = refreshStrippedHash(next.mes, next.extra);
     next.extra = restyleMirror(next.extra);
     if (Array.isArray(message.swipes)) {
       next.swipes = [...message.swipes];
       next.swipe_info = message.swipe_info?.map(info => ({ ...info }));
       for (let index = 0; index < next.swipes.length; index += 1) {
         const extra = message.swipe_info?.[index]?.extra;
-        const text = index === Number(message.swipe_id ?? 0) ? next.mes : restyleBilingual(next.swipes[index], settings, extra?.[MESSAGE_META_KEY]);
+        const swipeRecord = extra?.[MESSAGE_META_KEY];
+        const text = index === shown ? next.mes : restyleStrippedShown(restyleBilingual(next.swipes[index], settings, swipeRecord), swipeRecord);
         if (text !== next.swipes[index] && next.swipe_info?.[index]) next.swipe_info[index].extra = updateExtra(extra, text);
+        if (next.swipe_info?.[index]) next.swipe_info[index].extra = refreshStrippedHash(text, next.swipe_info[index].extra);
         if (next.swipe_info?.[index]) next.swipe_info[index].extra = restyleMirror(next.swipe_info[index].extra);
         next.swipes[index] = text;
       }
@@ -1786,6 +1818,11 @@ function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new M
         // so it must not also inherit whatever font-size the surrounding piece (an emotion's rhythm
         // scale, most often) was already carrying — that would multiply the two instead of picking one.
         dropSurroundingCss: /<(?:big|small)[\s>]/i.test(fragment.format.open),
+        // The same flag the reading already computed for this run (core.js `isHiddenCarryTag`: struck
+        // through, or painted the same colour as its own background). A move carved out of a run marked
+        // this way must not get its own colour either (core.js `splitPiecesByRuns`), or the redacted
+        // words would read right through the blackout/strike.
+        hidden: Boolean(fragment.hidden),
       };
     }).filter(Boolean);
   };
@@ -1829,10 +1866,11 @@ function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new M
   };
   return (ids, texts = [], quoteFormatsByIndex = [], fragmentsByIndex = []) => {
     // Each line with its speech cut out and a paint, or none, for every quoted run in it, plus layer
-    // 2's per-quote carried wrappers and layer 3's resolved runs (moves first, so a move name and a
-    // carried fragment that happen to overlap settle on the move's colour — `splitPiecesByRuns` places
-    // the longer, and only the first, of two runs whose text is the same, but a move is always looked
-    // for first regardless of length).
+    // 2's per-quote carried wrappers and layer 3's resolved runs — moves and carried fragments carved
+    // together by length, longest first and only the first occurrence of each, with a carried fragment
+    // winning a tie: `splitPiecesByRuns` places moves and carried runs in the same pass, so a move name
+    // that lands inside an already-carried half-sentence is still found and coloured inside that run's
+    // own wrapper.
     const lines = ids.map((id, index) => {
       const text = String(texts[index] ?? '');
       const mark = annotations.get(id) ?? null;
@@ -16339,6 +16377,9 @@ export const __testing = Object.freeze({
   reanalyzeTtsFloor,
   ttsPrepared,
   saveSettings,
+  // The restyle a coloring/affix/regex change schedules (saveSettings's own `visualChanged`) chains onto
+  // this promise rather than running inline, so a test that needs to see its effect awaits it here.
+  processingRefresh: () => runtime.processingRefresh,
   syncTtsTransport,
   runTtsTransport,
   playTtsUtterance,
