@@ -502,7 +502,11 @@ function hasMarkerBesideN(rawSource) {
 // うふん apart from a genuine hiragana word or name of the identical shape (はけん, 派遣) — the same
 // accepted trade-off, just for a different shape.
 function isBareHiraganaMoan(letters, morae, rawSource) {
-  if (letters.length > 3 || /\p{Script=Katakana}/u.test(String(rawSource ?? ''))) return false;
+  if (/\p{Script=Katakana}/u.test(String(rawSource ?? ''))) return false;
+  // One beat drawn through a glide or small vowel into a different vowel before the ん (ひゃうん,
+  // きゃいん, ふぁうん): the same moan one letter longer, and just as unlike any word or name.
+  if (letters.length === 4) return 'ゃゅょぁぃぅぇぉ'.includes(letters[1]) && 'あいうえお'.includes(letters[2]) && letters[3] === 'ん';
+  if (letters.length > 3) return false;
   if (morae.length !== 1) return true; // two real morae touching directly (うふん, あはん, はうん)
   if (letters.length === 2) return 'あいうえお'.includes(morae[0]); // bare mora+ん: only the vowels (あん…), never は/か行 (けん, かん…), which read as an ordinary word
   return true; // the lone real mora's own glide sits between it and ん (ひゃん, きゃん) — no plain word or name is spelled that way

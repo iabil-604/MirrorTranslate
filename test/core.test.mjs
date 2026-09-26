@@ -2721,3 +2721,14 @@ test('channelPostscriptFoldSummary reads role and whether the postscript text is
   );
   assert.equal(channelPostscriptFoldSummary({ postscriptRole: 'bogus', postscript: '' }), 'user · 未设置', '未知身份回退到 user');
 });
+
+test('a one-beat hiragana moan drawn through a glide into another vowel before ん is accepted on a second echo, names still are not', async () => {
+  const { looksUntranslated, isShortExactEcho } = await import('../core.js');
+  for (const line of ['ひゃうん', 'きゃうん', 'ひゃいん', 'きゃいん', 'ふぁうん', 'あっ、ひゃうん', 'ひゃ、ひゃうん']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} still gets one real translation attempt`);
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a moan, accepted on a second identical echo`);
+  }
+  for (const line of ['アン', 'ケン', 'カン', 'オーエン', 'はっけん', 'けん', 'かん']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} is a name or a word, never accepted as an echo`);
+  }
+});
