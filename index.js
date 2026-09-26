@@ -33,6 +33,7 @@ import {
   createGenerationGate,
   createIndependentRequest,
   clampInteger,
+  deepClone,
   estimateRequestTokens,
   extractGeneratedTranslations,
   extractTaggedRegions,
@@ -113,6 +114,7 @@ import {
   voiceLibraryFoldSummary,
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
+  helperPromptFoldSummary,
 } from './core.js?v=0.38.0';
 import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.38.0';
 import {
@@ -225,10 +227,23 @@ import { sampleThemeBackground } from './theme-probe.js?v=0.38.0';
 import {
   addDiagnostic,
   clearDiagnostics,
+  filterDiagnosticsByFloor,
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
 } from './diagnostics.js?v=0.38.0';
+import {
+  DEFAULT_HELPER_PROMPT,
+  HELPER_QUICK_QUESTIONS,
+  applyHelperSuggestion,
+  availableHelperActionNames,
+  availableHelperFieldNames,
+  buildHelperContext,
+  describeHelperSuggestion,
+  parseHelperReply,
+  resolveHelperPrompt,
+  validateHelperSuggestions,
+} from './helper.js?v=0.38.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -385,6 +400,17 @@ const runtime = {
     clickCleanup: null,
     preview: null,
   },
+  // DESIGN §16 小助手: session-only, never persisted — closing the control center or reloading the
+  // page starts a fresh conversation. `turns` is oldest-first; each is
+  // { question, answer, suggestions, busy, error }, `suggestions` filled in once the reply is parsed
+  // and validated against the settings at that moment.
+  helper: {
+    turns: [],
+    busy: false,
+    // Cached once fetched — 使用手册.md never changes while the page is open, and a reader can ask
+    // several questions in a row.
+    manualPromise: null,
+  },
 };
 
 const CONTROL_CENTER_MARKUP = `
@@ -393,7 +419,7 @@ const CONTROL_CENTER_MARKUP = `
   <div class="jy-identity"><span class="jy-monogram" aria-hidden="true">镜</span><div><strong>镜译</strong><small>正文翻译器</small></div></div>
   <div class="jy-mode-switch" role="group" aria-label="界面模式"><button type="button" data-jy-action="set-ui-mode" data-jy-ui-mode="normal" aria-pressed="true">正常模式</button><button type="button" data-jy-action="set-ui-mode" data-jy-ui-mode="advanced" aria-pressed="false">高级模式</button></div>
   <nav class="jy-navigation" role="tablist" aria-label="工作区">
-  <button type="button" role="tab" aria-selected="true" data-jy-tab="main"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg></span>翻译台</button><button type="button" role="tab" aria-selected="false" data-jy-tab="finetune"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10"/><path d="M17 7h3"/><circle cx="14.5" cy="7" r="2.2"/><path d="M4 17h3"/><path d="M10 17h10"/><circle cx="7.5" cy="17" r="2.2"/></svg></span>微调</button><button type="button" role="tab" aria-selected="false" data-jy-tab="prompt"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg></span>翻译规则</button><button type="button" role="tab" aria-selected="false" data-jy-tab="settings"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg></span>模型连接</button><button type="button" role="tab" aria-selected="false" data-jy-tab="processing"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg></span>正文处理</button><button type="button" role="tab" aria-selected="false" data-jy-tab="tts"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6"/><path d="M18.3 6.2a8.2 8.2 0 0 1 0 11.6"/></svg></span>朗读</button><button type="button" role="tab" aria-selected="false" data-jy-tab="logs"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg></span>运行记录</button>
+  <button type="button" role="tab" aria-selected="true" data-jy-tab="main"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg></span>翻译台</button><button type="button" role="tab" aria-selected="false" data-jy-tab="finetune"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10"/><path d="M17 7h3"/><circle cx="14.5" cy="7" r="2.2"/><path d="M4 17h3"/><path d="M10 17h10"/><circle cx="7.5" cy="17" r="2.2"/></svg></span>微调</button><button type="button" role="tab" aria-selected="false" data-jy-tab="prompt"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg></span>翻译规则</button><button type="button" role="tab" aria-selected="false" data-jy-tab="settings"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg></span>模型连接</button><button type="button" role="tab" aria-selected="false" data-jy-tab="processing"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg></span>正文处理</button><button type="button" role="tab" aria-selected="false" data-jy-tab="tts"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6"/><path d="M18.3 6.2a8.2 8.2 0 0 1 0 11.6"/></svg></span>朗读</button><button type="button" role="tab" aria-selected="false" data-jy-tab="helper"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M9.8 9.8a2.3 2.3 0 1 1 3.4 2c-.8.5-1.2 1-1.2 2"/><circle cx="12" cy="16.3" r="0.9" fill="currentColor" stroke="none"/></svg></span>小助手</button><button type="button" role="tab" aria-selected="false" data-jy-tab="logs"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg></span>运行记录</button>
   </nav>
   <details class="jy-theme-picker"><summary><span aria-hidden="true">◐</span> 外观</summary><div class="jy-theme-options"><button type="button" data-jy-action="set-theme" data-jy-theme="day" aria-pressed="false"><i aria-hidden="true"></i>日间</button><button type="button" data-jy-action="set-theme" data-jy-theme="night" aria-pressed="false"><i aria-hidden="true"></i>夜间</button><button type="button" data-jy-action="set-theme" data-jy-theme="fresh" aria-pressed="false"><i aria-hidden="true"></i>护眼小清新</button><button type="button" data-jy-action="set-theme" data-jy-theme="vampire" aria-pressed="false"><i aria-hidden="true"></i>华美吸血鬼</button><button type="button" data-jy-action="set-theme" data-jy-theme="glass" aria-pressed="false"><i aria-hidden="true"></i>极简毛玻璃</button></div></details><div class="jy-rail-bottom"><span class="jy-version">v${APP_VERSION}</span><button type="button" data-jy-action="check-update" class="jy-update-button" hidden aria-label="检查镜译更新">↻ <span data-jy-update-label>检查更新</span></button></div><p class="jy-update-notice" data-jy-update-notice hidden role="status"></p>
 </aside>
@@ -582,6 +608,7 @@ const CONTROL_CENTER_MARKUP = `
  </div></details><details class="jy-fold" data-jy-fold="channel-postscript"><summary><h2>这条连接的后置提示词（附在每次请求的最末尾）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存；一本都不开则节约模式下完全不带世界书。</p></details>
  <div class="jy-actions"><span class="jy-actions-spacer"></span><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="delete-channel">删除这条连接</button></div>
 </div>
+<section class="jy-card"><details class="jy-fold" data-jy-fold="helper-prompt"><summary><h2>小助手的提示词</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">小助手回答时用的提示词。留空就用镜译内置的（下面占位的文字就是它），资料本身——设置、当前楼层、运行记录——不受这里影响，一直都会给到小助手。</p><textarea data-jy-helper-prompt rows="6" spellcheck="false"></textarea><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="helper-reset-prompt">恢复默认</button></div></div></details></section>
 </section>
 
 <section class="jy-page" data-jy-page="processing" role="tabpanel" hidden>
@@ -718,6 +745,17 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 </section>
 </div>
+</section>
+
+<section class="jy-page" data-jy-page="helper" role="tabpanel" hidden>
+<header class="jy-page-heading"><div><h1>小助手</h1><span class="jy-page-context">只读：会看你的设置、这一楼的状态和运行记录；给出的改动要点「照这样改」才会真的生效</span></div></header>
+<div class="jy-ask-chips" data-jy-helper-quick></div>
+<div class="jy-helper-conversation" data-jy-helper-conversation aria-live="polite"></div>
+<footer class="jy-footer jy-helper-footer">
+ <textarea rows="3" data-jy-helper-input placeholder="问小助手…" aria-label="向小助手提问"></textarea>
+ <div class="jy-helper-input-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="helper-ask">发送</button><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="helper-clear">清空</button></div>
+ <p class="jy-muted jy-helper-note" data-jy-helper-note></p>
+</footer>
 </section>
 
 <section class="jy-page" data-jy-page="logs" role="tabpanel" hidden>
@@ -8874,7 +8912,7 @@ function applyTranslationChoice(settings, choice) {
 
 // core.js CONNECTION_USES ids, named the way the page already names them — kept here rather than in
 // core.js because it is display text, not settings logic.
-const CONNECTION_USE_LABELS = Object.freeze({ translation: '翻译', analysis: '朗读分析', deep: '深度分析' });
+const CONNECTION_USE_LABELS = Object.freeze({ translation: '翻译', analysis: '朗读分析', deep: '深度分析', helper: '小助手' });
 
 /** Which connection each feature uses right now, and where that is chosen. Nothing in the DESIGN
  * §15.4 markup renders this list any more (模型连接 页's own 用在 checkboxes cover the same ground
@@ -9405,6 +9443,7 @@ function syncFields(root, settings) {
   syncTtsFields(root, settings);
   syncDeskFields(root, settings);
   syncFinetuneFields(root, settings);
+  syncHelperFields(root, settings);
   updateSummary(root, settings);
 }
 
@@ -11589,12 +11628,382 @@ async function applyScopedRegexCleanup(plan, engine) {
   if (!runtime.mainGenerationActive && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
 }
 
+/**
+ * "删除多余正则", start to finish: builds the plan, asks to confirm, writes it. Pulled out of its own
+ * click branch so 小助手's whitelisted `cleanup-regex` action (DESIGN §16 item 7) can run the exact
+ * same thing instead of a second copy of it. Returns the applied plan, or null when the reader
+ * cancelled the confirmation — buildRegexCleanupPlan already throws when there is nothing to clean.
+ */
+async function performRegexDedupe(root) {
+  const currentRegex = getContext().extensionSettings.regex ?? [];
+  const next = collectSettings(root);
+  const engine = runtime.hostRegex || await loadHostRegex();
+  const plan = buildRegexCleanupPlan({ next, currentRegex, engine });
+  if (!plan) throw new Error('没有发现多余的镜译正则。');
+  if (!await confirmDestructive({ title: '删除多余正则', message: plan.message, confirmLabel: '删除多余正则' })) return null;
+  await persistProcessing(root, next);
+  await applyScopedRegexCleanup(plan, engine);
+  return plan;
+}
+
+/**
+ * "从角色卡和世界书识别角色", start to finish: asks the model, lets the reader pick, writes the picks
+ * into the voice table. Pulled out the same way performRegexDedupe is, for 小助手's `detect-cast`
+ * action. Returns how many were added, or null when the reader cancelled the picker.
+ */
+async function performCastImport(root) {
+  const next = collectSettings(root);
+  setText(root, '[data-jy-tts-save-note]', '正在读角色卡和世界书、识别角色…');
+  let found;
+  try {
+    found = await importCastFromWorldbook(next);
+  } finally {
+    setText(root, '[data-jy-tts-save-note]', '');
+  }
+  const { cast, dropped } = found;
+  const characterKey = ttsVoicesKey(next);
+  const existing = ttsVoicesFor(next);
+  // Somebody already in the table under any spelling is the same somebody: a row is not added
+  // for 桜井 next to the 樱井 who has 桜井 among her aliases.
+  const known = new Set(voiceRosterNames(existing).map(spelling => spelling.toLowerCase()));
+  const fresh = cast.filter(person => ![person.name, ...person.aliases].some(spelling => known.has(spelling.toLowerCase())));
+  if (!fresh.length) {
+    throw new Error(cast.length
+      ? `识别出的 ${cast.length} 个角色都已经在表里了。`
+      : `副模型没有从角色卡和世界书里识别出人物角色${dropped.length ? `；它说的 ${dropped.length} 个都没通过核对，运行记录里有明细` : ''}。`);
+  }
+  const chosen = await askCastPicks(fresh, { already: cast.length - fresh.length, dropped });
+  if (!chosen) return null;
+  if (!chosen.length) throw new Error('一个都没勾，角色表没有变。');
+  // Unlocked: no voice of their own, so they read in the dialogue default until given one.
+  const added = chosen.map(person => ({ name: person.name, aliases: person.aliases, voiceId: '', voices: {}, locked: false, title: '' }));
+  next.ttsVoices = { ...(next.ttsVoices || {}), [characterKey]: [...existing, ...added] };
+  saveSettings(next);
+  renderTtsVoiceList(root, runtime.settings);
+  return added.length;
+}
+
+// ---------------------------------------------------------------------------------------------
+// DESIGN §16 小助手. helper.js stays pure (context building, the default prompt, reply parsing,
+// suggestion validation); everything here is the DOM/host-facing half — gathering the raw data that
+// goes into buildHelperContext, asking the connection it is pointed at, and rendering the page. The
+// same split tts-deep.js keeps between its own pure half and the runtime code that calls it.
+// ---------------------------------------------------------------------------------------------
+
+const HELPER_MANUAL_PATH = './使用手册.md';
+
+/** 使用手册.md, fetched once and cached for the session (DESIGN §16 item 5's lower-priority knowledge
+ * supplement) — a reader who never asks anything never pays for it, and a host that cannot serve the
+ * file still gets an answer, just without this part. */
+function loadHelperManual() {
+  if (!runtime.helper.manualPromise) {
+    runtime.helper.manualPromise = fetch(new URL(HELPER_MANUAL_PATH, import.meta.url))
+      .then(response => (response.ok ? response.text() : ''))
+      .catch(() => '');
+  }
+  return runtime.helper.manualPromise;
+}
+
+/** 酒馆自己的版本号, best-effort from its own /version route; '' when it cannot be read (an older
+ * host, the route missing, a network hiccup) rather than a thrown error over something this minor. */
+async function fetchHostVersion() {
+  try {
+    const response = await fetch('/version', { method: 'GET', headers: requestHeaders(), cache: 'no-store' });
+    if (!response.ok) return '';
+    const data = await response.json();
+    return String(data?.pkgVersion ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function helperVersionsSnapshot() {
+  const context = getContext();
+  // 酒馆的主 API 面板把同一个 #stream_toggle 复选框换绑到不同后端的设置上，而不是每种后端各有一个 id
+  // 不同的开关，所以不管主 API 是什么，读它当下的勾选状态就是当下这条主连接的流式开关。
+  let streaming = false;
+  try {
+    streaming = document.querySelector('#stream_toggle')?.checked === true;
+  } catch {
+    streaming = false;
+  }
+  return {
+    appVersion: APP_VERSION,
+    hostVersion: await fetchHostVersion(),
+    mainApi: String(context.mainApi ?? '未知'),
+    streaming,
+  };
+}
+
+// A floor with a very noisy history would otherwise crowd out everything else in the context; the
+// most recent handful is what a reply actually needs.
+const HELPER_FLOOR_ERROR_LIMIT = 5;
+
+/**
+ * The current floor's own snapshot for 小助手's context: index, role, swipe, which tags were actually
+ * found (the very report "检查当前楼层" itself shows, via inspectTagConfiguration), segment count,
+ * translated/partly/not, this floor's own recent errors from the run log, and the floor's own text —
+ * buildFloorSnapshotLines is what bounds and formats it. null when there is no assistant floor to read.
+ */
+async function helperFloorSnapshot(settings) {
+  let snapshot;
+  try {
+    snapshot = await readMessageSnapshot(null, settings, { quiet: true });
+  } catch {
+    return null;
+  }
+  // readMessageSnapshot's own `source` is already stripGeneratedTranslationLines'd (see its
+  // `cleanMessage`); the floor's own recorded metadata — the same inspectCurrentFloor reads — is what
+  // resolveSegmentationVersion needs to agree with a floor translated under older segmentation rules.
+  const floor = readFloor(snapshot.message);
+  const metadata = floor.metadata ?? snapshot.message?.extra?.[MESSAGE_META_KEY];
+  const report = inspectTagConfiguration(
+    snapshot.source,
+    settings.bodyTags,
+    settings.excludedTags,
+    {
+      segmentPrefix: settings.segmentPrefix,
+      segmentSuffix: settings.segmentSuffix,
+      preserveLineRules: settings.preserveLineRules,
+      lyricLineRules: settings.lyricLineRules,
+      musicCardRules: settings.musicCardRules,
+      paragraphPerLine: settings.paragraphPerLine,
+      replaceTags: settings.replaceTags,
+      segmentationVersion: resolveSegmentationVersion(snapshot.source, metadata, { stripped: snapshot.stripped }),
+    },
+  );
+  const doneCount = snapshot.existingTranslations.size;
+  const totalCount = snapshot.segments.length;
+  const translationState = !totalCount ? '没有正文'
+    : doneCount === totalCount ? '已译'
+      : doneCount === 0 ? '未译'
+        : `缺 ${totalCount - doneCount} 段`;
+  const totalSwipes = Array.isArray(snapshot.message?.swipes) ? snapshot.message.swipes.length : 1;
+  const errors = filterDiagnosticsByFloor(readDiagnostics(), snapshot.messageId)
+    .filter(entry => entry.level !== 'info')
+    .slice(-HELPER_FLOOR_ERROR_LIMIT)
+    .map(entry => `[${String(entry.level).toUpperCase()}] ${entry.message}`);
+  return {
+    messageId: snapshot.messageId,
+    role: snapshot.message?.name || 'AI',
+    swipeLabel: `${snapshot.swipeId + 1} / ${Math.max(1, totalSwipes)}`,
+    segmentCount: totalCount,
+    translationState,
+    bodyTagsFound: report.bodyTags.filter(item => item.count).map(item => item.tag),
+    replaceTagsFound: report.replaceTags.filter(item => item.count).map(item => item.tag),
+    excludedTagsFound: report.excludedTags.filter(item => item.count).map(item => item.tag),
+    translationOnly: Boolean(snapshot.stripped),
+    errors,
+    preview: snapshot.source,
+  };
+}
+
+/**
+ * How many 镜译 regex rules the current profile expects and how many are surplus — the same read
+ * buildRegexCleanupPlan does for "删除多余正则"'s own confirmation, but on a clone: this is only ever
+ * looking, and buildRegexCleanupPlan writes its dedupe straight onto the profile object it is handed.
+ */
+function helperRegexSnapshot(settings) {
+  try {
+    const currentRegex = getContext().extensionSettings?.regex ?? [];
+    const active = deepClone(getActiveProcessingProfile(settings));
+    active.regexScripts = dedupeManagedRegexScripts(active.regexScripts);
+    const { expected, toRemove } = planRegexCleanup(currentRegex, active);
+    return { expected: expected.length, surplus: toRemove, nativeRegexInstalled: runtime.nativeRegexInstalled };
+  } catch (error) {
+    recordDiagnostic('warn', 'helper.regex-snapshot', `读取正则情况失败：${safeError(error)}`);
+    return { expected: 0, surplus: 0, nativeRegexInstalled: runtime.nativeRegexInstalled };
+  }
+}
+
+/** DESIGN §16.2 对话卡片列表 — rebuilt whenever a turn is added, finishes, or one of its suggestions
+ * changes state. Session-only state (runtime.helper.turns), never settings. */
+function renderHelperConversation(root) {
+  const container = root.querySelector('[data-jy-helper-conversation]');
+  if (!container) return;
+  const doc = container.ownerDocument;
+  container.replaceChildren(...runtime.helper.turns.map((turn, turnIndex) => {
+    const card = doc.createElement('section');
+    card.className = 'jy-brief jy-desk-card jy-helper-turn';
+    const question = doc.createElement('p');
+    question.className = 'jy-helper-question';
+    question.textContent = turn.question;
+    const answer = doc.createElement('p');
+    answer.className = 'jy-helper-answer';
+    if (turn.busy) {
+      const mark = doc.createElement('span');
+      mark.className = 'jy-state-mark';
+      mark.dataset.state = 'busy';
+      mark.setAttribute('aria-hidden', 'true');
+      mark.textContent = '◌';
+      answer.append(mark, doc.createTextNode(' 正在想…'));
+    } else if (turn.error) {
+      answer.classList.add('is-error');
+      answer.textContent = turn.error;
+    } else {
+      answer.textContent = turn.answer || '（没有回答）';
+    }
+    card.append(question, answer);
+    if (turn.suggestions?.length) {
+      const list = doc.createElement('div');
+      list.className = 'jy-helper-suggestions';
+      list.append(...turn.suggestions.map((suggestion, suggestionIndex) => {
+        const row = doc.createElement('div');
+        row.className = 'jy-helper-suggestion';
+        const text = doc.createElement('span');
+        text.textContent = describeHelperSuggestion(suggestion);
+        row.appendChild(text);
+        const tail = doc.createElement('span');
+        if (suggestion.applied === 'done') {
+          const done = doc.createElement('span');
+          done.className = 'jy-helper-suggestion-done';
+          done.textContent = '✓ 已改';
+          tail.appendChild(done);
+          if (suggestion.resultNote) {
+            const note = doc.createElement('span');
+            note.className = 'jy-muted';
+            note.textContent = ` · ${suggestion.resultNote}`;
+            tail.appendChild(note);
+          }
+        } else if (suggestion.applied === 'noop') {
+          tail.className = 'jy-muted';
+          tail.textContent = '现在已经是这样了';
+        } else if (suggestion.applied === 'cancelled') {
+          tail.className = 'jy-muted';
+          tail.textContent = '已取消';
+        } else {
+          const button = doc.createElement('button');
+          button.type = 'button';
+          button.className = 'jy-button';
+          button.dataset.jyAction = 'helper-apply';
+          button.dataset.jyTurn = String(turnIndex);
+          button.dataset.jySuggestion = String(suggestionIndex);
+          button.textContent = '照这样改';
+          tail.appendChild(button);
+        }
+        row.appendChild(tail);
+        return row;
+      }));
+      card.appendChild(list);
+    }
+    return card;
+  }));
+  container.scrollTop = container.scrollHeight;
+}
+
+/** DESIGN §16.3: the page-level 小助手提示词 fold on 模型连接, the quick-question row and the muted
+ * note under the input — everything on the helper page driven by settings rather than the
+ * conversation itself (renderHelperConversation covers that separately). */
+function syncHelperFields(root, settings) {
+  const helper = settings.helper || {};
+  const promptField = root.querySelector('[data-jy-helper-prompt]');
+  if (promptField) {
+    // Same as every other autosaved text field on this page (data-jy-channel-field, data-jy-tts-prompt,
+    // …): by the time a resync runs, the field's own change event has already fired with this exact
+    // value, so writing it back here is never a visible overwrite of something still being typed.
+    promptField.value = helper.prompt || '';
+    promptField.placeholder = DEFAULT_HELPER_PROMPT;
+  }
+  setText(root, '[data-jy-fold="helper-prompt"] [data-jy-fold-summary]', helperPromptFoldSummary(helper));
+
+  const quick = root.querySelector('[data-jy-helper-quick]');
+  if (quick && !quick.childElementCount) {
+    const doc = quick.ownerDocument;
+    quick.append(...HELPER_QUICK_QUESTIONS.map(question => {
+      const button = doc.createElement('button');
+      button.type = 'button';
+      button.dataset.jyAction = 'helper-quick';
+      button.dataset.jyHelperQuestion = question;
+      button.textContent = question;
+      return button;
+    }));
+  }
+
+  const note = root.querySelector('[data-jy-helper-note]');
+  if (note) {
+    const doc = note.ownerDocument;
+    const choice = connectionUseChoice(settings, 'helper');
+    note.replaceChildren(doc.createTextNode('会发送：版本、设置摘要（密钥只写已填/没填）、当前楼层状态、最近运行记录、正则情况、控制中心自身说明。走连接：'));
+    const link = doc.createElement('button');
+    link.type = 'button';
+    link.className = 'jy-text-button';
+    link.dataset.jyAction = 'helper-open-connection';
+    link.textContent = channelLabel(settings, choice, { short: true });
+    note.appendChild(link);
+    note.appendChild(doc.createTextNode('。'));
+  }
+}
+
+/** Asks 小助手 one question: gathers the context, sends it on the connection settings.helper points
+ * at (the same request path 朗读分析 uses — onChannel + requestSubModelRaw, follow/independent,
+ * timeouts and abort all included), parses the reply, and validates whatever suggestions it proposed
+ * against the settings as they stand right now. */
+async function askHelper(root, question) {
+  const trimmed = String(question ?? '').trim();
+  if (!trimmed || runtime.helper.busy) return;
+  const settings = runtime.settings;
+  const turn = { question: trimmed, answer: '', suggestions: [], busy: true, error: '' };
+  runtime.helper.turns.push(turn);
+  runtime.helper.busy = true;
+  const textarea = root.querySelector('[data-jy-helper-input]');
+  if (textarea) textarea.value = '';
+  renderHelperConversation(root);
+  const started = Date.now();
+  const request = onChannel(settings, connectionUseChoice(settings, 'helper'));
+  let contextLength = 0;
+  try {
+    const [manual, floor, versions] = await Promise.all([loadHelperManual(), helperFloorSnapshot(settings), helperVersionsSnapshot()]);
+    const regex = helperRegexSnapshot(settings);
+    // Only the last few turns go back as history (DESIGN §16 item 4); the full context is only ever
+    // built for the question actually being asked now.
+    const history = runtime.helper.turns.slice(0, -1).slice(-3);
+    const built = buildHelperContext({
+      versions, settings, floor, runLog: readDiagnostics(), regex,
+      knowledgeMarkup: CONTROL_CENTER_MARKUP, manual,
+      availableFields: availableHelperFieldNames(), availableActions: availableHelperActionNames(),
+    });
+    contextLength = built.length;
+    const messages = [
+      { role: 'system', content: resolveHelperPrompt(settings.helper) },
+      ...history.flatMap(item => [{ role: 'user', content: item.question }, { role: 'assistant', content: item.answer || '' }]),
+      { role: 'user', content: `${built.text}\n\n----\n问题：${trimmed}` },
+    ];
+    const raw = await requestSubModelRaw(messages, request, undefined);
+    const parsed = parseHelperReply(raw);
+    turn.answer = parsed.text || '（没有回答）';
+    turn.suggestions = validateHelperSuggestions(parsed.rawSuggestions, runtime.settings);
+    recordDiagnostic('info', 'helper.ask', `小助手回答完成，用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒。`, {
+      endpoint: describeChannelEndpoint(request),
+      apiMode: request.apiMode,
+      contextLength,
+      replyLength: turn.answer.length,
+      suggestions: turn.suggestions.length,
+    });
+  } catch (error) {
+    turn.error = isAbortError(error)
+      ? '请求已取消。'
+      : `没问到：${safeError(error)}。可以检查下面「走连接」写的那条连接是不是能用，或者换一条连接再试。`;
+    recordDiagnostic('error', 'helper.ask-failed', `小助手请求失败：${safeError(error)}`, {
+      endpoint: describeChannelEndpoint(request),
+      apiMode: request.apiMode,
+      contextLength,
+    });
+  } finally {
+    turn.busy = false;
+    runtime.helper.busy = false;
+    renderHelperConversation(root);
+  }
+}
+
 function createControlCenter(rootDocument = document) {
   const container = rootDocument.createElement('div');
   container.innerHTML = CONTROL_CENTER_MARKUP;
   const root = container.firstElementChild;
   syncFields(root, runtime.settings);
   refreshCurrentCard(root);
+  // Session-only conversation state (runtime.helper.turns), not part of settings: reopening the
+  // control center within the same page load picks up where it left off, syncFields above does not.
+  renderHelperConversation(root);
 
   const unsubscribe = subscribeTask(task => {
     updateTaskUi(root, task);
@@ -11765,15 +12174,67 @@ function createControlCenter(rootDocument = document) {
         // prefix (see isJingyiRegex), never by name alone, so a reader's own rule is never touched
         // even when it happens to share a name. Destructive, so it asks first, same as the other
         // bulk-remove buttons on this page.
-        const currentRegex = getContext().extensionSettings.regex ?? [];
+        const plan = await performRegexDedupe(root);
+        if (plan) toast('success', `已整理镜译正则：删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条，当前方案需要的 ${plan.expected.length} 条都在。`);
+      } else if (action === 'helper-quick') {
+        await askHelper(root, button.dataset.jyHelperQuestion || '');
+      } else if (action === 'helper-ask') {
+        await askHelper(root, root.querySelector('[data-jy-helper-input]')?.value || '');
+      } else if (action === 'helper-clear') {
+        if (!runtime.helper.turns.length) return;
+        if (!await confirmDestructive({ title: '清空对话', message: '清空这次和小助手的对话？不会改动任何设置。', confirmLabel: '清空' })) return;
+        runtime.helper.turns = [];
+        renderHelperConversation(root);
+      } else if (action === 'helper-reset-prompt') {
         const next = collectSettings(root);
-        const engine = runtime.hostRegex || await loadHostRegex();
-        const plan = buildRegexCleanupPlan({ next, currentRegex, engine });
-        if (!plan) throw new Error('没有发现多余的镜译正则。');
-        if (!await confirmDestructive({ title: '删除多余正则', message: plan.message, confirmLabel: '删除多余正则' })) return;
-        await persistProcessing(root, next);
-        await applyScopedRegexCleanup(plan, engine);
-        toast('success', `已整理镜译正则：删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条，当前方案需要的 ${plan.expected.length} 条都在。`);
+        next.helper = { ...next.helper, prompt: '' };
+        saveSettings(next);
+        syncFields(root, runtime.settings);
+      } else if (action === 'helper-open-connection') {
+        selectTab(runtime.settings.uiMode === 'advanced' ? 'settings' : 'main');
+      } else if (action === 'helper-apply') {
+        const turnIndex = Number(button.dataset.jyTurn);
+        const suggestionIndex = Number(button.dataset.jySuggestion);
+        const suggestion = runtime.helper.turns[turnIndex]?.suggestions?.[suggestionIndex];
+        if (!suggestion || suggestion.applied) return;
+        if (suggestion.type === 'action') {
+          if (suggestion.action === 'open-page') {
+            selectTab(suggestion.value);
+            suggestion.applied = 'done';
+          } else if (suggestion.action === 'inspect-floor') {
+            const report = await inspectCurrentFloor(root);
+            suggestion.resultNote = report.errors.length
+              ? `发现 ${report.errors.length} 个问题：${report.errors[0]}`
+              : `标签结构正常，${report.paragraphs} 个段落、${report.translationUnits} 行可翻译内容`;
+            suggestion.applied = 'done';
+          } else if (suggestion.action === 'detect-cast') {
+            const added = await performCastImport(root);
+            if (added === null) suggestion.applied = 'cancelled';
+            else { suggestion.resultNote = `加入了 ${added} 个角色`; suggestion.applied = 'done'; }
+          } else if (suggestion.action === 'cleanup-regex') {
+            const plan = await performRegexDedupe(root);
+            if (!plan) suggestion.applied = 'cancelled';
+            else { suggestion.resultNote = `删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条`; suggestion.applied = 'done'; }
+          }
+          renderHelperConversation(root);
+          return;
+        }
+        // Re-validated against the settings as they stand right now — something may have changed this
+        // very field since the reply came in, and a suggestion that is now a no-op says so instead of
+        // silently doing nothing (DESIGN §16 item 7).
+        const current = collectSettings(root);
+        const revalidated = validateHelperSuggestion({ type: 'set', field: suggestion.field, value: suggestion.value }, current);
+        if (!revalidated) {
+          suggestion.applied = 'noop';
+          renderHelperConversation(root);
+          return;
+        }
+        // The same save path autosave uses, so the console, preset drift and everything else refresh
+        // right along with it (DESIGN §16 item 7).
+        saveSettings(applyHelperSuggestion(current, revalidated));
+        suggestion.applied = 'done';
+        withFocusPreserved(root, () => syncFields(root, runtime.settings));
+        renderHelperConversation(root);
       } else if (action === 'adopt-speakers') {
         // Every reported name the palette has not got yet, with no colour of its own. The hue each
         // one already has is name-derived, so nothing on screen moves until a real hair colour is
@@ -12101,35 +12562,8 @@ function createControlCenter(rootDocument = document) {
         saveSettings(collectSettings(root));
         syncTtsFields(root, runtime.settings);
       } else if (action === 'tts-import-worldbook') {
-        const next = collectSettings(root);
-        setText(root, '[data-jy-tts-save-note]', '正在读角色卡和世界书、识别角色…');
-        let found;
-        try {
-          found = await importCastFromWorldbook(next);
-        } finally {
-          setText(root, '[data-jy-tts-save-note]', '');
-        }
-        const { cast, dropped } = found;
-        const characterKey = ttsVoicesKey(next);
-        const existing = ttsVoicesFor(next);
-        // Somebody already in the table under any spelling is the same somebody: a row is not added
-        // for 桜井 next to the 樱井 who has 桜井 among her aliases.
-        const known = new Set(voiceRosterNames(existing).map(spelling => spelling.toLowerCase()));
-        const fresh = cast.filter(person => ![person.name, ...person.aliases].some(spelling => known.has(spelling.toLowerCase())));
-        if (!fresh.length) {
-          throw new Error(cast.length
-            ? `识别出的 ${cast.length} 个角色都已经在表里了。`
-            : `副模型没有从角色卡和世界书里识别出人物角色${dropped.length ? `；它说的 ${dropped.length} 个都没通过核对，运行记录里有明细` : ''}。`);
-        }
-        const chosen = await askCastPicks(fresh, { already: cast.length - fresh.length, dropped });
-        if (!chosen) return;
-        if (!chosen.length) throw new Error('一个都没勾，角色表没有变。');
-        // Unlocked: no voice of their own, so they read in the dialogue default until given one.
-        const added = chosen.map(person => ({ name: person.name, aliases: person.aliases, voiceId: '', voices: {}, locked: false, title: '' }));
-        next.ttsVoices = { ...(next.ttsVoices || {}), [characterKey]: [...existing, ...added] };
-        saveSettings(next);
-        renderTtsVoiceList(root, runtime.settings);
-        toast('success', `加入 ${added.length} 个角色。它们先跟随对白默认音色，绑定专属音色后就会锁定。`);
+        const added = await performCastImport(root);
+        if (added !== null) toast('success', `加入 ${added} 个角色。它们先跟随对白默认音色，绑定专属音色后就会锁定。`);
       } else if (action === 'tts-clear-voices') {
         // DESIGN §15.4 危险操作: every other destructive action here goes through the shared .jy-ask
         // confirm; this one still used the browser's own native confirm() — different styling, theme
@@ -12399,6 +12833,15 @@ function createControlCenter(rootDocument = document) {
         // renderDeskConnections (inside syncFields) rebuilds this very row's form; without
         // withFocusPreserved, Tab from 地址 to 密钥 lands on <body> instead (review finding
         // index.js:11759/9054's evidence).
+        withFocusPreserved(root, () => syncFields(root, runtime.settings));
+      } catch (error) { toast('error', safeError(error)); }
+      return;
+    }
+    if (event.target.matches('[data-jy-helper-prompt]')) {
+      try {
+        const next = collectSettings(root);
+        next.helper = { ...next.helper, prompt: event.target.value };
+        saveSettings(next);
         withFocusPreserved(root, () => syncFields(root, runtime.settings));
       } catch (error) { toast('error', safeError(error)); }
       return;

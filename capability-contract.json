@@ -81,6 +81,27 @@
       "symbol": "/api/extensions/discover + /api/extensions/version + /api/extensions/update",
       "required": false,
       "fallback": "use-sillytavern-extension-manager"
+    },
+    {
+      "id": "helper-host-version",
+      "owner": "sillytavern",
+      "symbol": "/version",
+      "required": false,
+      "fallback": "omit-host-version-from-helper-context"
+    },
+    {
+      "id": "helper-main-api",
+      "owner": "sillytavern",
+      "symbol": "SillyTavern.getContext().mainApi",
+      "required": false,
+      "fallback": "report-main-api-as-unknown"
+    },
+    {
+      "id": "helper-stream-toggle",
+      "owner": "sillytavern",
+      "symbol": "#stream_toggle",
+      "required": false,
+      "fallback": "report-streaming-as-off"
     }
   ]
 }

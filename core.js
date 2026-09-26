@@ -907,6 +907,14 @@ export const DEFAULT_TTS = Object.freeze({
   fish: DEFAULT_FISH,
 });
 
+// DESIGN §16 小助手: a read-only helper the reader can ask about the current settings/floor/run log.
+// 'follow' is the same "跟随酒馆" value every other connection use understands (see CONNECTION_USES
+// below); an empty prompt means the default prompt in helper.js, shown as its placeholder.
+export const DEFAULT_HELPER = Object.freeze({
+  channelId: 'follow',
+  prompt: '',
+});
+
 export const DEFAULT_SETTINGS = Object.freeze({
   schemaVersion: 13,
   // The control center rail: 'normal' shows the small three-page layout (翻译台 · 微调 · 运行记录),
@@ -920,6 +928,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   coloring: DEFAULT_COLORING,
   speakerPalette: {},
   tts: DEFAULT_TTS,
+  helper: DEFAULT_HELPER,
   ttsVoices: {},
   // Voice ids the reader has saved by name, shared across every character card.
   voiceLibrary: [],
@@ -980,11 +989,12 @@ const FLOOR_BUTTON_LEGACY = Object.freeze({ auto: 'line', on: 'sentence' });
 export const UI_MODES = Object.freeze(['normal', 'advanced']);
 export const CONSOLE_PRESET_IDS = Object.freeze(['light', 'comfort', 'audiobook', 'everything']);
 
-// DESIGN §15.1: which rail pages exist in which mode. 'main' (翻译台) and 'logs' (运行记录) are in
-// both; 'finetune' (微调) is normal-mode only. The other four are unchanged advanced-mode pages.
+// DESIGN §15.1/§16.1: which rail pages exist in which mode. 'main' (翻译台), 'helper' (小助手) and
+// 'logs' (运行记录) are in both; 'finetune' (微调) is normal-mode only. The other four are unchanged
+// advanced-mode pages.
 export const CONTROL_CENTER_PAGES = Object.freeze({
-  normal: Object.freeze(['main', 'finetune', 'logs']),
-  advanced: Object.freeze(['main', 'prompt', 'settings', 'processing', 'tts', 'logs']),
+  normal: Object.freeze(['main', 'finetune', 'helper', 'logs']),
+  advanced: Object.freeze(['main', 'prompt', 'settings', 'processing', 'tts', 'helper', 'logs']),
 });
 
 /** The page ids shown in a mode's rail, advanced's list for anything that is not a known mode. */
@@ -1266,7 +1276,7 @@ export function getActiveChannel(settings) {
 // per connection per use, and these helpers are what that checkbox reads and writes.
 // ---------------------------------------------------------------------------------------------
 
-export const CONNECTION_USES = Object.freeze(['translation', 'analysis', 'deep']);
+export const CONNECTION_USES = Object.freeze(['translation', 'analysis', 'deep', 'helper']);
 
 /**
  * What a use points at right now, resolved to something real: 'follow' for the host's own connection,
@@ -1280,6 +1290,7 @@ export function connectionUseChoice(settings, use) {
     const own = String(settings?.tts?.deepChannelId ?? '').trim();
     return own ? resolveFeatureChannel(own, settings) : connectionUseChoice(settings, 'analysis');
   }
+  if (use === 'helper') return resolveFeatureChannel(settings?.helper?.channelId, settings);
   throw new Error(`未知用途：${use}`);
 }
 
@@ -1297,6 +1308,7 @@ export function setConnectionUse(settings, use, choice) {
   }
   if (use === 'analysis') return { ...settings, tts: { ...settings.tts, analysisChannelId: value || 'follow' } };
   if (use === 'deep') return { ...settings, tts: { ...settings.tts, deepChannelId: value } };
+  if (use === 'helper') return { ...settings, helper: { ...settings.helper, channelId: value || 'follow' } };
   throw new Error(`未知用途：${use}`);
 }
 
@@ -1330,6 +1342,10 @@ export function reassignConnectionUsesOnDelete(settings, channelId) {
     moved.push('deep');
   } else if (!deepOwnChoice && analysisPointedHere) {
     moved.push('deep');
+  }
+  if (connectionUseChoice(next, 'helper') === channelId) {
+    next = setConnectionUse(next, 'helper', 'follow');
+    moved.push('helper');
   }
   return { settings: next, moved };
 }
@@ -1390,11 +1406,13 @@ const CONSOLE_PRESET_CONTENT = Object.freeze({
   }),
 });
 
-function pathGet(object, path) {
+// Exported for helper.js's own suggestion-application logic (DESIGN §16.3's whitelisted `set`
+// suggestions read and write settings by the same dotted path as PRESET_MANAGED_FIELDS above).
+export function pathGet(object, path) {
   return path.reduce((node, key) => (node === undefined || node === null ? undefined : node[key]), object);
 }
 
-function pathSet(object, path, value) {
+export function pathSet(object, path, value) {
   const [head, ...rest] = path;
   if (!rest.length) return { ...object, [head]: value };
   return { ...object, [head]: pathSet((object && typeof object === 'object' ? object[head] : undefined) ?? {}, rest, value) };
@@ -1807,6 +1825,25 @@ export function normalizeTts(value) {
   };
 }
 
+// DESIGN §16.3: the prompt textarea leaves an empty value meaning "use the built-in default" (shown
+// as its placeholder) rather than storing the default text itself, so a later change to the built-in
+// default reaches every reader who never touched the field.
+const HELPER_PROMPT_MAX_LENGTH = 8000;
+
+export function normalizeHelper(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    channelId: String(source.channelId ?? '').trim().slice(0, 80) || DEFAULT_HELPER.channelId,
+    prompt: typeof source.prompt === 'string' ? normalizeNewlines(source.prompt).slice(0, HELPER_PROMPT_MAX_LENGTH) : '',
+  };
+}
+
+/** "默认" or "已改 N 字" — 模型连接「小助手的提示词」fold's summary (DESIGN §16.3). */
+export function helperPromptFoldSummary(helper = {}) {
+  const text = String(helper.prompt || '').trim();
+  return text ? `已改 ${text.length} 字` : '默认';
+}
+
 export function mergeSettings(value = {}) {
   const source = value && typeof value === 'object' ? value : {};
   const merged = { ...deepClone(DEFAULT_SETTINGS), ...source };
@@ -1941,6 +1978,11 @@ export function mergeSettings(value = {}) {
   if (merged.tts.deepChannelId && merged.tts.deepChannelId !== 'follow' && !merged.channels.some(channel => channel.id === merged.tts.deepChannelId)) {
     merged.tts.deepChannelId = '';
   }
+  // 小助手 is a shelf entry too (DESIGN §16.3): its own choice, resolved the same way 朗读分析's is —
+  // 'follow' stays 'follow', a deleted or never-set connection falls back to whatever the translation
+  // uses right now.
+  merged.helper = normalizeHelper(source.helper);
+  merged.helper.channelId = resolveFeatureChannel(merged.helper.channelId, merged);
   // Voices follow the character card for the same reason the palette does.
   merged.ttsVoices = {};
   const rawVoices = source.ttsVoices && typeof source.ttsVoices === 'object' ? source.ttsVoices : {};

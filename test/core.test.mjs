@@ -2280,9 +2280,9 @@ test('preset remembers the last applied package id, and drops anything unrecogni
   assert.equal(mergeSettings({ preset: 'made-up' }).preset, '');
 });
 
-test('pagesForMode lists the rail per DESIGN §15.1, and resolvePageForMode falls back to 翻译台', () => {
-  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'logs']);
-  assert.deepEqual(pagesForMode('advanced'), ['main', 'prompt', 'settings', 'processing', 'tts', 'logs']);
+test('pagesForMode lists the rail per DESIGN §15.1/§16.1, and resolvePageForMode falls back to 翻译台', () => {
+  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'helper', 'logs']);
+  assert.deepEqual(pagesForMode('advanced'), ['main', 'prompt', 'settings', 'processing', 'tts', 'helper', 'logs']);
   assert.deepEqual(pagesForMode('bogus'), pagesForMode('advanced'));
   assert.equal(pageExistsInMode('tts', 'normal'), false);
   assert.equal(pageExistsInMode('tts', 'advanced'), true);
@@ -2322,7 +2322,7 @@ test('connection uses: translation and analysis resolve directly, deep defers to
   const movedAnalysis = setConnectionUse(settings, 'analysis', 'c1');
   assert.equal(movedAnalysis.tts.analysisChannelId, 'c1');
 
-  assert.deepEqual(CONNECTION_USES, ['translation', 'analysis', 'deep']);
+  assert.deepEqual(CONNECTION_USES, ['translation', 'analysis', 'deep', 'helper']);
   assert.throws(() => connectionUseChoice(settings, 'bogus'));
   assert.throws(() => setConnectionUse(settings, 'bogus', 'c1'));
 });
@@ -2335,7 +2335,9 @@ test('channelUsesPointingAt lists every use resolving to a connection, deep incl
     tts: { analysisChannelId: 'c1', deepChannelId: '' },
   });
   assert.deepEqual(channelUsesPointingAt(settings, 'c1'), ['translation', 'analysis', 'deep']);
-  assert.deepEqual(channelUsesPointingAt(settings, 'follow'), []);
+  // 小助手 was never pointed at c1 above, so it still resolves to 跟随酒馆 (its own default) rather
+  // than following the translation the way 深度分析 does.
+  assert.deepEqual(channelUsesPointingAt(settings, 'follow'), ['helper']);
 });
 
 test('reassignConnectionUsesOnDelete moves every use a deleted connection served to 跟随酒馆, leaving a deferring deep still deferring', () => {
