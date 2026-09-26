@@ -11618,12 +11618,15 @@ function buildRegexCleanupPlan({ next, currentRegex, engine }) {
   // A scope with nothing to remove is left out of the message entirely rather than named with "0 条" --
   // the real getScriptsByType(SCOPED) returns [] rather than throwing when no character is selected (or
   // in a group chat), so scopedPlan is a normal, non-null plan even then, and mentioning it would claim
-  // an angle that never applied.
+  // an angle that never applied. The global count is held to the exact same rule: the common case after
+  // a reader moves a rule to their character (「移到角色」) is a global list that syncNativeRegex has
+  // already kept clean on its own, with only the moved copy left over in the scoped list -- naming that
+  // as "全局 0 条" claimed a global angle that never applied either.
   const scopeParts = [];
   if (scopedRemove > 0) scopeParts.push(`角色绑定 ${scopedRemove} 条`);
   if (presetRemove > 0) scopeParts.push(`预设绑定 ${presetRemove} 条`);
   const removalClause = scopeParts.length
-    ? `删除多余的镜译正则：全局 ${toRemove} 条、${scopeParts.join('、')}`
+    ? `删除多余的镜译正则：${[toRemove > 0 ? `全局 ${toRemove} 条` : null, ...scopeParts].filter(Boolean).join('、')}`
     : `删除 ${toRemove} 条多余的镜译正则`;
   const message = toInstall
     ? `${removalClause}，补上 ${toInstall} 条缺失的固定正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`
@@ -11647,6 +11650,22 @@ async function applyScopedRegexCleanup(plan, engine) {
   // stale copy of a 镜译 rule straight back over whatever the reader has in that slot now.
   const context = getContext();
   if (!runtime.mainGenerationActive && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+}
+
+// The other half of the same reload: applyScopedRegexCleanup above only ever reloads once it has actually
+// written a character- or preset-scoped list back, so a global-only cleanup -- the common case, and the
+// only one persistProcessing's own saveSettings handles -- never reloads through it at all. saveSettings's
+// own restyleCurrentChat (the only other place a reload happens) is no help either: it only runs when
+// something in `visualChanged` moved, and a dedupe that leaves active.regexScripts itself unchanged (only
+// the raw native list carried surplus copies) never counts as a regexScripts change. Left unreloaded,
+// 酒馆's own regex panel keeps showing the rows dedupe just removed, still bound to their old array index
+// (applyScopedRegexCleanup's own comment above). Skipped, not deferred, while a reply is generating --
+// the same guard and the same tradeoff applyScopedRegexCleanup itself already takes.
+async function reloadRegexPanelAfterGlobalCleanup(plan) {
+  if (plan.scopedPlan?.toRemove || plan.presetPlan?.toRemove) return; // applyScopedRegexCleanup already did
+  if (runtime.mainGenerationActive) return;
+  const context = getContext();
+  if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
 }
 
 function createControlCenter(rootDocument = document) {
@@ -11833,6 +11852,7 @@ function createControlCenter(rootDocument = document) {
         if (!await confirmDestructive({ title: '删除多余正则', message: plan.message, confirmLabel: '删除多余正则' })) return;
         await persistProcessing(root, next);
         await applyScopedRegexCleanup(plan, engine);
+        await reloadRegexPanelAfterGlobalCleanup(plan);
         toast('success', `已整理镜译正则：删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条，当前方案需要的 ${plan.expected.length} 条都在。`);
       } else if (action === 'adopt-speakers') {
         // Every reported name the palette has not got yet, with no colour of its own. The hue each
@@ -16653,7 +16673,10 @@ if (typeof document !== 'undefined') {
 // stands in for the module loadHostRegex would otherwise dynamically import from the host -- a path
 // that does not resolve outside a real browser -- so a mocked SCRIPT_TYPES/getScriptsByType/
 // saveScriptsByType can be exercised without ever reaching the real import.
-function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine, editingChannelId: editingChannelIdOverride, inflight } = {}) {
+function configureForTest({
+  settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine,
+  editingChannelId: editingChannelIdOverride, inflight, mainGenerationActive,
+} = {}) {
   if (settings) runtime.settings = { ...runtime.settings, ...settings };
   if (worldInfoEntries !== undefined) runtime.wiEntries = worldInfoEntries;
   if (initialized !== undefined) runtime.initialized = initialized === true;
@@ -16664,6 +16687,9 @@ function configureForTest({ settings, worldInfoEntries, initialized, deskExpande
   // Map of the same shape `runtime.inflight` already keeps ({ promise, controller, ... }), placed
   // directly since a headless run never actually starts a real translation request.
   if (inflight !== undefined) runtime.inflight = inflight;
+  // Same idea, for whatever a caller's own "skip while the main reply is generating" guard reads
+  // (放回原文/清除译文/reloadRegexPanelAfterGlobalCleanup) -- a headless run never actually starts one.
+  if (mainGenerationActive !== undefined) runtime.mainGenerationActive = mainGenerationActive === true;
   return runtime.settings;
 }
 
@@ -16693,6 +16719,7 @@ export const __testing = Object.freeze({
   configureForTest,
   buildRegexCleanupPlan,
   applyScopedRegexCleanup,
+  reloadRegexPanelAfterGlobalCleanup,
   startTranslation,
   translateMessageStreaming,
   worldInfoKeyMatches,
