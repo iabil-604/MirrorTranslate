@@ -364,7 +364,9 @@ test('reading both languages: one reading of the original carries over to the tr
   assert.equal(requests.length, 1, 'one reading, of the original the floor closed on');
   assert.deepEqual(JSON.parse(requests[0].messages.at(-1).content).lines, [{ line: 1, text: '桜井は振り返った。' }, { line: 2, text: '⟦2⟧「来たんだね」' }]);
   assert.deepEqual(read.segments.map(item => [item.type, item.speaker, item.lang, item.emotion]), [['narration', 'narrator', 'ja', null], ['dialogue', '樱井', 'ja', 'tender']]);
-  assert.deepEqual(read.segments[1].voice, { emotion: 'tender', speed: 'slow', stress: ['来'] });
+  // stressAnchored (see widenPauseStressSummary in index.js) marks that '来' is the deep line's own
+  // shortest-run anchor, not a full word — the thing that tells the panel it may widen it.
+  assert.deepEqual(read.segments[1].voice, { emotion: 'tender', speed: 'slow', stress: ['来'], stressAnchored: true });
   const { items } = await __testing.ttsItemsFor(source, read.segments, settings);
   assert.deepEqual(items.map(item => item.voiceId), ['voice-narrator', 'voice-ja'], 'the Japanese voice for the Japanese line');
   const translation = await __testing.collectTtsFloor(0, settings, 'translation');
@@ -375,6 +377,49 @@ test('reading both languages: one reading of the original carries over to the tr
   assert.deepEqual((await __testing.ttsItemsFor(translation, other.segments, settings)).items.map(item => item.voiceId), ['voice-narrator', 'voice-zh']);
   assert.notEqual(source.floorId, translation.floorId, 'each language keeps its own recordings');
 });
+
+test('reading both languages: remaking the other side\'s paragraph never stops the side actually playing, and remaking the playing side itself settles to idle rather than staying stuck on playing', async t => {
+  restoreGlobals(t);
+  const { context, toasts } = mockHost('tts-both-regen');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', side: 'both', playAfterGenerate: false, narratorVoice: 'voice-narrator', fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('一つの文。', [[1, '第一段中文。']], settings));
+  mockFish();
+  const audio = mockAudioHeld();
+  t.after(audio.restore);
+  const createUrl = URL.createObjectURL;
+  let urls = 0;
+  URL.createObjectURL = () => `blob:take-${urls += 1}`;
+  t.after(() => { URL.createObjectURL = createUrl; });
+
+  // Both sides already have their audio, as if the reader had played through the floor before.
+  await __testing.pregenerateTtsFloor(0, { quiet: true, side: 'source' });
+  await __testing.pregenerateTtsFloor(0, { quiet: true, side: 'translation' });
+
+  const transport = await __testing.createTtsTransport(0, { single: false, side: 'source' });
+  const running = __testing.runTtsTransport(transport);
+  assert.ok(await waitFor(() => transport.state === 'playing'), 'the source starts playing');
+  assert.notEqual(transport.current, null);
+
+  // Only the translation side is remade; a floor read with 「两种都读」 shares one player between the
+  // two sides' transports, so this must not touch the source that is actually playing.
+  await __testing.regenerateTtsParagraph(0, 1, 'translation');
+  assert.equal(__testing.ttsTransport(), transport, 'the same reading, uninterrupted');
+  assert.equal(transport.state, 'playing', 'the source keeps playing while the other side is remade');
+  assert.equal(transport.side, 'source');
+  assert.notEqual(transport.current, null);
+  assert.equal(audio.pauses.count, 0, 'the shared player was never paused for the other side\'s remake');
+  assert.deepEqual(toasts, [], 'nothing told the reader their reading had stopped, because it never did');
+
+  // Remaking the source's own paragraph — the one actually playing — drops the recording out from
+  // under it; the transport must settle to idle rather than staying stuck on 'playing' forever.
+  await __testing.regenerateTtsParagraph(0, 1, 'source');
+  await running;
+  assert.equal(transport.state, 'idle', 'the interrupted reading settles to idle instead of staying stuck on playing');
+  assert.equal(transport.current, null);
+});
+
 test('a sentence clicked alone gets its paragraph, and the paragraph is never made twice', async t => {
   restoreGlobals(t);
   const { context } = mockHost('tts-stream-sentence');
@@ -1453,6 +1498,95 @@ test('the panel\'s pause/stress widening is a deep reading\'s own trick: a simpl
   assert.deepEqual(inspected.summary.find(([term]) => term === '重音'), ['重音', '根']);
 });
 
+test('the same trick does not fire on a deep floor either, for a correction that answered in the simple reading\'s own shape', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-deep-refine-no-widen', {
+    async processRequest(payload) {
+      requests.push(payload);
+      const input = JSON.parse(payload.messages.at(-1).content);
+      // A correction goes through the simple reading's own request and reply shape even though the
+      // floor stays 'deep' (refineTtsAnalysis asks the connection the floor was read on, but always in
+      // parseVoiceAnalysis's format) — so '根' here is the model's own whole word, not a deep line's
+      // shortest-run anchor, and must not be widened into '根本' just because depth is still 'deep'.
+      if (input.task === 'refine_voices_for_audiobook') return { content: JSON.stringify({ voices: [{ id: 2, stress: ['根'], pauses: [{ after: '根', length: 'short' }] }] }) };
+      return { content: JSON.stringify({ voices: [{ id: 1 }, { id: 2, emotion: 'angry' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('彼は言った：「そんなの知らない」', [[1, '他说：「我根本不在乎你说什么。」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests.length, 1);
+  await __testing.refineTtsAnalysis(0, { utteranceId: 2, feedback: '语气再冲一点' });
+  assert.equal(requests.length, 2);
+  const corrected = await __testing.ttsInspect(0, 2);
+  assert.equal(corrected.depth, 'deep', 'a correction on a deep floor is still a deep floor');
+  assert.deepEqual(corrected.summary.find(([term]) => term === '重音'), ['重音', '根'], 'the correction named the whole word itself; the panel must not widen it into 根本');
+  assert.deepEqual(corrected.summary.find(([term]) => term === '停顿'), ['停顿', '「根」后短停']);
+});
+
+test('a deep line\'s own pause widens as it always has after merging with a translation mark\'s stress, but the mark\'s word does not', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-deep-merge-no-widen', {
+    async processRequest(payload) {
+      requests.push(payload);
+      // The deep line only tags a pause; the stress in the merged voice comes solely from the
+      // translation's own mark ('根本不在乎' translated line, marked stress: ['根']).
+      return { content: JSON.stringify({ voices: [{ id: 1 }, { id: 2, speaker: '泰罗', emotion: 'angry', line: '我说了根本不在乎 [pause] 你说什么。' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+  });
+  // Deliberately not the same wording as the neighbouring deep-floor tests above: the analysis is
+  // cached by the text alone, and an identical sentence would find their cached result instead of
+  // asking this test's own mock.
+  context.chat.push(await translatedFloor(
+    '彼は言った：「そんなの知らない」',
+    [[1, '他说：「我说了根本不在乎你说什么。」']],
+    settings,
+    { 1: { quotes: [{ head: '我说了根本', speaker: '泰罗', emotion: 'angry', intensity: 1, stress: ['根'] }] } },
+  ));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests.length, 1);
+  const inspected = await __testing.ttsInspect(0, 2);
+  assert.equal(inspected.depth, 'deep');
+  // The mark's own word ('根') must show exactly as it was written, never widened into 根本 just
+  // because a pause the deep line actually tagged sits in the very same merged voice.
+  assert.deepEqual(inspected.summary.find(([term]) => term === '重音'), ['重音', '根'], 'a translation mark\'s own word is not a deep anchor and must not be widened');
+  // The deep line's own pause anchor is still widened exactly as any other deep anchor would be.
+  assert.deepEqual(inspected.summary.find(([term]) => term === '停顿'), ['停顿', '「不在乎」后短停']);
+});
+
+test('a legacy-format deep reply (no `line`, the old side fields) never widens either, on a deep floor', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-deep-legacy-no-widen', {
+    async processRequest(payload) {
+      requests.push(payload);
+      // No `line`: a reply built for a reader's own custom deep prompt from before v0.37, read the same
+      // way the simple reading reads this shape (normalizeVoice) — never a deep line's own anchor.
+      return { content: JSON.stringify({ voices: [{ id: 1 }, { id: 2, stress: ['不'], pauses: [{ after: '我', length: 'short' }] }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('彼は言った：「そんなの知らない」', [[1, '他说：「我不在乎你说什么。」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  await __testing.prepareTtsSegments(floor, settings);
+  assert.equal(requests.length, 1);
+  const inspected = await __testing.ttsInspect(0, 2);
+  assert.equal(inspected.depth, 'deep');
+  assert.deepEqual(inspected.summary.find(([term]) => term === '重音'), ['重音', '不'], 'the legacy reply\'s own word must not be widened into 不在乎');
+  assert.deepEqual(inspected.summary.find(([term]) => term === '停顿'), ['停顿', '「我」后短停']);
+});
+
 test('a voice id edited in the library is heard on the next play, whole floor or one sentence, with no re-analysis', async t => {
   restoreGlobals(t);
   let requests = 0;
@@ -1713,6 +1847,60 @@ function mockAudio() {
   globalThis.Audio = FakeAudio;
   __testing.resetTtsPlayer();
   return { plays, restore: () => { globalThis.Audio = before; __testing.resetTtsPlayer(); } };
+}
+
+// Like mockAudio, but never ends or advances on its own: currentTime stays put and no 'ended' event
+// fires, so a transport started against it sits in 'playing' until something explicit stops it. For
+// tests that need to catch a reading mid-flight rather than let it run to completion.
+function mockAudioHeld() {
+  const pauses = { count: 0 };
+  class FakeAudio {
+    constructor() {
+      this.listeners = new Map();
+      this.readyState = 0;
+      this.currentTime = 0;
+      this.duration = 3;
+      this.value = '';
+    }
+
+    addEventListener(type, handler) {
+      if (!this.listeners.has(type)) this.listeners.set(type, []);
+      this.listeners.get(type).push(handler);
+    }
+
+    removeEventListener(type, handler) {
+      this.listeners.set(type, (this.listeners.get(type) ?? []).filter(item => item !== handler));
+    }
+
+    emit(type) {
+      for (const handler of [...(this.listeners.get(type) ?? [])]) handler({ type });
+    }
+
+    set src(value) {
+      this.value = value;
+    }
+
+    get src() {
+      return this.value;
+    }
+
+    load() {
+      this.readyState = 1;
+      setTimeout(() => this.emit('loadedmetadata'), 0);
+    }
+
+    play() {
+      return Promise.resolve();
+    }
+
+    pause() {
+      pauses.count += 1;
+    }
+  }
+  const before = globalThis.Audio;
+  globalThis.Audio = FakeAudio;
+  __testing.resetTtsPlayer();
+  return { pauses, restore: () => { globalThis.Audio = before; __testing.resetTtsPlayer(); } };
 }
 
 test('a sentence with a take of its own is heard from it inside its paragraph: rewritten by hand, or made again alone', async t => {

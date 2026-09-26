@@ -299,10 +299,19 @@ function anchorBackward(text, end) {
 // in it does not widen without end, is what is left to fall back on. Nothing stored anywhere is this
 // value; a floor edited since the analysis, or a result read back from before this existed, simply shows
 // the anchor itself, exactly as the panel always has.
+//
+// Without a dictionary, Intl.Segmenter tells Japanese words apart mostly by script: 全部, こと, しく each
+// come back whole, but a kanji stem gets cut away from the hiragana conjugation right after it (聞こえた
+// -> 聞|こ|え|た), so wordBoundsAt alone hands back just the stem's own single character. extendOkurigana
+// continues across exactly that boundary — and only that one: a segment already more than one character
+// (全部, こと) is a whole word already and is left where wordBoundsAt put it.
 // ---------------------------------------------------------------------------------------------
 
 const DISPLAY_WORD_RE = /[\p{L}\p{N}]/u;
 const DISPLAY_MARGIN = 6;
+const HAN_RUN_RE = /^\p{Script=Han}+$/u;
+const HIRAGANA_RUN_RE = /^\p{Script=Hiragana}+$/u;
+const OKURIGANA_MARGIN = 4;
 
 // Word segmentation does not depend on locale for the languages this extension reads (Chinese, Japanese,
 // English all come out the same either way), so one shared segmenter covers all of them. Older runtimes
@@ -329,6 +338,39 @@ function wordBoundsAt(source, at) {
   return null;
 }
 
+/** A stress's own end, pushed further right across an okurigana run the segmenter cut away from its
+ * kanji stem — the stem's trailing hiragana conjugation, one segment's worth, never a second one. */
+function extendOkuriganaRight(source, bounds) {
+  if (bounds.end - bounds.start !== 1) return bounds.end;
+  const seed = source[bounds.start];
+  if (!HAN_RUN_RE.test(seed) && !HIRAGANA_RUN_RE.test(seed)) return bounds.end;
+  const next = wordBoundsAt(source, bounds.end);
+  if (next && next.start === bounds.end && HIRAGANA_RUN_RE.test(source.slice(next.start, next.end))) return next.end;
+  return bounds.end;
+}
+
+/** A pause's own start, pulled further left across the same kind of cut: any hiragana run right before
+ * it, one segment at a time, then the one kanji segment it hangs off of — the word's own stem, not
+ * whatever came before that. The seed itself must be hiragana, never a kanji: a kanji anchor already
+ * standing alone is a complete Chinese word as often as it is a cut-off Japanese one (近, 喝), and
+ * nothing here can tell those apart — only a hiragana seed is the okurigana's own signature.
+ */
+function extendOkuriganaLeft(source, bounds) {
+  if (bounds.end - bounds.start !== 1) return bounds.start;
+  const seed = source[bounds.start];
+  if (!HIRAGANA_RUN_RE.test(seed)) return bounds.start;
+  let start = bounds.start;
+  for (let steps = 0; start > 0 && steps < OKURIGANA_MARGIN; steps += 1) {
+    const prev = wordBoundsAt(source, start - 1);
+    if (!prev || prev.end !== start) break;
+    const chunk = source.slice(prev.start, prev.end);
+    if (HIRAGANA_RUN_RE.test(chunk)) { start = prev.start; continue; }
+    if (HAN_RUN_RE.test(chunk)) return prev.start;
+    break;
+  }
+  return start;
+}
+
 function widenAnchor(text, anchor, side) {
   const source = String(text ?? '');
   const word = String(anchor ?? '');
@@ -337,13 +379,13 @@ function widenAnchor(text, anchor, side) {
   if (at < 0) return word;
   if (side === 'left') {
     const bounds = wordBoundsAt(source, at);
-    if (bounds) return source.slice(bounds.start, at + word.length);
+    if (bounds) return source.slice(extendOkuriganaLeft(source, bounds), at + word.length);
     let start = at;
     for (let steps = 0; start > 0 && steps < DISPLAY_MARGIN && DISPLAY_WORD_RE.test(source[start - 1]); steps += 1) start -= 1;
     return source.slice(start, at + word.length);
   }
   const bounds = wordBoundsAt(source, at + word.length - 1);
-  if (bounds) return source.slice(at, bounds.end);
+  if (bounds) return source.slice(at, extendOkuriganaRight(source, bounds));
   let end = at + word.length;
   for (let steps = 0; end < source.length && steps < DISPLAY_MARGIN && DISPLAY_WORD_RE.test(source[end]); steps += 1) end += 1;
   return source.slice(at, end);
@@ -440,8 +482,14 @@ function classifyAndApply(voice, tags, sourceText, { full = true } = {}) {
     // tag this reading does not place, and it is simply not placed.
   }
   if (shifts.length) voice.shifts = shifts;
-  if (pauses.length) voice.pauses = pauses;
-  if (stress.length) voice.stress = stress;
+  // pausesAnchored/stressAnchored mark that these specific arrays are the shortest run that still finds
+  // its word, not the word the model actually named — the one thing that tells the panel it may widen
+  // them (see widenPauseStressSummary in index.js). A translation's mark or a correction sets pauses or
+  // stress of its own without either flag, and mergeVoiceMaps (index.js) lays this voice's fields over
+  // theirs one key at a time, so a field this line left untagged keeps whichever it had — anchored or
+  // not, exactly as it already was.
+  if (pauses.length) { voice.pauses = pauses; voice.pausesAnchored = true; }
+  if (stress.length) { voice.stress = stress; voice.stressAnchored = true; }
   if (sounds.length) voice.sounds = sounds;
 }
 

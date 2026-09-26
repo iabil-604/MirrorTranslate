@@ -1190,7 +1190,9 @@ export function deriveLabelsForSide(primaryUtterances, primaryLabels, primaryVoi
     }
     const voice = primaryVoices instanceof Map ? primaryVoices.get(source) : null;
     if (voice) {
-      const { pauses, stress, shifts, sounds, ...rest } = voice;
+      // pausesAnchored/stressAnchored (tts-deep.js) describe the pauses/stress arrays they ride with;
+      // dropped alongside them here, not left behind to claim a field that no longer exists.
+      const { pauses, stress, shifts, sounds, pausesAnchored, stressAnchored, ...rest } = voice;
       const kept = (sounds ?? []).filter(sound => sound.at !== 'after');
       if (kept.length) rest.sounds = kept;
       if (Object.keys(rest).length) voices.set(utterance.id, rest);
@@ -1376,14 +1378,21 @@ export function groundVoice(voice, { text = '', evidence = '', sources = null } 
   const out = { ...voice };
   let rewritten = false;
   const drop = (field, value, why) => dropped.push({ field, value, why });
+  // pauses and stress carry a companion *Anchored flag (see classifyAndApply in tts-deep.js) that says
+  // whether the array is the deep reading's own shortest-run anchor rather than the word a model or a
+  // translation's mark actually named; it goes with the field, so cutting or emptying the field drops it.
   const cut = (key, why) => {
     if (out[key] === undefined) return;
     drop(key, out[key], why);
     delete out[key];
+    if (key === 'pauses' || key === 'stress') delete out[`${key}Anchored`];
   };
   const keep = (key, list) => {
     if (list.length) out[key] = list;
-    else delete out[key];
+    else {
+      delete out[key];
+      if (key === 'pauses' || key === 'stress') delete out[`${key}Anchored`];
+    }
   };
   const settle = () => (!dropped.length && !rewritten
     ? { voice, dropped, changed: false }
