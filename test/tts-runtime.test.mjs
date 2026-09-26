@@ -260,6 +260,13 @@ test('the deep reading carries the card and the recent floors, and every sentenc
 
   const inspected = await __testing.ttsInspect(1, 2);
   assert.equal(inspected.text, '[frustrated] 我操 [pause] 好 [emphasis] 热啊！', 'Fish\'s own words only: the mood, the pause, the stress');
+  // The stored anchor locating the pause and the stress is a single character ('操', '热') — good for
+  // finding them. Both already stand on their own as words to real word segmentation, so the edit
+  // panel's widening (a deep reading's anchors only, see widenPauseStressSummary) leaves each exactly
+  // as it is instead of running on into the neighbouring word the way the old character-margin widening
+  // used to (see the tts-deep-parser tests for a case where the word is wider than one character).
+  assert.deepEqual(inspected.summary.find(([term]) => term === '停顿'), ['停顿', '「操」后短停'], 'the panel shows the pause\'s own word, no wider than it needs to be');
+  assert.deepEqual(inspected.summary.find(([term]) => term === '重音'), ['重音', '热'], 'the panel shows the stress\'s own word, no wider than it needs to be');
   assert.deepEqual(inspected.prosody, { speed: 1.12, volume: 0 });
   assert.equal(inspected.depth, 'deep');
   assert.equal(requests.length, 1);
@@ -1415,6 +1422,35 @@ test('the simple analysis is the model\'s, names and moods alike; only the reade
   assert.deepEqual(requests[1].input.speakers, { 2: '泰罗' }, 'the reader\'s own word goes out with the request');
   const held = await __testing.prepareTtsSegments(floor, settings);
   assert.deepEqual([held.segments[1].speaker, held.segments[1].speakerSource, held.segments[1].emotion], ['泰罗', 'manual', 'angry']);
+});
+
+test('the panel\'s pause/stress widening is a deep reading\'s own trick: a simple reading\'s exact word is shown exactly as the model named it', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-simple-no-widen', {
+    async processRequest() {
+      return { content: JSON.stringify({ voices: [
+        { id: 1, type: 'narration' },
+        { id: 2, type: 'dialogue', speaker: '泰罗', emotion: 'angry', stress: ['根'], pauses: [{ after: '根', length: 'short' }] },
+      ] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'simple', askAnalysis: 'analyze', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+    },
+  });
+  context.chat.push(await translatedFloor('彼は言った：「そんなの知らない」', [[1, '他说：「我根本不在乎你说什么。」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  await __testing.prepareTtsSegments(floor, settings);
+  const inspected = await __testing.ttsInspect(0, 2);
+  assert.equal(inspected.depth, 'simple');
+  // The model named '根' outright — not a deep reading's shortest-unique-substring anchor for a bigger
+  // word it meant. '根' also happens to sit inside the real word '根本' (Intl.Segmenter would widen a
+  // deep reading's anchor there, see the tts-deep-parser tests), so applying that widening here too
+  // would misreport the model's own answer as '根本' instead of the '根' it actually said.
+  assert.deepEqual(inspected.summary.find(([term]) => term === '停顿'), ['停顿', '「根」后短停']);
+  assert.deepEqual(inspected.summary.find(([term]) => term === '重音'), ['重音', '根']);
 });
 
 test('a voice id edited in the library is heard on the next play, whole floor or one sentence, with no re-analysis', async t => {

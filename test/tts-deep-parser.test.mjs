@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TTS_ANALYSIS_VERSION, buildSegments, compileVoiceCues, sentenceFishText, splitUtterances } from '../tts.js';
-import { parseDeepAnalysis } from '../tts-deep.js';
+import { SOUND_END_RULE, TTS_ANALYSIS_VERSION, buildSegments, compileVoiceCues, sentenceFishText, splitUtterances } from '../tts.js';
+import { DEEP_PROMPT, parseDeepAnalysis, pauseDisplay, stressDisplay } from '../tts-deep.js';
 
 const S2 = { model: 's2-pro' };
 const lean = segment => sentenceFishText({ segment, voiceId: 'v' }, S2, { lean: true, directions: false });
@@ -256,4 +256,57 @@ test('a bracketed run the sentence itself was written with (a status line, a sys
   const { voices, mismatches } = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id, emotion: 'urgent', line }] }), utterances);
   assert.deepEqual(mismatches, [], 'the sentence\'s own [警告] is text, not a tag to strip out from under it');
   assert.deepEqual(voices.get(quote.id).pauses, [{ after: '，', length: 'short' }]);
+});
+
+test('the prompt\'s own worked example does not place a pause where its own rule 8 says punctuation already stops', () => {
+  const match = DEEP_PROMPT.match(/"line":"((?:[^"\\]|\\.)*)"/);
+  assert.ok(match, 'the worked example carries a line field');
+  const line = match[1];
+  const pauseAt = line.indexOf('[pause]');
+  assert.ok(pauseAt > 0, 'the example still shows a mid-sentence pause');
+  const before = line.slice(0, pauseAt).replace(/\[[^\]]*\]\s*/g, '').trimEnd();
+  assert.equal(/[…—～]$/.test(before), false, `a pause must not sit right where trailing-off punctuation already stops, per rule 8: "${before}"`);
+});
+
+test('SOUND_END_RULE, shared by every prompt that uses it, no longer names an "end" field the deep prompt\'s own output format never defines', () => {
+  assert.equal(/\bend\b/i.test(SOUND_END_RULE), false, 'the deep prompt never asks the model for an "end" field, so the shared rule must not name one');
+  assert.ok(DEEP_PROMPT.includes(SOUND_END_RULE), 'the deep prompt still carries the rule itself, just not the bare English word');
+});
+
+test('SOUND_END_RULE scopes its condition to the line within its own paragraph, the same condition rule 6 states for using `end`, not to the paragraph being the floor\'s last one', () => {
+  // "这一句所在段落后面又没有别的正文" reads most naturally as "nothing after the paragraph this line is
+  // in" — i.e. this is the floor's last paragraph — which is not what groundVoice actually checks and
+  // not what rule 6 (同一段里这句后面还有正文时用 end) or the comment above this constant says. The
+  // wording must instead be scoped inside the line's own paragraph, matching rule 6's own phrasing.
+  assert.match(SOUND_END_RULE, /同一段里这句后面又没有别的正文/, `must read "nothing more after this line, within its own paragraph", matching rule 6's condition: "${SOUND_END_RULE}"`);
+});
+
+test('a pause anchor is widened toward its own start for the panel, by the real word it opens rather than a character class, keeping the edge the pause actually lands on untouched', () => {
+  const text = '他们说的那些话我都听见了只是不想理。';
+  // '听见了' is one word to real word segmentation (Intl.Segmenter); the old character-class/margin
+  // widening cut in mid-word instead, landing on '些话我都听见了'.
+  assert.equal(pauseDisplay(text, '了'), '听见了', 'widens left to the start of the word segment the anchor itself sits in');
+  const wholeAlready = '你别靠这么近会让人看见的。';
+  assert.equal(pauseDisplay(wholeAlready, '近'), '近', '近 is already a whole word by itself, so there is nothing to widen it into');
+  assert.equal(pauseDisplay(text, '不存在的词'), '不存在的词', 'an anchor the text no longer has shows exactly as it is, unchanged');
+  assert.equal(pauseDisplay(text, ''), '', 'no anchor, nothing to widen');
+});
+
+test('a stress anchor is widened toward its own end for the panel, by the real word it starts rather than a character class, keeping the edge the stress actually starts on untouched', () => {
+  const text = '我根本不在乎你说什么。';
+  // '根本' is one word to real word segmentation; the old character-class/margin widening ran on past
+  // it to the six-character cap, landing on '根本不在乎你说'.
+  assert.equal(stressDisplay(text, '根'), '根本', 'widens right to the end of the word segment the anchor itself sits in');
+  const wholeAlready = '你去给别人喝吧，也不是不行。';
+  assert.equal(stressDisplay(wholeAlready, '喝'), '喝', '喝 is already a whole word by itself, so there is nothing to widen it into');
+  assert.equal(stressDisplay(wholeAlready, '别人喝'), '别人喝', 'widening never moves the start the model actually pointed at, nor shrinks what was already there');
+});
+
+test('widening a pause/stress anchor for the panel follows the real word boundary (Intl.Segmenter) past the old fixed character margin, rather than cutting a longer word short', () => {
+  // A run of digits or Latin letters with nothing else in it is one word to a segmenter however long,
+  // unlike the old character-class margin, which gave up after six characters no matter what.
+  const stressText = '打这个号码13800138000就对了';
+  assert.equal(stressDisplay(stressText, '1'), '13800138000', 'widens right across the whole number, well past the old six-character margin');
+  const pauseText = '输入这个网址abcdefghij就能看到';
+  assert.equal(pauseDisplay(pauseText, 'j'), 'abcdefghij', 'widens left across the whole word, well past the old six-character margin');
 });
