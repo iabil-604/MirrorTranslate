@@ -3423,6 +3423,7 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
   const chat = context.chat;
   if (!Array.isArray(chat) || !chat.length) throw new Error('没有打开的聊天。');
   if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再放回原文。');
+  const chatId = getCurrentChatId(context);
   const withoutMirror = meta => {
     const { stripped: _stripped, mirror: _mirror, projection_hash: _hash, ...rest } = meta;
     return rest;
@@ -3456,8 +3457,19 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
   if (!(await ask(`本聊天有 ${restores} 处只留了译文（${plan.length} 楼），要把原文放回去吗？放回后恢复成双语。${edited ? `其中 ${edited} 处的译文后来被改过，这些改动会丢。` : ''}`))) {
     return { restored: 0, cancelled: true };
   }
+  // The confirm can sit open long enough for the chat under it to move on — a whole different chat can
+  // be switched to, or a fresh main generation can start. Either cancels the restore outright rather
+  // than writing this plan's text into whatever is showing now.
+  if (getCurrentChatId() !== chatId || runtime.mainGenerationActive) {
+    throw new Error('放回原文的时候聊天变了，请重新点一次「恢复本聊天的原文」。');
+  }
   const changes = [];
-  for (const { message, current, swipes } of plan) {
+  for (const { message, swipes } of plan) {
+    // `current` was this message's shown swipe when the plan was built; a swipe during the confirm
+    // moves it on, and `.mes`/`.extra` (the swipe actually shown now) have to follow whichever swipe
+    // that turns out to be, not the one that was current before the wait — each swipe's own entry in
+    // `swipes` still carries its own original text either way, keyed by index.
+    const liveCurrent = Number(message.swipe_id ?? 0);
     const before = { mes: message.mes, extra: message.extra, swipes: message.swipes, swipe_info: message.swipe_info };
     const next = {
       mes: message.mes,
@@ -3468,10 +3480,10 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
     // The same record, whether it is this object or the host's copy of it.
     const same = (meta, record) => meta?.stripped === true && (meta === record || meta.projection_hash === record.projection_hash);
     for (const { index, record, text } of swipes) {
-      if (index === current) next.mes = text;
+      if (index === liveCurrent) next.mes = text;
       if (Array.isArray(next.swipes) && index < next.swipes.length) next.swipes[index] = text;
       const own = next.extra?.[MESSAGE_META_KEY];
-      if (index === current && same(own, record)) next.extra = { ...next.extra, [MESSAGE_META_KEY]: withoutMirror(own) };
+      if (index === liveCurrent && same(own, record)) next.extra = { ...next.extra, [MESSAGE_META_KEY]: withoutMirror(own) };
       const info = Array.isArray(next.swipe_info) ? next.swipe_info[index] : null;
       const recorded = info?.extra?.[MESSAGE_META_KEY];
       if (same(recorded, record)) info.extra = { ...info.extra, [MESSAGE_META_KEY]: withoutMirror(recorded) };
@@ -3497,7 +3509,8 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
  * mode wrote it: a 只留译文 floor is read from its mirror, a bilingual or replace-tag floor has the
  * translation stripped out of the text it already holds. The floor's metadata record for this swipe
  * (annotations included, since they only ever lived inside it) goes with it, so the floor reads as
- * never translated. `ask` is the confirmation; declining leaves everything untouched.
+ * never translated. `ask` is the confirmation; declining leaves everything untouched, and so does a
+ * floor that moved on while the confirmation was open (see the re-check right after `ask` resolves).
  */
 async function clearFloorTranslation(messageId = null, { ask = () => true } = {}) {
   if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再清除译文。');
@@ -3515,8 +3528,26 @@ async function clearFloorTranslation(messageId = null, { ask = () => true } = {}
     toast('info', `第 ${id} 楼还没有翻译，不用清除。`);
     return { cleared: false, messageId: id };
   }
+  const mesBeforeAsk = message.mes;
   if (!(await ask(`清除第 ${id} 楼的译文？正文会恢复成原文，这一楼镜译记下的翻译状态和标注都会丢，要再看到译文得重新翻译。`))) {
     return { cleared: false, cancelled: true, messageId: id };
+  }
+  // The confirm dialog can sit open long enough for the floor under it to move on: a swipe (its own
+  // arrow keys leak through the dialog's shadow host the same way Alt+Enter and the swipe arrows do)
+  // changes which page is shown and swaps `message.mes`/`swipe_id` for another page's, a fresh main
+  // generation can start, or another call can grab this exact swipe's translation lock. `original`
+  // above was derived from whatever was on screen before the wait, so writing it now would stamp that
+  // stale page over whatever the floor actually holds. Everything this clear depends on is re-read
+  // fresh here rather than trusted from before the wait, and any mismatch cancels instead of guessing.
+  if (
+    getCurrentChatId() !== chatId
+    || getContext().chat[id] !== message
+    || Number(message.swipe_id ?? 0) !== swipeId
+    || message.mes !== mesBeforeAsk
+    || runtime.mainGenerationActive
+    || runtime.inflight.has(lockKey)
+  ) {
+    throw new Error(`第 ${id} 楼在确认清除的时候变了，请重新点一次清除。`);
   }
   const previous = {
     mes: message.mes,
@@ -5718,7 +5749,9 @@ async function confirmDestructive({ title, message, confirmLabel = '确定' }) {
     const host = document.createElement('div');
     host.id = `${MODULE_ID}-confirm`;
     host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147483000;`;
-    keepTypingInside(host);
+    // A yes/no confirm has no text field of its own to guard — its buttons are the whole dialog, so
+    // every key stays inside it rather than only the ones typed into an input (see keepTypingInside).
+    keepTypingInside(host, { allKeys: true });
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
@@ -5761,7 +5794,8 @@ async function askTtsChoice(floor) {
     const host = document.createElement('div');
     host.id = `${MODULE_ID}-ask`;
     host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147483000;`;
-    keepTypingInside(host);
+    // See confirmDestructive's own keepTypingInside call: this dialog's controls are buttons too.
+    keepTypingInside(host, { allKeys: true });
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
@@ -5811,7 +5845,8 @@ async function ttsAskBox(body, { label = '选择' } = {}) {
     const host = document.createElement('div');
     host.id = `${MODULE_ID}-save`;
     host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147483000;`;
-    keepTypingInside(host);
+    // See confirmDestructive's own keepTypingInside call: this dialog's controls are buttons too.
+    keepTypingInside(host, { allKeys: true });
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
@@ -7525,7 +7560,8 @@ async function askTtsRefine({ messageId, sentence = null }) {
     const host = document.createElement('div');
     host.id = `${MODULE_ID}-refine`;
     host.style.cssText = `${SHADOW_HOST_BOX}z-index:2147483000;`;
-    keepTypingInside(host);
+    // See confirmDestructive's own keepTypingInside call: this dialog's controls are buttons too.
+    keepTypingInside(host, { allKeys: true });
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = css;
@@ -7815,6 +7851,24 @@ function planTtsLineButtons(segments) {
   return [...lines.values()];
 }
 
+/**
+ * Which utterance ids a 对白读原文 line's paragraph button looks for its anchor among.
+ *
+ * The line's own narration comes first, read off the full `utterances` list rather than `line.ids`
+ * (which planTtsLineButtons built from the range-filtered `visible` segments): a reading range of
+ * 只读对白 leaves every narration utterance out of `visible`, and 只留译文 leaves the original off the
+ * page for a quoted run's own anchor to resolve against — neither takes away a narration utterance's
+ * own place in `ranges` back in decorateTtsMessage, which is built from every utterance regardless of
+ * what the current range actually plays. `line.ids` — almost always the line's quoted dialogue — is
+ * only reached for a line that carries no narration of its own to begin with.
+ */
+function dialogueSourceLineAnchorIds(line, utterances) {
+  const narrationIds = (Array.isArray(utterances) ? utterances : [])
+    .filter(item => item.lineId === line.lineId && item.kind !== 'quoted')
+    .map(item => item.id);
+  return narrationIds.length ? narrationIds : line.ids;
+}
+
 // Which built-in beautify a rendered floor wears. The bar sits after the cards rather than inside one,
 // so it is told the style instead of inheriting it.
 function readingStyleOf(root) {
@@ -8003,12 +8057,13 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     // 对白读原文 is the one floor whose sentences are not all on the same side of the page: its
     // dialogue sits wherever the (possibly folded) original does, which a beautify may place after the
     // translation in the document. Its paragraph button stays on the translation's own text regardless
-    // — the narration segment of the line — never chasing a quoted run onto the original's block.
-    const typeById = floor.side === 'dialogue_source' ? new Map(visible.map(item => [item.id, item.type])) : null;
+    // — the narration utterances of the line — never chasing a quoted run onto the original's block.
+    // See dialogueSourceLineAnchorIds for why those narration utterances come from the full
+    // `utterances` list above, not from `visible`.
     for (const line of planTtsLineButtons(visible)) {
       let last = null;
-      const narrationIds = typeById ? line.ids.filter(id => typeById.get(id) === 'narration') : null;
-      for (const id of narrationIds?.length ? narrationIds : line.ids) {
+      const ids = floor.side === 'dialogue_source' ? dialogueSourceLineAnchorIds(line, utterances) : line.ids;
+      for (const id of ids) {
         const range = ranges.get(`${floor.side}:${id}`);
         if (range && (!last || range.compareBoundaryPoints(Range.END_TO_END, last) > 0)) last = range;
       }
@@ -8332,10 +8387,17 @@ const SHADOW_HOST_BOX = 'position:fixed;left:0;top:0;width:100vw;height:100vh;he
  * A key typed into one of our fields stays ours. The host listens on the document for ←/→ (swipe a
  * reply) and Ctrl+Enter (send, regenerate), and tells a field from the page by document.activeElement
  * — which is our host element whenever the field sits in a shadow root. Escape still goes through.
+ *
+ * `allKeys` widens this to every key, focus anywhere in the host — for a small `.jy-ask` confirm
+ * (confirmDestructive and the like), whose own buttons are not text fields and so would otherwise let a
+ * key meant for one of them (←/→ to swipe, Alt+Enter to continue) bubble out to the host's own document
+ * listener and act on the floor underneath while the dialog is still open. Escape is unaffected either
+ * way: it is already handled by a capture-phase listener on `document` before it would even reach here.
  */
-function keepTypingInside(host) {
+function keepTypingInside(host, { allKeys = false } = {}) {
   host.addEventListener('keydown', event => {
     if (event.key === 'Escape') return;
+    if (allKeys) { event.stopPropagation(); return; }
     const target = event.composedPath?.()[0];
     if (target instanceof Element && (target.matches('input, textarea, select') || target.isContentEditable)) event.stopPropagation();
   });
@@ -16671,6 +16733,7 @@ export const __testing = Object.freeze({
   floorButtonsOn,
   floorButtonMode,
   planTtsLineButtons,
+  dialogueSourceLineAnchorIds,
   refineTtsAnalysis,
   downloadTtsSentence,
   downloadTtsAudio,

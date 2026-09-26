@@ -9,7 +9,7 @@ import {
   normalizeChannel,
   segmentSource,
 } from '../core.js';
-import { locateAnchors, mixDialogueFromSource, splitByPairs, splitUtterances } from '../tts.js';
+import { audibleSegments, buildSegments, locateAnchors, mixDialogueFromSource, splitByPairs, splitUtterances } from '../tts.js';
 import { __testing } from '../index.js';
 import { readDiagnostics } from '../diagnostics.js';
 
@@ -371,4 +371,44 @@ test('locateDialogueSourceAnchors still finds narration when a floor has no quot
   const found = __testing.locateDialogueSourceAnchors(nodeTexts, floor, utterances);
   assert.equal(found.size, 1);
   assert.ok(found.get(1));
+});
+
+// ---------------------------------------------------------------------------------------------
+// dialogueSourceLineAnchorIds: which utterance ids a 对白读原文 line's paragraph button (play/redo)
+// looks for its anchor among. A hybrid line's narration lives on the translation, found through
+// locateDialogueSourceAnchors regardless of what the current reading range actually plays or whether
+// 只留译文 leaves the original off the page for the line's quoted run to resolve against — so a
+// paragraph button should reach for that narration first, not for whatever planTtsLineButtons was
+// left with after the range already filtered `visible` down.
+// ---------------------------------------------------------------------------------------------
+
+test('dialogueSourceLineAnchorIds reaches for a hybrid line’s own narration, even once 只读对白 leaves it out of what is actually read', () => {
+  const floor = { lines: [{ lineId: 1, text: '樱井回过头，「你来了啊」轻轻笑了一下。' }] };
+  const utterances = splitUtterances(floor.lines);
+  assert.deepEqual(utterances.map(item => item.kind), ['narration', 'quoted', 'narration'], 'a narration run on each side of the one quoted run');
+  const segments = buildSegments(utterances, new Map());
+  // 「只读对白」: only the quoted run is actually read; both narration runs are left out of `visible`.
+  const visible = audibleSegments(segments, 'dialogue');
+  assert.deepEqual(visible.map(item => item.id), [2]);
+  const [line] = __testing.planTtsLineButtons(visible);
+  assert.deepEqual(line.ids, [2], 'planTtsLineButtons only knows about the one segment the range let through');
+
+  // Proof the bug is real: decorateTtsMessage used to look for narration through a `visible`-built
+  // `typeById` instead — nothing is ever typed 'narration' in a `visible` this range already filtered
+  // narration out of, so it always fell back to line.ids, the quoted utterance's own anchor, which under
+  // 只留译文 is never found (the original is off the page) and the paragraph button went unplaced.
+  const naiveTypeById = new Map(visible.map(item => [item.id, item.type]));
+  const naiveNarrationIds = line.ids.filter(id => naiveTypeById.get(id) === 'narration');
+  assert.deepEqual(naiveNarrationIds, [], 'the old visible-only lookup never finds this line’s narration');
+
+  const ids = __testing.dialogueSourceLineAnchorIds(line, utterances);
+  assert.deepEqual(ids, [1, 3], 'the line’s own narration utterances, not the range-filtered quoted id');
+});
+
+test('dialogueSourceLineAnchorIds falls back to the line’s own ids once it truly carries no narration', () => {
+  const floor = { lines: [{ lineId: 1, text: '「你来了啊」' }] };
+  const utterances = splitUtterances(floor.lines);
+  assert.deepEqual(utterances.map(item => item.kind), ['quoted']);
+  const line = { lineId: 1, ids: [utterances[0].id] };
+  assert.deepEqual(__testing.dialogueSourceLineAnchorIds(line, utterances), [utterances[0].id]);
 });
