@@ -118,8 +118,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.40.0';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.40.0';
+} from './core.js?v=0.41.0-beta.1';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.0-beta.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -179,10 +179,10 @@ import {
   settledSpans,
   fishLivePayload,
   speechMood,
-} from './tts.js?v=0.40.0';
-import { createTtsStore } from './tts-store.js?v=0.40.0';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.40.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.40.0';
+} from './tts.js?v=0.41.0-beta.1';
+import { createTtsStore } from './tts-store.js?v=0.41.0-beta.1';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.0-beta.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.0-beta.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -192,7 +192,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.40.0';
+} from './processing.js?v=0.41.0-beta.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -209,13 +209,13 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.40.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.40.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.40.0';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.40.0';
-import { createCall, createCallHistory } from './call.js?v=0.40.0';
-import { createPcmPlayer } from './pcm-player.js?v=0.40.0';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest } from './tts-cloud.js?v=0.40.0';
+} from './prompts.js?v=0.41.0-beta.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.0-beta.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.0-beta.1';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.41.0-beta.1';
+import { createCall, createCallHistory } from './call.js?v=0.41.0-beta.1';
+import { createPcmPlayer } from './pcm-player.js?v=0.41.0-beta.1';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest } from './tts-cloud.js?v=0.41.0-beta.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -231,8 +231,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.40.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.40.0';
+} from './palette.js?v=0.41.0-beta.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.41.0-beta.1';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -240,7 +240,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.40.0';
+} from './diagnostics.js?v=0.41.0-beta.1';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -251,7 +251,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.40.0';
+} from './helper.js?v=0.41.0-beta.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
