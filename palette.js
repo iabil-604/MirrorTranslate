@@ -602,3 +602,177 @@ export function resolveSegmentStyle({ speakerColor, emotion, intensity = 1, band
   if (shape.letterSpacing * scale) declarations.push(`letter-spacing:${(shape.letterSpacing * scale).toFixed(3)}em`);
   return { emotion: key, intensity: level, declarations, css: declarations.join(';') };
 }
+
+// ---------------------------------------------------------------------------------------------
+// 招式上色（特效字）: the translator names a move, its element and how big a deal it is; every
+// other visual decision is made here, the same division of labour as speaker colouring above.
+//
+// Hue seeds below are read out of the author's own preset (声线排版总设定 §7.3/§8.4) with
+// `srgbToOklch` — only the hue survives, exactly like a speaker's hair colour: `adaptColorToBand`
+// re-solves lightness and chroma against the reader's actual background, so the same move keeps a
+// recognisable colour family in every theme without ever risking the preset's own fixed hex
+// (measured below DEFAULT_MIN_CONTRAST on plenty of real chat backgrounds).
+// ---------------------------------------------------------------------------------------------
+
+// One hue per attribute, keyed by every synonym the preset lists for it. A move whose element is
+// not in here (or has none) falls back to `fallbackHue(name)`, the same stable name-hash a speaker
+// with no registered colour already gets.
+export const MOVE_ELEMENT_HUES = Object.freeze({
+  火焰: 47.6, 爆炎: 47.6, 熔岩: 47.6, 火: 47.6,
+  真火: 41.1, 丹火: 41.1, 三昧真火: 41.1,
+  冰霜: 215.2, 寒气: 215.2, 雪: 215.2, 冰: 215.2,
+  水流: 259.8, 海潮: 259.8, 治愈: 259.8, 治愈之水: 259.8, 水: 259.8,
+  雷电: 86, 电光: 86, 雷: 86,
+  天雷: 293, 雷法: 293, 天劫: 293,
+  风: 149.6, 自然: 149.6, 植物: 149.6,
+  大地: 49, 岩石: 49, 重力: 49, 土: 49,
+  光明: 70.1, 神圣: 70.1, 祝福: 70.1, 光: 70.1,
+  黑暗: 292.7, 暗影: 292.7, 深渊: 292.7,
+  鲜血: 27.3, 诅咒: 27.3, 杀意: 27.3, 血: 27.3,
+  毒: 130.8, 腐蚀: 130.8, 瘴气: 130.8,
+  时间: 277.1, 空间: 277.1, 精神: 277.1, 幻术: 277.1, 时空: 277.1,
+  魅惑: 354.3, 爱意: 354.3, 樱花: 354.3,
+  科技: 182.5, 电子: 182.5, 数据: 182.5,
+  钢铁: 257.4, 剑技: 257.4, 纯物理: 257.4,
+  // 东方体系 (§8.4)，查不到再回落到上面的通用属性表。
+  道门金光: 75.8, 符箓: 75.8, 浩然正气: 75.8, 天道: 75.8, 道: 75.8,
+  佛光: 58.3, 梵音: 58.3, 金刚: 58.3, 舍利: 58.3, 佛: 58.3,
+  剑意: 221.7, 剑气: 221.7, 剑光: 221.7,
+  仙气: 163.2, 灵气: 163.2, 青木生机: 163.2, 丹药: 163.2, 仙: 163.2,
+  魔气: 16.9, 血煞: 16.9, 魔功: 16.9, 魔: 16.9,
+  九幽: 301.9, 鬼气: 301.9, 阴煞: 301.9, 邪祟: 301.9,
+  // 附加标注提示词自己举的例子（prompts.js「element 写这一招的属性、流派或来源」括号里的六个词）：前四个
+  // 已经是上面的键，后两个补在这里，和它们各自的类别同色——道法归入道门一类，机械归入钢铁一类。
+  道法: 75.8, 机械: 257.4,
+});
+
+// A small model answers in whatever shape it likes: 「火属性」「火系」「火之力」「冰魔法」 all name an
+// entry already in the table above with a descriptive suffix tacked on, and it may just as easily
+// answer in English or full-width characters. Without normalizing these first, every one of them
+// misses the table and falls back to `fallbackHue`'s name hash — a real element, landed on an
+// unpredictable hue instead of the family the table already assigns it.
+const MOVE_ELEMENT_SUFFIXES = Object.freeze(['属性', '系', '之力', '魔法', '元素', '属']);
+
+// The English equivalent of the same descriptive suffixes, stripped as a trailing word ("fire magic")
+// rather than a bare substring, since English names their attribute with a space instead of tacking a
+// character straight on.
+const MOVE_ELEMENT_ENGLISH_SUFFIXES = Object.freeze(['magic', 'element', 'attribute', 'type', 'style', 'power']);
+
+// Common English names for the same attributes, so an answer given in English keeps the same hue as
+// its Chinese synonym instead of hashing to something unrelated. Matched case-insensitively.
+const MOVE_ELEMENT_ALIASES = Object.freeze({
+  fire: '火焰', flame: '火焰', flames: '火焰', lava: '熔岩',
+  ice: '冰霜', frost: '冰霜', snow: '雪', cold: '冰霜',
+  water: '水流', ocean: '海潮', tide: '海潮', healing: '治愈',
+  lightning: '雷电', thunder: '雷电', electric: '电光', electricity: '电光',
+  wind: '风', nature: '自然', plant: '植物',
+  earth: '大地', rock: '岩石', gravity: '重力', stone: '大地',
+  light: '光明', holy: '神圣', divine: '神圣', blessing: '祝福',
+  dark: '黑暗', darkness: '黑暗', shadow: '暗影', shade: '暗影',
+  blood: '鲜血', curse: '诅咒', cursed: '诅咒',
+  poison: '毒', venom: '毒', toxic: '瘴气',
+  time: '时间', space: '空间', spirit: '精神', illusion: '幻术',
+  charm: '魅惑', love: '爱意',
+  tech: '科技', technology: '科技', electronic: '电子', data: '数据',
+  steel: '钢铁', iron: '钢铁', metal: '钢铁', sword: '剑技', physical: '纯物理',
+  machinery: '机械', machine: '机械',
+});
+
+// Full-width ASCII (letters, digits and the ideographic space some IMEs insert) reduced to their
+// half-width form, so 「Ｆｉｒｅ」 or a stray 　 trimmed the same way a plain "Fire" already is.
+function toHalfWidth(value) {
+  return String(value ?? '')
+    .replace(/[！-～]/g, character => String.fromCodePoint(character.codePointAt(0) - 0xFEE0))
+    .replace(/　/g, ' ');
+}
+
+// One descriptive suffix stripped off `value`, Chinese first (a bare substring, "属性"/"系"/…) then
+// English (a trailing word, "magic"/"type"/…); `value` itself when nothing strips, so the caller's own
+// loop knows to stop.
+function stripOneMoveElementSuffix(value) {
+  for (const suffix of MOVE_ELEMENT_SUFFIXES) {
+    if (value.length > suffix.length && value.endsWith(suffix)) return value.slice(0, -suffix.length);
+  }
+  const lower = value.toLowerCase();
+  for (const suffix of MOVE_ELEMENT_ENGLISH_SUFFIXES) {
+    const withSpace = ` ${suffix}`;
+    if (lower.length > withSpace.length && lower.endsWith(withSpace)) return value.slice(0, value.length - withSpace.length).trim();
+  }
+  return value;
+}
+
+// The table key an element name resolves to, after trimming and width-folding: the table itself, an
+// English alias, and a descriptive suffix are each tried in turn, stripping one more suffix and trying
+// both again whenever nothing yet matches — a small model stacks these freely (「雷系魔法」「冰属性魔
+// 法」「fire magic」) — until the value stops shrinking. '' when none of that ever lands on a real entry,
+// which leaves the caller to fall back to the name's own hash exactly as it already did.
+//
+// `Object.hasOwn` guards both lookups: a plain object indexed by a model-supplied key would otherwise
+// resolve an inherited property name ("constructor", "__proto__") to a function or a prototype instead
+// of refusing the key the way an unknown element already is.
+export function normalizeMoveElementKey(element) {
+  let current = toHalfWidth(element).trim();
+  const seen = new Set();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (Object.hasOwn(MOVE_ELEMENT_HUES, current)) return current;
+    const key = current.toLowerCase();
+    if (Object.hasOwn(MOVE_ELEMENT_ALIASES, key)) return MOVE_ELEMENT_ALIASES[key];
+    const stripped = stripOneMoveElementSuffix(current);
+    if (stripped === current) break;
+    current = stripped;
+  }
+  return '';
+}
+
+// A move's tier caps at 3 (究极奥义) whatever a small model answers; 0 and negative are folded up
+// to 1 rather than treated as "no tier", since the translator is always asked for one.
+export function normalizeMoveTier(value) {
+  const number = Math.round(Number(value));
+  return Number.isFinite(number) ? clamp(number, 1, 3) : 1;
+}
+
+/**
+ * The complete visual treatment for one move's name, given the tier code decided a gradient could
+ * not hold its own contrast (design decision, §8 item 6): tier 3 is bold, glow and one size step up
+ * instead, the same building blocks as tier 2 with the dial turned further, never a gradient.
+ *
+ * `color` and `-webkit-text-fill-color` are both written, and both `!important`: a speaker's outer
+ * wrapper already writes both important (index.js `resolvedSpeakerColors`'s `toInline`), and Chrome
+ * only repaints the glyph when the inner span states its own fill colour too — writing `color` alone
+ * still renders in the outer speaker's colour, with `-webkit-text-fill-color` inherited unchanged.
+ */
+export function resolveMoveStyle({ element = '', name = '', tier = 1, band, vividness = 0.7 } = {}) {
+  if (!band) return null;
+  const level = normalizeMoveTier(tier);
+  const key = String(element ?? '').trim();
+  const normalizedKey = normalizeMoveElementKey(key);
+  const hue = normalizedKey ? MOVE_ELEMENT_HUES[normalizedKey] : fallbackHue(name || key);
+  const seed = toHex(oklchToSrgb({ l: band.lightness ?? 0.6, c: Math.max(0.06, (band.chromaMax ?? 0.2) * 0.8), h: hue }));
+  const adapted = adaptColorToBand(seed, band, { name: name || key, vividness });
+  // Every tier is bold — the preset's own template wraps every level in <b> — carried as a real
+  // declaration here (not a nested <b> tag) so it rides the same single inline style as the colour.
+  const declarations = [`color:${adapted.hex}`, `-webkit-text-fill-color:${adapted.hex}`, 'font-weight:700'];
+  let glow = '';
+  if (level >= 2) {
+    // The glow is decorative, not text: it never has to clear the contrast floor, only to sit a
+    // visible step away from the base colour, further out the further the text already sits from
+    // the background (band.direction already says which way that is).
+    const away = band.direction === 'light' ? 0.2 : -0.2;
+    const glowOklch = { l: clamp01(adapted.oklch.l + away), c: Math.min(MAX_CHROMA, adapted.oklch.c + 0.08), h: adapted.oklch.h };
+    glow = toHex(oklchToSrgb(glowOklch));
+    declarations.push(`text-shadow:0 0 ${level >= 3 ? 8 : 6}px ${glow}`);
+  }
+  // Tier 3 stands in for the preset's own gradient (design decision: 加粗 + 发光 + 大一号 代替渐变,
+  // never a gradient — a gradient's own contrast cannot be guaranteed against an arbitrary background).
+  if (level >= 3) declarations.push('font-size:1.12em');
+  return {
+    tier: level,
+    hex: adapted.hex,
+    glow,
+    bold: true,
+    big: level >= 3,
+    declarations,
+    css: declarations.map(item => `${item} !important`).join(';'),
+  };
+}

@@ -10,13 +10,14 @@ import {
   parsePairList,
   placeQuoteMarks,
   unifySpeakerNames,
+  isDecorativeLine,
   MARK_TAGS,
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.37.0-beta.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.37.0-beta.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.37.0-beta.1';
+} from './core.js?v=0.40.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.40.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.40.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -90,7 +91,10 @@ export function linesFromTaggedText(text, tags = [], { excludedTags = [] } = {})
   for (const block of blocks) {
     for (const raw of block.inner.split('\n')) {
       const text = plainLineText(raw);
-      if (/[\p{L}\p{N}]/u.test(text)) lines.push({ lineId: lines.length + 1, text });
+      // The same judgement segmentSource applies through isBuiltinPreservedLine — a play-time readout or
+      // a pseudo waveform read as if it were prose otherwise, exactly the card this fallback path most
+      // often meets (a floor with no mirror of its own, read straight off its literal <jy-translation>).
+      if (text && !isDecorativeLine(text)) lines.push({ lineId: lines.length + 1, text });
     }
   }
   return lines;
@@ -104,7 +108,12 @@ export function linesFromTaggedText(text, tags = [], { excludedTags = [] } = {})
 
 const SENTENCE_STOP_RE = /[。！？!?]/u;
 const SENTENCE_TAIL_RE = /[。！？!?…～~」』”’"'）)\]】》]/u;
-const EDGE_PUNCTUATION_RE = /^[\s，,、；;：:。．.！!？?）)\]】》」』”’]+/u;
+// Exported for the deep reading (tts-deep.js): a reply's `line` is checked against `utterance.text`,
+// which already had this same lead trimmed off when the utterance was cut, and the model was shown the
+// untrimmed `anchor` instead — so the same trim has to run on the reply's own line before the two are
+// compared character for character, or a line that legitimately opens on one of these marks (an
+// ellipsis, an em dash) never passes the check no matter how faithfully it was copied.
+export const EDGE_PUNCTUATION_RE = /^[\s，,、；;：:。．.！!？?）)\]】》」』”’]+/u;
 const SPEAKABLE_RE = /[\p{L}\p{N}]/u;
 
 export function splitNarrationSentences(text) {
@@ -237,6 +246,45 @@ export function splitUtterances(lines, { quotePairs = DEFAULT_QUOTE_PAIRS, skipP
   return utterances;
 }
 
+/**
+ * One line for the 对白读原文 reading: the translation's narration kept as it is, each of its quoted
+ * runs swapped for the original's run at the same position — quote marks and all, so the run is found
+ * again on the (possibly folded) original block the same way any other anchor is. The line still comes
+ * out with the translation's own count and order of quoted runs, so a mark placed on the translation
+ * (placeQuoteMarks, deriveLabelsForSide) keeps landing where it always did; only the words inside those
+ * runs change language.
+ *
+ * Both sides are folded with foldEmbeddedQuotes first (the same fold splitUtterances applies), so a
+ * name or title quoted inside a sentence — 『星の約束』, a shop sign — reads as narration on whichever
+ * side it fell on, and is never treated as a line of dialogue to pair up.
+ *
+ * A one-to-one pairing only makes sense when both sides agree on how many runs are actually spoken:
+ * the translator split one line of dialogue into two, joined two into one, or used a quote style the
+ * original didn't. Guessing a pairing across a mismatch either repeats a run (the tail keeps pairing
+ * forward past where the split happened) or drops one, so a mismatch instead keeps the translation's
+ * line exactly as it already reads — never invented, never doubled — and reports itself through
+ * `onMismatch`, so the caller can leave a diagnostic.
+ */
+export function mixDialogueFromSource(translationText, sourceText, { quotePairs = DEFAULT_QUOTE_PAIRS, skipPairs = [], onMismatch } = {}) {
+  const quotes = pairsOf(quotePairs, DEFAULT_QUOTE_PAIRS);
+  const unquoteWith = run => unquote(run, quotes);
+  const target = foldEmbeddedQuotes(splitByPairs(translationText, { quotePairs: quotes, skipPairs }), unquoteWith);
+  const sourceRuns = foldEmbeddedQuotes(splitByPairs(sourceText ?? '', { quotePairs: quotes, skipPairs }), unquoteWith)
+    .filter(part => part.kind === 'quoted');
+  const targetCount = target.filter(part => part.kind === 'quoted').length;
+  if (targetCount !== sourceRuns.length) {
+    if (typeof onMismatch === 'function') onMismatch({ targetCount, sourceCount: sourceRuns.length });
+    return translationText;
+  }
+  let index = 0;
+  return target.map(part => {
+    if (part.kind !== 'quoted') return part.text;
+    const run = sourceRuns[index];
+    index += 1;
+    return run ? run.text : part.text;
+  }).join('');
+}
+
 // Which language a sentence is written in, by script alone. Latin script says 'en' because the
 // scripts of English, German and French are one and the same; the analysis names those apart.
 export function detectLanguage(text) {
@@ -320,7 +368,17 @@ export function annotationReading(utterances, annotations) {
     const mark = annotations.get(lineId);
     if (!mark) continue;
     const placed = placeQuoteMarks(quoted.map(utterance => utterance.text), mark, matchKey);
+    // A quoted run whose whole text is one of this line's own move names (design: a 『』-marked name is
+    // never a line of dialogue) is the narrator's, whatever placeQuoteMarks made of it — a name right
+    // after a full stop, or one on its own at the head of a sentence, looks exactly like a line someone
+    // just opened, and placeQuoteMarks has no way to tell the two apart on its own.
+    const moveNames = new Set((Array.isArray(mark.moves) ? mark.moves : [])
+      .map(move => String(move?.name ?? '').trim()).filter(Boolean));
     quoted.forEach((utterance, index) => {
+      if (moveNames.has(utterance.text.trim())) {
+        labels.set(utterance.id, { type: 'narration' });
+        return;
+      }
       const source = placed[index];
       if (!source) return;
       // A run the translation said nobody speaks, a sign or a title, is the narrator's.
@@ -402,7 +460,7 @@ function speechVocabulary() {
   const tones = new Map(SPEECH_TONES);
   for (const tone of FISH_TONES) if (FISH_TAG_LABELS[tone]) tones.set(FISH_TAG_LABELS[tone], tone);
   // The words are split at spaces, except Fish's own words of more than one ('soft tone', 'in a hurry
-  // tone'), which are taken whole where they stand.
+  // tone'), which are taken whole where they stand rather than torn into 'soft' and 'tone'.
   const separators = '、,，;；+/|｜\\s';
   const phrases = [...FISH_TONES, ...FISH_EMOTIONS].filter(word => /\s/.test(word))
     .sort((left, right) => right.length - left.length)
@@ -658,8 +716,11 @@ export const SOUND_GROUNDS = soundGrounds(Object.keys(SOUND_CUES));
 // trailing-off mark, and moves one written after a line that trails off to where the line starts.
 export const SOUND_PLACE_RULE = '声音不能紧挨省略号、破折号、波浪号：句首挨着就写在句尾，句尾挨着就写在句首，两头都挨着就不写。';
 // The analyses keep end for a line with more of its paragraph after it, so a line that trails off at its
-// start and ends its paragraph has nowhere left for a sound.
-export const SOUND_END_RULE = '句首挨着、end 又不能用时也不写。';
+// start and ends its paragraph has nowhere left for a sound. Spelled out in full — the same condition as
+// rule 6 below (同一段里这句后面还有正文时用 end), not the bare English word "end" — so a prompt whose own
+// output format never has a field called that (the deep reading's inline tags have no such field) still
+// asks for something it actually defines.
+export const SOUND_END_RULE = '句首挨着、同一段里这句后面又没有别的正文时也不写。';
 
 // The moods that fold into the palette's tender and shy. Laid over nothing but 嗯 and 啊 they are the
 // moan itself, so the check before Fish drops them there, and every prompt names them one by one.
@@ -1131,7 +1192,9 @@ export function deriveLabelsForSide(primaryUtterances, primaryLabels, primaryVoi
     }
     const voice = primaryVoices instanceof Map ? primaryVoices.get(source) : null;
     if (voice) {
-      const { pauses, stress, shifts, sounds, ...rest } = voice;
+      // pausesAnchored/stressAnchored (tts-deep.js) describe the pauses/stress arrays they ride with;
+      // dropped alongside them here, not left behind to claim a field that no longer exists.
+      const { pauses, stress, shifts, sounds, pausesAnchored, stressAnchored, ...rest } = voice;
       const kept = (sounds ?? []).filter(sound => sound.at !== 'after');
       if (kept.length) rest.sounds = kept;
       if (Object.keys(rest).length) voices.set(utterance.id, rest);
@@ -1317,14 +1380,21 @@ export function groundVoice(voice, { text = '', evidence = '', sources = null } 
   const out = { ...voice };
   let rewritten = false;
   const drop = (field, value, why) => dropped.push({ field, value, why });
+  // pauses and stress carry a companion *Anchored flag (see classifyAndApply in tts-deep.js) that says
+  // whether the array is the deep reading's own shortest-run anchor rather than the word a model or a
+  // translation's mark actually named; it goes with the field, so cutting or emptying the field drops it.
   const cut = (key, why) => {
     if (out[key] === undefined) return;
     drop(key, out[key], why);
     delete out[key];
+    if (key === 'pauses' || key === 'stress') delete out[`${key}Anchored`];
   };
   const keep = (key, list) => {
     if (list.length) out[key] = list;
-    else delete out[key];
+    else {
+      delete out[key];
+      if (key === 'pauses' || key === 'stress') delete out[`${key}Anchored`];
+    }
   };
   const settle = () => (!dropped.length && !rewritten
     ? { voice, dropped, changed: false }
@@ -1344,6 +1414,19 @@ export function groundVoice(voice, { text = '', evidence = '', sources = null } 
       out.emotion = word;
       if (step !== null && out.intensity === undefined) out.intensity = step;
       rewritten = true;
+    }
+  }
+  // A second, softer emotion word (the deep reading's own secondary tag) is not checked as strictly as
+  // `emotion` — a free-form phrase in it is left alone, the same as `why` or `breath`, since it only
+  // ever reaches Fish through emotionCue, which already says nothing for a word it does not know. But a
+  // sentence of nothing but 嗯 and 啊 is the soft mood itself, so a *recognised* soft or quiet word here
+  // is still the one thing worth catching: left unchecked it is exactly the kind of word emotionCue does
+  // know, and it would be sent for a line whose only content is the interjection already carrying it.
+  if (out.secondary !== undefined && !size.core) {
+    const word = spokenEmotion(out.secondary);
+    if (word && (SOFT_FOLDS.has(normalizeEmotion(word)) || quietWord(word))) {
+      drop('secondary', out.secondary, 'interjection');
+      delete out.secondary;
     }
   }
   if (!size.core) {

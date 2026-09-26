@@ -1,7 +1,7 @@
-import { extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, DEFAULT_QUOTE_PAIRS, MESSAGE_META_KEY } from './core.js?v=0.37.0-beta.1';
-import { composeAnnotationSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.37.0-beta.1';
-import { EMOTION_KEYS } from './palette.js?v=0.37.0-beta.1';
-import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOFT_MOODS, SOUND_CUES, SOUND_PLACE_RULE, SOUND_TAGS, TONE_CUES } from './tts.js?v=0.37.0-beta.1';
+import { extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, DEFAULT_QUOTE_PAIRS, MESSAGE_META_KEY } from './core.js?v=0.40.0';
+import { composeAnnotationSection, composeLyricsSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.40.0';
+import { EMOTION_KEYS } from './palette.js?v=0.40.0';
+import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOFT_MOODS, SOUND_CUES, SOUND_PLACE_RULE, SOUND_TAGS, TONE_CUES } from './tts.js?v=0.40.0';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -172,6 +172,24 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
   if (annotate) {
     messages.push({ role: 'system', content: composeAnnotationSection(annotate) });
   }
+  // segmentSource attaches `fragments` to a segment whenever the original line has one, regardless of
+  // any setting (index.js reads it for the reading's own stripHiddenRuns, and the display side reads it
+  // back off `fragmentsById`, not off this array) — so it has to be stripped back out here, the same
+  // place `input.annotate.runs` below decides whether the translator was even told what it means. Sent
+  // unconditionally, every reader — colouring off, 特效字 never turned on — got an unexplained field in
+  // their request the moment an original line happened to carry inline formatting.
+  const includeFragments = Boolean(annotate?.effects && annotate?.hasFragments);
+  const outputSegments = includeFragments || !Array.isArray(segments) ? segments : segments.map(segment => {
+    if (!segment || !Object.hasOwn(segment, 'fragments')) return segment;
+    const { fragments, ...rest } = segment;
+    return rest;
+  });
+  // Attached only when this batch actually has a lyric-marked segment in it (index.js works this out
+  // from segmentSource's own `lyricIds` before it ever calls this), the same way the annotation
+  // section above is only ever sent to a request that has something for it to annotate.
+  if (requestMeta?.hasLyrics) {
+    messages.push({ role: 'system', content: composeLyricsSection() });
+  }
   const input = {
     task: 'translate_story_to_target_language',
     source_language: 'auto-detect-per-segment',
@@ -183,7 +201,7 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
       worldbook: packet.worldbook || '',
       recent: packet.recent || '',
     },
-    segments,
+    segments: outputSegments,
   };
   if (annotate) {
     input.annotate = {
@@ -192,6 +210,7 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
       ...(annotate.speakers && annotate.roster.length ? { roster: annotate.roster.map(entry => entry.name) } : {}),
       ...(annotate.emotions ? { emotions: annotate.emotionLabels } : {}),
       ...(annotate.voice ? { quotes: true, ...(annotate.directions ? { direction: true } : {}), tones: annotate.tones, sounds: annotate.sounds } : {}),
+      ...(annotate.effects ? { moves: true, ...(annotate.hasFragments ? { runs: true } : {}) } : {}),
     };
   }
   if (phase === 'style_repair') {
@@ -234,9 +253,17 @@ function annotationRequest(settings, phase, requestMeta) {
   const speakers = coloring?.speakers === true || reading;
   const emotions = coloring?.emotions === true || reading;
   if (!speakers && !emotions) return null;
+  // 特效字 only ever asks anything of the translator while speaker colouring itself is on — it is a
+  // sub-switch under it (design 「开关名称和位置」), never turned on by the reading alone.
+  const effects = coloring?.speakers === true && coloring?.effects === true;
   return {
     speakers,
     emotions,
+    effects,
+    hasFragments: Boolean(requestMeta?.hasFragments),
+    // Already-known moves are only ever worth telling the translator about while 特效字 asks for moves
+    // at all — the same gate `effects` already is (see index.js knownMovesForRequest).
+    knownMoves: effects ? knownMoveEntries(requestMeta?.knownMoves) : [],
     roster: rosterEntries(requestMeta?.roster),
     // A name the roster lacks still earns a colour of its own and still reaches the reading; only
     // with both of those off is there nothing a name outside the roster could be used for.
@@ -280,4 +307,19 @@ function rosterEntries(value) {
   return [...entries.values()].slice(0, 40).map(entry => ({ ...entry, aliases: entry.aliases.filter(alias => !names.has(alias)) }));
 }
 
-export const __workflowTesting = Object.freeze({ cleanReferenceText, worldInfoChunks });
+// index.js's knownMovesForRequest has already picked, ordered and capped these; this only guards the
+// shape of what crosses the module boundary, the same reason rosterEntries re-checks the roster.
+function knownMoveEntries(value) {
+  const seen = new Set();
+  const entries = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const name = String(item?.name ?? '').trim();
+    const element = String(item?.element ?? '').trim();
+    if (!name || !element || seen.has(name)) continue;
+    seen.add(name);
+    entries.push({ name, element });
+  }
+  return entries.slice(0, 40);
+}
+
+export const __workflowTesting = Object.freeze({ cleanReferenceText, worldInfoChunks, knownMoveEntries });

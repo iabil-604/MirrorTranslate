@@ -22,6 +22,7 @@ import {
   readFloor,
   restoreStrippedForPrompt,
   HIDDEN_START,
+  HIDDEN_END,
   MESSAGE_META_KEY,
   renderReplacePair,
   renderSourceBlock,
@@ -48,6 +49,7 @@ import {
   normalizeOpenAiBaseUrl,
   parseModelListResponse,
   parsePreserveLineRulesWithErrors,
+  parseLyricLineRulesWithErrors,
   parseTagNames,
   parseTagNamesWithErrors,
   splitSpeechParts,
@@ -60,6 +62,40 @@ import {
   segmentSource,
   restyleBilingual,
   stripGeneratedTranslationLines,
+  matchesPreserveLine,
+  SEGMENTATION_RULES_VERSION,
+  UI_MODES,
+  CONSOLE_PRESET_IDS,
+  CONTROL_CENTER_PAGES,
+  pagesForMode,
+  pageExistsInMode,
+  resolvePageForMode,
+  CONNECTION_USES,
+  connectionUseChoice,
+  setConnectionUse,
+  channelUsesPointingAt,
+  reassignConnectionUsesOnDelete,
+  PRESET_MANAGED_FIELDS,
+  PRESET_LABELS,
+  PRESET_TIER_LABELS,
+  presetContent,
+  applyPreset,
+  presetDrift,
+  translationChannelChoice,
+  resolveFeatureChannel,
+  preserveLineRuleCountLabel,
+  segmentAffixSummary,
+  coloringDetailFoldSummary,
+  quoteSymbolFoldSummary,
+  fishParamsFoldSummary,
+  consoleFoldSummary,
+  voiceLibraryFoldSummary,
+  channelRequestFoldSummary,
+  channelPostscriptFoldSummary,
+  DEFAULT_CONSOLE,
+  DEFAULT_HELPER,
+  normalizeHelper,
+  helperPromptFoldSummary,
 } from '../core.js';
 import {
   addDiagnostic,
@@ -93,6 +129,8 @@ test('default settings use story_scene and migrate the legacy single tag', () =>
   assert.equal(DEFAULT_SETTINGS.streamingWriteback, false);
   assert.equal(DEFAULT_SETTINGS.contextMessages, 2);
   assert.equal(DEFAULT_SETTINGS.preserveLineRules, '');
+  assert.equal(DEFAULT_SETTINGS.uiMode, 'normal');
+  assert.equal(DEFAULT_SETTINGS.preset, '');
 });
 
 test('legacy single-channel settings migrate into a saved channel', () => {
@@ -111,7 +149,7 @@ test('legacy single-channel settings migrate into a saved channel', () => {
   assert.equal(channel.key, 'secret');
   assert.equal(channel.model, 'model-x');
   assert.equal(channel.timeoutSec, 600);
-  assert.equal(independent.schemaVersion, 12);
+  assert.equal(independent.schemaVersion, 13);
 });
 
 test('channel output budget scales with the raised default and no longer flattens above 32768', () => {
@@ -433,6 +471,144 @@ test('preserve whitelist supports exact, prefix and regular-expression rules', (
   assert.throws(() => segmentSource('本文。', { preserveLineRules: 'prefix:' }), /prefix 不能为空/);
 });
 
+test('a <br> or block edge inside one physical line is a line break, not glue, when sent to be translated', () => {
+  // No real newline between them — the three card lines are one physical line, joined only by <br>.
+  const card = 'NOW PLAYING<br>今日の空<br>作词：陽炎';
+  assert.deepEqual(
+    segmentSource(card).segments.map(item => item.text),
+    ['NOW PLAYING\n今日の空\n作词：陽炎'],
+    'the words on either side of a <br> are not run together',
+  );
+  assert.deepEqual(
+    segmentSource(card, { segmentationVersion: 1 }).segments.map(item => item.text),
+    ['NOW PLAYING今日の空作词：陽炎'],
+    'a floor already segmented under v0.36.0 or older is re-derived exactly as it read then, glue and all',
+  );
+  // A block edge behaves the same way as <br>.
+  assert.deepEqual(segmentSource('<div>甲</div><div>乙</div>').segments.map(item => item.text), ['甲\n\n乙']);
+});
+
+test('two adjacent inline elements with nothing of their own between them keep a separating space, on new floors only', () => {
+  const line = '<span>NOW PLAYING</span><span>Evening Glass</span>';
+  assert.deepEqual(segmentSource(line).segments.map(item => item.text), ['NOW PLAYING Evening Glass']);
+  assert.deepEqual(
+    segmentSource(line, { segmentationVersion: 1 }).segments.map(item => item.text),
+    ['NOW PLAYINGEvening Glass'],
+    'a floor already segmented under v0.36.0 or older keeps reading glued, exactly as it did then',
+  );
+  // Nesting deeper (an opener followed by markup) and unwinding a nest (two closers in a row) need
+  // nothing: there is no run of text on that side for the space to separate anything from.
+  assert.deepEqual(segmentSource('<span><b>加粗</b>文字</span>').segments.map(item => item.text), ['加粗文字']);
+  assert.deepEqual(segmentSource('<span><b>加粗文字</b></span>').segments.map(item => item.text), ['加粗文字']);
+  // A tag next to real text on either side already has that text to stand on its own; no space is added.
+  assert.deepEqual(segmentSource('前面<b>加粗</b>后面').segments.map(item => item.text), ['前面加粗后面']);
+  // Three siblings in a row: a space at each of the two junctions, never doubled.
+  assert.deepEqual(segmentSource('<span>甲</span><span>乙</span><span>丙</span>').segments.map(item => item.text), ['甲 乙 丙']);
+});
+
+test('a preserve rule matches past a line-level <say> shell and its indentation, on new floors only', () => {
+  const rules = ['NOW PLAYING'];
+  const line = '  <say who="旁白">NOW PLAYING</say>';
+  const modern = segmentSource(line, { preserveLineRules: rules });
+  assert.equal(modern.segments.length, 0, 'an indented, speaker-marked line still hits an exact rule written for the bare text');
+  assert.equal(modern.customPreservedLines, 1);
+  const legacy = segmentSource(line, { preserveLineRules: rules, segmentationVersion: 1 });
+  assert.equal(legacy.segments.length, 1, 'a floor already segmented under v0.36.0 or older is matched exactly as it read then: shell and all, so the rule misses and the line stays translated');
+  assert.equal(legacy.customPreservedLines, 0);
+  assert.equal(matchesPreserveLine('<say who="A">走开</say>', [{ type: 'exact', text: '走开' }], { modern: true }), true);
+  assert.equal(matchesPreserveLine('<say who="A">走开</say>', [{ type: 'exact', text: '走开' }]), false, 'options.modern defaults off, matching every version through v0.36.0');
+});
+
+test('looking past a <say> shell only adds matches on new floors, it never takes away what v0.36.0 already matched', () => {
+  // An indentation-anchored regex: it can only ever see the untrimmed original, shell or not, so
+  // stripping the shell to test a trimmed subject instead would make it miss every line it used to hit.
+  const indentRule = [{ type: 'regex', source: '/^\\s{4}/', regex: /^\s{4}/ }];
+  assert.equal(matchesPreserveLine('    indented code-like line', indentRule, { modern: true }), true);
+  assert.equal(matchesPreserveLine('    <say who="A">indented</say>', indentRule, { modern: true }), true, 'the shell sits after the indentation the rule anchors on');
+  // A prefix or exact rule written to include the <say> shell itself: v0.36.0 tested these against the
+  // trimmed line, shell and all, so a shell-stripped-only subject must not stop that from matching too.
+  const prefixRule = [{ type: 'prefix', text: '<say who="System">' }];
+  assert.equal(matchesPreserveLine('<say who="System">Signal lost.</say>', prefixRule, { modern: true }), true);
+  const exactRule = [{ type: 'exact', text: '<say who="DJ">NOW PLAYING</say>' }];
+  assert.equal(matchesPreserveLine('<say who="DJ">NOW PLAYING</say>', exactRule, { modern: true }), true);
+  // End to end: a floor whose preserve rules were written against v0.36.0's own matching keeps matching
+  // exactly the same lines once segmentSource runs under the modern rules.
+  const body = [
+    '    indented code-like line',
+    '<say who="System">Signal lost.</say>',
+    '',
+    'Plain prose here.',
+  ].join('\n');
+  const rules = ['/^\\s{4}/', '/^<say who="System">/'];
+  assert.deepEqual(segmentSource(body, { preserveLineRules: rules }).segments.map(item => item.text), ['Plain prose here.']);
+  const prefixRules = ['prefix:<say who="System">', '<say who="DJ">NOW PLAYING</say>'];
+  const prefixBody = [
+    '<say who="DJ">NOW PLAYING</say>',
+    '<say who="System">Signal lost.</say>',
+    '',
+    'Plain prose here.',
+  ].join('\n');
+  assert.deepEqual(segmentSource(prefixBody, { preserveLineRules: prefixRules }).segments.map(item => item.text), ['Plain prose here.']);
+});
+
+test('a play-time readout or a pseudo waveform line is preserved on new floors, translated as before on old ones', () => {
+  const card = ['00:42 / 03:15', 'llllIIIIll', '普通句子。'].join('\n\n');
+  const modern = segmentSource(card);
+  assert.deepEqual(modern.segments.map(item => item.text), ['普通句子。']);
+  assert.equal(modern.builtinPreservedLines, 2);
+  const legacy = segmentSource(card, { segmentationVersion: 1 });
+  assert.deepEqual(
+    legacy.segments.map(item => item.text),
+    ['00:42 / 03:15', 'llllIIIIll', '普通句子。'],
+    'v0.36.0 had no rule for either shape and sent both off to be translated',
+  );
+  assert.equal(legacy.builtinPreservedLines, 0);
+  assert.deepEqual(segmentSource('▶ 00:42 / 03:15 ◀').segments, [], 'decorations around the two clocks do not stop the rule');
+  // Under six characters is too short to be confident it is a waveform rather than a short word.
+  assert.equal(segmentSource('IIIII').segments.length, 1);
+  // A sentence that happens to end in one clock reading is not two clocks, so it stays prose.
+  assert.equal(segmentSource('11:30 に会おう。').segments.length, 1);
+});
+
+test('a decorative sub-line stays out of what is translated even when <br> folded it into a prose line\'s own text', () => {
+  // All three of the card's lines are joined by <br> with no real newline, so item 2's own <br>-as-break
+  // rule turns them into one physical `line` whose translationText carries two embedded \n — a decorative
+  // reading built only for a whole, undivided line would never see past those to find them.
+  const mixed = '<div class="player">NOW PLAYING<br>ılılıllıılı<br>▶ 01:02 / 03:45</div>';
+  const segmented = segmentSource(mixed);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['NOW PLAYING'], 'the two decorative sub-lines never reach the translator, only the prose one does');
+  // Every sub-line decorative: nothing semantic is left, so the whole physical line is preserved and no
+  // segment is created for it at all — the same outcome as when it is written on separate lines.
+  const allDecorative = '<div class="player">ılılıllıılı<br>▶ 01:02 / 03:45</div>';
+  assert.deepEqual(segmentSource(allDecorative).segments, []);
+  // An ordinary multi-line card with no decorative content is completely unaffected: every sub-line and
+  // its \n are kept exactly as item 2 alone already produced them.
+  const prose = 'NOW PLAYING<br>今日の空<br>作词：陽炎';
+  assert.deepEqual(segmentSource(prose).segments.map(item => item.text), ['NOW PLAYING\n今日の空\n作词：陽炎']);
+  // On an old floor's own rules, translationText never carries an embedded \n in the first place (see
+  // stripStructuralTags), so this filter has nothing to do and the glued legacy reading is untouched.
+  assert.deepEqual(
+    segmentSource(mixed, { segmentationVersion: 1 }).segments.map(item => item.text),
+    ['NOW PLAYINGılılıllıılı▶ 01:02 / 03:45'],
+  );
+});
+
+test('a segment carries a separate reading text only where it differs from what is translated, with struck-through and redacted words dropped', () => {
+  const plain = segmentSource('风停了。');
+  assert.equal(plain.reading.size, 0, 'nothing hidden, nothing struck: no entry at all, not even an identical one');
+  const struck = segmentSource('他说<del>不</del>要去。');
+  assert.equal(struck.segments[0].text, '他说不要去。', 'the translation still sees the retracted word');
+  assert.equal(struck.reading.get(struck.segments[0].id), '他说要去。', 'the reading drops it');
+  const redacted = segmentSource('前面<span style="background-color:currentColor">涂黑的字</span>后面');
+  assert.equal(redacted.segments[0].text, '前面涂黑的字后面', 'unchanged for translation');
+  assert.equal(redacted.reading.get(redacted.segments[0].id), '前面后面');
+  // A decorative sub-line folded away by <br> is dropped from both the translation and the reading, even
+  // on a line that separately carries struck-through text of its own elsewhere in it.
+  const both = segmentSource('他说<del>不</del>要去。<br>ılılıllıılı');
+  assert.equal(both.segments[0].text, '他说不要去。', 'the waveform sub-line never reaches the translator either');
+  assert.equal(both.reading.get(both.segments[0].id), '他说要去。');
+});
+
 test('transparent container tags and escaped excluded blocks never enter API segments', () => {
   const source = [
     '\\<parallel_line_drive>',
@@ -695,6 +871,26 @@ test('manifest and entry describe a native extension without TavernHelper calls'
   assert.match(entry, /add-prompt-section/);
   const hostCss = fs.readFileSync(path.join(root, manifest.css.split('?')[0]), 'utf8');
   assert.doesNotMatch(hostCss, /(^|\n)\s*(?:input|select|textarea|button)\b/m);
+});
+
+// DESIGN.md §15.4（常夜灯 2026-09-26 批准）：危险操作是红字文字按钮，放在自己那组的末尾。「删除多余正则」是
+// 「绑定正则」组里唯一的破坏性操作，是这一条实际适用的地方（§9.1 的 .jy-text-button 本身只是 --jy-accent）。
+test('the "删除多余正则" button is a red text button at the end of its own group, per DESIGN.md §9.1/§15.4', () => {
+  const entry = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
+  const group = entry.match(/<div class="jy-form-section"><span class="jy-label">绑定正则[\s\S]*?<\/details>/)?.[0];
+  assert.ok(group, '找到「绑定正则」这一组的标记');
+  const button = group.match(/<button[^>]*data-jy-action="dedupe-processing-regex"[^>]*>删除多余正则<\/button>/)?.[0];
+  assert.ok(button, '找到「删除多余正则」按钮本身');
+  assert.match(button, /class="jy-text-button jy-text-button-danger"/, '无边框的文字按钮，字色走危险色');
+  // 组内唯一另一个按钮是「导入正则」；危险操作要排在它之后，也排在正则列表和状态行之后（组的末尾）。
+  assert.ok(group.indexOf('导入正则') < group.indexOf('删除多余正则'), '排在「导入正则」之后');
+  assert.ok(group.indexOf('data-jy-processing-regex-list') < group.indexOf('删除多余正则'), '排在正则列表之后');
+  assert.ok(group.indexOf('data-jy-native-regex-status') < group.indexOf('删除多余正则'), '排在状态行之后，即组的末尾');
+
+  const hostCss = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+  const rule = hostCss.match(/\.jy-text-button-danger\s*\{[^}]*\}/)?.[0];
+  assert.ok(rule, '.jy-text-button-danger 的样式规则存在');
+  assert.match(rule, /color:\s*var\(--jy-error\)/, '危险文字按钮的字色是 --jy-error（DESIGN.md §9.1）');
 });
 
 test('manifest files, lifecycle exports, and capability snapshot are self-consistent', () => {
@@ -1041,6 +1237,49 @@ test('only a real whole-line wrapper is carried, and only its presentation attri
   assert.equal(withoutCarriedColor('<font color="#8cf">'), '<font>');
 });
 
+test('formatting is found past a line-level <say> shell and the story quotes wrapping the whole line', () => {
+  // The preset's own standard write-up: a speaker mark, then the whole line's quotes, then the tags.
+  assert.deepEqual(
+    lineFormatting('<say who="樱井" mood="开心">「<big><b>好的呀</b></big>」</say>'),
+    { open: '<big><b>', close: '</b></big>' },
+    'neither the <say> shell nor the quotes it wraps are part of what carries',
+  );
+  // The tags may wrap the quotes themselves instead of sitting inside them.
+  assert.deepEqual(
+    lineFormatting('<say who="樱井"><big>「加粗呀」</big></say>'),
+    { open: '<big>', close: '</big>' },
+  );
+  // A <say> shell with no quotes inside still has its formatting found.
+  assert.deepEqual(lineFormatting('<say who="樱井"><i>心里想着</i></say>'), { open: '<i>', close: '</i>' });
+  // No <say>, no quotes: behaves exactly as it always has.
+  assert.deepEqual(lineFormatting('<i>斜体</i>'), { open: '<i>', close: '</i>' });
+  // A self-closing mark is not a shell; it names the run after it rather than enclosing one.
+  assert.equal(lineFormatting('<say 樱井/><big>没有外壳</big>'), null);
+  // Two speakers on one line: no single wrapper for the <say> shell to reveal.
+  assert.equal(lineFormatting('<say who="A">「甲」</say><say who="B">「乙」</say>'), null);
+});
+
+test('formatting past a <say> shell is found through indentation and stray whitespace, not just a bare shell', () => {
+  const fullWidthSpace = String.fromCharCode(0x3000).repeat(2);
+  // An indented, speaker-marked line: the preset's own leading whitespace must not stop the shell from
+  // being found, the same way it already does not stop a bare wrapper like <b> from being found.
+  assert.deepEqual(
+    lineFormatting(`${fullWidthSpace}<say who="A">「<big><b>好。</b></big>」</say>`),
+    { open: '<big><b>', close: '</b></big>' },
+  );
+  assert.deepEqual(lineFormatting(`${fullWidthSpace}<b>「好。」</b>`), { open: '<b>', close: '</b>' }, 'the case this already handled keeps working');
+  // Trailing whitespace after </say>.
+  assert.deepEqual(
+    lineFormatting('<say who="A">「<big><b>好。</b></big>」</say> '),
+    { open: '<big><b>', close: '</b></big>' },
+  );
+  // Whitespace just inside the <say> shell, around the quotes themselves.
+  assert.deepEqual(
+    lineFormatting('<say who="A"> 「<b>好。</b>」 </say>'),
+    { open: '<b>', close: '</b>' },
+  );
+});
+
 test('speaker colouring wins the colour but the carried weight and slant still apply', () => {
   const source = '<b style="color:#e79">「台词」</b>';
   const options = {
@@ -1194,6 +1433,215 @@ test('a line handed back in the source language is recognised as untranslated', 
   assert.equal(looksUntranslated('艾莉丝在毛毯里扑腾，ヒルダ様の腕を押し返した。'), true);
   // Entirely Japanese without being an exact echo.
   assert.equal(looksUntranslated('エリスは泣きながら私の袖を掴んだ。'), true);
+});
+
+test('an echo of a source with nothing but a gasp or a stammer in it is not flagged as untranslated', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // The four reported lines: quote marks, ellipses and full stops stripped away, each leaves at most
+  // two letters and every one of them an interjection kana — there was nothing here to translate.
+  assert.equal(looksUntranslated('「……っ」', '「……っ」'), false);
+  assert.equal(looksUntranslated('「……え？」', '「……え？」'), false);
+  assert.equal(looksUntranslated('「ッ！」', '「ッ！」'), false);
+  assert.equal(looksUntranslated('「……うん。」', '「……うん。」'), false);
+  // Dropping the untranslatable kana instead of copying it is accepted the same way.
+  assert.equal(looksUntranslated('っ', 'あっ'), false);
+  // A pure-punctuation source never reaches this at all (segmentSource keeps it out), but a source
+  // with a real word beside the gasp still goes back for translation as it always did.
+  assert.equal(looksUntranslated('「……っ、待って」', '「……っ、待って」'), true);
+  // Three real vowel morae in a row is more than isTrivialInterjectionSource's own one-real-mora
+  // ceiling — it is no longer "a gasp or a stammer" — so an echo of it still counts as untranslated.
+  assert.equal(looksUntranslated('あああ', 'あああ'), true);
+});
+
+test('a gasp built on ー, doubled っ or the は/か consonant rows is recognised the same as a bare vowel, and a real short word is not', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // A long-vowel or doubled-stammer gasp: only one real mora once ー, ～/〜, small kana and repeated っ
+  // are set aside as filler rather than counted, so these settle in one reply instead of two.
+  for (const line of ['あーっ！', 'えーっ！？', 'うーん……', '……っっっ', 'えっっ', 'あ～っ', 'んんっ', 'うぅっ']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is one real mora plus filler, not a word`);
+  }
+  // The は/か consonant rows are gasps too, not only the five vowels — わ行/さ行 words are not covered
+  // by this the way tts.js's own INTERJECTION_CHARS draws the line at は行.
+  for (const line of ['はぁ……', 'ひっ', 'くっ', 'きゃっ', 'ふぅ……', 'ヒッ', 'ハァ……']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a single is-row/ka-row gasp`);
+  }
+  // Two real morae is always either a real short word or a name once it is not a bare gasp — even
+  // when, letter for letter, it is built from the same vowels a gasp is: おい (喂), いえ/いい (不/好),
+  // ええ (嗯), あい (愛) and うえ (上) all still need an actual translation, not a shrug.
+  for (const line of ['おい！', 'いえ', 'いい', 'ええ', 'あい', 'うえ', 'アイ！', 'イオ']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a real word or name, not a gasp`);
+  }
+});
+
+test('a bare mora next to a bare ん needs translation unless the whole shape is a real interjection, a marked moan or a repeated unit', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // Letter-for-letter the same shape as うん — one real mora next to a bare ん — but these are short
+  // names, not gasps: a model echoing one back untranslated is a real miss, not nothing to say.
+  for (const line of ['アン', 'アン！', '「カン。」', 'ケン', 'ラン', 'リン']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a name, not a gasp — it needs translation`);
+  }
+  // The real interjections this exact shape is otherwise indistinguishable from still go through on a
+  // single sighting, ううん's own two real morae (う, う) included.
+  for (const line of ['「……うん。」', 'ううん', 'ウン', 'ふん']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a real interjection, not a name`);
+  }
+  // A moan carrying its own extra marker — a stammer, a heart, a drawn-out vowel — or built by
+  // repeating the same mora-plus-ん unit is still accepted, even with two real morae in it.
+  for (const line of ['あんっ', 'あーん', 'あんあん', 'アンッ♡']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a marked or repeated moan, not a name`);
+  }
+});
+
+test('isShortExactEcho tells a short unchanged answer apart from a long one', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // A short katakana onomatopoeia, more than the two-letter interjection ceiling but still short
+  // enough that a model insisting on it twice is believed rather than asked a third time.
+  assert.equal(isShortExactEcho('ドキドキ', 'ドキドキ'), true);
+  // Whitespace-only differences still count as the same answer.
+  assert.equal(isShortExactEcho(' ドキドキ ', 'ドキドキ'), true);
+  // A real sentence echoed back is long enough (over 8 letters once punctuation is stripped) that it
+  // stays a genuine failure instead of ever being tolerated twice.
+  assert.equal(isShortExactEcho('雨が降っていて、風も強くなってきた。', '雨が降っていて、風も強くなってきた。'), false);
+  // Not an echo at all: no exact match, so this is never in play.
+  assert.equal(isShortExactEcho('キラキラ', 'ドキドキ'), false);
+  assert.equal(isShortExactEcho('下雨了。', '雨が降っている。'), false);
+});
+
+test('isShortExactEcho only forgives a second echo that is still plausibly untranslatable, not just short', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // Real greetings, names, ordinary sentences and a Han-bearing exclamation: every one of these is
+  // eight letters or fewer, so the old rule accepted an exact echo of any of them on a second sighting.
+  // A model that is simply lazy echoes short lines too, and a lazy echo is not "nothing to translate".
+  for (const line of ['ごめんなさい', 'バカ！', 'アリス！', '好きだよ', '待ってください', '大丈夫ですか？', 'ウソでしょ？', 'ありがとう', '行くぞ！']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} is a real line, not an echo worth accepting`);
+  }
+  // Two more sound-symbolic reduplications, matching ドキドキ's own shape.
+  assert.equal(isShortExactEcho('ワクワク', 'ワクワク'), true);
+  assert.equal(isShortExactEcho('ゴゴゴ', 'ゴゴゴ'), true);
+  // Some of what rule 1 already accepts on a single sighting is naturally also accepted here, on a
+  // second one — the two rules were never meant to disagree about the same source.
+  assert.equal(isShortExactEcho('はぁ……', 'はぁ……'), true);
+});
+
+test('isShortExactEcho draws the same name-versus-interjection line as isTrivialInterjectionSource for a bare mora next to a bare ん, even on a second sighting', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  for (const line of ['アン', 'ケン', 'カン']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} is a name, not an echo worth accepting`);
+  }
+  for (const line of ['ウン', 'ふん', 'あんあん', 'アンッ♡']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a real interjection or a marked/repeated moan`);
+  }
+});
+
+test('a two-mora word or name that happens to carry a bare ん still needs translation even when ー, っ or ～ appear elsewhere in it', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // Each of these has two real morae plus a bare ん — the same shape ううん and あんあん are forgiven
+  // for, but here nothing repeats and none of them is a fixed real interjection, so the moan-marker and
+  // reduplication checks must not wave them through just because ー or っ appears somewhere in the word.
+  for (const line of ['オーエン', 'オーエン！', 'ハーケン', 'ホーキン', 'コーエン', 'はっけん！', 'けっこん']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a two-mora ん word, not a gasp — it needs translation`);
+  }
+});
+
+test('real ん-interjections and moans not on the short allow-list are still accepted, including katakana フン, doubled vowels, and ♥/❤ as moan markers', async () => {
+  const { looksUntranslated, isShortExactEcho } = await import('../core.js');
+  // Accepted on the first sighting: a fixed real word (フン, ウウン, ふうん) or a moan carrying its own
+  // extra marker — a drawn-out vowel spelled with small kana instead of ー, or a heart.
+  for (const line of ['フン！', 'ウウン', 'ふうん', 'ふぅん', 'うぅん', 'あぁん……', 'はぁん', 'あん♥', 'あん❤']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a real interjection or a marked moan, not a name`);
+  }
+  // ファン/フィン are yōon names built from the same consonant as フ but a different vowel (a/i, not u),
+  // so the drawn-out-vowel check must not mistake them for ふぅ-style gasps.
+  for (const line of ['ファン', 'フィン']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a name, not a gasp — it needs translation`);
+  }
+  // ああん doubles a full-size vowel instead of marking it with ー or a small kana, so it is not caught
+  // on the first sighting the way あぁん is — but a model that repeats it verbatim is still believed.
+  assert.equal(looksUntranslated('ああん', 'ああん'), true);
+  assert.equal(isShortExactEcho('ああん', 'ああん'), true);
+});
+
+test('a drawn-out vowel spelled with a full-size vowel kana or a ゃ/ゅ/ょ glide is recognised the same as ー or a small kana, on a second sighting', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // はあ/ひい/へえ/くう double a full-size vowel kana instead of ー or a small one (ぁぃぅぇぉ) — the same
+  // gasp, just spelled a third way. Each of these carries two real morae once the vowel counts as one
+  // (は+あ, ひ+い, へ+え, く+う), so — same as ううん's own two real morae — the first sighting still asks
+  // for a translation; only a second identical echo is believed.
+  for (const line of ['はあん', 'はあん……', 'ひいん', 'へえん', 'くうん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a drawn-out vowel gasp spelled with a full-size vowel kana`);
+  }
+  // ひゃあ/きゅう elongate a ゃ/ゅ/ょ glide's own vowel (a/u/o) rather than a plain mora's.
+  for (const line of ['ひゃあん', 'きゃあん', 'きゅうん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} draws out a glide's own vowel, same as a plain mora's`);
+  }
+});
+
+test('on a second sighting, a hiragana-only bare ん beside its own real morae with nothing else decorating it is accepted as a moan, never the katakana name shape', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // A single vowel mora, a glide's own mora, or two real morae touching directly, all hiragana and
+  // nothing else beside the ん — no marker needed once the model has said it twice.
+  for (const line of ['あん！', 'あん……', '「あん……」', 'ん、あん', 'あんん', 'ひゃん！', 'きゃん！', 'うふん', 'あはん', 'はうん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a hiragana moan, accepted on a second identical echo`);
+  }
+  // The identical letter-for-letter shape, but a single plain は/か行 mora rather than a vowel or a
+  // glide, still reads as an ordinary word (けん, かん, はん, こん…) and is never accepted this way.
+  for (const line of ['けん', 'かん', 'はん', 'こん']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} is an ordinary word, not a moan, even hiragana and even on a second sighting`);
+  }
+});
+
+test('a marker beside one bare ん never forgives an unrelated name or word earlier in the same line', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // ええ/ああ/おお/はぁ/あぁ each carry a marker or a doubled vowel of their own, but it sits beside a
+  // comma and an entirely different word — a name's own ん, untouched by any of it — so the line as a
+  // whole still needs translation, on a second sighting exactly as much as on a first.
+  for (const line of ['ええ、ケン', 'ああ、アン！', 'おお、ケン', 'はぁ、ケン', 'あぁ、アン']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} pairs an unrelated marker with a name's own ん — the marker must not reach across the comma`);
+  }
+  // オーエン/ハーケン/ホーキン/コーエン and けっこん/はっけん！ all carry ー or っ somewhere in them, but never
+  // touching their own ん directly (a real mora always sits between the marker and the ん) — the same
+  // reason the reviewer's own two-mora-plus-ん test above already covers on the first sighting; here it
+  // must hold on the second sighting too.
+  for (const line of ['オーエン', 'ハーケン', 'ホーキン', 'コーエン', 'けっこん', 'はっけん！']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} has no marker directly beside its own ん`);
+  }
+});
+
+test('a moan marker separated from ん only by punctuation or an ellipsis still counts, on a second sighting', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // アッ、ン / ハァ……ン stammer the marker and the ん as two separate beats instead of writing them
+  // touching (アンッ, ハァん) — the marker still belongs to the same moan, not to something else.
+  for (const line of ['アッ……ン', 'アッ、ン', 'ハァ……ン', 'ハァ、ン', 'アァ……ン', 'ウゥ……ン', 'はぁっ、ん', 'あーっ、ん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} still has its own marker beside ん, only punctuation sits between them`);
+  }
+  // アア……ン doubles the same vowel across the gap instead of a っ/ー/♡ marker -- isDrawnOutVowelPair's
+  // own shape, reached the same way once the walk skips the ellipsis.
+  assert.equal(isShortExactEcho('アア……ン', 'アア……ン'), true);
+  // The line from "a marker beside one bare ん never forgives..." above still must not be reached by
+  // walking past a real mora: ケン/アン's own consonant sits directly against the ん (across the comma or
+  // not), never a marker, so punctuation between an unrelated word and a name's own ん still forgives
+  // nothing.
+  for (const line of ['ええ、ケン', 'はぁ、ケン', 'あぁ、アン']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line}: the letter right beside ん is still a real mora, not a marker`);
+  }
+});
+
+test('several short moan beats running together with nothing but punctuation, an ellipsis or a heart between them are accepted as one moan, on a second sighting', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // Each beat read on its own is filler-shaped (あっ, はぁ, くっ, ひゃっ…) or the bare-vowel-plus-ん moan
+  // shape (あん) -- flattened together without the punctuation, an earlier beat's own real mora would sit
+  // directly in front of the later ん and wrongly block it, the same as a real name's own mora would.
+  for (const line of [
+    'あっ、あん……', 'あっ……あん', 'ひゃっ……あん……', 'はぁ……あん', 'あ、あっ、あん！', 'くっ、あん……',
+    'ひっ、あん', 'あっ♡あん', 'あっ、あっ、あん', 'はぁ、はぁ、あん', 'ああっ、あん', 'あん、あっ',
+  ]) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is several moan beats, each filler- or moan-shaped on its own`);
+  }
+  // A short katakana name as one of the beats still fails on its own beat -- being katakana, never a
+  // hiragana moan -- so the line as a whole is still not accepted, comma or not.
+  for (const line of ['ええ、ケン', 'ケン、あん']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line}: ケン is still a name on its own beat, not a moan`);
+  }
 });
 
 test('a floor that fits one batch is spread evenly across parallel lanes', () => {
@@ -1613,4 +2061,745 @@ test('the original\'s side places its runs by order without the signs it folded 
     { head: '等等', speaker: '艾琳' }, { head: '那里很危险', speaker: '莉莉丝' }, { head: '算了', speaker: '千夏' },
   ] });
   assert.deepEqual(unplaced.map(own => own?.speaker ?? null), [null, null]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// v0.37.0 lyric-line rules, the music-card rule group, and inline pairing.
+// Every fixture below is invented text, never a real song's lyrics.
+// ---------------------------------------------------------------------------------------------
+
+test('lyric-line rules use the same exact, prefix and regex grammar as preserve rules', () => {
+  const parsed = parseLyricLineRulesWithErrors(['夜风轻轻吹过', 'prefix:作词', '/^\\s*献给/']);
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.rules.map(rule => rule.type), ['exact', 'prefix', 'regex']);
+  assert.match(parseLyricLineRulesWithErrors('/[/').errors[0], /第 1 行正则无效/);
+});
+
+test('a lyric line forms its own unit, never joining the narration around it', () => {
+  const source = '第一行叙述。\nそらにひびけ\n第二行叙述。';
+  const segmented = segmentSource(source, { lyricLineRules: ['そらにひびけ'] });
+  assert.equal(segmented.lyricLines, 1);
+  assert.equal(segmented.paragraphs, 1, 'still one blank-line-delimited paragraph');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['第一行叙述。', 'そらにひびけ', '第二行叙述。']);
+  assert.deepEqual([...segmented.lyricIds], [2]);
+  const kinds = segmented.layout.filter(part => part.type === 'segment').map(part => Boolean(part.lyric));
+  assert.deepEqual(kinds, [false, true, false], 'the lyric line is its own segment, flagged apart from its neighbours');
+});
+
+test('a lyric line already written in Chinese is not translated, same as any other preserved line', () => {
+  const source = '第一行叙述。\n静静地看着你\n第二行叙述。';
+  const segmented = segmentSource(source, { lyricLineRules: ['静静地看着你'] });
+  assert.equal(segmented.lyricLines, 1, 'still counted as a lyric-line candidate for the inspector');
+  assert.equal(segmented.lyricIds.size, 0, 'but it never becomes a segment to translate or read');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['第一行叙述。', '第二行叙述。']);
+  const output = assembleBilingual(segmented.layout, new Map([[1, '叙述译文一'], [2, '叙述译文二']]), { allowMissing: true });
+  assert.match(output.replace(/[\u200b\u200c\u2060-\u2064]/g, ''), /静静地看着你/);
+});
+
+test('the music-card group splits <br>-joined card rows and classifies each on its own', () => {
+  const card = 'NOW PLAYING<br>今日は静かな朝<br>作词：风铃<br>もう一度歌おう';
+  const segmented = segmentSource(card, { musicCardRules: true });
+  // NOW PLAYING is the built-in caption. 今日は静かな朝 and もう一度歌おう have nothing to claim them,
+  // so the catch-all makes them lyric lines. 作词：风铃 is also a lyric-line candidate by the same
+  // catch-all, but it carries no kana at all, so it is judged already-Chinese and skipped.
+  assert.equal(segmented.lyricLines, 3);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['今日は静かな朝', 'もう一度歌おう']);
+  assert.equal(segmented.segments.length, segmented.lyricIds.size, 'every remaining segment here is a lyric one');
+  assert.equal(segmented.cardPreservedLines, 1, 'NOW PLAYING only');
+});
+
+test('the waveform row still goes through the older built-in rule, not the music-card catch-all', () => {
+  const card = 'NOW PLAYING<br>そらいろの手紙<br>ılılılıllı';
+  const segmented = segmentSource(card, { musicCardRules: true });
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらいろの手紙']);
+  assert.equal(segmented.cardPreservedLines, 1, 'NOW PLAYING');
+  assert.equal(segmented.builtinPreservedLines, 1, 'the waveform row, by the v0.36.1 rule');
+  assert.equal(segmented.lyricLines, 1);
+});
+
+test('a row already written "原文 (中文)" is preserved untouched by the music-card group', () => {
+  const card = 'NOW PLAYING<br>灯りが揺れる (灯光摇曳)<br>次の一行';
+  const segmented = segmentSource(card, { musicCardRules: true });
+  assert.deepEqual(segmented.segments.map(item => item.text), ['次の一行']);
+  assert.equal(segmented.cardPreservedLines, 2, 'NOW PLAYING and the already-bilingual row');
+});
+
+test('a reader’s own preserve rule still wins over the music-card catch-all, <br> and all', () => {
+  const card = 'NOW PLAYING<br>作词：星野<br>そらいろの手紙';
+  const segmented = segmentSource(card, { musicCardRules: true, preserveLineRules: ['prefix:作词'] });
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらいろの手紙']);
+  assert.equal(segmented.customPreservedLines, 1);
+});
+
+test('a lyric line renders "原文 (译文)" inline in bilingual mode and reads back to the same translation', () => {
+  const source = '第一行叙述。\nそらにひびけ\n第二行叙述。';
+  const options = { lyricLineRules: ['そらにひびけ'] };
+  const segmented = segmentSource(source, options);
+  const translations = new Map([[1, '叙述译文一'], [2, '响彻天空'], [3, '叙述译文二']]);
+  const rendered = assembleBilingual(segmented.layout, translations, options);
+  const visible = rendered.replace(/[\u200b\u200c\u2060-\u2064]/g, '');
+  assert.match(visible, /そらにひびけ \(响彻天空\)/);
+  assert.doesNotMatch(visible, /\{响彻天空\}/, 'the lyric translation never gets the ordinary {…} affix');
+  const recovered = extractGeneratedTranslations(rendered, options);
+  assert.deepEqual(new Map(recovered), translations);
+  assert.equal(restyleBilingual(rendered, options), rendered, 're-colouring must leave a lyric pair exactly as written');
+});
+
+test('a lyric line restores its own <br> after the closing parenthesis, bilingual mode', () => {
+  const card = 'NOW PLAYING<br>そらにひびけ<br>作词：风铃';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(card, options);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらにひびけ']);
+  const translations = new Map([[segmented.segments[0].id, '响彻天空']]);
+  const rendered = assembleBilingual(segmented.layout, translations, options);
+  const visible = rendered.replace(/[\u200b\u200c\u2060-\u2064]/g, '');
+  assert.match(visible, /そらにひびけ \(响彻天空\)<br>/);
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.match(restored, /そらにひびけ<br>/);
+  assert.doesNotMatch(restored, /[()]/);
+});
+
+test('a lyric row still untranslated (a partial write) keeps its own trailing <br>, and strips back to the exact original', () => {
+  // Two lyric rows; only the second (もう一つの行, the last row, no <br> of its own to lose) has come
+  // back so far — a real streaming frame's first frame naming only one id, or a row withoutUntranslated
+  // dropped. The first row (そらにひびけ) is the one with a <br> to lose if renderLyricPair forgets it.
+  const card = 'NOW PLAYING<br>そらにひびけ<br>もう一つの行';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(card, options);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらにひびけ', 'もう一つの行']);
+  const translations = new Map([[segmented.segments[1].id, '另一行译文']]);
+  const rendered = assembleBilingual(segmented.layout, translations, { ...options, allowMissing: true });
+  const visible = rendered.replace(/[\u200b\u200c\u2060-\u2064]/g, '');
+  assert.match(visible, /そらにひびけ<br>/, 'the untranslated row\'s own <br> is not lost');
+  assert.doesNotMatch(visible, /そらにひびけ \(/, 'no dangling " (" with nothing to close it');
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, card, 'a partial write strips back to exactly the original card, both rows and both <br>s intact');
+});
+
+test('a lyric line in 只留译文 mode also pairs inline, plain text, no markers needed', () => {
+  const source = '第一行叙述。\nそらにひびけ\n第二行叙述。';
+  const options = { lyricLineRules: ['そらにひびけ'] };
+  const segmented = segmentSource(source, options);
+  const translations = new Map([[1, '叙述译文一'], [2, '响彻天空'], [3, '叙述译文二']]);
+  const output = assembleTranslationOnly(segmented.layout, translations, options);
+  assert.equal(output, '叙述译文一\nそらにひびけ (响彻天空)\n叙述译文二');
+});
+
+test('只留译文 keeps only a card row\'s own <br> between it and the narration after it, no extra blank line', () => {
+  // "NOW PLAYING<br>作词：风铃" is one physical line split into two preserved rows sharing a unit with the
+  // narration lines around it. assembleTranslationOnly used to join every lineParts entry with a fixed
+  // '\n' regardless of what actually separated them, so the caption row gained an extra line break after
+  // its own <br> — replaceUnitBody already joins with each line's real separator (see the replace-region
+  // test above); this is the same fix for the 只留译文 path.
+  const source = '她哼起了。\nNOW PLAYING<br>作词：风铃\n彼女は止まった。';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const output = assembleTranslationOnly(segmented.layout, translations, options);
+  assert.equal(output, '译1\nNOW PLAYING<br>作词：风铃\n译2', '卡片行自己的 <br> 后面不再多出一个换行，也没有丢掉真正的段内换行');
+
+  // The same card, but with its own row ending its own physical line in <br> (an empty trailing row) —
+  // the shape that also caught the replace-region reader off guard.
+  const bareBr = '她哼起了。\nNOW PLAYING<br>\n彼女は止まった。';
+  const segmentedBareBr = segmentSource(bareBr, options);
+  const translationsBareBr = new Map(segmentedBareBr.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const outputBareBr = assembleTranslationOnly(segmentedBareBr.layout, translationsBareBr, options);
+  assert.equal(outputBareBr, '译1\nNOW PLAYING<br>\n译2', '卡片自己独占一整行的 <br> 也不会被多插一个换行');
+});
+
+test('inspectTagConfiguration counts lyric and music-card-preserved lines separately from the rest', () => {
+  const card = '<story_scene>NOW PLAYING<br>そらにひびけ<br>もう一つの行</story_scene>';
+  const report = inspectTagConfiguration(card, ['story_scene'], [], { musicCardRules: true });
+  assert.equal(report.cardPreservedLines, 1);
+  assert.equal(report.lyricLines, 2);
+  assert.equal(report.translationUnits, 2);
+});
+
+test('with the music-card group off, a <br>-joined card is read exactly as v0.36.1 already reads it', () => {
+  const card = 'NOW PLAYING<br>今日の空<br>作词：陽炎';
+  assert.deepEqual(
+    segmentSource(card).segments.map(item => item.text),
+    ['NOW PLAYING\n今日の空\n作词：陽炎'],
+    'musicCardRules defaults off, so an existing floor segments exactly as it always has',
+  );
+});
+
+test('v0.40.0: a card\'s first row starts its own unit instead of merging into the narration before it', () => {
+  const source = '她哼起了一段旋律。\nNOW PLAYING<br>そらにひびけ<br>作词：风铃';
+  const segmented = segmentSource(source, { musicCardRules: true });
+  const units = segmented.layout.filter(part => part.type === 'segment');
+  assert.equal(units[0].text, '她哼起了一段旋律。');
+  assert.equal(units[0].sourceText, '她哼起了一段旋律。', 'the NOW PLAYING row that follows is never folded into this unit');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['她哼起了一段旋律。', 'そらにひびけ']);
+  // An old floor (segmented before this fix) keeps reading the same text the way it always did — the
+  // narration and the card's first row still merge into one unit, so its stored translation still matches.
+  const oldFloor = segmentSource(source, { musicCardRules: true, segmentationVersion: 2 });
+  const oldUnits = oldFloor.layout.filter(part => part.type === 'segment');
+  assert.equal(oldUnits[0].sourceText, '她哼起了一段旋律。\nNOW PLAYING<br>', 'segmentation_version 2 stays on the old, unfixed merge');
+});
+
+test('v0.40.0: the music-card catch-all only fires inside an actual card, so plain <br>-separated prose is left as ordinary text', () => {
+  const prose = '写着地址的第一行<br>写着地址的第二行<br>写着地址的第三行';
+  const segmented = segmentSource(prose, { musicCardRules: true });
+  assert.equal(segmented.lyricLines, 0, '没有 NOW PLAYING 字样、双语行或歌词行命中，这里就不该被当成音乐卡片');
+  assert.deepEqual(
+    segmented.segments.map(item => item.text),
+    ['写着地址的第一行\n写着地址的第二行\n写着地址的第三行'],
+    '当成普通正文整体翻译，和 musicCardRules 关闭时读法一致',
+  );
+  // An old floor still runs the broader, unsignalled split — every <br> row becomes its own lyric guess.
+  const oldFloor = segmentSource(prose, { musicCardRules: true, segmentationVersion: 2 });
+  assert.equal(oldFloor.lyricLines, 3, 'segmentation_version 2 stays on the old catch-all, so a floor already translated that way still matches');
+});
+
+test('v0.40.0: the card signal is judged over the whole run of <br>-bearing lines, not each physical line alone', () => {
+  // A NOW PLAYING card pretty-printed with every row on its own source line: only the caption's own
+  // physical line shows a signal by itself, but the whole run (caption + two lyric rows, each ending in
+  // its own <br>) is one card and every row of it must be read as one.
+  const pretty = '<div class="player">\n<b>♪ NOW PLAYING ♪</b><br>\nそらにひびけ<br>\nもう一度だけ<br>\n</div>';
+  const segmented = segmentSource(pretty, { musicCardRules: true });
+  assert.deepEqual([...segmented.lyricIds].length, 2, '两行歌词都被识别，不止判过信号的那一行');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらにひびけ', 'もう一度だけ']);
+  // An old floor already ran the whole run unconditionally (musicCardRules alone was always enough),
+  // so it agrees with the fixed v3 reading on this exact shape — nothing here needed a version bump.
+  const oldFloor = segmentSource(pretty, { musicCardRules: true, segmentationVersion: 2 });
+  assert.deepEqual(oldFloor.segments.map(item => item.text), ['そらにひびけ', 'もう一度だけ']);
+
+  // Plain <br>-separated prose spread one row per physical line still shows no signal anywhere in the
+  // run, so it is still left alone under v3 — the run-wide check does not turn ordinary prose into a
+  // card just because it happens to end each of its lines in <br>.
+  const prose = '写着地址的第一行<br>\n写着地址的第二行<br>\n写着地址的第三行';
+  assert.equal(segmentSource(prose, { musicCardRules: true }).lyricLines, 0, '没有信号的一组 <br> 行，逐行拆开也不该被当成卡片');
+});
+
+test('v0.40.0: the already-bilingual row check only counts a parenthesised part that is actually Chinese', () => {
+  // A bare kana reading has no Han character in the parens at all, so the legacy check never matched
+  // it either — this case alone proves nothing about the fix (v2 and v3 always agreed on it).
+  const ruby = 'NOW PLAYING<br>星(ほし)<br>もう一つの行';
+  const segmented = segmentSource(ruby, { musicCardRules: true });
+  assert.equal(segmented.cardPreservedLines, 1, 'NOW PLAYING only — a bare kana reading was never mistaken for our own bilingual pairing, on either version');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['星(ほし)', 'もう一つの行']);
+
+  const real = 'NOW PLAYING<br>灯りが揺れる (灯光摇曳)<br>次の一行';
+  assert.equal(segmentSource(real, { musicCardRules: true }).cardPreservedLines, 2, '一句真正写好的中文仍然照常识别、保留');
+
+  // The case that actually changed: a parenthetical that mixes kana into its kanji — still untranslated
+  // Japanese, not a finished Chinese gloss. The legacy (segmentation_version 2) check only asked for any
+  // Han character and took it for one; v3 asks whether the parenthesised part itself reads as Chinese
+  // (Han present, no kana) and no longer does.
+  const mixed = 'NOW PLAYING<br>そらにひびけ (空に響け)<br>次の一行';
+  assert.equal(segmentSource(mixed, { musicCardRules: true }).cardPreservedLines, 1, 'v3：括号里混着假名，不算已经写好的中文译文，照常按歌词处理');
+  assert.equal(
+    segmentSource(mixed, { musicCardRules: true, segmentationVersion: 2 }).cardPreservedLines, 2,
+    '旧楼层（segmentation_version 2）照旧按当时更宽松的判断读，存量译文不会对不上',
+  );
+
+  // A known, accepted limit shared with looksAlreadyTranslatedLyric (design §7 item 9): a Japanese gloss
+  // written entirely in kanji, with no kana to tell it apart from Chinese, is still misjudged as already
+  // translated — this has not changed, and the fix above does not claim otherwise.
+  const kanjiGloss = 'NOW PLAYING<br>あんた(貴方)<br>次の一行';
+  assert.equal(segmentSource(kanjiGloss, { musicCardRules: true }).cardPreservedLines, 2, '纯汉字注解仍然会被当成已翻译，这是已知的限制，不是这次修复要解决的');
+});
+
+test('a lyric line lays out "原文 (译文)" inside a replace region too, its own <br> intact, and reads back translated', () => {
+  const card = 'NOW PLAYING<br>そらにひびけ<br>作词：风铃';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(card, options);
+  const translations = new Map([[segmented.segments[0].id, '响彻天空']]);
+  const rendered = assembleReplace(segmented.layout, translations, { ...options, allowMissing: true });
+  // 什么是读者真正看到的：隐藏的原文连同它自己的边界一起去掉，剩下的不可见标记也一并去掉（替换对总是把隐藏的那一半留在原始楼层文本里，真正的隐藏由另一套机制完成，这里不模拟它）。
+  const visible = rendered
+    .replace(new RegExp(`\\n?${HIDDEN_START}[\\s\\S]*?${HIDDEN_END}`, 'g'), '')
+    .replace(/[\u200b\u200c\u2060-\u2064]/g, '');
+  assert.match(visible, /そらにひびけ \(响彻天空\)<br>/, '替换模式下也排成和双语/只留译文一样的「原文 (译文)」，卡片行自己的 <br> 还在');
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, card, '还原时严丝合缝地拿回原文，两个 <br> 都还在');
+  // 高优先级部分：替换标签区域里歌词行的译文必须能被 extractReplaceTranslations 读回来（readMessageSnapshot 对替换区域唯一的读法），否则这楼层永远不会被判定成已翻译，每次都会重发。
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '响彻天空', '替换标签区域里的歌词行译文能被读回，楼层不会被判定成没翻译、每次都重发');
+  // 中优先级部分：主模型自己的提示词里看到的是译文，不是原文。
+  const prompt = stripGeneratedTranslationLines(rendered, undefined, 'prompt');
+  assert.equal(prompt, 'NOW PLAYING<br>响彻天空<br>作词：风铃', '主模型在提示词里看到的是译文，不是日文原文');
+});
+
+test('a replace-tag lyric line written before this fix (「歌词行」 predates it, v0.37.0) still reads back translated', () => {
+  // main 8f76124's assembleReplace had no part.lyric branch at all — a 「歌词行」-matched line inside a
+  // replace region went through the same ordinary path as any other segment, its hidden half holding the
+  // full source (trailing <br> included, since the ordinary path never strips it). extractReplaceTranslations
+  // must still recognise that shape, not only the new renderReplaceLyricPair one.
+  const source = '♪ 星の歌\n彼女は歌った。';
+  const options = { lyricLineRules: 'prefix:♪' };
+  const segmented = segmentSource(source, options);
+  assert.ok(segmented.layout.some(part => part.lyric), '这句歌词规则命中的行确实被判成了 lyric，样例才有意义');
+  const mainStyleLayout = segmented.layout.map(part => (part.lyric ? { ...part, lyric: false } : part));
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(mainStyleLayout, translations, options);
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.size, segmented.segments.length, '旧写法（main 8f76124）留下的替换标签歌词行，读回时一段都不少');
+});
+
+test('a non-lyric card row sharing a unit with narration keeps only its own <br> in a replace region, no extra blank line', () => {
+  // "NOW PLAYING<br>作词：风铃" is one physical line split into two preserved rows; 彼女は止まった。 is the
+  // next physical line, joined to them by a real newline. Before this fix replaceUnitBody joined every
+  // line of the unit with a literal '\n' regardless of what actually separated them, so the caption row
+  // gained an extra blank line after its own <br> once rendered.
+  const source = '她哼起了。\nNOW PLAYING<br>作词：风铃\n彼女は止まった。';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(segmented.layout, translations, options);
+  const prompt = stripGeneratedTranslationLines(rendered, undefined, 'prompt');
+  assert.equal(prompt, '译1\nNOW PLAYING<br>作词：风铃\n译2', '卡片行自己的 <br> 后面不再多出一个换行，也没有丢掉真正的段内换行');
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, source, '原文一字不差地还原');
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '译1');
+  assert.equal(seenAgain.get(segmented.segments[1].id), '译2');
+
+  // A floor written before this fix always inserted a real '\n' there regardless — reading it back
+  // still has to work, so an already-translated floor is never seen as needing anything more.
+  const oldStyleIndex = rendered.indexOf('NOW PLAYING<br>') + 'NOW PLAYING<br>'.length;
+  const oldStyle = `${rendered.slice(0, oldStyleIndex)}\n${rendered.slice(oldStyleIndex)}`;
+  const seenOldStyle = extractReplaceTranslations(oldStyle, options);
+  assert.equal(seenOldStyle.get(segmented.segments[0].id), '译1', '旧写法多出来的换行，读的时候能容忍');
+  assert.equal(seenOldStyle.get(segmented.segments[1].id), '译2');
+});
+
+test('a card row whose own physical line ends in <br> reads back correctly, one narration line after it', () => {
+  // "NOW PLAYING<br>" is a whole physical line ending in its own <br>: splitCardRows leaves an empty
+  // trailing row behind it (the row after the last <br>, carrying the physical line's own separator).
+  // That empty row used to make readReplaceBodyByLine's old tolerance eat a '\n' that in fact belonged to
+  // the *next* boundary, breaking the read one step later. Here the whole card sits in the same unit as
+  // the narration that follows it (nothing forces a boundary going from card rows back to plain text), so
+  // this empty row and the translated narration share one lineParts array — the exact shape that broke.
+  const source = '彼は言った。\nNOW PLAYING<br>\n彼女は答えた。';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(segmented.layout, translations, options);
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, source, '原文一字不差地还原');
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '译1');
+  assert.equal(seenAgain.get(segmented.segments[1].id), '译2', '卡片自己的空行不会被错误吞掉的换行连累，叙述句译文照常读回');
+});
+
+test('a trailing excluded block on the last narration line does not make the exact-first pass misread a legacy-joined body\'s stray \\n', () => {
+  // Same card-then-narration shape as the two tests above, but the last narration line also carries a
+  // trailing excluded block (<image>...</image>). On a legacy ('\n'-joined) body, line.trail's own
+  // rest.indexOf used to reach straight across the stray '\n' left at the card row's own '' boundary and
+  // land inside what is really the *next* semantic line's text, so the exact-first pass wrongly
+  // "succeeded" with segment 2's translation missing and segment 3 holding both -- and the legacy pass,
+  // which reads this shape correctly, was never even tried.
+  const source = '彼は言った。\nNOW PLAYING<br>\n彼女は答えた。\n彼は笑った。<image>メモ</image>';
+  const options = { musicCardRules: true, excludedTags: ['image'] };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(segmented.layout, translations, options);
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, source, '原文一字不差地还原');
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '译1');
+  assert.equal(seenAgain.get(segmented.segments[1].id), '译2');
+  assert.equal(seenAgain.get(segmented.segments[2].id), '译3', '带 <image> 尾巴的最后一句译文也能整段读回');
+
+  const oldStyleIndex = rendered.indexOf('NOW PLAYING<br>') + 'NOW PLAYING<br>'.length;
+  const oldStyle = `${rendered.slice(0, oldStyleIndex)}\n${rendered.slice(oldStyleIndex)}`;
+  const seenOldStyle = extractReplaceTranslations(oldStyle, options);
+  assert.equal(seenOldStyle.get(segmented.segments[0].id), '译1');
+  assert.equal(seenOldStyle.get(segmented.segments[1].id), '译2', '旧写法多出来的换行不会被排除标签尾巴带偏，第二句译文没有丢');
+  assert.equal(seenOldStyle.get(segmented.segments[2].id), '译3', '第三句也没有被第二句的译文挤成一段');
+});
+
+test('a card row whose own physical line ends in <br> reads back correctly, two narration lines after it', () => {
+  // Same shape as above, but with two narration lines sharing the unit after the card — before the fix
+  // this landed on the "two or more ids, line count mismatch" branch and read back nothing at all.
+  const source = '彼は言った。\nNOW PLAYING<br>\n彼女は答えた。\n彼はうなずいた。';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(segmented.layout, translations, options);
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, source, '原文一字不差地还原');
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '译1');
+  assert.equal(seenAgain.get(segmented.segments[1].id), '译2', '两句叙述句的译文都能读回，不会因为行数对不上而整段丢失');
+  assert.equal(seenAgain.get(segmented.segments[2].id), '译3');
+});
+
+// -------------------------------------------------------------------------------------------
+// 控制中心 foundation (DESIGN §15): uiMode / preset settings, the rail's page list per mode, the
+// one-click packages, and the connection-use helpers behind 「用在」.
+// -------------------------------------------------------------------------------------------
+
+test('uiMode migration: fresh install is normal, anything schemaVersion<=12 or missing uiMode is advanced, a current save keeps its own choice', () => {
+  assert.equal(mergeSettings({}).uiMode, 'normal');
+  assert.equal(mergeSettings(undefined).uiMode, 'normal');
+  assert.equal(mergeSettings({ schemaVersion: 12, apiMode: 'follow' }).uiMode, 'advanced');
+  assert.equal(mergeSettings({ schemaVersion: 5 }).uiMode, 'advanced');
+  assert.equal(mergeSettings({ schemaVersion: 13 }).uiMode, 'advanced', 'schemaVersion 13 but no uiMode at all still reads as an old save');
+  assert.equal(mergeSettings({ schemaVersion: 13, uiMode: 'normal' }).uiMode, 'normal');
+  assert.equal(mergeSettings({ schemaVersion: 13, uiMode: 'advanced' }).uiMode, 'advanced');
+  assert.equal(mergeSettings({ schemaVersion: 13, uiMode: 'bogus' }).uiMode, 'advanced');
+  assert.equal(mergeSettings({}).schemaVersion, 13);
+});
+
+test('preset remembers the last applied package id, and drops anything unrecognised', () => {
+  assert.equal(mergeSettings({}).preset, '');
+  for (const id of CONSOLE_PRESET_IDS) assert.equal(mergeSettings({ preset: id }).preset, id);
+  assert.equal(mergeSettings({ preset: 'made-up' }).preset, '');
+});
+
+test('pagesForMode lists the rail per DESIGN §15.1/§16.1, and resolvePageForMode falls back to 翻译台', () => {
+  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'helper', 'logs']);
+  assert.deepEqual(pagesForMode('advanced'), ['main', 'prompt', 'settings', 'processing', 'tts', 'helper', 'logs']);
+  assert.deepEqual(pagesForMode('bogus'), pagesForMode('advanced'));
+  assert.equal(pageExistsInMode('tts', 'normal'), false);
+  assert.equal(pageExistsInMode('tts', 'advanced'), true);
+  assert.equal(pageExistsInMode('main', 'normal'), true);
+  assert.equal(resolvePageForMode('tts', 'normal'), 'main', 'a page not in the new mode returns to 翻译台');
+  assert.equal(resolvePageForMode('tts', 'advanced'), 'tts', 'a page that still exists stays put');
+  assert.equal(resolvePageForMode('logs', 'normal'), 'logs');
+  assert.deepEqual(Object.keys(CONTROL_CENTER_PAGES).sort(), [...UI_MODES].sort());
+});
+
+test('connection uses: translation and analysis resolve directly, deep defers to analysis until it has its own choice', () => {
+  const settings = mergeSettings({
+    apiMode: 'independent',
+    channels: [
+      { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+      { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+    ],
+    selectedChannelId: 'c1',
+    tts: { analysisChannelId: 'c2', deepChannelId: '' },
+  });
+  assert.equal(connectionUseChoice(settings, 'translation'), 'c1');
+  assert.equal(connectionUseChoice(settings, 'analysis'), 'c2');
+  assert.equal(connectionUseChoice(settings, 'deep'), 'c2', 'empty deepChannelId defers to analysis');
+
+  const pinned = setConnectionUse(settings, 'deep', 'c1');
+  assert.equal(pinned.tts.deepChannelId, 'c1');
+  assert.equal(connectionUseChoice(pinned, 'deep'), 'c1');
+
+  const followingAgain = setConnectionUse(pinned, 'deep', '');
+  assert.equal(followingAgain.tts.deepChannelId, '', "setting deep back to '' returns it to following analysis");
+  assert.equal(connectionUseChoice(followingAgain, 'deep'), 'c2');
+
+  const movedTranslation = setConnectionUse(settings, 'translation', 'follow');
+  assert.equal(movedTranslation.apiMode, 'follow');
+  assert.equal(connectionUseChoice(movedTranslation, 'translation'), 'follow');
+
+  const movedAnalysis = setConnectionUse(settings, 'analysis', 'c1');
+  assert.equal(movedAnalysis.tts.analysisChannelId, 'c1');
+
+  assert.deepEqual(CONNECTION_USES, ['translation', 'analysis', 'deep', 'helper']);
+  assert.throws(() => connectionUseChoice(settings, 'bogus'));
+  assert.throws(() => setConnectionUse(settings, 'bogus', 'c1'));
+});
+
+test('channelUsesPointingAt lists every use resolving to a connection, deep included when it only defers there', () => {
+  const settings = mergeSettings({
+    apiMode: 'independent',
+    channels: [{ id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' }],
+    selectedChannelId: 'c1',
+    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+  });
+  assert.deepEqual(channelUsesPointingAt(settings, 'c1'), ['translation', 'analysis', 'deep']);
+  // 小助手 was never pointed at c1 above, so it still resolves to 跟随酒馆 (its own default) rather
+  // than following the translation the way 深度分析 does.
+  assert.deepEqual(channelUsesPointingAt(settings, 'follow'), ['helper']);
+});
+
+test('reassignConnectionUsesOnDelete moves every use a deleted connection served to 跟随酒馆, leaving a deferring deep still deferring', () => {
+  const twoChannels = [
+    { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+    { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+  ];
+  const settings = mergeSettings({
+    apiMode: 'independent',
+    channels: twoChannels,
+    selectedChannelId: 'c1',
+    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+  });
+  const result = reassignConnectionUsesOnDelete(settings, 'c1');
+  assert.deepEqual(result.moved, ['translation', 'analysis', 'deep']);
+  assert.equal(result.settings.apiMode, 'follow');
+  assert.equal(result.settings.tts.analysisChannelId, 'follow');
+  assert.equal(result.settings.tts.deepChannelId, '', 'deep never had its own choice, so its field is left untouched');
+  assert.equal(connectionUseChoice(result.settings, 'deep'), 'follow');
+
+  const pinnedSettings = mergeSettings({
+    apiMode: 'independent',
+    channels: twoChannels,
+    selectedChannelId: 'c2',
+    tts: { analysisChannelId: 'c2', deepChannelId: 'c1' },
+  });
+  const pinnedResult = reassignConnectionUsesOnDelete(pinnedSettings, 'c1');
+  assert.deepEqual(pinnedResult.moved, ['deep']);
+  assert.equal(pinnedResult.settings.tts.deepChannelId, 'follow');
+  assert.equal(pinnedResult.settings.apiMode, 'independent', 'translation used c2, untouched by deleting c1');
+
+  const untouched = reassignConnectionUsesOnDelete(settings, 'not-a-real-id');
+  assert.deepEqual(untouched.moved, []);
+  assert.equal(untouched.settings, settings, 'nothing to move returns the very same settings object');
+});
+
+// review finding test/core.test.mjs:2325: settings.helper's own defaults/normalisation, the 'helper'
+// branch of setConnectionUse/reassignConnectionUsesOnDelete and helperPromptFoldSummary had no test of
+// their own — deleting any of them would still leave the whole suite green.
+
+test('settings.helper defaults to {channelId: \'follow\', prompt: \'\'} for a save that never had it, and normalises a bad one', () => {
+  assert.deepEqual(DEFAULT_HELPER, { channelId: 'follow', prompt: '' });
+  // An old save from before this feature existed has no `helper` key at all.
+  const fromOldSave = mergeSettings({ schemaVersion: 13, apiMode: 'follow' });
+  assert.deepEqual(fromOldSave.helper, { channelId: 'follow', prompt: '' });
+
+  // A stale channelId (the connection it pointed at was deleted without going through
+  // reassignConnectionUsesOnDelete, or the save is just old and outdated) is kept as-is by
+  // normalizeHelper itself — connectionUseChoice/resolveFeatureChannel is what falls back to
+  // 跟随酒馆-or-translation for a channel id that no longer exists, the same as 朗读分析.
+  assert.equal(normalizeHelper({ channelId: 'deleted-channel-id', prompt: '' }).channelId, 'deleted-channel-id');
+  const staleSettings = mergeSettings({
+    apiMode: 'independent',
+    channels: [{ id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' }],
+    selectedChannelId: 'c1',
+    helper: { channelId: 'deleted-channel-id', prompt: '' },
+  });
+  assert.equal(connectionUseChoice(staleSettings, 'helper'), 'c1', '失效的连接 id 应该退回到跟翻译一样的解析结果');
+
+  // A non-string prompt (a corrupted save, or a future field type nobody has written yet) drops to ''
+  // rather than surfacing as [object Object] or similar in the prompt sent to the model.
+  assert.equal(normalizeHelper({ channelId: 'follow', prompt: 42 }).prompt, '');
+  assert.equal(normalizeHelper({ channelId: 'follow', prompt: null }).prompt, '');
+  assert.equal(normalizeHelper(undefined).channelId, 'follow');
+  assert.equal(normalizeHelper(null).prompt, '');
+});
+
+test('a preset never touches settings.helper', () => {
+  const before = mergeSettings({ helper: { channelId: 'c1', prompt: '自定义提示词' } });
+  const after = applyPreset(before, 'audiobook');
+  assert.deepEqual(after.helper, before.helper);
+});
+
+test('the \'helper\' connection use: binding it to a real connection, then deleting that connection, moves it back to 跟随酒馆 (review finding test/core.test.mjs:2325)', () => {
+  const channels = [
+    { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+    { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+  ];
+  let settings = mergeSettings({ apiMode: 'independent', channels, selectedChannelId: 'c1' });
+  assert.equal(connectionUseChoice(settings, 'helper'), 'follow', '默认跟随酒馆，不跟着翻译走');
+
+  settings = setConnectionUse(settings, 'helper', 'c2');
+  assert.equal(settings.helper.channelId, 'c2');
+  assert.equal(connectionUseChoice(settings, 'helper'), 'c2');
+  assert.deepEqual(channelUsesPointingAt(settings, 'c2'), ['helper']);
+
+  const result = reassignConnectionUsesOnDelete(settings, 'c2');
+  assert.deepEqual(result.moved, ['helper']);
+  assert.equal(result.settings.helper.channelId, 'follow');
+  assert.equal(connectionUseChoice(result.settings, 'helper'), 'follow');
+
+  const backToFollow = setConnectionUse(settings, 'helper', 'follow');
+  assert.equal(backToFollow.helper.channelId, 'follow');
+});
+
+test('helperPromptFoldSummary reads "默认" for an empty/whitespace prompt and "已改 N 字" for a real one', () => {
+  assert.equal(helperPromptFoldSummary(), '默认');
+  assert.equal(helperPromptFoldSummary({ prompt: '' }), '默认');
+  assert.equal(helperPromptFoldSummary({ prompt: '   ' }), '默认');
+  assert.equal(helperPromptFoldSummary({ prompt: '自定义' }), '已改 3 字');
+});
+
+test('preset content covers exactly the nine managed fields named in DESIGN §15.2 and nothing else', () => {
+  assert.equal(PRESET_MANAGED_FIELDS.length, 9);
+  for (const id of CONSOLE_PRESET_IDS) {
+    const content = presetContent(id);
+    assert.ok(content, `${id} 缺少套餐内容`);
+    assert.deepEqual(Object.keys(content).sort(), PRESET_MANAGED_FIELDS.map(field => field.key).sort());
+  }
+  assert.equal(presetContent(''), null);
+  assert.equal(presetContent('not-a-package'), null);
+  assert.deepEqual(Object.keys(PRESET_LABELS).sort(), [...CONSOLE_PRESET_IDS].sort());
+  for (const id of Object.keys(PRESET_TIER_LABELS)) assert.ok(CONSOLE_PRESET_IDS.includes(id));
+  assert.equal(CONSOLE_PRESET_IDS.includes('audiobook') && !Object.hasOwn(PRESET_TIER_LABELS, 'audiobook'), true, '有声小说 carries no 最省/推荐/最费 pill');
+});
+
+test('applyPreset writes only the managed fields and remembers the package id; presetDrift reports what a hand edit changed', () => {
+  const base = mergeSettings({});
+  const audiobook = applyPreset(base, 'audiobook');
+  assert.equal(audiobook.preset, 'audiobook');
+  assert.equal(audiobook.tts.enabled, true);
+  assert.equal(audiobook.tts.mode, 'simple');
+  assert.equal(audiobook.tts.autoRead, true);
+  assert.equal(audiobook.coloring.speakers, true);
+  assert.equal(audiobook.coloring.effects, false, '特效字 only comes with 全都要');
+  assert.equal(applyPreset(base, 'comfort').coloring.effects, false);
+  assert.equal(applyPreset(base, 'everything').coloring.effects, true);
+  // DESIGN §15.2's explicit 「套餐不碰」 list: none of these move.
+  assert.equal(audiobook.translationOnly, base.translationOnly);
+  assert.equal(audiobook.streamingWriteback, base.streamingWriteback);
+  assert.equal(audiobook.theme, base.theme);
+  assert.deepEqual(audiobook.channels, base.channels);
+
+  assert.deepEqual(presetDrift(audiobook), []);
+  const handEdited = { ...audiobook, coloring: { ...audiobook.coloring, speakers: false } };
+  const drift = presetDrift(handEdited);
+  assert.equal(drift.length, 1);
+  assert.equal(drift[0].key, 'coloringSpeakers');
+  assert.equal(drift[0].label, '说话人着色');
+
+  const restored = applyPreset(handEdited, handEdited.preset);
+  assert.deepEqual(presetDrift(restored), []);
+  assert.equal(restored.coloring.speakers, true);
+
+  assert.deepEqual(presetDrift(mergeSettings({})), [], 'no package remembered means nothing to report as drifted');
+  assert.throws(() => applyPreset(base, 'not-a-package'));
+});
+
+// DESIGN §15.4 折叠组: "收起时同一行写当前值摘要" — the pure half of each collapsed fold's summary line
+// on the 正文处理 / 朗读 advanced pages.
+test('preserveLineRuleCountLabel counts usable rules and reads "空" for none', () => {
+  assert.equal(preserveLineRuleCountLabel(''), '空');
+  assert.equal(preserveLineRuleCountLabel('   \n  '), '空');
+  assert.equal(preserveLineRuleCountLabel('此时彼刻'), '1 条');
+  assert.equal(preserveLineRuleCountLabel('此时彼刻\nprefix:【系统记录】\n/^foo/'), '3 条');
+  // A line that fails to parse (an unterminated /regex/) contributes no rule, not a crash.
+  assert.equal(preserveLineRuleCountLabel('/unterminated'), '空');
+});
+
+test('segmentAffixSummary reads the default 译文 { } / 原文 无 pair and any custom prefix-suffix pair', () => {
+  assert.equal(segmentAffixSummary({ translationPrefix: '{', translationSuffix: '}' }), '原文 无 · 译文 { }');
+  assert.equal(segmentAffixSummary({}), '原文 无 · 译文 无');
+  assert.equal(
+    segmentAffixSummary({ segmentPrefix: '【', segmentSuffix: '】', translationPrefix: '(', translationSuffix: ')' }),
+    '原文 【 】 · 译文 ( )',
+  );
+  // A lone prefix or suffix (no matching other half) still reads as something, not "无".
+  assert.equal(segmentAffixSummary({ segmentPrefix: '«' }), '原文 « · 译文 无');
+});
+
+test('coloringDetailFoldSummary reports the numbers actually set, falling back to DEFAULT_COLORING for a bare object', () => {
+  assert.equal(
+    coloringDetailFoldSummary({ minContrast: 4.5, vividness: 0.65 }),
+    '对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({}),
+    '对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ minContrast: 7, vividness: 1 }),
+    '对比度目标 7 · 彩度 1.00 · 读取当前主题与壁纸',
+  );
+});
+
+// A collapsed fold used to claim 情绪起伏/名单外自动取色 were on no matter what the switches actually
+// said (review finding core.js:946) — each token now only shows up when its own setting is on.
+test('coloringDetailFoldSummary only lists 情绪起伏/名单外自动取色 when those switches are actually on', () => {
+  assert.equal(
+    coloringDetailFoldSummary({ rhythm: true, minContrast: 4.5, vividness: 0.65 }),
+    '情绪起伏 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ autoSpeakers: true, minContrast: 4.5, vividness: 0.65 }),
+    '名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ rhythm: true, autoSpeakers: true, minContrast: 4.5, vividness: 0.65 }),
+    '情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+  assert.equal(
+    coloringDetailFoldSummary({ rhythm: false, autoSpeakers: false, minContrast: 4.5, vividness: 0.65 }),
+    '对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸',
+  );
+});
+
+test('quoteSymbolFoldSummary reads the default quote/skip pairs and any custom ones, "空" for no skip pairs', () => {
+  assert.equal(quoteSymbolFoldSummary({}), '「」, 『』, “”, "" · 空');
+  assert.equal(
+    quoteSymbolFoldSummary({ quotePairs: '“”', skipPairs: '** **, （）' }),
+    '“” · ** **, （）',
+  );
+});
+
+test('fishParamsFoldSummary reads format, speed and concurrency', () => {
+  assert.equal(fishParamsFoldSummary({ format: 'mp3', speed: 1, concurrency: 2 }), 'mp3 · 语速 1 · 同时生成 2 段');
+  assert.equal(fishParamsFoldSummary({ format: 'wav', speed: 0.8, concurrency: 1 }), 'wav · 语速 0.8 · 同时生成 1 段');
+});
+
+test('consoleFoldSummary reads "AI 判断" until a slider leaves 50, then counts what moved, plus the mark count', () => {
+  assert.equal(consoleFoldSummary(DEFAULT_CONSOLE), 'AI 判断 · 标点情绪标签 0 条');
+  assert.equal(consoleFoldSummary({ ...DEFAULT_CONSOLE, pause: 75 }), '1 项已设定 · 标点情绪标签 0 条');
+  assert.equal(
+    consoleFoldSummary({ ...DEFAULT_CONSOLE, pause: 75, speed: 0, marks: [{ punct: '！！', tag: '加大音量', at: 'head' }] }),
+    '2 项已设定 · 标点情绪标签 1 条',
+  );
+});
+
+test('voiceLibraryFoldSummary counts voices with a usable id and reads "空" for none', () => {
+  assert.equal(voiceLibraryFoldSummary(undefined), '空');
+  assert.equal(voiceLibraryFoldSummary([]), '空');
+  assert.equal(voiceLibraryFoldSummary([{ id: 'a', name: '少女', voiceId: '' }]), '空');
+  assert.equal(voiceLibraryFoldSummary([{ id: 'a', name: '少女', voiceId: 'voice-a' }]), '1 个音色');
+  assert.equal(
+    voiceLibraryFoldSummary([
+      { id: 'a', name: '少女', voiceId: 'voice-a' },
+      { id: 'b', name: '老人', voiceId: 'voice-b' },
+    ]),
+    '2 个音色',
+  );
+});
+
+// --- channelRequestFoldSummary / channelPostscriptFoldSummary ---------------------------------
+// DESIGN §15.4: 模型连接 每条连接卡的「请求参数」「后置提示词」became .jy-fold groups, matching every
+// other advanced-mode fold's collapsed-row summary (review: they used to be plain <details> with no
+// summary at all, so a collapsed card said nothing about what was actually set).
+
+test('channelRequestFoldSummary always reads timeout/limit/temperature, falling back to DEFAULT_CHANNEL for a bare object', () => {
+  assert.equal(channelRequestFoldSummary({}), '超时 240s · 上限 60000 tokens · 温度 0.15');
+  assert.equal(
+    channelRequestFoldSummary({ timeoutSec: 60, maxTokens: 4096, temperature: 1 }),
+    '超时 60s · 上限 4096 tokens · 温度 1',
+  );
+});
+
+test('channelRequestFoldSummary only lists 并发/推理强度/排除参数/节约模式 when actually set', () => {
+  assert.equal(
+    channelRequestFoldSummary({ timeoutSec: 240, maxTokens: 60000, temperature: 0.15, concurrency: 1 }),
+    '超时 240s · 上限 60000 tokens · 温度 0.15',
+    '并发批次为 1（默认）时不单独列出',
+  );
+  assert.equal(
+    channelRequestFoldSummary({
+      timeoutSec: 240,
+      maxTokens: 60000,
+      temperature: 0.15,
+      concurrency: 3,
+      reasoningEffort: 'high',
+      excludeParams: ['temperature', 'top_p'],
+      tokenSaving: true,
+    }),
+    '超时 240s · 上限 60000 tokens · 温度 0.15 · 并发 3 · 推理强度 high · 排除 2 项 · 节约 token 模式',
+  );
+});
+
+test('channelPostscriptFoldSummary reads role and whether the postscript text is set, with its length', () => {
+  assert.equal(channelPostscriptFoldSummary({}), 'user · 未设置');
+  assert.equal(channelPostscriptFoldSummary({ postscriptRole: 'system', postscript: '  ' }), 'system · 未设置', '只有空白也算未设置');
+  assert.equal(
+    channelPostscriptFoldSummary({ postscriptRole: 'system', postscript: '直接输出结果，不要输出任何思考过程。' }),
+    'system · 已设置（18 字）',
+  );
+  assert.equal(channelPostscriptFoldSummary({ postscriptRole: 'bogus', postscript: '' }), 'user · 未设置', '未知身份回退到 user');
+});
+
+test('a one-beat hiragana moan drawn through a glide into another vowel before ん is accepted on a second echo, names still are not', async () => {
+  const { looksUntranslated, isShortExactEcho } = await import('../core.js');
+  for (const line of ['ひゃうん', 'きゃうん', 'ひゃいん', 'きゃいん', 'ふぁうん', 'あっ、ひゃうん', 'ひゃ、ひゃうん']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} still gets one real translation attempt`);
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a moan, accepted on a second identical echo`);
+  }
+  for (const line of ['アン', 'ケン', 'カン', 'オーエン', 'はっけん', 'けん', 'かん']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} is a name or a word, never accepted as an echo`);
+  }
 });

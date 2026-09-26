@@ -6,6 +6,7 @@ import {
   DEFAULT_JAILBREAK_PROMPT,
   DEFAULT_PROMPT_PROFILE,
   PRE_OUTPUT_CHECKLIST,
+  composeAnnotationSection,
   composeTranslationSpecification,
   countPromptCharacters,
   findForbiddenPhraseHits,
@@ -115,4 +116,24 @@ test('translation leanings are their own item and combine with any style', async
     leaningCustom: '原文是港漫，粗口保留力度。',
   }));
   assert.match(custom, /# 翻译倾向\n原文是港漫，粗口保留力度。/);
+});
+
+// Regression: composeAnnotationSection had no way to tell the translator which moves had already been
+// given an element, so the same move could be assigned a different one floor to floor even though the
+// colouring code always keeps the first (index.js's chat-wide move index). See workflow.test.mjs for
+// the same thing wired end to end through buildTranslationMessages/annotationRequest.
+test('composeAnnotationSection lists already-known moves only while effects is on and the list is non-empty', () => {
+  const knownMoves = [{ name: '红莲拳', element: '火焰' }, { name: '霜针', element: '冰霜' }];
+  const withMoves = composeAnnotationSection({ speakers: true, effects: true, knownMoves });
+  assert.match(withMoves, /红莲拳→火焰/);
+  assert.match(withMoves, /霜针→冰霜/);
+
+  const noKnownMoves = composeAnnotationSection({ speakers: true, effects: true, knownMoves: [] });
+  assert.doesNotMatch(noKnownMoves, /前面已经出现过下面这些招式/);
+
+  const effectsOff = composeAnnotationSection({ speakers: true, effects: false, knownMoves });
+  assert.doesNotMatch(effectsOff, /红莲拳→火焰/, '特效字 关闭时完全不问 moves，也不该带上已知列表');
+
+  const omitted = composeAnnotationSection({ speakers: true, effects: true });
+  assert.doesNotMatch(omitted, /前面已经出现过下面这些招式/, '不传 knownMoves 时默认没有列表');
 });

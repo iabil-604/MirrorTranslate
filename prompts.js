@@ -1,4 +1,4 @@
-import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.37.0-beta.1';
+import { DEFAULT_JAILBREAK_PROMPT } from './jailbreak-default.js?v=0.40.0';
 
 export { DEFAULT_JAILBREAK_PROMPT };
 
@@ -684,6 +684,23 @@ export function findForbiddenPhraseHits(translations, profile) {
   return hits;
 }
 
+/**
+ * The lyric lines' own translation rules — attached as one more system message, and only on a batch
+ * that actually has a lyric-marked segment in it (see workflow.js's `hasLyrics`). Everything else about
+ * a lyric segment (its id, its "one line in, one line out" shape) already comes through the ordinary
+ * segment contract; this section only adds what a lyric line needs on top of it.
+ */
+export function composeLyricsSection() {
+  return [
+    '# 歌词行',
+    '本次 segments 里有几段是歌词行，翻译时额外遵守：',
+    '- 一行进一行出：一段输入只对应一行译文，不拆成多行，也不把几段合并成一行；不在 text 里换行。',
+    '- 意象优先：按这行歌词的意境和画面翻，读起来要像能唱出来的词，不必逐字直译。',
+    '- 同一句歌词在本次输入中重复出现时，每次都用同一种译法，不因为位置不同就换一种说法。',
+    '- 人名、曲名、专辑名这类专名照抄原文，不翻译、不音译。',
+  ].join('\n');
+}
+
 // The palette's moods as a reader tells them apart. A bare English word leaves the model to guess where
 // fear ends and serious begins; two of them are ways of saying a line, not moods at all, and are asked
 // for only where the text says so (see quietWords below).
@@ -731,7 +748,7 @@ function rosterLine(roster) {
  * reading checks a mark against before Fish hears it, so a model that follows the rule is never
  * overruled.
  */
-export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], openRoster = true, emotionLabels = [], emotionGroups = null, voice = false, tones = [], toneCues = {}, quoteMarks = [], sounds = [], soundCues = {}, soundPlace = '', softMoods = [], styles = [], directions = false } = {}) {
+export function composeAnnotationSection({ speakers = false, emotions = false, roster = [], openRoster = true, emotionLabels = [], emotionGroups = null, voice = false, tones = [], toneCues = {}, quoteMarks = [], sounds = [], soundCues = {}, soundPlace = '', softMoods = [], styles = [], directions = false, effects = false, hasFragments = false, knownMoves = [] } = {}) {
   if (!speakers && !emotions) return '';
   const marks = (quoteMarks.length ? quoteMarks : ['「」', '『』', '“”', '""']).join(' ');
   const fields = [];
@@ -815,6 +832,25 @@ export function composeAnnotationSection({ speakers = false, emotions = false, r
       ? `写 direction 时要遵守下面这些角色的表达习惯和用户定下的规则（「默认」一条对所有人和旁白生效）：${styleLines.join('；')}`
       : `下面是各角色的说话习惯和用户定下的规则（「默认」一条对所有人生效）。它们决定 emotion 和 intensity 的整体取向，和上面的强度条件冲突时以它们为准；tone 和 sounds 仍然必须有原文依据；规则要求少写或不写 sounds、tone 时照做：${styleLines.join('；')}`);
     checks.push('quotes 的项数不多于译文里这一项的引号数');
+  }
+  // 特效字：招式只认不画（design §1）——模型只标出名字、属性、分量，颜色和发光都由代码算，逐字核对不
+  //到的名字或片段直接丢弃（design §2 item 4），所以这里只问「是什么」，不问「用什么颜色」。
+  if (effects) {
+    example.moves = [{ name: '<招式名>', element: '<属性>', tier: 1 }];
+    fields.push('moves（这一项的译文或旁白里出现的招式/技能/法宝名）');
+    rules.push('moves：译文正文或这一项紧挨着的旁白里，每出现一个招式、必杀技、法宝、咒语这类"有名字的招数"就写一项，找不到就不写这个字段。name 逐字抄这个名字在译文里实际写出的样子；element 写这一招的属性、流派或来源（火、冰、雷、剑气、道法、机械之类），写不出准确的就不写这一项；tier 是分量：1 普通招式，2 大招/必杀技/祭出法宝，3 整个故事最高潮的绝招，拿不准写 1。人物的口头禅、称号、普通武器和道具名字不算招式，不要写。招式名如果写在『』这类引号里，那是名号不是台词，quotes 里对应那一项要写 "type":"narration"，不要当成台词标注。');
+    if (Array.isArray(knownMoves) && knownMoves.length) {
+      // Told once per request rather than left to guess again each time (design §2 「同招同色」): the
+      // colour is fixed to whichever element a name was FIRST given, so a later floor naming a
+      // different one for a move already on this list is wasted — the code keeps the first anyway.
+      rules.push(`这个故事前面已经出现过下面这些招式，属性已经定下来了，这次再写到同一个名字，element 要照抄这里的属性，不要换一个：${knownMoves.map(({ name, element }) => `${name}→${element}`).join('、')}。`);
+    }
+    if (hasFragments) {
+      example.runs = ['<译文里对应这处原文排版的字>'];
+      fields.push('runs（原文自带排版的片段，翻成了译文里的哪几个字）');
+      rules.push('runs：这一项如果带 fragments 字段，那是原文里本来就有特殊排版（加粗、变色、删除线之类）的几处片段，已经去掉了标签、只留文字，按原文出现的顺序编了号。runs 数组按同样的顺序，第几条对应 fragments 里第几条，逐条写出那条文字被译成了译文里的哪几个字，只填译文里实际写出的字，不加任何符号、标签或编号；这一项没有 fragments 字段就不写 runs，某一条在译文里找不到对应的字，就在这一条的位置写空字符串 ""，不要整条跳过、也不要挪到别的位置——数组的长度和顺序必须和 fragments 一一对应，其余条目照写。');
+    }
+    checks.push('moves 和 runs 里的字都能在这一项的 text 里逐字找到');
   }
   if (checks.length) rules.push(`输出前整体核对一遍，不写出核对过程：${checks.join('；')}。`);
   return [

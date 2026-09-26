@@ -8,12 +8,30 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.37.0-beta.1';
-import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.37.0-beta.1';
+} from './prompts.js?v=0.40.0';
+// The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
+// struck-through and redacted content dropped with its words, so a segment carries it for the
+// translation to see — that stays in `text`, unaffected — while what the floor's own words are read
+// with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.40.0';
+// A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
+// same maths index.js `moveStyleFor` used to paint it the first time.
+import { resolveMoveStyle } from './palette.js?v=0.40.0';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.40.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.37.0-beta.1';
+export const APP_VERSION = '0.40.0';
+// How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
+// a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
+// built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
+// card when it actually shows one of the three documented signals, a kana-holding parenthesis no longer
+// counts as an already-bilingual row, and a card's first row starts its own unit apart from whatever
+// narration precedes it. A floor already translated keeps whichever rules produced what is stored on
+// it — recorded on its metadata as `segmentation_version` — so re-deriving its segments for matching
+// never disagrees with what was actually written; a floor with no record yet always starts on the
+// latest rules. See segmentSource's `segmentationVersion` option.
+export const SEGMENTATION_RULES_VERSION = 3;
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -27,6 +45,28 @@ export const AFFIX_END = '\u2063\u200c\u2063';
 // and re-translation restores it, so the swap is reversible without touching swipes.
 export const HIDDEN_START = '\u2063\u200d\u2063';
 export const HIDDEN_END = '\u2063\ufeff\u2063';
+
+/**
+ * Which segmentation rules a floor's own metadata actually speaks for. `metadata` alone is not enough:
+ * the host starts a freshly generated swipe with a *copy* of the previous swipe's `extra` (see readFloor
+ * above), so a floor nothing has ever translated can still carry a `segmentation_version` that describes
+ * someone else's text entirely. Trusting it there would lock a brand new reply onto whatever rules
+ * produced a different swipe, forever — `writeTranslation` copies whatever this returns straight onto
+ * the record it writes next.
+ *
+ * `text` is read for the boundaries a write of this extension's own leaves inside the floor itself
+ * (SOURCE_START/TRANSLATION_START/HIDDEN_START, and the legacy brace marker) — proof this exact text,
+ * not a copied record, was actually written to. `stripped` (a 只留译文 floor) is exempt: readFloor's own
+ * fingerprint or carriesTranslation already matched this metadata to this text by content, not by the
+ * swipe's copied `extra`, so nothing more needs proving here.
+ */
+export function resolveSegmentationVersion(text, metadata, { stripped = false } = {}) {
+  if (!metadata) return SEGMENTATION_RULES_VERSION;
+  const source = String(text ?? '');
+  const carries = stripped || [SOURCE_START, TRANSLATION_START, HIDDEN_START, `{${INVISIBLE_MARKER}`].some(marker => source.includes(marker));
+  return carries ? (Number(metadata.segmentation_version) || 1) : SEGMENTATION_RULES_VERSION;
+}
+
 const SOURCE_BLOCK_RE = new RegExp(`${SOURCE_START}([\\s\\S]*?)${SOURCE_END}`, 'g');
 const TRANSLATION_BLOCK_RE = new RegExp(`\\n?${TRANSLATION_START}([\\s\\S]*?)${TRANSLATION_END}`, 'g');
 const AFFIX_RE = new RegExp(`${AFFIX_START}[\\s\\S]*?${AFFIX_END}`, 'g');
@@ -54,6 +94,13 @@ const SPEECH_OPENERS = new Map([
   ['“', '”'],
   ['"', '"'],
 ]);
+// A whole line wrapped in exactly one speaker mark, its story-side shell rather than anything
+// carryable — <say who="樱井" mood="开心">…</say>. Used to look past the mark to whatever it wraps: the
+// words a preserve rule tests, the formatting a translation carries. The inner group excludes another
+// <say>/</say>, so a line where two people speak — two marks run together with nothing between them —
+// is not mistaken for one shell around both; that stays unmatched, for the ordinary handling. A
+// self-closing mark is not this shell either; it names the run after it rather than enclosing one.
+const SAY_SHELL_RE = /^<say(?=[\s/>])[^<>]*>((?:(?!<\/?say(?=[\s/>]))[\s\S])*)<\/say>$/i;
 
 /**
  * Splits a translated line into quoted and unquoted runs.
@@ -332,6 +379,189 @@ export function unifySpeakerNames(reported, knownNames = []) {
 const KANA_RE = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF]/gu;
 const KANA_OR_HAN_RE = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF\p{Script=Han}]/gu;
 
+// What a line still says once every mark around it is gone: whitespace, punctuation, symbols and quote
+// marks stripped away along with this extension's own invisible block markers (SOURCE_START and the
+// others just above — all Unicode "format" characters, category \p{Cf}). Kept the other way around
+// instead — only \p{L}/\p{N} survive — so nothing has to be enumerated by hand except the drawn-out
+// sound mark's fullwidth spelling, which Unicode itself files under "symbol" rather than "letter" the
+// way it files ー (U+30FC, a modifier letter, \p{L} already). A segment sent for translation that
+// reduces to nothing here was already caught by segmentSource's own isBuiltinPreservedLine and never
+// sent at all; this is for the ones a stray kana still let through.
+const RESIDUE_LETTER_RE = /[\p{L}\p{N}]|[～〜]/u;
+
+// Small kana that only decorate a gasp or a stammer, the moraic ん/ン and the drawn-out sound marks:
+// filler that never turns a gasp into a word or a name on its own, so none of it counts toward how
+// many real morae a residue has. ん stays here rather than among the counted morae so that あっ-style
+// stammers keep working (「……うん。」, 「うーん……」) — the cost is a narrow gap of its own, see
+// isTrivialInterjectionSource's own note.
+const INTERJECTION_FILLER = new Set('ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮーんン～〜');
+
+// The five vowels and the は/か consonant rows: the only full-size morae an honest gasp or stammer is
+// ever built from (はぁ, ひっ, くっ, きゃっ, ふぅ…). Kept in step with tts.js's own INTERJECTION_CHARS,
+// which draws the same は行 line for a breath rather than a word.
+const INTERJECTION_MORA = new Set('あいうえおアイウエオはひふへほハヒフヘホかきくけこカキクケコ');
+
+// Real short kana words this same letter shape can spell — carrying actual meaning, never "nothing to
+// translate" even though every letter of them is drawn from INTERJECTION_MORA. Kept in step with
+// tts.js's own KANA_WORDS_RE (はい/いいえ/いえ/いい are words there too, not gasps); おい/ええ/あい/うえ
+// are the other short real words the same two-vowel shape spells.
+const KANA_REAL_WORDS = new Set([
+  'はい', 'ハイ', 'いいえ', 'イイエ', 'いえ', 'いい', 'おい', 'オイ', 'ええ', 'エエ', 'あい', 'アイ', 'うえ', 'ウエ',
+]);
+
+// A bare ん/ン next to a real mora is letter-for-letter what a short name looks like (アン, ケン, カン…)
+// as much as it is a real interjection (うん, ふん…) — the shapes are identical, so only a small fixed
+// set of the real words is trusted outright. ううん carries two real morae (う, う) and still belongs
+// here for the same reason, and so do フン (katakana ふん), ウウン and ふうん (both a doubled vowel plus
+// ん, spelled without ー). うふん/あはん/はうん are the same kind of fixed moan, just not shaped like a
+// doubled vowel at all (う-ふ-ん, あ-は-ん, は-う-ん are three distinct morae, not one mora drawn out).
+const INTERJECTION_N_WORDS = new Set([
+  'うん', 'ううん', 'ウン', 'ふん', 'フン', 'ウウン', 'ふうん', 'うふん', 'あはん', 'はうん',
+]);
+// A moan's own extra marker: a stammered glottal stop, a heart, or a drawn-out vowel — none of which a
+// bare name is ever written with. Checked against the untouched source so ♡/♥/❤, which residueLetters
+// never keeps, still count.
+const MOAN_MARKER_RE = /[っッ♡♥❤ー～〜~]/;
+
+// The vowel each full-size mora (あいうえお/アイウエオ/はひふへほ/ハヒフヘホ/かきくけこ/カキクケコ), each
+// small vowel kana (ぁぃぅぇぉ/ァィゥェォ) and each ゃ/ゅ/ょ glide (which always carries exactly a/u/o,
+// whatever consonant it rides on) carries. Used only to spot a drawn-out gasp spelled by doubling a
+// vowel instead of by ー — ふぅ, はあ, ひゃあ, ああ, ウウ — without also matching a yōon name that happens
+// to share a consonant (ファン, フィン: フ carries u, ァ/ィ carry a/i, so the vowels differ).
+const VOWEL_OF = new Map();
+for (const [group, vowels] of [
+  ['あいうえお', 'aiueo'], ['アイウエオ', 'aiueo'],
+  ['はひふへほ', 'aiueo'], ['ハヒフヘホ', 'aiueo'],
+  ['かきくけこ', 'aiueo'], ['カキクケコ', 'aiueo'],
+  ['ぁぃぅぇぉ', 'aiueo'], ['ァィゥェォ', 'aiueo'],
+  ['ゃゅょ', 'auo'], ['ャュョ', 'auo'],
+]) {
+  for (let index = 0; index < group.length; index += 1) VOWEL_OF.set(group[index], vowels[index]);
+}
+// The kana that carry nothing but a vowel — a full-size or small vowel kana, or a ゃ/ゅ/ょ glide — as
+// against an ordinary consonant+vowel mora that merely happens to share a vowel with the one before it
+// (う followed by ふ both carry "u", but ふ is its own mora, not う drawn out).
+const PURE_VOWEL_KANA = new Set('あいうえおアイウエオぁぃぅぇぉァィゥェォゃゅょャュョ');
+
+// Whether `here`, right after `before`, reads as `before`'s own vowel drawn out — a pure vowel kana
+// carrying the same vowel (ふぅ, はあ, ひい, へえ, ひゃあ, きゅう) or an exact repeat of the same kana
+// (ああ, ウウ). Checking the vowel — not just "some kana follows" — is what keeps a yōon name (ファン,
+// フィン) from matching.
+function isDrawnOutVowelPair(before, here) {
+  const vowel = VOWEL_OF.get(before);
+  if (vowel === undefined || VOWEL_OF.get(here) !== vowel) return false;
+  return PURE_VOWEL_KANA.has(here) || before === here;
+}
+
+// Full katakana letters only (ァ–ヺ, ヽヾヿ, the phonetic extensions) — never ー, which a hiragana moan
+// drawn out with it (あーん) still spells entirely in hiragana otherwise. Used only to tell a hiragana
+// moan from the katakana name the same bare-ん shape could just as easily be (see isInterjectionShaped).
+const KATAKANA_LETTER_RE = /[ァ-ヺヽ-ヿㇰ-ㇿ]/;
+
+function residueLetters(text) {
+  return [...String(text ?? '')].filter(ch => RESIDUE_LETTER_RE.test(ch));
+}
+
+// A character that never itself reads as part of a word — punctuation, an ellipsis, whitespace — and so
+// is skipped over when hasMarkerBesideN walks back from a ん/ン looking for its nearest real letter.
+// Never a moan marker (MOAN_MARKER_RE) and never a letter (RESIDUE_LETTER_RE): those are exactly what the
+// walk is looking for, not what it steps past.
+function isInterjectionGap(ch) {
+  return ch !== undefined && !RESIDUE_LETTER_RE.test(ch) && !MOAN_MARKER_RE.test(ch);
+}
+
+// Whether a marker of a moan — a stammered glottal stop, a heart, or a drawn-out vowel — sits against one
+// of `rawSource`'s ん/ン: immediately before it (あーん, ああん, はぁん, はあん), separated from it only by
+// punctuation or an ellipsis (アッ、ン, ハァ……ン — a stammer and its ん spoken as two beats), or
+// immediately after it (あんっ, アンッ♡). Checked against the untouched source so ♡/♥/❤, which
+// residueLetters never keeps, still count. A marker sitting beyond the nearest real letter — beside a
+// different word entirely (オーエン, はっけん, ええ、ケン) — must not count: the walk back stops at the
+// first letter it finds, marker or not, so a real mora sitting directly against the ん (across punctuation
+// or not) still blocks it, same as before. Forgiving a bare ん just because some unrelated interjection or
+// geminate consonant appears earlier in the same line would forgive a real, untranslated word or name
+// right next to it.
+function hasMarkerBesideN(rawSource) {
+  const chars = [...String(rawSource ?? '')];
+  return chars.some((ch, index) => {
+    if (ch !== 'ん' && ch !== 'ン') return false;
+    let at = index - 1;
+    while (at >= 0 && isInterjectionGap(chars[at])) at -= 1;
+    const before = chars[at];
+    if (before !== undefined && (MOAN_MARKER_RE.test(before) || isDrawnOutVowelPair(chars[at - 1], before))) return true;
+    const after = chars[index + 1];
+    return after !== undefined && MOAN_MARKER_RE.test(after);
+  });
+}
+
+// A hiragana-only bare ん read alongside its real morae with nothing else decorating it — あん, ひゃん,
+// うふん, あはん, はうん — reads exactly like a moan spelled out in hiragana, not a name: the katakana
+// shapes this same letter pattern is otherwise indistinguishable from (アン, ケン, カン, オーエン) are
+// never written in hiragana. Only ever consulted for a *second* identical echo (isShortExactEcho's own
+// caller, isInterjectionShaped) — never the first sighting, isTrivialInterjectionSource — on the same
+// reasoning isReduplicatedSound already accepts a repeated shape outright: a plain repeat is stronger
+// evidence than the shape alone would be, and short of a real dictionary check nothing here can tell
+// うふん apart from a genuine hiragana word or name of the identical shape (はけん, 派遣) — the same
+// accepted trade-off, just for a different shape.
+function isBareHiraganaMoan(letters, morae, rawSource) {
+  if (/\p{Script=Katakana}/u.test(String(rawSource ?? ''))) return false;
+  // One beat drawn through a glide or small vowel into a different vowel before the ん (ひゃうん,
+  // きゃいん, ふぁうん): the same moan one letter longer, and just as unlike any word or name.
+  if (letters.length === 4) return 'ゃゅょぁぃぅぇぉ'.includes(letters[1]) && 'あいうえお'.includes(letters[2]) && letters[3] === 'ん';
+  if (letters.length > 3) return false;
+  if (morae.length !== 1) return true; // two real morae touching directly (うふん, あはん, はうん)
+  if (letters.length === 2) return 'あいうえお'.includes(morae[0]); // bare mora+ん: only the vowels (あん…), never は/か行 (けん, かん…), which read as an ordinary word
+  return true; // the lone real mora's own glide sits between it and ん (ひゃん, きゃん) — no plain word or name is spelled that way
+}
+
+// Whether a bare ん/ン sitting among `letters` (every one of which is already known to be filler or a
+// real mora) is genuinely free filler here, rather than the one real thing that turns "gasp" into
+// "name": a small fixed set of real ん-interjections (INTERJECTION_N_WORDS), a moan carrying its own
+// extra marker directly beside the ん itself (hasMarkerBesideN), or a shape built by repeating a shorter
+// unit two or more times over (あんあん). Only meaningful once the caller already knows `letters`
+// contains at least one real mora — with none at all (ん, んん, んー…) there is nothing left to mistake
+// for a name in the first place.
+function bareNIsFreeFiller(letters, rawSource) {
+  if (INTERJECTION_N_WORDS.has(letters.join(''))) return true;
+  if (hasMarkerBesideN(rawSource)) return true;
+  return isReduplicatedSound(letters);
+}
+
+// A source with nothing in it worth translating beyond a gasp or a stammer: everything left once every
+// mark is stripped is filler, with at most one real mora among it (design: a repair request over
+// 「……っ」, 「ッ！」 or 「はぁ……」 only ever gets the same unchanged answer back, forever). Two or more
+// real morae is always either a real short word (see KANA_REAL_WORDS) or a name, never a bare gasp.
+// A bare ん/ン is the one exception worth naming: next to a single real mora it reads exactly like a
+// short name (アン, ケン, カン…) as much as a real stammer (うん, ふん…), so that narrow shape is
+// accepted only when bareNIsFreeFiller above says so — a fixed real word, a moan's own extra marker, or
+// a repeated unit (あんあん, which is why this only otherwise caps at one real mora and yet still takes
+// あんあん's two) — never on letter shape alone. The one-real-mora cap still applies once ん brings a
+// *second* real mora into the mix (オーエン, ハーケン, けっこん): bareNIsFreeFiller's own moan-marker
+// check would otherwise wave through an untranslated multi-mora word just because ー or っ appears
+// somewhere in it (a promotion mark and a geminate consonant, not a moan), so a second real mora is
+// only ever forgiven by a fixed real word (ううん) or an actually repeated unit (あんあん).
+function isTrivialInterjectionSource(source) {
+  const letters = residueLetters(source);
+  if (!letters.length || letters.length > 4) return false;
+  if (!letters.every(ch => INTERJECTION_FILLER.has(ch) || INTERJECTION_MORA.has(ch))) return false;
+  const morae = letters.filter(ch => INTERJECTION_MORA.has(ch));
+  if (!letters.includes('ん') && !letters.includes('ン')) return morae.length <= 1;
+  if (morae.length > 1) return INTERJECTION_N_WORDS.has(letters.join('')) || isReduplicatedSound(letters);
+  return !morae.length || bareNIsFreeFiller(letters, source);
+}
+
+// An answer to a trivial interjection source is accepted whole (an unchanged echo) or with some/all of
+// its filler kana dropped — never with anything in it the source did not already have.
+function isAcceptedInterjectionEcho(text, source) {
+  if (!isTrivialInterjectionSource(source)) return false;
+  const remaining = residueLetters(source);
+  for (const letter of residueLetters(text)) {
+    const at = remaining.indexOf(letter);
+    if (at === -1) return false;
+    remaining.splice(at, 1);
+  }
+  return true;
+}
+
 /**
  * Whether a returned "translation" is still, in substance, the source language.
  *
@@ -339,21 +569,113 @@ const KANA_OR_HAN_RE = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u3
  * Japanese. That passes every structural check — the id is right, the text is not empty — and lands
  * on the floor looking like a translation. Kana are the tell: Chinese text carries none, so a line in
  * which they make up a real share of the script goes back for another attempt instead.
+ *
+ * The one exception is an echo of a source that had nothing to translate in the first place — see
+ * isAcceptedInterjectionEcho above. There the unchanged answer is not a failure to flag; it is the
+ * only correct one.
  */
 export function looksUntranslated(text, source = '') {
   const value = String(text ?? '');
   const kana = value.match(KANA_RE)?.length ?? 0;
   if (!kana) return false;
+  if (source && isAcceptedInterjectionEcho(value, source)) return false;
   if (source && value.replace(/\s+/g, '') === String(source).replace(/\s+/g, '')) return true;
   const script = value.match(KANA_OR_HAN_RE)?.length ?? 0;
   return kana >= 3 && kana / script >= 0.3;
+}
+
+// ドキドキ, ワクワク, ゴゴゴ: Japanese sound-symbolic words are almost always built by repeating a short
+// unit two or more times over, which an ordinary word or a name never is. True when `letters` splits
+// evenly into two or more copies of the same shorter run.
+function isReduplicatedSound(letters) {
+  for (let unit = 1; unit <= Math.floor(letters.length / 2); unit += 1) {
+    if (letters.length % unit) continue;
+    const base = letters.slice(0, unit).join('');
+    let repeats = true;
+    for (let at = unit; at < letters.length; at += unit) {
+      if (letters.slice(at, at + unit).join('') !== base) { repeats = false; break; }
+    }
+    if (repeats) return true;
+  }
+  return false;
+}
+
+// Anything that never itself reads as part of a word -- punctuation, an ellipsis, whitespace, or a
+// moan's own decorative ♡/♥/❤ -- splitting a line into the punctuation-separated "beats"
+// isChunkedInterjectionShaped below judges one at a time. Unlike isInterjectionGap above (which stops
+// right at a marker symbol so hasMarkerBesideN can test it), a marker here is just another break: ♡ in
+// あっ♡あん never belongs to either half. ー/～/〜 stay out of this class (\p{L} already covers ー; ～/〜
+// are named here too) because they still have to stay glued to the letter beside them within a beat
+// (あーん's own drawn-out vowel).
+const CHUNK_BREAK_RE = /[^\p{L}\p{N}～〜]+/u;
+
+// A moan built from several short beats running together with nothing but punctuation, an ellipsis or a
+// heart between them (あっ、あん……, あっ♡あん, あ、あっ、あん！): each beat read on its own is exactly the
+// filler or bare-vowel-plus-ん shape isInterjectionShaped already knows, but residueLetters flattens the
+// *whole* line before isInterjectionShaped ever sees it, so an earlier beat's own real mora (あ in あっ)
+// ends up sitting directly in front of a later beat's ん (あん) and blocks it, same as a real name's own
+// mora would. Splitting first and judging every beat with that same isInterjectionShaped keeps every
+// existing safeguard exactly as it is: a short katakana name (ケン in ええ、ケン) still fails its own beat
+// because it is katakana, and a real two-mora word or name (オーエン, はっけん) never contains a break in
+// the first place, so it is never even split. Only reached once the unsplit line has already failed its
+// own check, and only worth anything once splitting actually finds more than one beat -- a single beat
+// recurses into isInterjectionShaped and lands right back on the same (already failed) checks, so nothing
+// loops and nothing is gained by trying.
+function isChunkedInterjectionShaped(rawSource) {
+  const chunks = String(rawSource ?? '').split(CHUNK_BREAK_RE).filter(Boolean);
+  if (chunks.length < 2) return false;
+  return chunks.every(chunk => isInterjectionShaped(residueLetters(chunk), chunk));
+}
+
+// Every letter drawn from INTERJECTION_FILLER or INTERJECTION_MORA, with no cap at all on how many real
+// morae are among them — isShortExactEcho's own looser half of the shape isTrivialInterjectionSource
+// caps at one. A bare ん/ン still needs bareNIsFreeFiller's say-so, same as there — an unmarked, non-
+// repeating mora-plus-ん is a short name (アン, ケン…) whether it is sighted once or twice in a row — with
+// two further allowances only here, on a second sighting: isBareHiraganaMoan's own hiragana-only shapes,
+// and (failing everything else) isChunkedInterjectionShaped's own beat-by-beat reading of the same line.
+function isInterjectionShaped(letters, rawSource) {
+  if (!letters.every(ch => INTERJECTION_FILLER.has(ch) || INTERJECTION_MORA.has(ch))) return isChunkedInterjectionShaped(rawSource);
+  if (!letters.includes('ん') && !letters.includes('ン')) return true;
+  const morae = letters.filter(ch => INTERJECTION_MORA.has(ch));
+  if (!morae.length) return true;
+  return bareNIsFreeFiller(letters, rawSource) || isBareHiraganaMoan(letters, morae, rawSource) || isChunkedInterjectionShaped(rawSource);
+}
+
+/**
+ * Whether `text` is a short, exact echo of `source` (whitespace aside) that is still plausibly
+ * untranslatable — not merely short. A model that already echoed a source once is not, on its own,
+ * good evidence that a real sentence, name or ordinary word needs no translation; it usually just means
+ * the model is lazy. This only ever fires for a source with no Han character in it, at most 8 letters
+ * once every mark is stripped, and shaped either like a gasp or a stammer (the same filler-shaped
+ * material isTrivialInterjectionSource accepts on a single sighting, just without its own one-real-mora
+ * ceiling — a second identical reply is stronger evidence than a first) or a doubled/tripled
+ * sound-symbolic word (see isReduplicatedSound). KANA_REAL_WORDS is checked first and always wins, so a
+ * real short word built from the same letters — いい, ええ… — is never waved through by either shape,
+ * and a bare-ん name (アン, ケン…) is no more accepted here on a second sighting than on a first.
+ *
+ * A short segment the model hands back unchanged twice in a row — once on the first request, once on
+ * the repair that followed — is treated as the model saying it needs no translation, rather than being
+ * asked a third time forever (see withoutUntranslated / translateOneBatch in index.js, which are the
+ * only callers: this never overrides looksUntranslated's own verdict by itself, only what a caller does
+ * once that verdict, and a second matching one, have already been reached).
+ */
+export function isShortExactEcho(text, source) {
+  if (!source) return false;
+  const value = String(text ?? '');
+  if (value.replace(/\s+/g, '') !== String(source).replace(/\s+/g, '')) return false;
+  if (/\p{Script=Han}/u.test(String(source))) return false;
+  const letters = residueLetters(source);
+  if (!letters.length || letters.length > 8) return false;
+  if (KANA_REAL_WORDS.has(letters.join(''))) return false;
+  if (isInterjectionShaped(letters, source)) return true;
+  return isReduplicatedSound(letters);
 }
 
 // SillyTavern rewrites message class names with a custom- prefix when it renders, and an edited
 // floor can be saved back in that form, so both spellings have to be recognised here.
 const SPEAKER_OPEN_RE = new RegExp(`<span class="(?:custom-)?${SPEAKER_CLASS}(?:[ "][^>]*)?>`);
 const VALID_TAG_RE = /^[A-Za-z][A-Za-z0-9_:-]*$/;
-const STRUCTURAL_TAG_RE = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
+const STRUCTURAL_TAG_RE = /\\?<(\/?)([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
 const HTML_ENTITY_RE = /&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi;
 // A Markdown picture as the host's showdown renders it — ![alt](src "title"), sizes and one level of
 // brackets in the address included — and the empty link a linked picture [![a](b)](c) leaves once the
@@ -388,6 +710,9 @@ export const MAX_CHANNEL_CONCURRENCY = 4;
 export const DEFAULT_COLORING = Object.freeze({
   speakers: false,
   emotions: false,
+  // 特效字 (design 声线排版/招式上色/搬运原文排版, folded together as one switch): a sub-switch of
+  // speakers, asked for and applied only while `speakers` is also on — see `normalizeColoring`.
+  effects: false,
   // WCAG AA for body text. The theme probe reports what a background can actually reach.
   minContrast: 4.5,
   // 0 keeps a character's own hair colour faithfully, 1 paints everyone at full strength.
@@ -451,9 +776,11 @@ export function normalizeMarks(value) {
   return result;
 }
 export const TTS_RANGES = Object.freeze(['all', 'dialogue', 'narration']);
-// Which language is read: the translation, the original the floor was written in, or both — each
-// made on its own, every line getting a button in either language.
-export const TTS_SIDES = Object.freeze(['translation', 'source', 'both']);
+// Which language is read: the translation, the original the floor was written in, both — each made on
+// its own, every line getting a button in either language — or dialogue_source, one reading where the
+// narration is the translation and every quoted run is the original, in whatever language it was
+// written in.
+export const TTS_SIDES = Object.freeze(['translation', 'source', 'both', 'dialogue_source']);
 // What one request of the stream carries: a paragraph, or a single sentence.
 export const TTS_STREAM_UNITS = Object.freeze(['line', 'sentence']);
 // What one request to the voice provider carries: the whole floor with every speaker in it, one
@@ -715,11 +1042,28 @@ export const DEFAULT_TTS = Object.freeze({
   minimax: DEFAULT_MINIMAX,
 });
 
+// DESIGN §16 小助手: a read-only helper the reader can ask about the current settings/floor/run log.
+// 'follow' is the same "跟随酒馆" value every other connection use understands (see CONNECTION_USES
+// below); an empty prompt means the default prompt in helper.js, shown as its placeholder.
+export const DEFAULT_HELPER = Object.freeze({
+  channelId: 'follow',
+  prompt: '',
+});
+
 export const DEFAULT_SETTINGS = Object.freeze({
-  schemaVersion: 12,
+  schemaVersion: 13,
+  // The control center rail: 'normal' shows the small three-page layout (翻译台 · 微调 · 运行记录),
+  // 'advanced' the full six pages that used to be the only layout. See UI_MODES / mergeSettings below
+  // for who gets which on first load.
+  uiMode: 'normal',
+  // The last one-click package applied from 正常模式 · 翻译台, so its card stays highlighted and a
+  // hand-changed managed field can say what it drifted from. '' once nothing has been applied yet, or
+  // after 「恢复原样」 leaves a set of choices that matches no package by construction (it does).
+  preset: '',
   coloring: DEFAULT_COLORING,
   speakerPalette: {},
   tts: DEFAULT_TTS,
+  helper: DEFAULT_HELPER,
   ttsVoices: {},
   // Voice ids the reader has saved by name, shared across every character card.
   voiceLibrary: [],
@@ -749,6 +1093,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
   replaceTags: Object.freeze([]),
   excludedTags: Object.freeze([]),
   preserveLineRules: '',
+  // v0.37.0 「歌词」: lines matched here are translated one line in, one line out and laid out beside
+  // their original instead of joining the surrounding prose unit. Same grammar as preserveLineRules.
+  lyricLineRules: '',
+  // The 「音乐卡片」 rule group (processing.js PROCESSING_FIELDS carries it alongside the other
+  // per-profile fields above): off by default, a reader turns it on by hand. See splitCardRows.
+  musicCardRules: false,
   segmentPrefix: '',
   segmentSuffix: '',
   translationPrefix: '{',
@@ -770,6 +1120,120 @@ export const FLOOR_BUTTON_MODES = Object.freeze(['line', 'sentence', 'off']);
 // What the two older names meant: 'auto' was per-sentence on a desktop and nothing on a phone, which
 // the paragraph buttons replace; 'on' was per-sentence everywhere, which is now the fuller mode.
 const FLOOR_BUTTON_LEGACY = Object.freeze({ auto: 'line', on: 'sentence' });
+
+export const UI_MODES = Object.freeze(['normal', 'advanced']);
+export const CONSOLE_PRESET_IDS = Object.freeze(['light', 'comfort', 'audiobook', 'everything']);
+
+// DESIGN §15.1/§16.1: which rail pages exist in which mode. 'main' (翻译台), 'helper' (小助手) and
+// 'logs' (运行记录) are in both; 'finetune' (微调) is normal-mode only. The other four are unchanged
+// advanced-mode pages.
+export const CONTROL_CENTER_PAGES = Object.freeze({
+  normal: Object.freeze(['main', 'finetune', 'helper', 'logs']),
+  advanced: Object.freeze(['main', 'prompt', 'settings', 'processing', 'tts', 'helper', 'logs']),
+});
+
+/** The page ids shown in a mode's rail, advanced's list for anything that is not a known mode. */
+export function pagesForMode(mode) {
+  return CONTROL_CENTER_PAGES[UI_MODES.includes(mode) ? mode : 'advanced'];
+}
+
+export function pageExistsInMode(pageId, mode) {
+  return pagesForMode(mode).includes(pageId);
+}
+
+/** Which page should be showing after a mode switch: the current one if it still exists there, else 翻译台. */
+export function resolvePageForMode(pageId, mode) {
+  return pageExistsInMode(pageId, mode) ? pageId : 'main';
+}
+
+// -------------------------------------------------------------------------------------------
+// DESIGN.md §15.4 折叠组: "收起时同一行写当前值摘要". Each of these is the pure half of one collapsed
+// fold's summary line on the 正文处理 / 朗读 advanced pages — given the settings already on the page, no
+// DOM. The DOM-facing sync functions in index.js call these and write the result into that fold's
+// `[data-jy-fold-summary]` span.
+// -------------------------------------------------------------------------------------------
+
+/** "N 条" for a rule list with content, "空" for none — 原样保留白名单 and 歌词行 share this reading. */
+export function preserveLineRuleCountLabel(value) {
+  const { rules } = parsePreserveLineRulesWithErrors(value);
+  return rules.length ? `${rules.length} 条` : '空';
+}
+
+function affixPairLabel(prefix, suffix) {
+  return prefix || suffix ? `${prefix || ''} ${suffix || ''}`.trim() : '无';
+}
+
+/** "原文 无 · 译文 { }" — the 段落前后缀 fold's summary. */
+export function segmentAffixSummary(settings = {}) {
+  return `原文 ${affixPairLabel(settings.segmentPrefix, settings.segmentSuffix)} · 译文 ${affixPairLabel(settings.translationPrefix, settings.translationSuffix)}`;
+}
+
+/** "情绪起伏 · 名单外自动取色 · 对比度目标 4.5 · 彩度 0.65 · 读取当前主题与壁纸" — 颜色细节 fold's summary.
+ * 情绪起伏/名单外自动取色 only appear when actually on — a collapsed row used to claim both regardless
+ * of the real setting (review finding core.js:946). */
+export function coloringDetailFoldSummary(coloring = {}) {
+  const contrast = Number.isFinite(coloring.minContrast) ? coloring.minContrast : DEFAULT_COLORING.minContrast;
+  const vividness = Number.isFinite(coloring.vividness) ? coloring.vividness : DEFAULT_COLORING.vividness;
+  return [
+    coloring.rhythm ? '情绪起伏' : '',
+    coloring.autoSpeakers ? '名单外自动取色' : '',
+    `对比度目标 ${contrast}`,
+    `彩度 ${vividness.toFixed(2)}`,
+    '读取当前主题与壁纸',
+  ].filter(Boolean).join(' · ');
+}
+
+/** "「」 『』 · （）" — 对白符号 · 跳过符号 fold's summary, empty skip pairs shown as "空". */
+export function quoteSymbolFoldSummary(tts = {}) {
+  const quotes = formatPairList(tts.quotePairs ?? DEFAULT_QUOTE_PAIRS);
+  const skips = formatPairList(tts.skipPairs ?? DEFAULT_SKIP_PAIRS);
+  return `${quotes || '空'} · ${skips || '空'}`;
+}
+
+/** "mp3 · 语速 1.0 · 同时生成 2 段" — Fish 参数 fold's summary. */
+export function fishParamsFoldSummary(fish = {}) {
+  return `${fish.format} · 语速 ${fish.speed} · 同时生成 ${fish.concurrency} 段`;
+}
+
+/** "AI 判断 · 标点情绪标签 3 条" (or "N 项已设定" once a slider leaves the middle) — 默认调音台 fold's summary. */
+export function consoleFoldSummary(value = {}) {
+  const overridden = CONSOLE_KEYS.filter(key => Number(value[key]) !== DEFAULT_CONSOLE[key]).length;
+  const tuning = overridden ? `${overridden} 项已设定` : 'AI 判断';
+  const marks = Array.isArray(value.marks) ? value.marks.length : 0;
+  return `${tuning} · 标点情绪标签 ${marks} 条`;
+}
+
+/** "N 个音色" for a non-empty library, "空" for none — 音色库 fold's summary, nested inside 音色's card. */
+export function voiceLibraryFoldSummary(voiceLibrary) {
+  const list = normalizeVoiceLibrary(voiceLibrary);
+  return list.length ? `${list.length} 个音色` : '空';
+}
+
+/** "超时 240s · 上限 60000 tokens · 温度 0.15" (plus 并发/推理强度/排除参数/节约模式 only when actually set) —
+ * 模型连接 每条连接卡「请求参数」fold's summary (DESIGN §15.4). */
+export function channelRequestFoldSummary(channel = {}) {
+  const timeoutSec = Number.isFinite(channel.timeoutSec) ? channel.timeoutSec : DEFAULT_CHANNEL.timeoutSec;
+  const maxTokens = Number.isFinite(channel.maxTokens) ? channel.maxTokens : DEFAULT_CHANNEL.maxTokens;
+  const temperature = Number.isFinite(channel.temperature) ? channel.temperature : DEFAULT_CHANNEL.temperature;
+  const concurrency = Number.isFinite(channel.concurrency) ? channel.concurrency : DEFAULT_CHANNEL.concurrency;
+  const excludeCount = Array.isArray(channel.excludeParams) ? channel.excludeParams.length : 0;
+  return [
+    `超时 ${timeoutSec}s`,
+    `上限 ${maxTokens} tokens`,
+    `温度 ${temperature}`,
+    concurrency > 1 ? `并发 ${concurrency}` : '',
+    channel.reasoningEffort ? `推理强度 ${channel.reasoningEffort}` : '',
+    excludeCount ? `排除 ${excludeCount} 项` : '',
+    channel.tokenSaving ? '节约 token 模式' : '',
+  ].filter(Boolean).join(' · ');
+}
+
+/** "user · 未设置" / "system · 已设置（12 字）" — 模型连接「后置提示词」fold's summary (DESIGN §15.4). */
+export function channelPostscriptFoldSummary(channel = {}) {
+  const role = ['system', 'user', 'assistant'].includes(channel.postscriptRole) ? channel.postscriptRole : 'user';
+  const text = String(channel.postscript || '').trim();
+  return `${role} · ${text ? `已设置（${text.length} 字）` : '未设置'}`;
+}
 
 export function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -861,13 +1325,29 @@ export function parsePreserveLineRulesWithErrors(value) {
   return { rules, errors };
 }
 
-export function matchesPreserveLine(line, rules) {
+// 「歌词行」 rules read exactly like preserve rules — exact / prefix: / /regex/ — the grammar is shared
+// verbatim; only what a hit means differs (lyric translation instead of untouched original).
+export const parseLyricLineRulesWithErrors = parsePreserveLineRulesWithErrors;
+
+// `options.modern`: v0.36.1 also looks past a whole-line <say> shell before testing a rule, so an
+// indented line or one the story marked with a speaker still hits a preserve rule written for the bare
+// text. It is strictly additional — every version through v0.36.0's own test (a regex against the
+// untrimmed original, a prefix or exact rule against the trimmed line) is tried first and still wins on
+// its own; the shell-stripped subject is only a second try for whichever of those missed, never a
+// replacement for them. Off (segmentSource's old floors), behaviour is byte-identical to every version
+// through v0.36.0.
+export function matchesPreserveLine(line, rules, options = {}) {
   const raw = String(line ?? '');
   const trimmed = raw.trim();
+  let subject = null;
+  if (options.modern) {
+    const shell = trimmed.match(SAY_SHELL_RE);
+    subject = shell ? shell[1].trim() : trimmed;
+  }
   return (Array.isArray(rules) ? rules : []).some(rule => {
-    if (rule.type === 'regex') return rule.regex.test(raw);
-    if (rule.type === 'prefix') return trimmed.startsWith(rule.text);
-    return trimmed === rule.text;
+    if (rule.type === 'regex') return rule.regex.test(raw) || (subject !== null && subject !== raw && rule.regex.test(subject));
+    if (rule.type === 'prefix') return trimmed.startsWith(rule.text) || (subject !== null && subject !== trimmed && subject.startsWith(rule.text));
+    return trimmed === rule.text || (subject !== null && subject !== trimmed && subject === rule.text);
   });
 }
 
@@ -920,6 +1400,184 @@ export function resolveFeatureChannel(value, settings) {
 export function getActiveChannel(settings) {
   const channels = Array.isArray(settings?.channels) ? settings.channels : [];
   return channels.find(channel => channel.id === settings?.selectedChannelId) || channels[0] || normalizeChannel();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Connection uses: the three places a saved connection (or the host's own) can be put to work,
+// named the way the control center names them rather than by the settings fields underneath —
+// 'translation' is apiMode + selectedChannelId, 'analysis' is tts.analysisChannelId, 'deep' is
+// tts.deepChannelId. Each use holds exactly one choice at a time; the pages that used to have three
+// separate pickers for this (翻译用哪条连接 / 朗读分析用的连接 / 深度分析用的连接) become one checkbox
+// per connection per use, and these helpers are what that checkbox reads and writes.
+// ---------------------------------------------------------------------------------------------
+
+export const CONNECTION_USES = Object.freeze(['translation', 'analysis', 'deep', 'helper']);
+
+/**
+ * What a use points at right now, resolved to something real: 'follow' for the host's own connection,
+ * or a saved connection's id. 深度分析's own empty value — 「和朗读分析用同一条」 — resolves through to
+ * whatever 朗读分析 resolves to, so all three uses are always directly comparable to a connection id.
+ */
+export function connectionUseChoice(settings, use) {
+  if (use === 'translation') return translationChannelChoice(settings);
+  if (use === 'analysis') return resolveFeatureChannel(settings?.tts?.analysisChannelId, settings);
+  if (use === 'deep') {
+    const own = String(settings?.tts?.deepChannelId ?? '').trim();
+    return own ? resolveFeatureChannel(own, settings) : connectionUseChoice(settings, 'analysis');
+  }
+  if (use === 'helper') return resolveFeatureChannel(settings?.helper?.channelId, settings);
+  throw new Error(`未知用途：${use}`);
+}
+
+/**
+ * Points a use at a connection — 'follow' for the host's own, a saved connection's id, or (深度分析
+ * only) '' for 「和朗读分析用同一条」. A use holds exactly one choice, so pointing it here is what moves
+ * it away from wherever it pointed before; nothing else needs writing.
+ */
+export function setConnectionUse(settings, use, choice) {
+  const value = String(choice ?? '').trim();
+  if (use === 'translation') {
+    return value && value !== 'follow'
+      ? { ...settings, apiMode: 'independent', selectedChannelId: value }
+      : { ...settings, apiMode: 'follow' };
+  }
+  if (use === 'analysis') return { ...settings, tts: { ...settings.tts, analysisChannelId: value || 'follow' } };
+  if (use === 'deep') return { ...settings, tts: { ...settings.tts, deepChannelId: value } };
+  if (use === 'helper') return { ...settings, helper: { ...settings.helper, channelId: value || 'follow' } };
+  throw new Error(`未知用途：${use}`);
+}
+
+/** Which uses currently resolve to this connection id — for saying who is using a connection. */
+export function channelUsesPointingAt(settings, channelId) {
+  return CONNECTION_USES.filter(use => connectionUseChoice(settings, use) === channelId);
+}
+
+/**
+ * Deleting a connection cannot leave a use pointing at nothing still in the list, so every use it
+ * served moves to 跟随酒馆 first. 深度分析 is left to defer (its field stays '') when it was only
+ * following 朗读分析 to this connection — moving 朗读分析 already carries it along, and leaving the
+ * field empty means it keeps deferring afterwards instead of being pinned to today's fallback.
+ * Returns the adjusted settings and which uses moved, for whoever deletes the connection to say so.
+ */
+export function reassignConnectionUsesOnDelete(settings, channelId) {
+  const moved = [];
+  let next = settings;
+  if (connectionUseChoice(next, 'translation') === channelId) {
+    next = setConnectionUse(next, 'translation', 'follow');
+    moved.push('translation');
+  }
+  const deepOwnChoice = String(next?.tts?.deepChannelId ?? '').trim();
+  const analysisPointedHere = connectionUseChoice(next, 'analysis') === channelId;
+  if (analysisPointedHere) {
+    next = setConnectionUse(next, 'analysis', 'follow');
+    moved.push('analysis');
+  }
+  if (deepOwnChoice && deepOwnChoice === channelId) {
+    next = setConnectionUse(next, 'deep', 'follow');
+    moved.push('deep');
+  } else if (!deepOwnChoice && analysisPointedHere) {
+    moved.push('deep');
+  }
+  if (connectionUseChoice(next, 'helper') === channelId) {
+    next = setConnectionUse(next, 'helper', 'follow');
+    moved.push('helper');
+  }
+  return { settings: next, moved };
+}
+
+// ---------------------------------------------------------------------------------------------
+// 正常模式 · 翻译台 one-click packages (DESIGN §15.2 方案 C): 只看翻译 / 看得舒服 / 有声小说 / 全都要.
+// Each sets exactly the nine fields below and nothing else — 只留译文、流式写回、全部连接与密钥、提取标
+// 签、翻译规则文字、音色、主题 are never touched by a package, per the same section.
+//
+// The four packages' actual field values are a proposal — 镜译 has never shipped a package system
+// before this branch — chosen to read as a cost ladder (translation only → + display → + simple
+// reading → + deep reading, the priciest pass). They are pending 常夜灯's sign-off before a page ships
+// them; presetContent is the one place to change once that lands.
+// ---------------------------------------------------------------------------------------------
+
+export const PRESET_MANAGED_FIELDS = Object.freeze([
+  { key: 'autoGeneration', label: '自动接续翻译', path: Object.freeze(['autoGeneration']) },
+  { key: 'autoSwipe', label: '切换滑动页时补译', path: Object.freeze(['autoSwipe']) },
+  { key: 'coloringSpeakers', label: '说话人着色', path: Object.freeze(['coloring', 'speakers']) },
+  { key: 'coloringEmotions', label: '情绪排版', path: Object.freeze(['coloring', 'emotions']) },
+  { key: 'coloringEffects', label: '特效字', path: Object.freeze(['coloring', 'effects']) },
+  { key: 'ttsEnabled', label: '朗读功能', path: Object.freeze(['tts', 'enabled']) },
+  { key: 'ttsMode', label: '分析模式', path: Object.freeze(['tts', 'mode']) },
+  { key: 'ttsAutoRead', label: '新回复自动朗读', path: Object.freeze(['tts', 'autoRead']) },
+  { key: 'ttsPlayAfterGenerate', label: '点播放后做完直接播', path: Object.freeze(['tts', 'playAfterGenerate']) },
+]);
+
+export const PRESET_LABELS = Object.freeze({
+  light: '只看翻译',
+  comfort: '看得舒服',
+  audiobook: '有声小说',
+  everything: '全都要',
+});
+
+// The 药丸 pills DESIGN §15.2 names for three of the four cards; 有声小说 carries none.
+export const PRESET_TIER_LABELS = Object.freeze({ light: '最省', comfort: '推荐', everything: '最费' });
+
+const CONSOLE_PRESET_CONTENT = Object.freeze({
+  light: Object.freeze({
+    autoGeneration: true, autoSwipe: true,
+    coloringSpeakers: false, coloringEmotions: false, coloringEffects: false,
+    ttsEnabled: false, ttsMode: 'off', ttsAutoRead: false, ttsPlayAfterGenerate: true,
+  }),
+  comfort: Object.freeze({
+    autoGeneration: true, autoSwipe: true,
+    coloringSpeakers: true, coloringEmotions: true, coloringEffects: false,
+    ttsEnabled: false, ttsMode: 'off', ttsAutoRead: false, ttsPlayAfterGenerate: true,
+  }),
+  audiobook: Object.freeze({
+    autoGeneration: true, autoSwipe: true,
+    coloringSpeakers: true, coloringEmotions: true, coloringEffects: false,
+    ttsEnabled: true, ttsMode: 'simple', ttsAutoRead: true, ttsPlayAfterGenerate: true,
+  }),
+  everything: Object.freeze({
+    autoGeneration: true, autoSwipe: true,
+    coloringSpeakers: true, coloringEmotions: true, coloringEffects: true,
+    ttsEnabled: true, ttsMode: 'deep', ttsAutoRead: true, ttsPlayAfterGenerate: true,
+  }),
+});
+
+// Exported for helper.js's own suggestion-application logic (DESIGN §16.3's whitelisted `set`
+// suggestions read and write settings by the same dotted path as PRESET_MANAGED_FIELDS above).
+export function pathGet(object, path) {
+  return path.reduce((node, key) => (node === undefined || node === null ? undefined : node[key]), object);
+}
+
+export function pathSet(object, path, value) {
+  const [head, ...rest] = path;
+  if (!rest.length) return { ...object, [head]: value };
+  return { ...object, [head]: pathSet((object && typeof object === 'object' ? object[head] : undefined) ?? {}, rest, value) };
+}
+
+/** A package's content by field key, or null for an id that names no package (including ''). */
+export function presetContent(id) {
+  return CONSOLE_PRESET_CONTENT[id] ?? null;
+}
+
+/** Settings with one package's fields written and `preset` remembering which package that was. */
+export function applyPreset(settings, id) {
+  const content = presetContent(id);
+  if (!content) throw new Error(`没有这个套餐：${id}`);
+  let next = settings;
+  for (const field of PRESET_MANAGED_FIELDS) next = pathSet(next, field.path, content[field.key]);
+  return { ...next, preset: id };
+}
+
+/**
+ * The gap between what `settings.preset` last set and what the managed fields hold now: each field
+ * that no longer matches, with its label — the list 「看改了什么」 shows and `.length` is 「改过 N 项」.
+ * Empty when no package is remembered (`preset` is '') or every managed field still matches it.
+ */
+export function presetDrift(settings) {
+  const content = presetContent(settings?.preset);
+  if (!content) return [];
+  return PRESET_MANAGED_FIELDS
+    .filter(field => pathGet(settings, field.path) !== content[field.key])
+    .map(field => ({ key: field.key, label: field.label }));
 }
 
 function normalizePromptSection(value = {}, fallbackId = 'section-1') {
@@ -1025,6 +1683,10 @@ export function normalizeColoring(value) {
   return {
     speakers: Boolean(source.speakers),
     emotions: Boolean(source.emotions),
+    // A sub-switch: on paper it out-lives `speakers` in storage, but every reader (prompts.js
+    // `annotationRequest`, index.js `buildSegmentStyler`) checks `speakers && effects`, so turning
+    // speaker colouring off silently turns this off with it, exactly like a sub-switch under it should.
+    effects: Boolean(source.effects),
     minContrast: clampNumber(source.minContrast, 1.5, 21, DEFAULT_COLORING.minContrast),
     vividness: clampNumber(source.vividness, 0, 1, DEFAULT_COLORING.vividness),
     autoSpeakers: source.autoSpeakers === undefined ? DEFAULT_COLORING.autoSpeakers : Boolean(source.autoSpeakers),
@@ -1346,11 +2008,40 @@ export function normalizeTts(value) {
   };
 }
 
+// DESIGN §16.3: the prompt textarea leaves an empty value meaning "use the built-in default" (shown
+// as its placeholder) rather than storing the default text itself, so a later change to the built-in
+// default reaches every reader who never touched the field.
+const HELPER_PROMPT_MAX_LENGTH = 8000;
+
+export function normalizeHelper(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    channelId: String(source.channelId ?? '').trim().slice(0, 80) || DEFAULT_HELPER.channelId,
+    prompt: typeof source.prompt === 'string' ? normalizeNewlines(source.prompt).slice(0, HELPER_PROMPT_MAX_LENGTH) : '',
+  };
+}
+
+/** "默认" or "已改 N 字" — 模型连接「小助手的提示词」fold's summary (DESIGN §16.3). */
+export function helperPromptFoldSummary(helper = {}) {
+  const text = String(helper.prompt || '').trim();
+  return text ? `已改 ${text.length} 字` : '默认';
+}
+
 export function mergeSettings(value = {}) {
   const source = value && typeof value === 'object' ? value : {};
   const merged = { ...deepClone(DEFAULT_SETTINGS), ...source };
   const sourceSchemaVersion = clampInteger(source.schemaVersion, 0, 999, 0);
-  merged.schemaVersion = 12;
+  // A reader who has never saved anything here gets the small normal-mode rail; anything saved by
+  // schemaVersion 12 or earlier (or missing uiMode outright, which only an old save can do) lands in
+  // advanced mode instead, so every control it already relied on is still where it was. A round trip
+  // through this schemaVersion keeps whatever the reader picked.
+  merged.uiMode = Object.keys(source).length === 0
+    ? 'normal'
+    : (sourceSchemaVersion <= 12 || typeof source.uiMode !== 'string')
+      ? 'advanced'
+      : (UI_MODES.includes(source.uiMode) ? source.uiMode : 'advanced');
+  merged.preset = CONSOLE_PRESET_IDS.includes(source.preset) ? source.preset : '';
+  merged.schemaVersion = 13;
   merged.theme = ['day', 'night', 'fresh', 'vampire', 'glass'].includes(source.theme) ? source.theme : 'day';
   delete merged.chunkChars;
   delete merged.chunkSegments;
@@ -1473,6 +2164,11 @@ export function mergeSettings(value = {}) {
   if (merged.tts.deepChannelId && merged.tts.deepChannelId !== 'follow' && !merged.channels.some(channel => channel.id === merged.tts.deepChannelId)) {
     merged.tts.deepChannelId = '';
   }
+  // 小助手 is a shelf entry too (DESIGN §16.3): its own choice, resolved the same way 朗读分析's is —
+  // 'follow' stays 'follow', a deleted or never-set connection falls back to whatever the translation
+  // uses right now.
+  merged.helper = normalizeHelper(source.helper);
+  merged.helper.channelId = resolveFeatureChannel(merged.helper.channelId, merged);
   // Voices follow the character card for the same reason the palette does.
   merged.ttsVoices = {};
   const rawVoices = source.ttsVoices && typeof source.ttsVoices === 'object' ? source.ttsVoices : {};
@@ -1739,14 +2435,22 @@ export function stripGeneratedTranslationLines(text, metadata, view = 'source') 
     .replace(TRANSLATION_BLOCK_RE, '')
     .replace(SOURCE_BLOCK_RE, (_match, source) => stripLeftoverAffix(source.replace(AFFIX_RE, '')))
     .replace(GENERATED_BLOCK_RE, '')
+    // A lyric line's inline "(" / ")" / restored <br> (renderLyricPair) are marked affixes standing
+    // outside both blocks above, the only ones ever written there — every other marked affix has
+    // always been nested inside a source or translation block and is already gone by this point, so
+    // this pass is a no-op for a floor without lyric lines.
+    .replace(AFFIX_RE, '')
     .split('\n')
     .filter(line => !LEGACY_GENERATED_LINE_RE.test(line))
     .join('\n');
 }
 
+// `\n?`: an ordinary bilingual unit still writes the real newline that puts the translation on its own
+// line, but a lyric line's translation follows its source block on the very same line — see
+// renderLyricPair — with nothing at all between SOURCE_END and TRANSLATION_START to require here.
 function generatedBlockAfter(value) {
   const current = String(value ?? '');
-  const owned = current.match(new RegExp(`^\\n${TRANSLATION_START}([\\s\\S]*?)${TRANSLATION_END}`));
+  const owned = current.match(new RegExp(`^\\n?${TRANSLATION_START}([\\s\\S]*?)${TRANSLATION_END}`));
   if (owned) return { full: owned[0], text: owned[1].replace(AFFIX_RE, ''), modern: true, owned: true };
   const modern = current.match(new RegExp(`^\\n\\{${INVISIBLE_MARKER}([\\s\\S]*?)${INVISIBLE_MARKER}\\}(?=\\n|$)`));
   if (modern) return { full: modern[0], text: modern[1], modern: true };
@@ -1783,7 +2487,10 @@ export function extractGeneratedTranslations(text, options = {}) {
 
   for (const layoutPart of segmented.layout.filter(part => part.type === 'segment')) {
     const ids = Array.isArray(layoutPart.ids) && layoutPart.ids.length ? layoutPart.ids : [layoutPart.id];
-    const original = layoutPart.sourceText ?? layoutPart.text;
+    // renderLyricPair writes only the row's bare text (its own trailing <br>, if any, restored outside
+    // the source block) inside SOURCE_START/END, so a lyric part is looked up by that same bare text.
+    const rawOriginal = layoutPart.sourceText ?? layoutPart.text;
+    const original = layoutPart.lyric ? String(rawOriginal).replace(TRAILING_BR_RE, '') : rawOriginal;
     const ownedSources = new RegExp(SOURCE_BLOCK_RE.source, 'g');
     ownedSources.lastIndex = cursor;
     let match, start = -1, renderedSource = '';
@@ -2165,6 +2872,8 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   let translationUnits = 0;
   let customPreservedLines = 0;
   let builtinPreservedLines = 0;
+  let cardPreservedLines = 0;
+  let lyricLines = 0;
   const structuralTags = new Set();
   if (!errors.length && bodyResults.some(result => result.count)) {
     try {
@@ -2179,6 +2888,8 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
         translationUnits += segmented.segments.length;
         customPreservedLines += segmented.customPreservedLines;
         builtinPreservedLines += segmented.builtinPreservedLines;
+        cardPreservedLines += segmented.cardPreservedLines;
+        lyricLines += segmented.lyricLines;
         segmented.structuralTags.forEach(tag => structuralTags.add(tag));
         nextId += segmented.segments.length;
       }
@@ -2194,6 +2905,8 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
     translationUnits,
     customPreservedLines,
     builtinPreservedLines,
+    cardPreservedLines,
+    lyricLines,
     structuralTags: [...structuralTags].sort(),
     errors: [...new Set(errors)],
   };
@@ -2324,10 +3037,33 @@ function splitPhysicalLines(value) {
   return lines.map((text, index) => ({ text, separator: index < lines.length - 1 ? '\n' : '' }));
 }
 
-function stripStructuralTags(value, structuralTags) {
-  return String(value ?? '').replace(STRUCTURAL_TAG_RE, (_raw, name) => {
-    structuralTags?.add(String(name).toLowerCase());
-    return '';
+// Tags that begin a fresh line where they stand, matching the reading's own BREAK_RE (tts-sanitizer.js):
+// br/hr always, and the block containers whose OPEN tag starts a line and whose CLOSE tag ends one — a
+// container tag (ul/ol/table/section/article/header/footer) only on its CLOSE, since its own open holds
+// nothing but further block children that already break on their own.
+const BREAK_TAGS_ALWAYS = new Set(['br', 'hr']);
+const BREAK_TAGS_ON_OPEN = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'tr', 'pre', 'dd', 'dt']);
+const BREAK_TAGS_ON_CLOSE = new Set([...BREAK_TAGS_ON_OPEN, 'ul', 'ol', 'section', 'article', 'header', 'footer', 'table']);
+
+// `modern`: v0.36.1's rule for what a removed tag leaves behind. Off (segmentSource's old floors) a tag
+// always leaves nothing, exactly as every version through v0.36.0 read it — a card's "NOW PLAYING<br>A"
+// glued into "NOW PLAYINGA". On, <br> and a block edge leave the line break they stood for, so text
+// split only by markup is not glued into one run of words when it is sent to be translated; two inline
+// elements sitting right against each other with nothing of their own between them — "<span>A</span>
+// <span>B</span>" — leave the single space that already keeps every other such pair apart instead.
+function stripStructuralTags(value, structuralTags, options = {}) {
+  const source = String(value ?? '');
+  return source.replace(STRUCTURAL_TAG_RE, (raw, closing, name, offset) => {
+    const tag = String(name).toLowerCase();
+    structuralTags?.add(tag);
+    if (!options.modern) return '';
+    const breaks = BREAK_TAGS_ALWAYS.has(tag) || (closing ? BREAK_TAGS_ON_CLOSE.has(tag) : BREAK_TAGS_ON_OPEN.has(tag));
+    if (breaks) return '\n';
+    // Only a closer immediately followed by another element's opener needs this: an opener followed by
+    // more markup is only nesting deeper into the same run, two closers in a row are only unwinding one,
+    // and a tag next to real text already has that text to stand on its own.
+    const next = source.slice(offset + raw.length, offset + raw.length + 2);
+    return closing && next[0] === '<' && next[1] !== '/' ? ' ' : '';
   });
 }
 
@@ -2405,7 +3141,11 @@ export function speechMarkedLine(value) {
     return `${SPEECH_OPEN}${marks.length - 1}${SPEECH_SEP}`;
   });
   if (!marks.length) return null;
-  return { text: stripStructuralTags(replaced).trim(), marks };
+  // Struck through or painted invisible on itself, inside the marked dialogue or outside it: dropped
+  // before the tags are stripped, the same as an unmarked line's own reading text — see segmentSource's
+  // `readingText`. The private-use markers just written in for <say> survive: dropHiddenMarkup only
+  // matches ordinary `<tag>` syntax, never those code points.
+  return { text: stripStructuralTags(dropHiddenMarkup(replaced)).trim(), marks };
 }
 
 // Presentation tags a preset puts around a line of dialogue. The translation is sent to the model
@@ -2464,6 +3204,51 @@ function wrapperClosesAtEnd(rest, tag) {
   return null;
 }
 
+// A line-level <say> shell and, inside or outside it, the pair of story quotes wrapping the whole
+// line: neither is formatting to carry, but a preset writes the tags that ARE — <big><b> — between
+// them, not outside them, so both are looked past before the carryable tags are searched for. Neither
+// shell reappears in the return value: the translation writes its own quotes and never sees a <say>.
+function unwrapLineForFormatting(line) {
+  // A leading indent (plain or full-width), a trailing space, or a space just inside the <say> shell is
+  // never part of either wrapper: trimmed here so an indented or speaker-marked line finds its shell the
+  // same way an unmarked one already does. lineFormatting's own '^\s*<' and wrapperClosesAtEnd re-trim
+  // whatever this returns, so nothing about the untrimmed case changes.
+  const trimmedLine = String(line ?? '').trim();
+  const say = trimmedLine.match(SAY_SHELL_RE);
+  let body = say ? say[1].trim() : trimmedLine;
+  for (const [open, close] of SPEECH_OPENERS) {
+    if (body.length > open.length + close.length - 1 && body.startsWith(open) && body.endsWith(close)) {
+      body = body.slice(open.length, body.length - close.length);
+      break;
+    }
+  }
+  return body;
+}
+
+// The wrapper's own opening/closing tags when `body` really is wrapped whole in one to four nested
+// carryable tags, and really has text inside once they are peeled off — a body that is only tags has
+// nothing to carry, and a body with two sibling spans has no single wrapper to speak of. Shared by
+// `lineFormatting` (the whole line) and `lineQuoteFormats` (one quote's own content, §2 layer 2:
+// "整句引号内容被同一组标签包住"), which differ only in what substring of the line they hand in.
+function extractCarryableWrap(body) {
+  let content = body;
+  const opens = [];
+  const closes = [];
+  for (let depth = 0; depth < 4; depth += 1) {
+    const match = content.match(/^\s*<([A-Za-z][A-Za-z0-9]*)(?:\s[^<>]*?)?\s*>/);
+    if (!match) break;
+    const tag = match[1].toLowerCase();
+    if (!CARRYABLE_FORMAT_TAGS.has(tag)) break;
+    const closed = wrapperClosesAtEnd(content.slice(match[0].length), tag);
+    if (!closed) break;
+    opens.push(sanitizeFormatOpenTag(match[0], tag));
+    closes.unshift(`</${tag}>`);
+    content = closed.inner;
+  }
+  if (!opens.length || !stripStructuralTags(content).trim()) return null;
+  return { open: opens.join(''), close: closes.join('') };
+}
+
 /**
  * The presentation wrapper around a whole source line, ready to be re-applied to its translation.
  *
@@ -2471,22 +3256,138 @@ function wrapperClosesAtEnd(rest, tag) {
  * tags has nothing to carry, and a line with two sibling spans has no single wrapper to speak of.
  */
 export function lineFormatting(line) {
-  let body = String(line ?? '');
-  const opens = [];
-  const closes = [];
-  for (let depth = 0; depth < 4; depth += 1) {
-    const match = body.match(/^\s*<([A-Za-z][A-Za-z0-9]*)(?:\s[^<>]*?)?\s*>/);
-    if (!match) break;
-    const tag = match[1].toLowerCase();
-    if (!CARRYABLE_FORMAT_TAGS.has(tag)) break;
-    const closed = wrapperClosesAtEnd(body.slice(match[0].length), tag);
-    if (!closed) break;
-    opens.push(sanitizeFormatOpenTag(match[0], tag));
-    closes.unshift(`</${tag}>`);
-    body = closed.inner;
+  return extractCarryableWrap(unwrapLineForFormatting(line));
+}
+
+// The `<say>` shell peeled off, nothing else touched — unlike `unwrapLineForFormatting`, the outer
+// speech quotes stay on, because `lineQuoteFormats` needs to see every quote on the line, not just
+// treat the first and last as one wrapper around all of them.
+function sayShellInner(line) {
+  const trimmed = String(line ?? '').trim();
+  const say = trimmed.match(SAY_SHELL_RE);
+  return say ? say[1].trim() : trimmed;
+}
+
+/**
+ * Layer 2 of carrying the original's own typesetting into the translation (design §2 「原文自带的排版
+ * 怎么搬到译文」item 2): a line that is not wholly one carried wrapper (narration beside a quote, or
+ * more than one quote on the line — `lineFormatting` already returned null for it) can still have one
+ * or more of its own quotes entirely wrapped in carryable tags. No question is put to the translator
+ * for this layer: the k-th quote of the translation is simply given the k-th quote's own wrapper here,
+ * paired by order the same way `deriveLabelsForSide` already pairs quoted runs for speaker colouring.
+ *
+ * Returns one entry per quoted run of the line, in order — `null` for a run with nothing to carry —
+ * so the caller can zip it directly against `splitSpeechParts` run for run.
+ */
+// A quote mark used to delimit an attribute (`name="甲"`, `style="color:#c00"`) is not one of the
+// story's own quote marks; masked here, with a space in its place, so splitSpeechParts's count of
+// quotes on the line is not thrown off by it. Only characters inside a tag's own `<…>` span are
+// touched — never the length of the line, so every other position on it is unmoved.
+const SPEECH_MARK_CHARS = new Set([...SPEECH_OPENERS.keys(), ...SPEECH_OPENERS.values()]);
+function maskTagAttributeQuotes(text) {
+  return String(text ?? '').replace(/<[^<>]*>/g, tag => [...tag].map(character => SPEECH_MARK_CHARS.has(character) ? ' ' : character).join(''));
+}
+
+export function lineQuoteFormats(line) {
+  const body = sayShellInner(line);
+  // Quote boundaries are found on the masked copy, so an attribute's own quote marks never pair off
+  // against a real one; splitSpeechParts consumes every character of what it is given into some part
+  // or other, in order, so summing each part's own length walks the same offsets in `body` — and the
+  // *content* extractCarryableWrap sees is read back from `body` itself, attributes and all, rather
+  // than from the masked copy, so a carried tag's own real attributes are never the ones blanked out.
+  const masked = maskTagAttributeQuotes(body);
+  const wraps = [];
+  let offset = 0;
+  for (const part of splitSpeechParts(masked)) {
+    const start = offset;
+    offset += part.text.length;
+    if (!part.spoken) continue;
+    wraps.push(extractCarryableWrap(body.slice(start, offset).slice(1, -1)));
   }
-  if (!opens.length || !stripStructuralTags(body).trim()) return null;
-  return { open: opens.join(''), close: closes.join('') };
+  return wraps;
+}
+
+// A tag this run's own wrapper carried in the original that means the words were not actually said
+// out loud (design §2 「朗读怎么处理」: "删除线...涂黑...朗读时按存下的 runs 把这几个字去掉"): struck
+// through, or painted the same colour as its own background ("隐形涂黑"). The reading drops a run
+// marked this way; the display still shows it struck through or blacked out as always.
+function isHiddenCarryTag(tag, openTag) {
+  if (tag === 's' || tag === 'del' || tag === 'strike') return true;
+  return tag === 'span' && /background(?:-color)?\s*:\s*currentcolor/i.test(String(openTag ?? ''));
+}
+
+// A fragment small enough, and specific enough, to be worth carrying on its own rather than as part
+// of a whole line or a whole quote — half a sentence bolded, a move name bolded inside a narrated
+// paragraph. Found by scanning for the first, outermost carryable tag at every position in turn, left
+// to right, non-overlapping; nothing about the scan requires the fragment to be the line's or the
+// quote's entire content, which is what tells this layer apart from the two above.
+const INLINE_FORMAT_OPEN_RE = /<([A-Za-z][A-Za-z0-9]*)((?:\s[^<>]*)?)>/g;
+
+/**
+ * Layer 3, the structural half (design §2 item 3 「行内片段」): every carryable-tagged fragment inside
+ * one line that is not the line's entire content, in the order it appears, with the fragment's own
+ * plain text (what gets numbered and sent to the translator to place in its own words) and the exact
+ * wrapper to re-apply around whatever the translator says that fragment became.
+ *
+ * The scan's cursor jumps past whatever a found fragment closed on, so a fragment already claimed —
+ * the whole body (`lineFormatting`'s job), or an outer tag this same scan just matched — is never
+ * matched a second time from a tag nested inside it: `<b>bold <i>and italic</i> more</b>` carries once,
+ * as the outer `<b>…</b>`, with the inner `<i>` left as plain text once `stripStructuralTags` runs on
+ * its own content — a known simplification (report §「anything left undone」), not a rendering bug.
+ */
+export function inlineFormatRuns(line) {
+  const body = sayShellInner(line);
+  // `lineFormatting` (layer 1) unwraps the speech quotes too, before it looks for a whole-line
+  // wrapper — so on `<say>…「<big><b>…</b></big>」…</say>`, its own carryable-wrap span sits one
+  // character in from where this scan sees it (`sayShellInner` keeps the quotes on, on purpose, so
+  // `lineQuoteFormats` can still see every quote on the line). Comparing only against `body.trim()`
+  // therefore never matches for the single-quote-with-a-carried-wrapper shape, and the wrapper this
+  // scan found was carried a second time, nested inside the one layer 1 already carries.
+  const unwrapped = String(unwrapLineForFormatting(line) ?? '').trim();
+  const runs = [];
+  INLINE_FORMAT_OPEN_RE.lastIndex = 0;
+  let match;
+  while ((match = INLINE_FORMAT_OPEN_RE.exec(body))) {
+    const tag = match[1].toLowerCase();
+    if (!CARRYABLE_FORMAT_TAGS.has(tag)) continue;
+    const openTag = match[0];
+    const from = match.index + openTag.length;
+    const closed = wrapperClosesAtEndAnywhere(body, from, tag);
+    if (!closed) continue;
+    const span = body.slice(match.index, closed.end);
+    // The whole body, trimmed, or the whole body with its speech quotes peeled off the same way layer
+    // 1 peels them: either way `lineFormatting` already carries this one, as the whole line.
+    if (span === body.trim() || span === unwrapped) {
+      INLINE_FORMAT_OPEN_RE.lastIndex = closed.end;
+      continue;
+    }
+    const text = stripStructuralTags(closed.inner).trim();
+    INLINE_FORMAT_OPEN_RE.lastIndex = closed.end;
+    if (!text) continue;
+    runs.push({
+      text,
+      format: { open: sanitizeFormatOpenTag(openTag, tag), close: `</${tag}>` },
+      hidden: isHiddenCarryTag(tag, openTag),
+    });
+  }
+  return runs;
+}
+
+// Like `wrapperClosesAtEnd`, but the closing tag only has to be found somewhere in `source` from
+// `from` onward — an inline fragment usually has more of the line after it, which is exactly the case
+// `wrapperClosesAtEnd` (built for a wrapper that has to reach the line's own end) refuses.
+function wrapperClosesAtEndAnywhere(source, from, tag) {
+  const pattern = new RegExp(`<(/?)${tag}(?:\\s[^<>]*?)?\\s*(/?)>`, 'gi');
+  pattern.lastIndex = from;
+  let depth = 1;
+  let match;
+  while ((match = pattern.exec(source))) {
+    if (match[2] === '/') continue;
+    depth += match[1] === '/' ? -1 : 1;
+    if (depth > 0) continue;
+    return { inner: source.slice(from, match.index), end: match.index + match[0].length };
+  }
+  return null;
 }
 
 function isClosingTagOnlyLine(value) {
@@ -2497,7 +3398,125 @@ function isClosingTagOnlyLine(value) {
     && stripStructuralTags(source).trim() === '';
 }
 
-function isBuiltinPreservedLine(value) {
+// ---------------------------------------------------------------------------------------------
+// v0.37.0 「音乐卡片」 rule group and 「歌词行」 lyric lines.
+// ---------------------------------------------------------------------------------------------
+
+// A card row's own trailing line break, kept as a literal tag rather than folded into a real '\n' the
+// way segmentSource's usual <br>-to-break handling does — splitCardRows and the lyric renderers below
+// need to know a row had one (to restore it) without losing which exact spelling it was.
+const TRAILING_BR_RE = /(<br\s*\/?>)\s*$/i;
+
+// The one caption every such card is assumed to carry verbatim, decoration marks either side allowed
+// ("♪ NOW PLAYING ♪", "- NOW PLAYING -"): unambiguous, so it needs no rule of the reader's own.
+const MUSIC_CARD_CAPTION_RE = /^[^\p{L}\p{N}]*now\s*playing[^\p{L}\p{N}]*$/iu;
+// A row the card already wrote as "原文 (译文)": before v0.40.0 (segmentation_version 3) any Han
+// character inside the parens was enough, which also caught a still-untranslated parenthetical that
+// mixes kana into its kanji — a ruby reading, or a phrase like "Hoshi (星の歌)" — as if it were already
+// Chinese. An old floor keeps being read this way.
+const MUSIC_CARD_BILINGUAL_LEGACY_RE = /[(（][^()（）]*[一-鿿㐀-䶿][^()（）]*[)）]\s*$/u;
+// v0.40.0 and up: captures the parenthesised half so isCardBilingualRow can judge it the same way
+// looksAlreadyTranslatedLyric judges a lyric line — a CJK ideograph and no kana in it — so a
+// parenthetical with any kana in it is no longer taken for an already-translated row. A parenthetical
+// written entirely in kanji (a Japanese gloss such as あんた(貴方), with no kana to tell it apart from
+// Chinese) is still counted as already-translated, same as before this change — a known, accepted limit
+// shared with looksAlreadyTranslatedLyric itself (design §7 item 9).
+const MUSIC_CARD_BILINGUAL_RE = /[(（]([^()（）]*)[)）]\s*$/u;
+
+// Hiragana/katakana (no 'g' flag — see KANA_RE's own note above on why a global one is unsafe to
+// `.test()` repeatedly) and any CJK ideograph.
+const KANA_TEST_RE = /[ぁ-ゖゝ-ゟァ-ヺヽ-ヿㇰ-ㇿ]/u;
+const HAN_TEST_RE = /[一-鿿㐀-䶿]/u;
+
+/**
+ * Whether a candidate lyric line is already Chinese and so is not translated at all (design §2 「歌词
+ *怎么译、怎么排」: 中文歌词行不翻). Judged the same way `looksUntranslated` tells a returned translation
+ * apart from a still-Japanese one: kana is the tell. A Japanese lyric written entirely in on'yomi kanji
+ * carries none and is misjudged as Chinese too — a known, accepted limit (design §7 item 9).
+ */
+function looksAlreadyTranslatedLyric(text) {
+  const value = String(text ?? '');
+  return HAN_TEST_RE.test(value) && !KANA_TEST_RE.test(value);
+}
+
+/**
+ * Whether a row's trailing parenthesised half is itself Chinese — see MUSIC_CARD_BILINGUAL_RE. `v3`
+ * false reads it the pre-v0.40.0 way (MUSIC_CARD_BILINGUAL_LEGACY_RE), so an old floor's stored
+ * translations still match what it was actually segmented with.
+ */
+function isCardBilingualRow(text, v3) {
+  const value = String(text ?? '');
+  if (!v3) return MUSIC_CARD_BILINGUAL_LEGACY_RE.test(value);
+  const match = value.match(MUSIC_CARD_BILINGUAL_RE);
+  return Boolean(match) && looksAlreadyTranslatedLyric(match[1]);
+}
+
+/**
+ * One physical line, split at every `<br>` into the card's own rows — each becomes as independent a
+ * "line" as a real newline would have, for every purpose downstream (preserve rules, builtin decorative
+ * lines, lyric classification, formatting). A row keeps its own trailing `<br>` as literal text, so
+ * `sourceText`/`lineParts` reproduce the card's structure byte for byte; only the true last row (nothing
+ * split off after it) carries the physical line's own `separator` instead of one of its own.
+ *
+ * A physical line with no `<br>` in it at all comes back as the one row it always was — `fromBr: false`,
+ * `separator` unchanged — so a caller that never turns this on (musicCardRules off) never has to call it,
+ * and a caller that does pays nothing extra for the lines it does not affect.
+ */
+function splitCardRows(line) {
+  const pieces = String(line?.text ?? '').split(/(<br\s*\/?>)/i);
+  if (pieces.length < 2) return [line];
+  const rows = [];
+  let buffer = '';
+  for (const piece of pieces) {
+    if (/^<br\s*\/?>$/i.test(piece)) {
+      rows.push({ text: buffer + piece, separator: '', fromBr: true });
+      buffer = '';
+    } else {
+      buffer += piece;
+    }
+  }
+  // Whatever is left after the last <br> is the card's last row — no tag of its own to restore, but
+  // still "from" the same run of card rows, which is what tells apart, further down, a genuine blank
+  // trailing row from an ordinary physical line that merely happens to have no <br> anywhere in it.
+  rows.push({ text: buffer, separator: line.separator, fromBr: true });
+  return rows;
+}
+
+/**
+ * Whether a would-be run of card rows actually looks like a card at all — one of the three documented
+ * shapes: NOW PLAYING's own caption, a row already written "原文 (译文)", or a hit from the reader's own
+ * 「歌词行」 rules. Checked before a run of `<br>`-joined rows is even treated as a card (see `rawLines`
+ * in segmentSource), so ordinary prose that merely uses `<br>` for its own line breaks never reaches the
+ * catch-all that would otherwise assume every row it cannot otherwise classify is a lyric.
+ */
+function cardRowsShowSignal(rows, lyricRules, blocks, modern) {
+  return rows.some(row => {
+    if (!row.fromBr) return false;
+    const withoutExcluded = replaceMaskedBlocks(row.text, blocks, 'remove');
+    const translationText = withoutDecorativeSublines(
+      stripStructuralTags(withoutExcluded, null, { modern }).trim(),
+      { modern },
+    );
+    // Only called under musicCardRulesV3 (see rawLines in segmentSource), so the v3 bilingual test applies.
+    if (MUSIC_CARD_CAPTION_RE.test(translationText) || isCardBilingualRow(translationText, true)) return true;
+    const matchSubject = replaceMaskedBlocks(row.text, blocks, 'restore').replace(TRAILING_BR_RE, '');
+    return matchesPreserveLine(matchSubject, lyricRules.rules, { modern });
+  });
+}
+
+// A play-time readout — "01:23 / 04:56", with a played/total pair of m:ss clocks and whatever icons or
+// dashes a card decorates it with — never prose, even though the digits themselves pass the letter and
+// number test below. Two clocks are required so an ordinary sentence that happens to end in one time
+// ("11:30 に会おう。") is not caught by this rule.
+const PLAY_TIME_RE = /^[^\p{L}\p{N}\n]*\d{1,2}:\d{2}[^\p{L}\p{N}\n]*\/[^\p{L}\p{N}\n]*\d{1,2}:\d{2}[^\p{L}\p{N}\n]*$/u;
+// A pseudo waveform some players draw from tall, thin glyphs — ı l I | — never actual letters, though
+// each one alone is a real letter the general check above would keep as prose.
+const WAVEFORM_RE = /^[ılI|]+$/u;
+
+// `options.modern`: v0.36.1's two new built-in patterns, gated the same way as segmentSource's other
+// rules — see stripStructuralTags. Off (an old floor's own rules), only the general "no letters, no
+// digits" test applies, exactly as every version through v0.36.0 read a line.
+function isBuiltinPreservedLine(value, options = {}) {
   const visibleOf = text => text
     .replace(HTML_ENTITY_RE, '')
     .replace(/\\(?=[\\`*_{}\[\]()#+\-.!|<>])/g, '')
@@ -2506,7 +3525,36 @@ function isBuiltinPreservedLine(value) {
   if (!visibleOf(stripped)) return false;
   // What is left once the pictures are gone: a line of pictures alone has no words in it.
   const words = visibleOf(stripped.replace(MARKDOWN_IMAGE_RE, '').replace(EMPTY_MARKDOWN_LINK_RE, ''));
-  return !/[\p{L}\p{N}]/u.test(words);
+  if (!/[\p{L}\p{N}]/u.test(words)) return true;
+  if (!options.modern) return false;
+  if (PLAY_TIME_RE.test(words)) return true;
+  const compact = words.replace(/\s+/gu, '');
+  return compact.length >= 6 && WAVEFORM_RE.test(compact);
+}
+
+/**
+ * Whether a line of already-plain text (tags gone, as every reading and translation sees it) is one of
+ * the built-in decorative shapes segmentSource itself never sends translating or reading — a play-time
+ * readout or a pseudo waveform, on top of a line with no letters or digits in it at all. The one
+ * judgement shared by every path that decides this for itself instead of through segmentSource: the
+ * literal-tag fallback a translated floor with no mirror of its own falls back to (tts.js's
+ * linesFromTaggedText) is the other reader of it.
+ */
+export function isDecorativeLine(text) {
+  return isBuiltinPreservedLine(String(text ?? ''), { modern: true });
+}
+
+// A play-time readout or a pseudo waveform is judged by its own physical line, but stripStructuralTags's
+// modern rule can now fold several of a card's physical lines — joined only by <br> or a block edge —
+// into one, `\n`-separated "line" here (see stripStructuralTags). Judging the joined whole against
+// PLAY_TIME_RE/WAVEFORM_RE would never match (their anchors let neither pattern see past an embedded
+// `\n`), so a played/total clock or a waveform on its own <br>-joined sub-line would otherwise reach the
+// translator and the reader after all — exactly the card the built-in rule exists for. Sub-lines that
+// are themselves builtin-preserved are dropped before the whole is judged or sent anywhere; prose
+// sub-lines are kept, `\n` and all, so an ordinary multi-line card is untouched.
+function withoutDecorativeSublines(value, options = {}) {
+  if (!options.modern || !value.includes('\n')) return value;
+  return value.split('\n').filter(sub => !isBuiltinPreservedLine(sub.trim(), options)).join('\n').trim();
 }
 
 /** A line that is only pictures (Markdown or <img>), with nothing to translate or read beside them. */
@@ -2524,15 +3572,44 @@ export function segmentSource(text, options = {}) {
   const prefix = typeof options.segmentPrefix === 'string' ? options.segmentPrefix : '';
   const suffix = typeof options.segmentSuffix === 'string' ? options.segmentSuffix : '';
   const startId = clampInteger(options.startId, 1, Number.MAX_SAFE_INTEGER, 1);
+  // Which rule generation a floor's own segmentation_version speaks for: see SEGMENTATION_RULES_VERSION.
+  // A caller with no opinion gets the latest rules; a legacy (pre-schema-4) wrapper predates the option
+  // entirely and is always exactly version 1.
+  const segmentationRules = options.legacyWrappers === true ? 1
+    : (options.segmentationVersion == null ? SEGMENTATION_RULES_VERSION : Number(options.segmentationVersion));
+  // v0.36.1's built-in-regex fixes (version 2 and up).
+  const modern = segmentationRules >= 2;
+  // v0.40.0's 「音乐卡片」 tightening (version 3 and up) — see SEGMENTATION_RULES_VERSION's own note. An
+  // old floor keeps reading with the broader, unsignalled rules it was actually segmented and translated
+  // with, so its stored translations still match.
+  const musicCardRulesV3 = segmentationRules >= 3;
   const parsedRules = parsePreserveLineRulesWithErrors(options.preserveLineRules);
-  if (parsedRules.errors.length) throw new Error(parsedRules.errors.join(' '));
+  const lyricRules = parseLyricLineRulesWithErrors(options.lyricLineRules);
+  if (parsedRules.errors.length || lyricRules.errors.length) {
+    throw new Error([...parsedRules.errors, ...lyricRules.errors].join(' '));
+  }
   const { masked, blocks } = maskExcludedTags(source, options.excludedTags);
   const structuralTags = new Set();
   // Segment id → the line with its speaker marks as markers, for the reading; see speechMarkedLine.
   const speech = new Map();
+  // Segment id → the same segment read aloud instead of translated: struck-through and redacted text
+  // dropped, everything else the same. Only present when it differs from the segment's own `text` — a
+  // reader who has never touched this leaves every id out and pays nothing beyond that one check per
+  // line — so a caller looks it up with `reading.get(id) ?? segments[i].text`.
+  const reading = new Map();
+  // Every lyric segment's id, translated or not — collectTtsFloor reads this to skip them; the built-in
+  // decorative and card-preserved lines never need it, since they hold no segment id to skip.
+  const lyricIds = new Set();
+  // Segment id → that line's own layer-3 structural fragments (`inlineFormatRuns`, format and `hidden`
+  // included), the same list `segment.fragments` sent the translator the plain text of. Kept apart from
+  // `segment.fragments` because the reading (collectTtsFloor) needs `hidden` and `format`, which have no
+  // business riding in the request JSON a model reads.
+  const fragmentsById = new Map();
   let paragraphs = 0;
   let customPreservedLines = 0;
   let builtinPreservedLines = 0;
+  let cardPreservedLines = 0;
+  let lyricLines = 0;
   let body = masked;
   const leading = body.match(/^(?:[ \t]*\n)+/)?.[0] || '';
   if (leading) {
@@ -2570,32 +3647,125 @@ export function segmentSource(text, options = {}) {
     const unwrapped = options.legacyWrappers === true
       ? stripSegmentWrappers(maskedParagraph, prefix, suffix)
       : maskedParagraph;
-    const lines = splitPhysicalLines(unwrapped).map(line => {
+    const physicalLines = splitPhysicalLines(unwrapped);
+    // The 「音乐卡片」 group turns each <br>-joined card row into its own "physical line" before anything
+    // else runs, so every rule below (preserve, lyric, builtin, format) already applies per row with no
+    // further special-casing. Off (the default), splitCardRows is never called and this is the exact
+    // array `physicalLines` already was. Since musicCardRulesV3, a run of physical lines is only split
+    // this way when cardRowsShowSignal finds one of the three documented card shapes among the whole
+    // run's would-be rows, so ordinary prose that happens to use <br> stays the physical lines it always
+    // was, never fed to the lyric catch-all; an older floor keeps the broader, unconditional split it was
+    // segmented with.
+    const rawLines = options.musicCardRules === true ? (() => {
+      // The signal is judged once per run of *consecutive* physical lines that each have a <br> of their
+      // own, not once per physical line — a NOW PLAYING card pretty-printed with every row on its own
+      // source line only shows its signal on the caption's line, and every other row of that same card
+      // would otherwise lose lyric handling entirely (v0.40.0). A run of exactly one physical line (the
+      // ordinary case, several rows sharing one <br>-joined line) behaves exactly as before.
+      const result = [];
+      let run = [];
+      const flushRun = () => {
+        if (!run.length) return;
+        const split = !musicCardRulesV3 || cardRowsShowSignal(run.flatMap(item => item.rows), lyricRules, blocks, modern);
+        for (const item of run) result.push(...(split ? item.rows : [item.line]));
+        run = [];
+      };
+      for (const line of physicalLines) {
+        const rows = splitCardRows(line);
+        if (rows.length < 2) { flushRun(); result.push(line); continue; }
+        run.push({ line, rows });
+      }
+      flushRun();
+      return result;
+    })() : physicalLines;
+    // What `lineFormatting`/`lineQuoteFormats`/`inlineFormatRuns` all read: a card row's own trailing
+    // <br> dropped first, so a wrapper's closing tag right before it still looks like it closes at the
+    // row's end.
+    const formatSource = raw => (raw.fromBr ? raw.text.replace(TRAILING_BR_RE, '') : raw.text);
+    const lines = rawLines.map(line => {
       const sourceLine = replaceMaskedBlocks(line.text, blocks, 'restore');
       const withoutExcluded = replaceMaskedBlocks(line.text, blocks, 'remove');
       const lineStructuralTags = new Set();
-      const translationText = stripStructuralTags(withoutExcluded, lineStructuralTags).trim();
+      const translationText = withoutDecorativeSublines(
+        stripStructuralTags(withoutExcluded, lineStructuralTags, { modern }).trim(),
+        { modern },
+      );
       lineStructuralTags.forEach(tag => structuralTags.add(tag));
-      const customPreserved = matchesPreserveLine(sourceLine, parsedRules.rules);
+      // What the reading hears for this line when the story wrote no <say> mark on it: the same words
+      // as `translationText`, with whatever is struck through or painted invisible on itself dropped —
+      // that stays in `translationText`/segment.text untouched, so the translation still sees it and
+      // nothing about a segment's identity or hash changes. Skipped when nothing would differ, so a line
+      // with none of this markup costs nothing beyond the one `dropHiddenMarkup` no-op check.
+      const withoutHidden = dropHiddenMarkup(withoutExcluded);
+      const readingText = withoutHidden === withoutExcluded
+        ? translationText
+        : withoutDecorativeSublines(stripStructuralTags(withoutHidden, null, { modern }).trim(), { modern });
+      // A card row still carries its own trailing <br>, which a preserve/lyric rule written for the bare
+      // caption never expects (an exact rule "NOW PLAYING" would never match "NOW PLAYING<br>"). Matched
+      // against with that tag off, same as matchesPreserveLine already looks past a <say> shell.
+      const matchSubject = line.fromBr ? sourceLine.replace(TRAILING_BR_RE, '') : sourceLine;
+      const customPreserved = matchesPreserveLine(matchSubject, parsedRules.rules, { modern });
       const builtinPreserved = !customPreserved && (
-        isBuiltinPreservedLine(translationText)
+        isBuiltinPreservedLine(translationText, { modern })
         || (!translationText && lineStructuralTags.size > 0)
       );
       if (customPreserved) customPreservedLines += 1;
       if (builtinPreserved) builtinPreservedLines += 1;
-      const semantic = Boolean(translationText) && !customPreserved && !builtinPreserved;
+      // 「音乐卡片」 catches what a reader's own rules did not: the fixed NOW PLAYING caption and a row
+      // already written "原文 (译文)" are kept exactly as they are, never translated or read.
+      const cardCaption = options.musicCardRules === true && line.fromBr && !customPreserved && !builtinPreserved
+        && MUSIC_CARD_CAPTION_RE.test(translationText);
+      const cardBilingual = options.musicCardRules === true && line.fromBr && !customPreserved && !builtinPreserved
+        && isCardBilingualRow(translationText, musicCardRulesV3);
+      const cardPreserved = cardCaption || cardBilingual;
+      if (cardPreserved) cardPreservedLines += 1;
+      const lyricByRule = matchesPreserveLine(matchSubject, lyricRules.rules, { modern });
+      // "其余以 <br> 结尾的卡片行": whatever is left of a card row once the reader's own preserve and
+      // lyric rules and the two built-ins above have all had a turn is assumed to be a lyric line — the
+      // one guess this group makes, and the reason it defaults off (design §7 item 10).
+      const cardCatchAll = options.musicCardRules === true && line.fromBr
+        && !customPreserved && !builtinPreserved && !cardPreserved && !lyricByRule;
+      const lyricCandidate = Boolean(translationText) && !customPreserved && !builtinPreserved && !cardPreserved
+        && (lyricByRule || cardCatchAll);
+      const lyricChinese = lyricCandidate && looksAlreadyTranslatedLyric(translationText);
+      if (lyricCandidate) lyricLines += 1;
+      const lyric = lyricCandidate && !lyricChinese;
+      const semantic = Boolean(translationText) && !customPreserved && !builtinPreserved && !cardPreserved && !lyricChinese;
       return {
         source: sourceLine,
         separator: line.separator,
         translationText,
+        readingText,
         ...(semantic ? excludedAround(line.text, blocks) : { lead: '', trail: '' }),
         // Who says what, when the story marked it; kept beside the segment, never on it.
         speech: speechMarkedLine(withoutExcluded),
         semantic,
+        lyric,
+        // Carried through so the chunk-building below can tell a run of card rows apart from the
+        // ordinary line that may precede it (a card's first row always starts its own unit).
+        fromBr: Boolean(line.fromBr),
         closingTagOnly: isClosingTagOnlyLine(withoutExcluded),
-        // Read from the masked text so an excluded block inside the line cannot be mistaken for
-        // part of the wrapper; the tokens that stand in for it carry no angle brackets.
-        format: lineFormatting(line.text),
+        // `format`/`quoteFormats`/`inlineFragments` are all read off the masked text (via
+        // `formatSource`) so an excluded block inside the line cannot be mistaken for part of a
+        // wrapper — the tokens standing in for it carry no angle brackets. A card row's own trailing
+        // <br> is dropped first, so a wrapper's closing tag right before it still looks like it closes
+        // at the row's end.
+        ...(() => {
+          const source = formatSource(line);
+          const format = lineFormatting(source);
+          // Layers 2 and 3 of carrying the original's own typesetting (design §2): one quote-shaped
+          // wrapper per quoted run, and every smaller tagged fragment. Both are cheap, structural reads
+          // of the original alone — no different from `format` — so both are always computed; only
+          // rendering and the translation request itself are gated on 特效字 (index.js, prompts.js).
+          // A whole line already covered by `format` is not reported again by `lineQuoteFormats` too —
+          // the ordinary case of one line, one quote, would otherwise wrap `<b>` around it twice, once
+          // from each layer.
+          return {
+            format,
+            quoteFormats: format ? [] : lineQuoteFormats(source),
+            inlineFragments: inlineFormatRuns(source),
+          };
+        })(),
       };
     });
     const firstSemantic = lines.findIndex(line => line.semantic);
@@ -2624,8 +3794,17 @@ export function segmentSource(text, options = {}) {
           pendingRaw = '';
         }
         const segment = { id: startId + segments.length, text: line.translationText };
+        const fragments = line.inlineFragments ?? [];
+        // Same as the ordinary (non-paragraphPerLine) branch below: only present when this line
+        // actually carries one, so a line with nothing to carry costs nothing beyond the length check.
+        if (fragments.length) {
+          segment.fragments = fragments.map(fragment => fragment.text);
+          fragmentsById.set(segment.id, fragments);
+        }
         segments.push(segment);
         if (line.speech) speech.set(segment.id, line.speech);
+        if (line.readingText !== line.translationText) reading.set(segment.id, line.readingText);
+        if (line.lyric) lyricIds.add(segment.id);
         layout.push({
           type: 'segment',
           id: segment.id,
@@ -2633,8 +3812,13 @@ export function segmentSource(text, options = {}) {
           text: segment.text,
           sourceText: line.source,
           formats: [line.format ?? null],
+          // Layers 2 and 3 (design §2), aligned with `ids`/`formats` one entry per line — the same shape
+          // the ordinary branch's own chunk carries, so 特效字's carried formatting works in this mode too.
+          quoteFormats: [line.quoteFormats ?? []],
+          fragments: [fragments],
           lineParts: [{ semantic: true, source: line.source, lead: line.lead, trail: line.trail }],
           padAfter: index !== lastSemantic,
+          ...(line.lyric ? { lyric: true } : {}),
         });
         paragraphs += 1;
         if (separator) layout.push({ type: 'raw', text: separator });
@@ -2647,33 +3831,115 @@ export function segmentSource(text, options = {}) {
       return;
     }
 
-    const ids = [];
-    const unitTexts = [];
-    const unitFormats = [];
-    for (let index = firstSemantic; index <= lastIncluded; index += 1) {
-      const line = lines[index];
-      if (!line.semantic) continue;
-      const segment = { id: startId + segments.length, text: line.translationText };
-      segments.push(segment);
-      if (line.speech) speech.set(segment.id, line.speech);
-      ids.push(segment.id);
-      unitTexts.push(segment.text);
-      unitFormats.push(line.format ?? null);
+    // A lyric line never joins the surrounding narration's unit (design §3 「歌词行单独成单元」): the
+    // selected range is cut into chunks at every lyric line, each lyric line its own one-line chunk, the
+    // narration between them grouped exactly as the whole range used to be grouped as one.
+    const selectedAll = lines.slice(firstSemantic, lastIncluded + 1);
+    const chunks = [];
+    let current = [];
+    for (const line of selectedAll) {
+      if (line.lyric) {
+        if (current.length) chunks.push(current);
+        chunks.push([line]);
+        current = [];
+        continue;
+      }
+      // v0.40.0 (musicCardRulesV3): a card's first row must start its own unit too, never merge into
+      // the narration that precedes it. Only the transition from an ordinary line into a run of
+      // <br>-joined card rows forces this boundary — later rows of the same run still group with each
+      // other exactly as before. Gated the same as the rest of musicCardRulesV3, so an older floor's
+      // units still match what it was actually segmented and translated with.
+      if (musicCardRulesV3 && line.fromBr && current.length && !current[current.length - 1].fromBr) {
+        chunks.push(current);
+        current = [];
+      }
+      current.push(line);
     }
-    const sourceText = lines.slice(firstSemantic, lastIncluded + 1)
-      .map((line, index, selected) => `${line.source}${index < selected.length - 1 ? line.separator : ''}`)
-      .join('');
-    layout.push({
-      type: 'segment',
-      id: ids[0],
-      ids,
-      text: unitTexts.join('\n'),
-      sourceText,
-      formats: unitFormats,
-      // Every line of the unit in order, translatable or not: a replace-tag region rebuilds the
-      // paragraph from these so what is not for translation stays where it stood.
-      lineParts: lines.slice(firstSemantic, lastIncluded + 1)
-        .map(line => ({ semantic: line.semantic, source: line.source, lead: line.lead, trail: line.trail })),
+    if (current.length) chunks.push(current);
+
+    chunks.forEach((chunk, chunkIndex) => {
+      const isLastChunk = chunkIndex === chunks.length - 1;
+      // Every line but the chunk's own last one keeps its separator inside the unit; the chunk's own
+      // last line defers its separator to whatever follows the chunk — the same way the single unit
+      // this loop replaces always deferred `lines[lastIncluded]`'s own separator to `trailing` below.
+      const heldSeparator = (line, indexInChunk) => (indexInChunk < chunk.length - 1 ? line.separator : '');
+      if (chunk.length === 1 && chunk[0].lyric) {
+        const line = chunk[0];
+        const segment = { id: startId + segments.length, text: line.translationText };
+        segments.push(segment);
+        if (line.speech) speech.set(segment.id, line.speech);
+        if (line.readingText !== line.translationText) reading.set(segment.id, line.readingText);
+        lyricIds.add(segment.id);
+        layout.push({
+          type: 'segment',
+          id: segment.id,
+          ids: [segment.id],
+          text: segment.text,
+          sourceText: line.source,
+          formats: [line.format ?? null],
+          lineParts: [{ semantic: true, source: line.source, lead: line.lead, trail: line.trail }],
+          lyric: true,
+        });
+      } else {
+        const ids = [];
+        const unitTexts = [];
+        const unitFormats = [];
+        const unitQuoteFormats = [];
+        const unitFragments = [];
+        for (const line of chunk) {
+          if (!line.semantic) continue;
+          const fragments = line.inlineFragments ?? [];
+          const segment = { id: startId + segments.length, text: line.translationText };
+          // Only present when this line actually has one: a segment with nothing to carry costs the
+          // request payload (and every reader of `segments` that is not this feature) nothing.
+          if (fragments.length) {
+            segment.fragments = fragments.map(fragment => fragment.text);
+            fragmentsById.set(segment.id, fragments);
+          }
+          segments.push(segment);
+          if (line.speech) speech.set(segment.id, line.speech);
+          if (line.readingText !== line.translationText) reading.set(segment.id, line.readingText);
+          ids.push(segment.id);
+          unitTexts.push(segment.text);
+          unitFormats.push(line.format ?? null);
+          unitQuoteFormats.push(line.quoteFormats ?? []);
+          unitFragments.push(fragments);
+        }
+        const sourceText = chunk.map((line, index) => `${line.source}${heldSeparator(line, index)}`).join('');
+        if (ids.length) {
+          layout.push({
+            type: 'segment',
+            id: ids[0],
+            ids,
+            text: unitTexts.join('\n'),
+            sourceText,
+            formats: unitFormats,
+            // Aligned with `ids`/`formats`, one entry per line: layer 2's per-quote wrappers and layer
+            // 3's structural fragments (design §2). Both travel with the layout the same way `formats`
+            // already does — recomputed fresh from the original each time, never stored — so a restyle
+            // that re-runs `segmentSource` on the kept original sees them again without asking anybody.
+            quoteFormats: unitQuoteFormats,
+            fragments: unitFragments,
+            // Every line of the unit in order, translatable or not: a replace-tag region rebuilds the
+            // paragraph from these so what is not for translation stays where it stood. `separator` is
+            // the same value `sourceText` above was actually built with — a card row's own trailing
+            // <br> already is the break (separator ''), an ordinary physical-line boundary is '\n' —
+            // so replaceUnitBody can join with what really separated these lines instead of assuming
+            // '\n' for all of them (v0.40.0).
+            lineParts: chunk.map((line, index) => (
+              { semantic: line.semantic, source: line.source, lead: line.lead, trail: line.trail, separator: heldSeparator(line, index) }
+            )),
+          });
+        } else {
+          // A run of nothing but preserved/card-caption lines between two lyric lines: nothing to
+          // translate here, so it stands exactly as written, same as any other preserved run.
+          layout.push({ type: 'raw', text: sourceText });
+        }
+      }
+      if (!isLastChunk) {
+        const lastLine = chunk[chunk.length - 1];
+        if (lastLine.separator) layout.push({ type: 'raw', text: lastLine.separator });
+      }
     });
     paragraphs += 1;
 
@@ -2699,8 +3965,13 @@ export function segmentSource(text, options = {}) {
     paragraphs,
     customPreservedLines,
     builtinPreservedLines,
+    cardPreservedLines,
+    lyricLines,
     structuralTags: [...structuralTags].sort(),
     speech,
+    reading,
+    lyricIds,
+    fragmentsById,
   };
 }
 
@@ -2734,7 +4005,12 @@ export function createTranslationSignature(regions) {
   })));
 }
 
-function unwrapResponseContent(raw) {
+// Exported so callers whose reply is not itself translation JSON (小助手's free-text answer, say)
+// can still unwrap the same { content, reasoning } / nested-content envelope parseJsonCandidates and
+// recoverStructuredTranslations already unwrap here, instead of re-deriving it (review finding
+// helper.js:616: askHelper handed an independent connection's raw { content, reasoning } object
+// straight to String(), which read as "[object Object]").
+export function unwrapResponseContent(raw) {
   let value = raw;
   for (let depth = 0; depth < 3; depth += 1) {
     if (!value || typeof value !== 'object') break;
@@ -2988,13 +4264,48 @@ export function readQuoteMark(entry) {
   return mark ? { ...(head ? { head } : {}), ...mark } : null;
 }
 
-// A line's mark, plus one mark per quoted run when the reading asked for them. Whatever is not a mark
-// is dropped without a word.
+// 1–3, whatever a model answers (see palette.js `normalizeMoveTier`, which clamps the same way for a
+// mark read back out of storage): core.js stays independent of palette.js's colour maths, so the
+// clamp is repeated here rather than imported.
+function clampMoveTier(value) {
+  const number = Math.round(Number(value));
+  return Number.isFinite(number) ? Math.min(3, Math.max(1, number)) : 1;
+}
+
+// One move (招式/技能/法宝) the translator named inside this item: what it is called, what it draws
+// on, and how big a deal it is. `element` and `tier` are free-form enough that a model rarely leaves
+// them out, so both default rather than dropping the whole move for want of one — the colour maths
+// (palette.js `resolveMoveStyle`) already falls back to a name-derived hue when `element` is empty.
+export function readMoveMark(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const name = exampleFree(entry.name ?? entry.move ?? entry.title).slice(0, 24);
+  if (!name) return null;
+  const element = exampleFree(entry.element ?? entry.attribute ?? entry.type).slice(0, 12);
+  return { name, element, tier: clampMoveTier(entry.tier ?? entry.level) };
+}
+
+// A run's own text is checked against the item's `text` before it is trusted anywhere (design §2
+// item 4: "找不到的丢掉"); this only shapes the raw string the model wrote, the same way `word()` above
+// shapes a stress or a pause.
+function readCarriedRunText(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
+// A line's mark, plus one mark per quoted run when the reading asked for them, this item's own moves
+// and the translated text of its carried-format runs (特效字 — see core.js `inlineFormatRuns`, which
+// is what numbered the fragments this answers, in the same order). Whatever is not a mark is dropped
+// without a word.
 function readAnnotation(object) {
   if (!object || typeof object !== 'object') return null;
   const fields = readAnnotationFields(object) ?? {};
   const quotes = (Array.isArray(object.quotes) ? object.quotes : []).slice(0, 12).map(readQuoteMark).filter(Boolean);
   if (quotes.length) fields.quotes = quotes;
+  const moves = (Array.isArray(object.moves) ? object.moves : []).slice(0, 6).map(readMoveMark).filter(Boolean);
+  if (moves.length) fields.moves = moves;
+  if (Array.isArray(object.runs) && object.runs.length) {
+    const runs = object.runs.slice(0, 12).map(readCarriedRunText);
+    if (runs.some(Boolean)) fields.runs = runs;
+  }
   return Object.keys(fields).length ? fields : null;
 }
 
@@ -3082,6 +4393,15 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
   const TEXT_KEYS = ['text', 'chinese', 'translation', 'zh', 'cn', 'id', 'segment_id', 'segmentId', 'index'];
   const ID_KEYS = ['id', 'segment_id', 'segmentId', 'index'];
   const runMarks = new Set();
+  // An item's own `runs` (特效字 layer 3, prompts.js) is a plain array of strings, not objects — the
+  // same bracket scan that recovers a truncated JSON reply also finds this array on its own and hands
+  // it to `translationItems` as if it were the top-level `translations` array, each of its strings then
+  // read as an id-less translation. `isRunMark` below only ever catches an *object* item; a `runs`
+  // entry is a bare string, so nothing stops it from joining `items` and, having no id, throwing off
+  // the position count `items.length === expected.length` gates the id-less recovery fallback on. The
+  // fix is not to filter it back out item by item but to never walk into it as a fallback list of
+  // items at all: its own signature is recorded here and the candidate is skipped outright below.
+  const consumedRunArrays = new Set();
   const collectRuns = value => {
     if (Array.isArray(value)) {
       value.forEach(collectRuns);
@@ -3089,12 +4409,14 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
     }
     if (!value || typeof value !== 'object') return;
     if (Array.isArray(value.quotes)) for (const quote of value.quotes) if (quote && typeof quote === 'object') runMarks.add(JSON.stringify(quote));
+    if (Array.isArray(value.runs)) consumedRunArrays.add(JSON.stringify(value.runs));
     for (const key of ['translations', 'items', 'results', 'data']) if (Array.isArray(value[key])) value[key].forEach(collectRuns);
   };
   parsedCandidates.forEach(collectRuns);
   const isRunMark = item => item && typeof item === 'object' && !Array.isArray(item)
     && (!TEXT_KEYS.some(key => Object.hasOwn(item, key)) || (!ID_KEYS.some(key => Object.hasOwn(item, key)) && runMarks.has(JSON.stringify(item))));
   for (const parsed of parsedCandidates) {
+    if (Array.isArray(parsed) && consumedRunArrays.has(JSON.stringify(parsed))) continue;
     for (const item of translationItems(parsed)) {
       if (isRunMark(item)) continue;
       const signature = typeof item === 'string' ? `text:${item}` : `json:${JSON.stringify(item)}`;
@@ -3185,8 +4507,12 @@ export function assembleBilingual(layout, translationMap, options = {}) {
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
     const missingIds = ids.filter(id => !translationMap.get(id));
     if (missingIds.length && !allowMissing) throw new Error(`缺少第 ${missingIds.join('、')} 段译文。`);
+    if (part.lyric) {
+      pieces.push(renderLyricPair(part, translationMap.get(ids[0]), options));
+      continue;
+    }
     pieces.push(renderSourceBlock(part.sourceText ?? part.text, options));
-    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''));
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''), part.quoteFormats, part.fragments);
     const body = translationUnitBody(part, ids, translationMap, options, decoration);
     if (body) {
       pieces.push(`\n${renderTranslationBlock(body, {
@@ -3203,6 +4529,67 @@ export function assembleBilingual(layout, translationMap, options = {}) {
 
 function markedAffix(value) {
   return value ? `${AFFIX_START}${value}${AFFIX_END}` : '';
+}
+
+// The exact marked-affix bytes a lyric pair's parentheses are written with — restyleBilingual matches
+// against these literally to tell a lyric block apart from an ordinary one without any layout of its
+// own to consult (it works by regex over the raw floor text alone).
+const LYRIC_OPEN_AFFIX = markedAffix(' (');
+const LYRIC_CLOSE_AFFIX = markedAffix(')');
+
+/**
+ * A lyric line, bilingual mode: "原文 (译文)" on one visible line, the restored `<br>` (if the row had
+ * one) ending it — see design §2 「歌词怎么译、怎么排」 and §3 item 2. `generatedBlockAfter`'s leading
+ * `\n?` is what lets the translation block sit right after the source block with nothing between them.
+ *
+ * The opening "(" rides inside the source block itself, as the block's own trailing affix, so
+ * `extractGeneratedTranslations`/`restyleBilingual` never need to look past anything between
+ * `SOURCE_END` and `TRANSLATION_START` — there is nothing there. The closing ")" is a marked affix,
+ * the `<br>` bare text: read-back strips the punctuation and keeps the tag, which is what lets the
+ * card's own line structure survive a re-translation (segmentSource sees the same `<br>`-ended row).
+ */
+function renderLyricPair(part, translation, options = {}) {
+  const trailingBr = String(part?.sourceText ?? '').match(TRAILING_BR_RE);
+  const bareSource = trailingBr ? part.sourceText.slice(0, trailingBr.index) : String(part?.sourceText ?? '');
+  const trailer = trailingBr ? trailingBr[1] : '';
+  // No translation yet (a partial write, mid-stream, or a row withoutUntranslated dropped): the row's
+  // own trailing <br> has to go back exactly where it came from, and without a translation there is no
+  // " (" to open — writing it here would leave a dangling affix with nothing to close it, and the very
+  // next line's <br> gone with it.
+  if (!translation) return `${SOURCE_START}${bareSource}${SOURCE_END}${trailer}`;
+  const sourceBlock = `${SOURCE_START}${bareSource}${LYRIC_OPEN_AFFIX}${SOURCE_END}`;
+  const translationBlock = `${TRANSLATION_START}${String(translation)}${TRANSLATION_END}`;
+  return `${sourceBlock}${translationBlock}${LYRIC_CLOSE_AFFIX}${trailer}`;
+}
+
+/**
+ * A lyric line, replace mode: still "原文 (译文)" in place (design §2, same as bilingual/只留译文), but
+ * built as an ordinary replace pair — visible SOURCE-block position, hidden original — instead of
+ * `renderLyricPair`'s own SOURCE+TRANSLATION shape, which has no hidden block at all for a replace
+ * region's reader (`extractReplaceTranslations`) to find: the lyric id was never in `existingTranslations`,
+ * so the row was re-sent on every run, and the main model saw the original in its prompt (stripped down
+ * to whatever a plain SOURCE block holds) instead of the translation replace mode is supposed to show it.
+ *
+ * "原文 (" and ")" ride as marked affixes either side of the bare translation, exactly like the visible
+ * decoration around an ordinary replace segment's translation — `extractReplaceTranslations` already
+ * strips every marked affix off a pair's translation half (`AFFIX_RE`), so it reads the plain translation
+ * straight out from between them with no changes of its own needed.
+ *
+ * The row's own trailing `<br>` (if it had one), like `renderLyricPair`'s, is bare text outside every
+ * block rather than folded into either half: inside the hidden block it would double up on restore (the
+ * source view already gets it back once, from the hidden bare source that keeps it); inside the visible
+ * half it would vanish from the prompt view along with the rest of that half's marked affixes, taking the
+ * card's own line break out of what the main model sees with it. Kept bare after the whole pair, it
+ * survives both.
+ */
+function renderReplaceLyricPair(part, translation, options = {}) {
+  const sourceFull = String(part?.sourceText ?? '');
+  const trailingBr = sourceFull.match(TRAILING_BR_RE);
+  const bareSource = trailingBr ? sourceFull.slice(0, trailingBr.index) : sourceFull;
+  const trailer = trailingBr ? trailingBr[1] : '';
+  if (!translation) return sourceFull; // Not translated yet: stay as plain original text, ready for 补译.
+  const visible = `${markedAffix(`${bareSource} (`)}${String(translation)}${markedAffix(')')}`;
+  return `${SOURCE_START}${visible}${SOURCE_END}\n${HIDDEN_START}${bareSource}${HIDDEN_END}${trailer}`;
 }
 
 /**
@@ -3239,11 +4626,11 @@ function translationUnitBody(part, ids, translationMap, options, decoration = {}
 // Speaker and emotion styling rides inside the same invisible affix markers the visible prefixes
 // use. That is the whole trick: nothing new has to learn how to strip it, the main model's prompt
 // never sees it, and a floor written with colouring on reads back identically with it off.
-function segmentDecoration(styleFor, ids, texts = []) {
+function segmentDecoration(styleFor, ids, texts = [], quoteFormats = [], fragments = []) {
   if (typeof styleFor !== 'function') return {};
   let decoration;
   try {
-    decoration = styleFor(ids, texts);
+    decoration = styleFor(ids, texts, quoteFormats, fragments);
   } catch {
     return {}; // A palette problem must never cost the reader their translation.
   }
@@ -3343,6 +4730,17 @@ export function liftSplitQuotes(pieces) {
   return lifted;
 }
 
+// Written into a move's own span (below) so a later restyle (`restyleBilingual`) can recompute its
+// colour against a new band without needing the chat's own annotations again. A move's name or element
+// is otherwise free-form model output, so it is escaped exactly like an ordinary HTML attribute value.
+function escapeMoveAttribute(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function unescapeMoveAttribute(value) {
+  return String(value ?? '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+}
+
 // `id` is the line's segment id, so a unit with more than one speaker in it can paint each line's
 // quoted runs by that line's own marks.
 function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) {
@@ -3364,18 +4762,239 @@ function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) 
   pieces = liftSplitQuotes(pieces);
   // Nothing to carry means nothing to wrap: a line split into runs that all came back bare is the
   // line itself, and wrapping it would only add markers for a reader to strip later.
-  if (!pieces.some(piece => piece?.css || piece?.className)) return translation;
+  if (!pieces.some(piece => piece?.css || piece?.className || piece?.rawOpen || piece?.rawClose)) return translation;
   return pieces
     .map(piece => {
       const attributes = [
         piece.className ? `class="${piece.className}"` : '',
         piece.css ? `style="${piece.css}"` : '',
+        // A move's own element/name/tier (index.js `moveStyleFor`), carried on the span so a restyle
+        // can recolour it later without the chat's annotations — see `recolorMoveSpans` below.
+        piece.moveElement !== undefined ? `data-jy-move-element="${escapeMoveAttribute(piece.moveElement)}"` : '',
+        piece.moveName !== undefined ? `data-jy-move-name="${escapeMoveAttribute(piece.moveName)}"` : '',
+        piece.moveTier !== undefined ? `data-jy-move-tier="${escapeMoveAttribute(piece.moveTier)}"` : '',
+        // 字号二选一 (design §2 item 4): this move was carved out of a piece that was itself a <big>/
+        // <small> carried fragment, so `carvedCss` already dropped its own font-size for this render
+        // (`piece.dropSurroundingCss` rides onto the move piece unchanged — moves carry no such field of
+        // their own to override it with). A later restyle (`recolorMoveSpans`) rebuilds this span's style
+        // from scratch against a new band, with only the span's own attributes to go on and no piece tree
+        // left to ask, so the same choice has to survive as a marker here or the size comes back.
+        piece.moveElement !== undefined && piece.dropSurroundingCss ? 'data-jy-move-nosize="1"' : '',
       ].filter(Boolean).join(' ');
-      return attributes
+      const inner = attributes
         ? `${wrap(`<span ${attributes}>`)}${piece.text}${wrap('</span>')}`
         : piece.text;
+      // `rawOpen`/`rawClose` are literal carried tags (layer 2's quote wrapper, §2 「原文自带的排版怎么
+      // 搬到译文」) wrapped OUTSIDE whatever colour span the piece already got — the same nesting layer
+      // 1's own `format.open`/`format.close` sit at around the whole line, just per-run instead.
+      return piece.rawOpen || piece.rawClose ? `${wrap(piece.rawOpen ?? '')}${inner}${wrap(piece.rawClose ?? '')}` : inner;
     })
     .join('');
+}
+
+// `dropSurroundingCss`'s own job (design §2 "字号二选一"): a fragment carried as <big>/<small> is its
+// own size decision, so only the font-size the piece it sat inside was already carrying — an emotion's
+// rhythm scale, most often — is dropped. Everything else the piece's `css` held (a speaker's colour,
+// most often) rides through untouched, so a carried fragment inside a painted quote keeps that colour.
+function dropSizeCss(css) {
+  if (!css) return css ?? '';
+  return css.split(';').map(part => part.trim()).filter(part => part && !/^font-size\s*:/i.test(part)).join(';');
+}
+
+// One longest-first carving pass, deciding both moves and layer 3's carried fragments together. Each
+// run in `ordered` is found by its first remaining occurrence and cut into its own piece; `...run`
+// rides onto the carved piece ahead of the computed fields below, so any field a caller put on the run
+// (a move's `moveElement`/`moveName`/`moveTier`, say) reaches the rendered piece without this function
+// having to know its name.
+//
+// A carried run (one with `rawOpen`/`rawClose`) may never land inside a piece any earlier run of
+// *either* kind already carved — its job is to claim the whole span its tag covered, and a piece a move
+// already cut up has no single span left to find it by. A move's own colour run is not held to that:
+// it may still be cut out of a piece a carried run just produced, which is what lets a move landing
+// inside an already-carried half-sentence still get coloured, inside that run's own wrapper — it only
+// ever skips a piece another move already claimed, or one carried fully invisible (`hidden`, design §2
+// 涂黑/删除线): a move's own colour would make a blacked-out or struck-through name readable again, so
+// it is left inside the hidden piece uncoloured instead of carved out on its own.
+//
+// The one exception to "never land inside a piece an earlier run already carved" is a hidden carried
+// run meeting a move piece: when the move's own name is *longer* than the hidden span inside it (a name
+// carrying a blacked-out prefix, say), the move is carved first (longest-first) and would otherwise
+// leave nothing behind for the hidden run to find — the redaction would vanish and its characters would
+// render in the move's colour, the exact leak this run exists to prevent. That fallback is a last resort
+// only, tried in its own pass once every piece has had its chance at a standalone home for the run first
+// (below carveRuns' two main passes): a hidden run whose text also occurs outside the move's own name
+// must find *that* occurrence, or the standalone one stays legible while the in-move one gets redacted
+// for no reason. Only when nothing else claims it does it carve out of the move-applied piece instead,
+// and the piece it takes does not keep the move's own colour or its data-jy-move-* identity: leaving
+// either would let a later restyle's recolorMoveSpans (core.js, which matches by that same data
+// attribute and adds a `style` back onto a tag missing one) repaint or re-tag exactly the characters
+// this run hides. Whatever text of the move piece is left over keeps the move's colour as it did before,
+// since none of it is hidden.
+//
+// 字号二选一 (design §2 item 4): a run carved out of a piece that is itself a <big>/<small> carried
+// fragment (`piece.dropSurroundingCss`, set on that fragment's own run and carried forward on every piece
+// it produced) must not add its own `font-size` on top of the wrapper's — the wrapper already made that
+// size decision. A carried run with no `css` of its own instead drops any font-size the *piece* it is cut
+// from was carrying, the same rule from the other side.
+function carvedCss(run, piece) {
+  return run.css !== undefined
+    ? (piece.dropSurroundingCss ? dropSizeCss(run.css) : run.css)
+    : (run.dropSurroundingCss ? dropSizeCss(piece.css) : piece.css);
+}
+
+function carveRuns(pieces, ordered) {
+  let result = pieces;
+  const placed = new Set();
+  for (const run of ordered) {
+    const carried = Boolean(run.rawOpen || run.rawClose);
+    const flag = carried ? 'runApplied' : 'moveApplied';
+    let claimed = false;
+    const next = [];
+    for (const piece of result) {
+      const text = piece?.text ?? '';
+      // moveApplied blocks a carried run exactly as it blocks another move -- a standalone occurrence
+      // elsewhere in the line always wins over one sitting inside a move's own name. A hidden run with no
+      // standalone occurrence anywhere still gets a piece to carve, just not here: see the last-resort
+      // pass below, tried only once this pass and the nesting one after it have both had their turn.
+      const blocked = carried ? Boolean(piece.runApplied || piece.moveApplied) : Boolean(piece.moveApplied || piece.hidden);
+      const at = !claimed && !blocked ? text.indexOf(run.text) : -1;
+      if (at < 0) {
+        next.push(piece);
+        continue;
+      }
+      claimed = true;
+      if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
+      next.push({
+        ...piece,
+        ...run,
+        css: carvedCss(run, piece),
+        className: run.className ?? piece.className,
+        // A run with no wrapper of its own (a move) keeps whatever wrapper the piece it was cut from
+        // already had, instead of erasing it.
+        rawOpen: run.rawOpen ?? piece.rawOpen,
+        rawClose: run.rawClose ?? piece.rawClose,
+        // A carried run's own `hidden` (index.js `carriedRunsFor`) rides onto the piece it produced, so
+        // a move carved out of it later still sees it; a move run carries none of its own, so it falls
+        // back to whatever the piece already had.
+        hidden: run.hidden ?? piece.hidden,
+        [flag]: true,
+      });
+      const rest = text.slice(at + run.text.length);
+      if (rest) next.push({ ...piece, text: rest });
+    }
+    if (claimed) placed.add(run);
+    result = next;
+  }
+  // The source cannot nest fragments (inlineFormatRuns jumps past each one it finds), but the
+  // translator's own answer can still make one carried run's text sit only inside another carried run's
+  // already-carved span (word reordering, most often). The pass above never lets a carried run land
+  // there (a carried run may never land inside a piece any earlier run of either kind already carved,
+  // the whole point of "carried" being to claim its own span), so that run's own wrapper — a struck-
+  // through or blacked-out fragment, `run.hidden` most often — would otherwise disappear entirely and
+  // render as plain, legible text. Nested inside that span instead, both wrappers apply: the outer
+  // fragment's tag stays on the rest of its own text, the inner run's tag (and `hidden`) wraps only its
+  // own characters.
+  for (const run of ordered) {
+    if (placed.has(run) || !(run.rawOpen || run.rawClose)) continue;
+    let claimed = false;
+    const next = [];
+    for (const piece of result) {
+      const text = piece?.text ?? '';
+      const at = !claimed && piece.runApplied && !piece.moveApplied ? text.indexOf(run.text) : -1;
+      if (at < 0) {
+        next.push(piece);
+        continue;
+      }
+      claimed = true;
+      if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
+      next.push({
+        ...piece,
+        ...run,
+        css: carvedCss(run, piece),
+        className: run.className ?? piece.className,
+        rawOpen: `${piece.rawOpen ?? ''}${run.rawOpen ?? ''}`,
+        rawClose: `${run.rawClose ?? ''}${piece.rawClose ?? ''}`,
+        hidden: Boolean(run.hidden) || Boolean(piece.hidden),
+        runApplied: true,
+      });
+      const rest = text.slice(at + run.text.length);
+      if (rest) next.push({ ...piece, text: rest });
+    }
+    if (claimed) placed.add(run);
+    result = next;
+  }
+  // The last-resort pass promised above: a hidden carried run still unplaced after both a standalone
+  // occurrence (the main pass) and a nested one inside another carried run's span (just above) may now
+  // carve out of a piece a move already claimed, so its redaction is not lost entirely. Tried last, and
+  // only for a run that is both hidden and still unplaced, so a standalone occurrence anywhere else in
+  // the line is always preferred over reaching into a move's own name for the same text.
+  for (const run of ordered) {
+    if (placed.has(run) || !run.hidden || !(run.rawOpen || run.rawClose)) continue;
+    let claimed = false;
+    const next = [];
+    for (const piece of result) {
+      const text = piece?.text ?? '';
+      const at = !claimed && piece.moveApplied && !piece.runApplied ? text.indexOf(run.text) : -1;
+      if (at < 0) {
+        next.push(piece);
+        continue;
+      }
+      claimed = true;
+      if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
+      // The redaction wins outright here: none of the move's own colour, class or data-jy-move-*
+      // identity survives onto this piece, or a later restyle's recolorMoveSpans (core.js, matches by
+      // that same data attribute) would repaint or re-tag exactly the characters this run hides.
+      next.push({
+        ...piece,
+        ...run,
+        css: undefined,
+        className: undefined,
+        rawOpen: run.rawOpen ?? piece.rawOpen,
+        rawClose: run.rawClose ?? piece.rawClose,
+        hidden: run.hidden ?? piece.hidden,
+        runApplied: true,
+        moveElement: undefined,
+        moveName: undefined,
+        moveTier: undefined,
+        moveApplied: false,
+      });
+      const rest = text.slice(at + run.text.length);
+      if (rest) next.push({ ...piece, text: rest });
+    }
+    if (claimed) placed.add(run);
+    result = next;
+  }
+  return result;
+}
+
+/**
+ * Carves named runs out of a piece list, each run's own text found and given its own rendering while
+ * whatever piece it sat inside keeps its own `css`/`className` on the rest of its text. Used for both
+ * 招式 colouring and layer 3's carried inline fragments (design §2): the two differ only in what a
+ * `runs` entry carries — a colour (`css`) for a move, a literal tag pair (`rawOpen`/`rawClose`) for a
+ * carried fragment — not in how they are placed.
+ *
+ * All runs go through one longest-first pass together (`carveRuns`, above): a carried run and a move
+ * skip different things once something else has already been carved, which is what lets a move inside
+ * an already-carried half-sentence still get coloured without a short carried run inside an earlier,
+ * longer move name stealing the move's own characters first. Ties (a carried run and a move of the same
+ * length) carve the carried run first, since its whole point is to claim its span before anything else
+ * can. A hidden carried run is the one exception to the ordering itself, and only as a last resort: even
+ * when a longer move name carves first and leaves nothing behind for it anywhere in the line, it still
+ * gets to carve out of the move's own piece in `carveRuns`'s final pass, once every piece has had its
+ * chance to offer it a standalone home first, rather than lose its redaction to the move's colour. Only
+ * the first remaining occurrence of each run's text is carved — a name mentioned twice in one segment is
+ * uncommon, and carving every occurrence would let one wrong `indexOf` match repaint the whole segment.
+ */
+export function splitPiecesByRuns(pieces, runs) {
+  const list = Array.isArray(runs) ? runs.filter(run => run?.text) : [];
+  if (!Array.isArray(pieces) || !pieces.length || !list.length) return pieces;
+  const isCarried = run => Boolean(run.rawOpen || run.rawClose);
+  const ordered = [...list].sort((left, right) => {
+    if (right.text.length !== left.text.length) return right.text.length - left.text.length;
+    return Number(isCarried(right)) - Number(isCarried(left));
+  });
+  return carveRuns(pieces, ordered);
 }
 
 export function renderSourceBlock(source, options = {}) {
@@ -3400,20 +5019,34 @@ export function renderReplacePair(translation, source, decoration = {}) {
 function replaceUnitBody(part, ids, translationMap, options, decoration = {}) {
   const carry = options.carryFormatting !== false;
   const formats = Array.isArray(part?.formats) ? part.formats : [];
+  const lineParts = part.lineParts;
   let index = 0;
-  return part.lineParts.map(line => {
-    if (!line.semantic) return line.source;
-    const id = ids[index];
-    const format = carry ? formats[index] : null;
-    index += 1;
-    const translation = translationMap.get(id);
-    if (!translation) return markedAffix(line.source);
-    const shaped = styledBody(String(translation), decoration.styleBody, markedAffix, id);
-    const body = format?.open
-      ? `${markedAffix(paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open)}${shaped}${markedAffix(format.close)}`
-      : shaped;
-    return `${line.lead ?? ''}${body}${line.trail ?? ''}`;
-  }).join('\n');
+  return lineParts.map((line, at) => {
+    let body;
+    if (!line.semantic) {
+      body = line.source;
+    } else {
+      const id = ids[index];
+      const format = carry ? formats[index] : null;
+      index += 1;
+      const translation = translationMap.get(id);
+      if (!translation) {
+        body = markedAffix(line.source);
+      } else {
+        const shaped = styledBody(String(translation), decoration.styleBody, markedAffix, id);
+        const painted = format?.open
+          ? `${markedAffix(paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open)}${shaped}${markedAffix(format.close)}`
+          : shaped;
+        body = `${line.lead ?? ''}${painted}${line.trail ?? ''}`;
+      }
+    }
+    // v0.40.0: each line's own separator (a card row's own trailing <br> already is the break, an
+    // ordinary physical-line boundary is a real '\n') instead of assuming '\n' joined every line —
+    // see the `lineParts` note in segmentSource that carries it, and readReplaceBodyByLine's own note
+    // on reading both this and what a floor written before this fix already has stored.
+    const separator = at < lineParts.length - 1 ? (typeof line.separator === 'string' ? line.separator : '\n') : '';
+    return `${body}${separator}`;
+  }).join('');
 }
 
 export function assembleReplace(layout, translationMap, options = {}) {
@@ -3425,8 +5058,19 @@ export function assembleReplace(layout, translationMap, options = {}) {
       continue;
     }
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
+    // A lyric line keeps its own "原文 (译文)" layout inside a replace region too (design §2 「歌词怎么译、
+    // 怎么排」 applies regardless of mode) — but as its own replace pair (renderReplaceLyricPair), not
+    // assembleBilingual's renderLyricPair: that shape has no hidden block for extractReplaceTranslations
+    // to read the translation back from, and would show the main model the original instead of the
+    // translation replace mode is meant to keep visible to it.
+    if (part.lyric) {
+      const missingIds = ids.filter(id => !translationMap.get(id));
+      if (missingIds.length && !allowMissing) throw new Error(`缺少第 ${missingIds.join('、')} 段译文。`);
+      pieces.push(renderReplaceLyricPair(part, translationMap.get(ids[0]), options));
+      continue;
+    }
     const sourceText = part.sourceText ?? part.text;
-    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''));
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''), part.quoteFormats, part.fragments);
     const byLine = Array.isArray(part.lineParts) && part.lineParts.length > 0;
     const body = !ids.some(id => translationMap.get(id)) ? ''
       : byLine ? replaceUnitBody(part, ids, translationMap, options, decoration)
@@ -3464,40 +5108,61 @@ export function assembleTranslationOnly(layout, translationMap, options = {}) {
       pieces.push(part.sourceText ?? part.text);
       continue;
     }
-    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''));
+    if (part.lyric) {
+      // No markers needed here: a 只留译文 floor is never re-parsed from its own displayed text, only
+      // rebuilt fresh from translationMap each time (see readFloor/strippedRecords), so the pairing can
+      // be plain visible text straight away.
+      const trailingBr = String(part.sourceText ?? '').match(TRAILING_BR_RE);
+      const bareSource = trailingBr ? part.sourceText.slice(0, trailingBr.index) : String(part.sourceText ?? '');
+      pieces.push(`${bareSource} (${String(translationMap.get(ids[0]))})${trailingBr ? trailingBr[1] : ''}`);
+      continue;
+    }
+    const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''), part.quoteFormats, part.fragments);
     const formats = Array.isArray(part.formats) ? part.formats : [];
     const lineParts = Array.isArray(part.lineParts) && part.lineParts.length
       ? part.lineParts
       : ids.map(() => ({ semantic: true, source: '', lead: '', trail: '' }));
     let index = 0;
-    const body = lineParts.map(line => {
-      if (!line.semantic) return line.source;
+    // Joined with each line's own `separator` (a card row's own trailing <br> is the break, an ordinary
+    // physical-line boundary is '\n'), the same way replaceUnitBody joins a replace region's lineParts —
+    // a fixed '\n' here doubled a card row's own <br> with a real line break (v0.40.0).
+    const body = lineParts.map((line, at) => {
+      const separator = at < lineParts.length - 1 ? (typeof line.separator === 'string' ? line.separator : '\n') : '';
+      if (!line.semantic) return `${line.source}${separator}`;
       const id = ids[index];
       const format = carry ? formats[index] : null;
       index += 1;
       const translation = translationMap.get(id);
-      if (!translation) return line.source;
+      if (!translation) return `${line.source}${separator}`;
       const shaped = styledBody(String(translation), decoration.styleBody, plain, id);
       const wrapped = format?.open
         ? `${paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open}${shaped}${format.close}`
         : shaped;
-      return `${line.lead ?? ''}${wrapped}${line.trail ?? ''}`;
-    }).join('\n');
+      return `${line.lead ?? ''}${wrapped}${line.trail ?? ''}${separator}`;
+    }).join('');
     pieces.push(`${decoration.stylePrefix ?? ''}${body}${decoration.styleSuffix ?? ''}`);
   }
   return pieces.join('');
 }
 
 /**
- * A replace pair's visible side read back along the paragraph it was built from (replaceUnitBody): a
- * line not for translation must be there exactly as written, a translated line is its translation with
- * the line's excluded blocks beside it, a line not translated yet has nothing left once the markers are
- * gone. Blocks and pictures may run over several lines, so the reading follows the text, not a line
- * count. Anything that does not follow (a floor written before this, an edited floor) gives null, and
- * the older line-count reading is used.
+ * One reading pass over a replace pair's visible side, along the paragraph it was built from
+ * (replaceUnitBody): a line not for translation must be there exactly as written, a translated line is
+ * its translation with the line's excluded blocks beside it, a line not translated yet has nothing left
+ * once the markers are gone. Blocks and pictures may run over several lines, so the reading follows the
+ * text, not a line count.
+ *
+ * `legacy` picks which separator every boundary is read with. False (the exact reading, tried first):
+ * whatever `replaceUnitBody` actually joined that pair of lines with (v0.40.0: a card row's own trailing
+ * <br> is '', an ordinary line boundary is '\n') — a floor written by the current code always matches
+ * this exactly, with nothing left over. True (tried only once that fails): every boundary is '\n'
+ * regardless of what `line.separator` records, because a floor written before this fix always joined
+ * every line with a literal '\n', even a card row whose own <br> already was the break. Trying the exact
+ * reading greedily on both shapes at once used to consume a '\n' that in fact belonged to a *later*
+ * boundary whenever a card row's own <br>-ended row left an empty trailing row behind it, breaking the
+ * read at the boundary after — hence two separate passes instead of one tolerant one.
  */
-function readReplaceBodyByLine(body, lineParts, ids) {
-  if (!Array.isArray(lineParts) || !lineParts.length) return null;
+function readReplaceBodyByLineOnce(body, lineParts, ids, legacy) {
   const found = new Map();
   let rest = body;
   let index = 0;
@@ -3517,17 +5182,35 @@ function readReplaceBodyByLine(body, lineParts, ids) {
         }
         const end = line.trail ? rest.indexOf(line.trail) : (rest.indexOf('\n') < 0 ? rest.length : rest.indexOf('\n'));
         if (end < 0) return null;
+        // A trail-bearing line's own translation is always written on one line (replaceUnitBody), so a
+        // '\n' inside the slice found by line.trail means this pass has drifted -- most often the exact
+        // pass reading a legacy-joined body (an extra '\n' at a preceding '' boundary), where trail's own
+        // indexOf then reaches straight across that stray '\n' into what is really the *next* semantic
+        // line's own text. Rejecting it here sends the read to the legacy pass instead of accepting a
+        // wrong split.
+        if (line.trail && rest.slice(0, end).includes('\n')) return null;
         const translation = rest.slice(0, end).trim();
         rest = rest.slice(end + (line.trail ? line.trail.length : 0));
         if (translation) found.set(id, translation);
       }
     }
     if (at < lineParts.length - 1) {
-      if (!rest.startsWith('\n')) return null;
-      rest = rest.slice(1);
+      const expected = legacy ? '\n' : (typeof line.separator === 'string' ? line.separator : '\n');
+      if (expected) {
+        if (!rest.startsWith(expected)) return null;
+        rest = rest.slice(expected.length);
+      }
     }
   }
   return rest === '' ? found : null;
+}
+
+// Anything that does not follow either shape (an edited floor, a shape neither pass expects) gives null,
+// and the caller falls back to the older line-count reading.
+function readReplaceBodyByLine(body, lineParts, ids) {
+  if (!Array.isArray(lineParts) || !lineParts.length) return null;
+  return readReplaceBodyByLineOnce(body, lineParts, ids, false)
+    ?? readReplaceBodyByLineOnce(body, lineParts, ids, true);
 }
 
 // Seeds for 补译: each replace pair's source block holds that part's translation.
@@ -3543,10 +5226,17 @@ export function extractReplaceTranslations(text, options = {}) {
   const translations = new Map();
   let cursor = 0;
   for (const part of segmented.layout.filter(item => item.type === 'segment')) {
-    const sourceText = String(part.sourceText ?? part.text ?? '');
+    const rawSourceText = String(part.sourceText ?? part.text ?? '');
+    // renderReplaceLyricPair's hidden half holds only the bare source, its own trailing <br> kept
+    // outside every block (see its own note) — the same way extractGeneratedTranslations already reads
+    // a lyric part's rendered source by its bare text alone. 「歌词行」 predates that pair shape (v0.37.0):
+    // a lyric part in a replace region written before this fix went through the ordinary path instead,
+    // its hidden half holding the full source, trailing <br> included — so a lyric part accepts either
+    // form here, whichever this particular floor was actually written with.
+    const bareSourceText = part.lyric ? rawSourceText.replace(TRAILING_BR_RE, '') : rawSourceText;
     const pair = pairs[cursor];
     // An untranslated segment has no pair of its own; leave the queue where it is for the next one.
-    if (!pair || pair.original !== sourceText) continue;
+    if (!pair || (pair.original !== rawSourceText && pair.original !== bareSourceText)) continue;
     cursor += 1;
     const body = pair.translation;
     if (typeof body !== 'string' || !body.trim()) continue;
@@ -3678,21 +5368,73 @@ function translationBlockBody(translation, metadata) {
   return { body, wrapper, padAfter };
 }
 
+// Matches a move's own opening span (index.js `moveStyleFor`, above `escapeMoveAttribute`) by the
+// data attribute nothing else on a translation body writes, whatever else the tag carries and in
+// whatever order — a speaker's own class can sit on the same span when a move lands inside a painted
+// quote.
+const MOVE_SPAN_OPEN_RE = /<span\b[^>]*\sdata-jy-move-element="[^"]*"[^>]*>/g;
+
+/**
+ * A restyle keeps a translation body byte for byte (`translationBlockBody`, below) because it has no
+ * annotations left to rebuild rhythm or speaker paint from — but a move's own colour is not read back
+ * from an annotation either; it is recomputed here, the same `resolveMoveStyle` call `moveStyleFor`
+ * (index.js) made the first time, against whatever band `options.coloring` carries now. Skipped
+ * entirely while 特效字 is off or there is no band to resolve against, in which case the span is left
+ * exactly as it already reads.
+ *
+ * Exported because a translation block's markers are not the only place a move span can live: a 「只留
+ * 译文」 floor's shown text (`assembleTranslationOnly`) carries the same span directly, with no marker
+ * around it for `restyleBilingual` below to find, so index.js's own restyle pass calls this straight on
+ * that text too.
+ */
+export function recolorMoveSpans(body, options) {
+  if (typeof body !== 'string' || !body.includes('data-jy-move-element="')) return body;
+  const coloring = normalizeColoring(options?.coloring);
+  if (!coloring.speakers || !coloring.effects || !coloring.band) return body;
+  return body.replace(MOVE_SPAN_OPEN_RE, tag => {
+    const element = unescapeMoveAttribute(tag.match(/\sdata-jy-move-element="([^"]*)"/)?.[1]);
+    const name = unescapeMoveAttribute(tag.match(/\sdata-jy-move-name="([^"]*)"/)?.[1]);
+    const tier = unescapeMoveAttribute(tag.match(/\sdata-jy-move-tier="([^"]*)"/)?.[1]);
+    const resolved = resolveMoveStyle({ element, name, tier, band: coloring.band, vividness: coloring.vividness });
+    if (!resolved) return tag;
+    // 字号二选一 (design §2 item 4): `data-jy-move-nosize` (`styledBody`, above) says this move was
+    // carved out of a <big>/<small> carried fragment on first render, so its own font-size was dropped
+    // then for the same reason it must be dropped again here -- resolveMoveStyle knows nothing about the
+    // wrapper it is about to sit inside, only the marker left for it does.
+    const css = /\sdata-jy-move-nosize="/.test(tag) ? dropSizeCss(resolved.css) : resolved.css;
+    return /\sstyle="[^"]*"/.test(tag)
+      ? tag.replace(/\sstyle="[^"]*"/, ` style="${css}"`)
+      : tag.replace(/>$/, ` style="${css}">`);
+  });
+}
+
 export function restyleBilingual(text, options = {}, metadata) {
   return upgradeLegacyBilingual(text, metadata)
     .replace(SOURCE_BLOCK_RE, (match, source, offset, whole) => {
       // A replace pair's source-block position holds the translation, dressed in its speaker colours;
-      // the visible prefixes are never part of it, so a restyle leaves the pair exactly as it is.
+      // the visible prefixes are never part of it, so a restyle leaves the pair as it is — except for a
+      // move's own colour, which still has to move with the band exactly as inside an ordinary
+      // translation block below, or a floor with only replace-tag regions would never restyle at all.
       const after = whole.slice(offset + match.length);
-      if (after.startsWith(HIDDEN_START) || after.startsWith(`\n${HIDDEN_START}`)) return match;
+      if (after.startsWith(HIDDEN_START) || after.startsWith(`\n${HIDDEN_START}`)) {
+        return `${SOURCE_START}${recolorMoveSpans(source, options)}${SOURCE_END}`;
+      }
+      // A lyric pair (renderLyricPair): its own trailing "(" is unmistakable, and a restyle has no
+      // per-line decoration to offer it anyway — the visible prefix/suffix a plain unit would gain here
+      // is exactly what the "(" already is, so the block is left exactly as it was written.
+      if (source.endsWith(LYRIC_OPEN_AFFIX)) return match;
       return renderSourceBlock(source.replace(AFFIX_RE, ''), options);
     })
-    .replace(TRANSLATION_BLOCK_RE, (match, translation) => {
+    .replace(TRANSLATION_BLOCK_RE, (match, translation, offset, whole) => {
+      // The lyric pair's other half: its ")" (and the row's own restored <br>, bare text past it) sit
+      // right after this match, unlike a plain unit's visible affixes, which live inside it.
+      const after = whole.slice(offset + match.length);
+      if (after.startsWith(LYRIC_CLOSE_AFFIX)) return match;
       // Only the outer affixes change: the runs painted in each speaker's colour, the rhythm and the
       // original's carried formatting inside the body are kept as they are.
       const kept = translationBlockBody(translation, metadata);
       if (kept) {
-        return `${match.startsWith('\n') ? '\n' : ''}${renderTranslationBlock(kept.body, {
+        return `${match.startsWith('\n') ? '\n' : ''}${renderTranslationBlock(recolorMoveSpans(kept.body, options), {
           ...options, padAfter: kept.padAfter, stylePrefix: kept.wrapper, styleSuffix: kept.wrapper ? '</span>' : '', styleBody: null,
         })}`;
       }

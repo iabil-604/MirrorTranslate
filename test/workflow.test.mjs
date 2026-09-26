@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { DEFAULT_SETTINGS, INVISIBLE_MARKER, mergeSettings } from '../core.js';
-import { DEFAULT_PROMPT_PROFILE } from '../prompts.js';
+import { DEFAULT_PROMPT_PROFILE, composeLyricsSection } from '../prompts.js';
 import { buildTranslationMessages, collectTranslationContext } from '../workflow.js';
 import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOUND_CUES, TONE_CUES } from '../tts.js';
 
@@ -420,6 +420,95 @@ test('the translation counts every quote, says where a sound may go and what a l
   assert.doesNotMatch(colouring, /台词只有嗯、啊/);
 });
 
+// segmentSource attaches `fragments` to a segment whenever the original line has one, whether or not
+// 特效字 (or colouring at all) is on — buildTranslationMessages is where that has to be gated back out,
+// the same place `input.annotate.runs` already decides whether the translator was even told what a
+// `fragments` field would mean.
+test('a segment\'s own `fragments` field never reaches the request unless 特效字 is on and this batch actually has one', () => {
+  const segments = [{ id: 1, text: '他压低声音：这半句特别轻，其余照常。', fragments: ['特别轻'] }];
+
+  // Colouring off entirely: no annotation section, and no unexplained field either.
+  const plain = JSON.parse(buildTranslationMessages(segments, mergeSettings({}), {}, 'primary', {}).find(message => message.role === 'user').content);
+  assert.equal('fragments' in plain.segments[0], false, '着色全关时，segments 里不该带着一个没人解释过的字段');
+
+  // Speaker colouring on, 特效字 off: still nothing to carry.
+  const speakersOnly = JSON.parse(buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true, effects: false } }), {}, 'primary', { hasFragments: true })
+    .find(message => message.role === 'user').content);
+  assert.equal('fragments' in speakersOnly.segments[0], false, '特效字 关闭时，segments 里同样不该带 fragments');
+
+  // 特效字 on, but this particular request has nothing carryable in it (hasFragments not passed):
+  // still nothing sent, even though the segment object itself happens to carry the field.
+  const effectsButNoFragments = JSON.parse(buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true, effects: true } }), {}, 'primary', {})
+    .find(message => message.role === 'user').content);
+  assert.equal('fragments' in effectsButNoFragments.segments[0], false);
+
+  // 特效字 on and this batch does have a fragment: now it goes out, and the prompt explains it (`runs`).
+  const effectsOn = buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true, effects: true } }), {}, 'primary', { hasFragments: true });
+  const input = JSON.parse(effectsOn.find(message => message.role === 'user').content);
+  assert.deepEqual(input.segments[0].fragments, ['特别轻']);
+  assert.equal(input.annotate.runs, true, 'the field is only ever sent alongside the instruction for what it means');
+  // A fragment the translation could not find a matching run for writes an empty string in its own
+  // position (readCarriedRunText/carriedRunsFor already read that position correctly by index) rather
+  // than being skipped — skipping would shift every fragment after it out of alignment with its run.
+  const runsSection = effectsOn.find(message => message.content.includes('附加标注')).content;
+  assert.match(runsSection, /找不到对应的字，就在这一条的位置写空字符串 ""/);
+  assert.doesNotMatch(runsSection, /跳过那一条/);
+
+  // A segment with nothing to carry is untouched either way — never an empty `fragments: []`.
+  const bare = { id: 2, text: '她点了点头。' };
+  const untouched = JSON.parse(buildTranslationMessages([bare], mergeSettings({ coloring: { speakers: true, emotions: true, effects: true } }), {}, 'primary', { hasFragments: true })
+    .find(message => message.role === 'user').content);
+  assert.deepEqual(untouched.segments[0], bare);
+});
+
+// Regression: the translator was never told which moves this chat had already fixed an element for, so
+// it could name a different one next time (index.js's chat-wide index already forces the first known
+// element to win, but only the translator naming the same one to begin with avoids the demotion/repaint
+// this causes elsewhere). 特效字's own gate (coloring.speakers && coloring.effects) is what decides
+// whether the list is sent at all.
+test('already-known moves are told to the translator only while 特效字 is on, and never touch CORE_TRANSLATION_SPEC', async () => {
+  const segments = [{ id: 1, text: '他又打出了红莲拳。' }];
+  const knownMoves = [{ name: '红莲拳', element: '火焰' }];
+
+  const effectsOn = buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true, effects: true } }), {}, 'primary', { knownMoves });
+  const section = effectsOn.find(message => message.content.includes('附加标注'))?.content ?? '';
+  assert.match(section, /红莲拳→火焰/, '已知招式的属性要原样告诉翻译');
+
+  // Off entirely: no annotation section at all is unaffected by this change, so nothing extra appears.
+  const plain = buildTranslationMessages(segments, mergeSettings({}), {}, 'primary', { knownMoves });
+  assert.ok(!plain.some(message => message.content.includes('红莲拳→火焰')), '着色全关时完全不提已知招式');
+
+  // Speaker colouring on, 特效字 off: still nothing, even though knownMoves was passed in.
+  const speakersOnly = buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true, effects: false } }), {}, 'primary', { knownMoves });
+  const speakersSection = speakersOnly.find(message => message.content.includes('附加标注'))?.content ?? '';
+  assert.doesNotMatch(speakersSection, /红莲拳→火焰/, '特效字 关闭时不提已知招式');
+
+  // No known moves yet (a fresh chat): the moves field is still asked for, just with no reminder list.
+  const noneYet = buildTranslationMessages(segments, mergeSettings({ coloring: { speakers: true, emotions: true, effects: true } }), {}, 'primary', {});
+  const noneYetSection = noneYet.find(message => message.content.includes('附加标注'))?.content ?? '';
+  assert.match(noneYetSection, /moves（/);
+  assert.doesNotMatch(noneYetSection, /前面已经出现过下面这些招式/);
+
+  const { CORE_TRANSLATION_SPEC } = await import('../prompts.js');
+  assert.doesNotMatch(CORE_TRANSLATION_SPEC, /红莲拳|已经出现过下面这些招式/, '常量本身不受这个改动影响');
+});
+
+test('knownMoveEntries drops entries with no name or element, de-duplicates by name, and caps at 40', async () => {
+  const { __workflowTesting } = await import('../workflow.js');
+  const many = Array.from({ length: 45 }, (_, index) => ({ name: `招${index}`, element: '火' }));
+  const messy = [
+    { name: '红莲拳', element: '火焰' },
+    { name: '红莲拳', element: '冰霜' }, // duplicate name, first one wins
+    { name: '', element: '雷' }, // no name
+    { name: '无属性招', element: '' }, // no element
+    ...many,
+  ];
+  const cleaned = __workflowTesting.knownMoveEntries(messy);
+  assert.equal(cleaned.length, 40);
+  assert.deepEqual(cleaned[0], { name: '红莲拳', element: '火焰' });
+  assert.ok(!cleaned.some(entry => entry.name === '无属性招'));
+});
+
 test('every stand-in the annotation example shows is thrown away when a model copies it back', async () => {
   const { readAnnotationFields, EXAMPLE_STAND_INS } = await import('../core.js');
   const sections = [
@@ -432,4 +521,24 @@ test('every stand-in the annotation example shows is thrown away when a model co
     assert.ok(EXAMPLE_STAND_INS.includes(standIn), standIn);
     assert.equal(readAnnotationFields({ speaker: `<${standIn}>`, emotion: `<${standIn}>`, tone: `<${standIn}>` }), null, standIn);
   }
+});
+
+test('the lyrics section is attached only when this batch actually has a lyric segment in it', () => {
+  const settings = mergeSettings({});
+  const segments = [{ id: 1, text: '第一行叙述。' }, { id: 2, text: 'そらにひびけ' }];
+  const withLyrics = buildTranslationMessages(segments, settings, {}, 'primary', { hasLyrics: true });
+  const lyricsMessage = withLyrics.find(message => message.content === composeLyricsSection());
+  assert.ok(lyricsMessage, 'the lyrics section rides as its own system message');
+  assert.equal(lyricsMessage.role, 'system');
+  const without = buildTranslationMessages(segments, settings, {}, 'primary', { hasLyrics: false });
+  assert.ok(!without.some(message => message.content === composeLyricsSection()));
+  const unset = buildTranslationMessages(segments, settings, {}, 'primary', {});
+  assert.ok(!unset.some(message => message.content === composeLyricsSection()));
+});
+
+test('the lyrics section states the one-line-in-one-line-out rule and leaves names untouched', () => {
+  const section = composeLyricsSection();
+  assert.match(section, /一行进一行出/);
+  assert.match(section, /不在 text 里换行/);
+  assert.match(section, /人名、曲名、专辑名/);
 });

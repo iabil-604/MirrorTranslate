@@ -55,7 +55,18 @@ label { min-width: 0; }
 .jy-close:hover { background: #e9eade; color: var(--jy-text); }
 .jy-studio { display: grid; grid-template-columns: 190px minmax(0,1fr); height: 100%; min-width: 0; }
 .jy-rail { display: flex; flex-direction: column; background: var(--jy-rail); color: #cfe0d5; padding: 24px 12px 16px; }
-.jy-identity { display: flex; align-items: center; gap: 10px; padding: 0 8px 28px; }
+.jy-identity { display: flex; align-items: center; gap: 10px; padding: 0 8px 14px; }
+/* DESIGN §15.1 模式切换: two-segment 正常模式 / 高级模式 under the brand, shown in both modes. */
+.jy-mode-switch { display: flex; gap: 2px; margin: 0 8px 18px; padding: 2px; border-radius: 9px; background: #0f2c24; }
+.jy-mode-switch button { flex: 1 1 0; min-height: 34px; padding: 0 4px; border: 0; border-radius: 7px; background: transparent; color: #a9c0b2; font-size: 12px; font-weight: 650; cursor: pointer; transition: background var(--jy-hover), color var(--jy-hover); }
+/* DESIGN §15.1 触屏 ≥ 44: the max-width:640px rule below only ever caught a narrow phone — a touch
+   tablet or a touch laptop wider than that got the 34px desktop target instead (review finding
+   style.css:471). `hover: none` also catches a touch device that reports a coarse-but-not-strictly-
+   coarse pointer. */
+@media (pointer: coarse), (hover: none) {
+  .jy-mode-switch button { min-height: 44px; }
+}
+.jy-mode-switch button[aria-pressed="true"] { background: #f2f7f0; color: var(--jy-rail); }
 .jy-monogram { display: grid; place-items: center; width: 34px; height: 38px; border: 1px solid #91ad9680; border-radius: 4px 11px 4px 4px; font: 21px Georgia, "Songti SC", serif; color: #e2cf9c; flex: 0 0 auto; }
 .jy-identity strong { display: block; font-size: 17px; font-weight: 700; letter-spacing: .16em; color: #f2f7f0; }
 .jy-identity small { font-size: 9px; letter-spacing: .1em; color: #8fab99; }
@@ -77,6 +88,8 @@ label { min-width: 0; }
 .jy-overline { font-size: 11px; color: var(--jy-muted); font-weight: 700; margin-bottom: 5px; }
 .jy-muted { color: var(--jy-muted); font-size: 12px; line-height: 1.7; margin-top: 6px; overflow-wrap: anywhere; }
 .jy-processing-bar, .jy-processing-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* DESIGN §15.4 危险操作: 红字文字按钮放每组末尾 — a toolbar holding only that button, right-aligned. */
+.jy-processing-toolbar-end { justify-content: flex-end; }
 .jy-processing-bar { margin-bottom: 20px; }
 .jy-processing-choice { display: flex; align-items: center; gap: 10px; flex: 1 1 170px; max-width: 320px; }
 .jy-processing-choice > span { flex-shrink: 0; color: var(--jy-muted); font-size: 12px; }
@@ -97,6 +110,8 @@ label { min-width: 0; }
 .jy-button-primary:hover { background: var(--jy-accent); color: var(--jy-on-accent); filter: brightness(.94); }
 .jy-text-button { border: 0; background: transparent; color: var(--jy-accent); padding: 8px 4px; font-size: 12px; text-align: left; }
 .jy-text-button:hover { text-decoration: underline; }
+/* 危险操作的文字按钮：无边框沿用 .jy-text-button，字色换成 --jy-error（DESIGN.md §9.1/§15.4）。 */
+.jy-text-button-danger { color: var(--jy-error); }
 .jy-icon-button { display: inline-grid; place-items: center; height: 30px; min-width: 30px; border: 1px solid var(--jy-line); border-radius: var(--jy-radius-sm); color: var(--jy-accent); background: transparent; font-size: 16px; transition: background var(--jy-hover), border-color var(--jy-hover); }
 .jy-badge { display: inline-block; max-width: 100%; border: 1px solid var(--jy-line); border-radius: 4px; background: var(--jy-accent-soft); color: var(--jy-muted); font-size: 10px; line-height: 1.5; padding: 3px 7px; overflow-wrap: anywhere; }
 .jy-desk { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(0,1fr); gap: 20px; padding-bottom: 18px; }
@@ -139,8 +154,12 @@ label { min-width: 0; }
 .jy-desk-side { display: flex; flex-direction: column; gap: 12px; }
 .jy-brief { padding: 14px 16px; margin: 0; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
 .jy-brief h3 { margin: 5px 0 0; font-size: 14px; overflow-wrap: anywhere; }
-.jy-brief .jy-button { margin-top: 10px; border: 0; border-radius: 0; padding: 0; min-height: 24px; color: var(--jy-accent); background: transparent; }
-.jy-brief .jy-button:hover { background: transparent; text-decoration: underline; }
+/* Only a .jy-button that is .jy-brief's OWN direct child (the pre-existing "编辑规则 →" / "管理连接…→"
+   link-out pattern) turns borderless; §15.2/§15.3's desk cards (.jy-desk-card, also a .jy-brief) nest
+   their real .jy-button action buttons — 测试连接、＋ 添加连接、测试这条连接 — inside a wrapper div, so
+   a plain descendant selector here would have stripped their border and background too. */
+.jy-brief > .jy-button { margin-top: 10px; border: 0; border-radius: 0; padding: 0; min-height: 24px; color: var(--jy-accent); background: transparent; }
+.jy-brief > .jy-button:hover { background: transparent; text-decoration: underline; }
 .jy-automation { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 22px; padding: 16px 20px; background: var(--jy-band); border: 1px solid var(--jy-band-line); border-radius: var(--jy-radius); }
 .jy-automation > div:first-child { margin-right: auto; }
 .jy-automation .jy-muted { margin-top: 3px; }
@@ -206,14 +225,67 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-footer { display: flex; justify-content: space-between; gap: 16px; align-items: center; position: sticky; bottom: 0; z-index: 4; padding: 12px 10px 16px 0; margin-top: 14px; border-top: 1px solid var(--jy-line); background: var(--jy-paper); }
 .jy-save-note { color: var(--jy-muted); font-size: 11px; }
 .jy-save-note[data-jy-dirty="true"] { color: var(--jy-focus); font-weight: 600; }
+/* DESIGN §15.4 「改了就存」: the label a page's header shows once save-on-change replaces its save button. */
+/* margin-left: auto — .jy-page-heading's justify-content: space-between otherwise spreads three
+   children (title block, this indicator, a header button such as ＋新建连接/刷新楼层) evenly across
+   the row, leaving the indicator stranded around the middle instead of beside the button it belongs
+   next to (review finding style.css:78). The row's own `gap` still holds it apart from that button. */
+.jy-autosave-indicator { font-size: 11px; color: var(--jy-ok); flex: none; margin-left: auto; }
 .jy-connection-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .jy-connection-choice label { position: relative; cursor: pointer; }
 .jy-connection-choice input { position: absolute; opacity: 0; }
-.jy-connection-choice span { display: block; border: 1px solid var(--jy-line); background: var(--jy-surface); padding: 13px 16px; border-radius: 9px; transition: background var(--jy-hover), border-color var(--jy-hover); }
+/* input + span (not the bare descendant ".jy-connection-choice span") so the card's own box styling
+   never falls on a <span> nested further in — DESIGN §15.2's preset cards (the same component) nest a
+   .jy-mini-pill span for 最省/推荐/最费, and that one keeps its own small pill styling untouched. */
+.jy-connection-choice input + span { display: block; border: 1px solid var(--jy-line); background: var(--jy-surface); padding: 13px 16px; border-radius: 9px; transition: background var(--jy-hover), border-color var(--jy-hover); }
 .jy-connection-choice strong { display: block; font-size: 13px; font-weight: 650; }
 .jy-connection-choice small { color: var(--jy-muted-soft); font-size: 11px; }
 .jy-connection-choice input:checked + span { border-color: var(--jy-accent); background: var(--jy-accent-tint); }
 .jy-connection-choice input:checked + span small { color: var(--jy-accent-ink); }
+.jy-connection-choice input + span h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-size: 13px; font-weight: 650; }
+.jy-connection-choice input + span p { margin: 0; color: var(--jy-muted-soft); font-size: 11px; }
+.jy-connection-choice input:checked + span p { color: var(--jy-accent-ink); }
+
+/* DESIGN §15.2/§15.3 正常模式 · 翻译台与微调: card primitives shared by both pages. */
+.jy-preset-drift { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 12px 0 0; color: var(--jy-muted); font-size: 12px; }
+.jy-preset-drift-list { margin: 6px 0 0; padding-left: 18px; color: var(--jy-muted); font-size: 12px; }
+.jy-preset-drift-list li { margin: 2px 0; }
+/* minmax(0,1fr) rather than a bare 1fr: without it a column track cannot shrink below its content's
+   min-content width, and the 朗读语言 select's long option text (width:auto) forced this whole grid,
+   and the dialog around it, into horizontal scroll between about 641px and 950px (review finding
+   style.css:240). */
+.jy-desk-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 18px; }
+.jy-desk-column { display: flex; flex-direction: column; gap: 18px; }
+.jy-desk-card { padding: 16px 18px; }
+.jy-card-title { margin: 0 0 4px; font-size: 14px; }
+.jy-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.jy-card-head .jy-card-title { margin: 0; }
+.jy-desk-fish[data-missing="true"] { border-color: var(--jy-error-soft); }
+.jy-summary-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--jy-line-soft); }
+.jy-summary-row:first-of-type { border-top: 0; padding-top: 0; }
+.jy-summary-row-sub { margin-left: 28px; }
+.jy-summary-row-end { justify-content: flex-end; border-top: 0; padding-top: 4px; }
+.jy-summary-copy { flex: 1; min-width: 0; }
+.jy-summary-copy h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.jy-summary-copy p { margin: 3px 0 0; color: var(--jy-muted); font-size: 11px; }
+.jy-summary-row .jy-mini-pill { margin-left: 6px; }
+.jy-summary-select { justify-content: space-between; }
+.jy-summary-select .jy-label { margin: 0; flex: none; }
+.jy-summary-select select { width: auto; min-width: 168px; max-width: 100%; }
+.jy-state-mark { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none; font-size: 11px; color: var(--jy-muted); }
+.jy-state-mark[data-state="done"] { color: var(--jy-ok); }
+.jy-state-mark[data-state="busy"] { color: var(--jy-focus); }
+.jy-desk-connection-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.jy-desk-connection { padding: 10px 14px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
+.jy-desk-connection[data-expanded="true"] { border-color: var(--jy-accent); background: var(--jy-accent-tint); }
+.jy-desk-connection-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.jy-desk-connection-open { flex: 1 1 12em; min-width: 12em; display: flex; flex-wrap: wrap; align-items: baseline; align-content: center; column-gap: 8px; row-gap: 2px; border: 0; background: none; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.jy-desk-connection-open strong { font-size: 12.5px; font-weight: 650; }
+.jy-desk-connection-open small { color: var(--jy-muted-soft); font-size: 11px; overflow-wrap: anywhere; }
+.jy-desk-connection-uses { display: flex; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+.jy-desk-connection-uses label { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--jy-muted); white-space: nowrap; }
+.jy-desk-connection-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.jy-desk-connection-form .jy-actions { grid-column: 1 / -1; margin-top: 2px; }
 .jy-form-section { display: grid; grid-template-columns: 132px minmax(0,1fr); gap: 20px; padding: 18px 0; border-bottom: 1px solid var(--jy-line); }
 .jy-section-title { display: flex; gap: 9px; align-items: baseline; }
 .jy-section-title > span { display: none; }
@@ -242,7 +314,62 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-channel-use[data-editing="true"] { border-color: var(--jy-accent); background: var(--jy-accent-tint); }
 /* The buttons below pull themselves up under the picker; the line between them keeps its own room. */
 .jy-form-body [data-jy-channel-usage] { margin: 6px 0 18px; }
-.jy-processing-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; border-bottom: 1px solid var(--jy-line); padding-bottom: 26px; }
+
+/* DESIGN §15.4 高级模式排版: a generic card for the 翻译台 / 翻译规则 / 模型连接 re-layout — the
+   编辑区 padding tier (§3), reused wherever a page groups a few rows under one heading. */
+.jy-card { display: flex; flex-direction: column; gap: 2px; padding: 16px 18px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); margin-bottom: 18px; }
+.jy-card > h2 { margin-bottom: 6px; }
+.jy-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; align-items: start; }
+.jy-card-grid > .jy-card { margin-bottom: 0; }
+.jy-card-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 9px 0; border-top: 1px solid var(--jy-line-soft); }
+.jy-card-row:first-child { border-top: 0; padding-top: 0; }
+.jy-card-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 160px; }
+.jy-card-row-text h3 { overflow-wrap: anywhere; }
+.jy-card-row-text > .jy-muted { margin-top: 0; }
+.jy-card-row select { min-width: 0; max-width: 220px; }
+.jy-card-row-field { display: inline-flex; align-items: center; gap: 6px; }
+.jy-card-row-field input[type="number"] { width: 72px; }
+.jy-card-row-end { justify-content: flex-end; }
+/* 依赖缩进变灰: indented 28px under the switch it depends on; greyed with a reason only while blocked. */
+.jy-card-row-dependent { margin-left: 28px; }
+.jy-card-row-dependent[data-jy-blocked="true"] { opacity: .55; }
+.jy-card-row-dependent[data-jy-blocked="true"] .jy-switch, .jy-card-row-dependent[data-jy-blocked="true"] input { cursor: not-allowed; }
+.jy-launch-danger { margin-left: auto; }
+/* 翻译规则 §15.4 常用（选择题）: the 自定义 preview/textarea a select-row folds in, without the
+   .jy-form-body ancestor that used to give a static field its spacing. */
+.jy-prompt-select-detail { display: block; margin: -4px 0 10px; padding-left: 2px; }
+.jy-prompt-select-detail.jy-preset-preview { font-style: italic; }
+.jy-prompt-select-detail .jy-label { display: block; margin-bottom: 6px; }
+/* 改过 pill (§9.2 徽章 token, §6.4 已改动 colours) for a row with no pencil head of its own to carry it. */
+.jy-badge-changed { border-color: transparent; background: var(--jy-accent-tint); color: var(--jy-accent-ink); font-weight: 600; }
+/* Pushes the two red 方案管理 buttons to the end of their row without a third one drifting there too. */
+.jy-actions-spacer { flex: 1 1 auto; }
+
+/* DESIGN §15.4 模型连接: one card per connection, its head carrying the 用在 checkboxes. */
+.jy-channel-card { margin-bottom: 10px; }
+.jy-channel-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.jy-channel-card-toggle { flex: 1 1 200px; display: flex; min-width: 0; border: 0; background: transparent; padding: 0; text-align: left; color: inherit; }
+.jy-channel-card-toggle .jy-card-row-text h2 { font-size: 13px; overflow-wrap: anywhere; }
+.jy-channel-card-uses { display: flex; flex-wrap: wrap; gap: 3px 14px; }
+.jy-channel-card-uses .jy-check { padding: 0; white-space: nowrap; }
+.jy-channel-card-chevron { flex: none; border: 0; background: transparent; color: var(--jy-muted-soft); font-size: 11px; padding: 4px; }
+/* DESIGN §15.1 触屏 ≥ 44: these rows measured 19–21px tall and the chevron 17×26 under touch, and
+   every 用在 checkbox shared one generic name with no connection attached (review finding
+   style.css:270 — the aria-label fix for the name is in index.js's makeChannelUseCheckbox /
+   buildDeskConnectionRow). */
+@media (pointer: coarse), (hover: none) {
+  .jy-desk-connection-uses label,
+  .jy-channel-card-uses .jy-check { min-height: 44px; padding: 6px 0; }
+  .jy-channel-card-toggle,
+  .jy-desk-connection-open { min-height: 44px; }
+  .jy-channel-card-chevron { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0; }
+}
+.jy-channel-card [data-jy-channel-detail] { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--jy-line-soft); }
+.jy-channel-card [data-jy-channel-detail] > label { display: block; margin-bottom: 16px; }
+/* align-items: start — this grid's default stretch made every card in a row match the tallest one's
+   height, leaving hundreds of pixels of empty bordered space below a shorter card's own content on
+   both 正文处理 and 朗读 (review finding index.js:625, same class on both pages). */
+.jy-processing-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; border-bottom: 1px solid var(--jy-line); padding-bottom: 26px; }
 .jy-text-scope { padding: 15px 17px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
 .jy-text-scope h2 { margin-bottom: 12px; font-size: 14px; }
 .jy-text-scope .jy-overline { margin-bottom: 3px; }
@@ -367,9 +494,14 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-monogram { width: 27px; height: 29px; font-size: 18px; }
   .jy-identity strong { font-size: 15px; display: inline; }
   .jy-identity small { display: none; }
+  /* DESIGN §15.1/§15.5: touch target ≥44, still the full row under the title. */
+  .jy-mode-switch { margin: 0 0 8px; }
+  .jy-mode-switch button { min-height: 44px; font-size: 12.5px; }
   /* Columns follow the tabs actually shown: 朗读 is hidden in ordinary mode, and a fixed count would
-     leave an empty slot at the end of the row. */
-  .jy-navigation { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); gap: 3px; }
+     leave an empty slot at the end of the row. minmax(44px,1fr) plus overflow-x rather than
+     minmax(0,1fr): six advanced-mode tabs at a 320px phone width squeezed to 42px each instead of
+     scrolling, under DESIGN §15.5's own "高级模式六页签横向可滑" (review finding style.css:471). */
+  .jy-navigation { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(44px,1fr); gap: 3px; overflow-x: auto; }
   .jy-navigation button { display: flex; flex-direction: column; gap: 5px; min-height: 54px; padding: 6px 1px 8px; border-radius: 5px 5px 0 0; font-size: 10px; }
   .jy-navigation button > span { font-size: 19px; }
   .jy-rail-bottom { position: absolute; top: 8px; right: 55px; margin: 0; padding: 0; border: 0; gap: 9px; }
@@ -406,7 +538,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-prompt-item-editor textarea { min-height: 240px; }
   .jy-form-section { grid-template-columns: 1fr; gap: 18px; }
   .jy-connection-choice { gap: 8px; }
-  .jy-connection-choice span { padding: 13px; }
+  .jy-connection-choice input + span { padding: 13px; }
   .jy-connection-choice strong { font-size: 12px; }
   .jy-connection-choice small { font-size: 10px; }
   .jy-channel-uses { grid-template-columns: 1fr; gap: 6px; }
@@ -421,6 +553,19 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-inline-field select { min-width: 0; max-width: 100%; }
   .jy-log-tools { margin-left: 0; }
   .jy-footer { padding-bottom: max(14px,env(safe-area-inset-bottom)); }
+  .jy-card { padding: 14px 14px; }
+  .jy-card-row select, .jy-card-row-field input[type="number"] { max-width: none; width: 100%; }
+  .jy-card-row-dependent { margin-left: 18px; }
+  .jy-channel-card-toggle { flex-basis: 100%; }
+  .jy-channel-card-uses { gap: 4px 12px; font-size: 11px; }
+  /* DESIGN §15.5: 套餐卡单列四张，每张 ≥ 64；正常模式其余卡片单列。 */
+  .jy-preset-grid { grid-template-columns: 1fr; }
+  .jy-preset-grid input + span { min-height: 64px; display: flex; flex-direction: column; justify-content: center; }
+  .jy-desk-columns { grid-template-columns: 1fr; }
+  .jy-summary-select { flex-wrap: wrap; }
+  .jy-summary-select select { min-width: 0; width: 100%; }
+  .jy-desk-connection-uses { margin-left: 0; width: 100%; }
+  .jy-desk-connection-form { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 
@@ -704,9 +849,33 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-fold > summary::before { content: ""; width: 7px; height: 7px; margin-right: 2px; border-right: 2px solid var(--jy-accent); border-bottom: 2px solid var(--jy-accent); transform: rotate(-45deg); transition: transform var(--jy-hover); align-self: center; flex: 0 0 auto; }
 .jy-fold[open] > summary::before { transform: rotate(45deg); }
 .jy-fold > summary h2 { font-size: 13px; }
-.jy-fold-summary { margin-left: auto; color: var(--jy-muted); font-size: 11px; font-weight: 500; text-align: right; overflow-wrap: anywhere; }
+/* DESIGN §15.4 折叠组: 当前值摘要 is specified at 12px `--jy-muted`; this was 11px (review finding
+   style.css:822). */
+.jy-fold-summary { margin-left: auto; color: var(--jy-muted); font-size: 12px; font-weight: 500; text-align: right; overflow-wrap: anywhere; }
 .jy-fold[open] > summary .jy-fold-summary { display: none; }
 .jy-fold > .jy-form-body { padding-top: 16px; }
+/* DESIGN §15.4 折叠组 nested inside a card (正文处理/朗读's always-open cards): a hairline separates it
+   from the row above, matching the card's own row rhythm. 模型连接's request/postscript folds sit in
+   the same kind of row list (`.jy-connection-form`, the shared per-connection editor) and get the same
+   treatment — they used to be `.jy-advanced`, which supplied its own 21px padding + bottom border; the
+   plain `.jy-fold` they became has none on its own. */
+.jy-text-scope > .jy-fold, .jy-connection-form > .jy-fold { padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--jy-line-soft); }
+/* DESIGN §15.4 依赖: a child field 28px in from its parent switch; grayed with a reason line once the
+   parent is off (JS toggles `[data-jy-dependent-off]` — see syncColoringFields in index.js). */
+.jy-dependent { margin-left: 28px; }
+.jy-dependent-reason { display: none; margin: 2px 0 0; font-size: 11px; }
+.jy-dependent[data-jy-dependent-off="true"] .jy-check { color: var(--jy-muted-soft); }
+.jy-dependent[data-jy-dependent-off="true"] .jy-dependent-reason { display: block; }
+/* 微调's own 特效字 row (DESIGN §15.3) carries the same [data-jy-dependent]/[data-jy-dependent-off]
+   marker but is a .jy-summary-row-sub, not a .jy-dependent — it used to look fully active and explain
+   nothing when 说话人着色 was off (review finding index.js:404). */
+.jy-summary-row[data-jy-dependent-off="true"] h3 { color: var(--jy-muted-soft); }
+.jy-summary-row[data-jy-dependent-off="true"] .jy-dependent-reason { display: block; }
+/* DESIGN §15.4 更多 (朗读 page): a labelled card holding several individually-folded groups. */
+.jy-more-group { margin-top: 4px; }
+.jy-more-group > h2 { margin: 0 0 10px; font-size: 14px; font-weight: 650; }
+.jy-fold-list { display: flex; flex-direction: column; gap: 8px; }
+.jy-fold-list > .jy-fold { padding: 12px 14px; background: var(--jy-band); border: 1px solid var(--jy-band-line); border-radius: var(--jy-radius-sm); }
 .jy-tts-voice-row { display: block; padding: 0; border-bottom: 1px solid var(--jy-line-soft); }
 .jy-tts-voice-row > summary { display: flex; align-items: center; gap: 8px; padding: 9px 0; cursor: pointer; list-style: none; font-size: 12.5px; }
 .jy-tts-voice-row > summary::-webkit-details-marker { display: none; }
@@ -805,6 +974,14 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-row, .jy-mini-sentence { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 8px 4px; border-top: 1px solid var(--jy-line-soft); border-radius: 6px; cursor: pointer; }
 .jy-mini-row:hover, .jy-mini-sentence:hover { background: var(--jy-band); }
 .jy-mini-row[data-editing="true"] { background: var(--jy-accent-soft); cursor: default; }
+/* 片段跳转: the row a chat click landed on, flashed once so the reader can find it. */
+.jy-mini-row-jump { animation: jy-mini-row-jump 1100ms ease-out; will-change: background-color; }
+@keyframes jy-mini-row-jump { 0% { background: var(--jy-accent-soft); } 100% { background: transparent; } }
+/* DESIGN §14 减少动态效果: the keyframe above is suppressed by the global animation:none rule further
+   down this file, which used to leave 片段跳转 with no highlight at all (review finding style.css:975).
+   This holds the same colour as a plain background instead; index.js's focusRow adds it, waits about
+   2s, then removes it again — no animation involved. */
+.jy-mini-row-jump-static { background: var(--jy-accent-soft); }
 .jy-mini-sentence[data-current="true"] { background: var(--jy-accent-soft); }
 .jy-mini-row-mark, .jy-mini-sentence-mark { font-size: 12px; line-height: 1.6; color: var(--jy-muted); text-align: center; }
 .jy-mini-row[data-state="done"] .jy-mini-row-mark, .jy-mini-sentence[data-ready="true"] .jy-mini-sentence-mark { color: var(--jy-ok); }
@@ -1047,3 +1224,19 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-call-talk { grid-column: span 2; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .jy-mini-call [data-jy-call-typing] .jy-button { flex: 0 0 auto; white-space: nowrap; }
 .jy-mini[data-touch="true"] .jy-mini-call [data-jy-call-input], .jy-mini[data-touch="true"] .jy-mini-call [data-jy-call-typing] .jy-button { min-height: 44px; }
+
+/* DESIGN §16 小助手：对话卡片沿用 .jy-desk-card 的底与描边，输入区沿用 .jy-footer 的吸底与安全区，
+   这里只重排布局，不新增颜色、字号、圆角或动效 token。 */
+.jy-helper-conversation { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.jy-helper-turn { display: flex; flex-direction: column; gap: 8px; }
+.jy-helper-question { margin: 0; font-size: 12px; color: var(--jy-muted); }
+.jy-helper-answer { margin: 0; font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.jy-helper-answer.is-error { color: var(--jy-error); }
+.jy-helper-suggestions { display: flex; flex-direction: column; }
+.jy-helper-suggestion { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--jy-line-soft); font-size: 13px; }
+.jy-helper-suggestion > span { min-width: 0; overflow-wrap: anywhere; }
+.jy-helper-suggestion-done { flex: none; color: var(--jy-ok); font-size: 12px; font-weight: 600; }
+.jy-helper-footer { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; }
+.jy-helper-input-actions { display: flex; gap: 8px; align-items: center; }
+.jy-helper-note { margin: 0; font-size: 11px; }
+.jy-helper-note .jy-text-button { padding: 0; font-size: 11px; }

@@ -18,7 +18,7 @@ import {
   SPEECH_MOODS,
   FISH_EMOTIONS,
 } from '../tts.js';
-import { castNameOccurs, refineCast, resolveSpeakers } from '../tts-speakers.js';
+import { castNameOccurs, discoverSpeakerAliases, refineCast, resolveSpeakers } from '../tts-speakers.js';
 
 // One source line as the reading gets it: marks turned into runs, the utterances cut, the marks read on.
 function readLine(source, options = {}) {
@@ -36,6 +36,20 @@ test('a speaker mark is read however the model half-remembered how to write it',
   assert.deepEqual(readSpeechAttributes(" speaker='Alice' emotion=“happy”"), { speaker: 'Alice', mood: 'happy' });
   assert.equal(speechMarkedLine('没有标记的一行。'), null, 'a line without marks is left as it always was');
   assert.equal(speechMarkedLine('<saying>不是标记</saying>'), null, 'a tag that only starts with say is not a mark');
+});
+
+test('a mark\'s own struck-through or redacted words are dropped from what the mark is read with', () => {
+  const struck = readLine('<say who="泰罗">「这是<s>划掉的</s>话。」</say>');
+  assert.equal(struck.read.text, '「这是话。」', 'gone before the tag is stripped, not read as if it were still there');
+  assert.equal(struck.read.spans.length, 1, 'the mark itself, and who it names, are unaffected');
+  assert.equal(struck.read.spans[0].speaker, '泰罗');
+  const redacted = readLine('<say who="泰罗">「<span style="background-color:currentColor">秘密</span>之事。」</say>');
+  assert.equal(redacted.read.text, '「之事。」');
+  // The private-use markers speechMarkedLine writes in for <say> are not ordinary markup and survive
+  // dropHiddenMarkup untouched: an unaffected mark still reads and finds its speaker as it always did.
+  const plain = readLine('<say who="泰罗">「一句话。」</say>');
+  assert.equal(plain.read.text, '「一句话。」');
+  assert.equal(plain.read.spans[0]?.speaker, '泰罗');
 });
 
 test('the translator never sees a mark; the reading gets it beside the segment, not on it', () => {
@@ -88,6 +102,14 @@ test('a mood is heard in Fish\'s own words, whichever language the mark wrote it
   for (const [, english] of SPEECH_MOODS) assert.ok(FISH_EMOTIONS.includes(english), `${english} is a word Fish knows`);
 });
 
+test('a mood of more than one word is kept whole, not torn apart at its own space', () => {
+  assert.deepEqual(speechMood('soft tone'), { emotion: '', tone: 'soft tone' });
+  assert.deepEqual(speechMood('Soft  Tone'), { emotion: '', tone: 'soft tone' }, 'case and spacing do not matter');
+  assert.deepEqual(speechMood('生气 in a hurry tone'), { emotion: 'angry', tone: 'in a hurry tone' });
+  assert.deepEqual(speechMood('happy, soft tone'), { emotion: 'happy', tone: 'soft tone' });
+  assert.deepEqual(speechMood('soft tones'), { emotion: '', tone: '' }, 'only the phrase itself, not a word it happens to start');
+});
+
 test('the reader\'s own word still outranks a mark; a mark outranks everything the text only suggests', () => {
   const { utterances, reading } = readLine('泰罗说：<say who="樱井" mood="开心">「走吧。」</say>');
   const tagged = new Map([...reading.labels].map(([id, label]) => [id, label.speaker]));
@@ -96,6 +118,88 @@ test('the reader\'s own word still outranks a mark; a mark outranks everything t
   assert.deepEqual([byMark.get(2).speaker, byMark.get(2).source], ['樱井', 'tag'], 'the author named her; 「泰罗说」 beside it does not move that');
   const byReader = resolveSpeakers(utterances, { cast, tagged, manual: new Map([[2, '泰罗']]) });
   assert.deepEqual([byReader.get(2).speaker, byReader.get(2).source], ['泰罗', 'manual']);
+});
+
+test('a mark nobody in the cast has is read as naming that spelling; the correction for R2 now happens upstream, before resolveSpeakers ever sees the mark', () => {
+  // The body writes the character's Japanese name; the cast (and the translation) know him as 真嗣. The
+  // spelling is no longer corrected here — discoverSpeakerAliases corrects it upstream, in
+  // prepareTtsSegments, before `tagged` ever reaches resolveSpeakers (see test/tts-runtime.test.mjs,
+  // 'a mark the cast does not know falls back to the translation's own speaker...').
+  const { utterances } = readLine('<say who="碇シンジ" mood="无奈">「……仕方ないよ。」</say>');
+  const cast = [{ name: '真嗣', aliases: [] }];
+  const tagged = new Map([[1, '碇シンジ']]);
+  const byMark = resolveSpeakers(utterances, { cast, tagged, infer: false });
+  assert.deepEqual([byMark.get(1).speaker, byMark.get(1).source], ['碇シンジ', 'tag'], 'a spelling nobody in the cast has is read as naming that spelling, not silently dropped as if nobody had spoken');
+});
+
+// R1: a mark for a minor character the cast never lists (the prompt's own rule 2 asks the model to
+// write exactly this) must keep its own identity, not fall to whoever else the cast does have — at
+// this level with only one cast member, the easiest way for that bug to hide.
+test('a mark for somebody outside the cast keeps its own name, not the only person the cast does list', () => {
+  const { utterances } = readLine('<say who="凛">「就这家吧。」</say><say who="店员">「欢迎光临！」</say>');
+  const cast = [{ name: '凛', aliases: [] }];
+  const tagged = new Map([[1, '凛'], [2, '店员']]);
+  const byMark = resolveSpeakers(utterances, { cast, tagged, infer: false });
+  assert.deepEqual([byMark.get(1).speaker, byMark.get(1).source], ['凛', 'tag']);
+  assert.deepEqual([byMark.get(2).speaker, byMark.get(2).source], ['店员', 'tag'], '店员 is not in the cast, but is still their own person, not folded into 凛');
+});
+
+test('discoverSpeakerAliases corrects a mark per line, from that line\'s own hint, once the mark resolves to nobody a voice answers to', () => {
+  const { utterances } = readLine('<say who="碇シンジ" mood="无奈">「……仕方ないよ。」</say>');
+  const cast = [{ name: '真嗣', aliases: [] }];
+  const tagged = new Map([[1, '碇シンジ']]);
+  const hints = new Map([[1, '真嗣']]);
+  const voiced = new Set(['真嗣']);
+  const found = discoverSpeakerAliases(utterances, { cast, hints, tagged, voiced });
+  assert.deepEqual([...found.corrected], [[1, '真嗣']]);
+  assert.deepEqual([...found.learnable], [['碇シンジ', '真嗣']]);
+  // Nothing to correct or learn without a translation hint to confirm it against.
+  assert.equal(discoverSpeakerAliases(utterances, { cast, tagged, voiced }).corrected.size, 0);
+  // Nothing to correct once the spelling is already one of the cast's own — a voice already answers to it.
+  const known = [{ name: '真嗣', aliases: ['碇シンジ'] }];
+  assert.equal(discoverSpeakerAliases(utterances, { cast: known, hints, tagged, voiced }).corrected.size, 0);
+  // A mark the cast already recognises under its own name is not "discovered" again.
+  const already = new Map([[1, '真嗣']]);
+  assert.equal(discoverSpeakerAliases(utterances, { cast, hints, tagged: already, voiced }).corrected.size, 0);
+  // A card's own name, carried into the cast with no voice of its own (R2's own scenario), counts the
+  // same as no match at all — without a `voiced` set every cast match counts as settled, as it always did.
+  const cardOnly = discoverSpeakerAliases(utterances, { cast, hints, tagged, voiced: new Set() });
+  assert.deepEqual([...cardOnly.corrected], [[1, '真嗣']]);
+});
+
+test('discoverSpeakerAliases only remembers a spelling every line under it, this floor, agreed on the same person — never a crowd, role or placeholder word', () => {
+  const first = readLine('<say who="少女">「就是这里。」</say>');
+  const second = readLine('<say who="少女">「太慢了！」</say>');
+  const utterances = [...first.utterances, ...second.utterances.map(item => ({ ...item, id: item.id + 10 }))];
+  const cast = [{ name: '凛', aliases: [] }, { name: '明日香', aliases: [] }];
+  const voiced = new Set(['凛', '明日香']);
+  const tagged = new Map([[1, '少女'], [11, '少女']]);
+  // Two lines marked 少女, hinted for two different people: each line is corrected from its own hint —
+  // this is the same-floor case the old per-spelling map got wrong.
+  const disagreeing = discoverSpeakerAliases(utterances, { cast, hints: new Map([[1, '凛'], [11, '明日香']]), tagged, voiced });
+  assert.deepEqual([...disagreeing.corrected], [[1, '凛'], [11, '明日香']]);
+  // ...but nothing is remembered for 少女 itself: the spelling does not mean one particular person.
+  assert.equal(disagreeing.learnable.size, 0);
+  // Both lines hinted the same person: that agreement is worth remembering.
+  const agreeing = discoverSpeakerAliases(utterances, { cast, hints: new Map([[1, '凛'], [11, '凛']]), tagged, voiced });
+  assert.deepEqual([...agreeing.learnable], [['少女', '凛']]);
+  // A crowd word is never remembered, even when the only line under it agrees with a hint.
+  const crowd = new Map([[1, '众人']]);
+  assert.equal(discoverSpeakerAliases(first.utterances, { cast, hints: new Map([[1, '凛']]), tagged: crowd, voiced }).learnable.size, 0);
+});
+
+test('discoverSpeakerAliases falls back to a spelling learned from an earlier floor, but this floor\'s own, disagreeing hint still wins', () => {
+  const { utterances } = readLine('<say who="少女">「太慢了！」</say>');
+  const cast = [{ name: '凛', aliases: [] }, { name: '明日香', aliases: [] }];
+  const voiced = new Set(['凛', '明日香']);
+  const tagged = new Map([[1, '少女']]);
+  const learned = new Map([['少女', '凛']]);
+  // No hint on this floor: the spelling learned from a floor before this one applies.
+  const remembered = discoverSpeakerAliases(utterances, { cast, tagged, voiced, learned });
+  assert.deepEqual([...remembered.corrected], [[1, '凛']]);
+  // This floor's own hint disagrees with the earlier guess: the fresh hint wins.
+  const overridden = discoverSpeakerAliases(utterances, { cast, hints: new Map([[1, '明日香']]), tagged, voiced, learned });
+  assert.deepEqual([...overridden.corrected], [[1, '明日香']]);
 });
 
 test('a name counts as written only where it is written: whole words for Latin names, any run for the rest', () => {

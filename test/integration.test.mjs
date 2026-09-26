@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 import {
   MESSAGE_META_KEY,
+  SEGMENTATION_RULES_VERSION,
   assembleBilingual,
+  assembleReplace,
   extractGeneratedTranslations,
   createTranslationSignature,
   hashText,
@@ -161,6 +163,130 @@ test('streaming and whole-request paths agree on the already-translated gate', a
   // A forced run must not take the same shortcut; without a channel it fails at the request, which
   // is proof enough that it did NOT stop at the gate.
   await assert.rejects(__testing.startTranslation(0, { quiet: true, force: true }));
+});
+
+test('a floor already translated under v0.36.0 or older — a <br>-joined card line and a play-time line included — reads back exactly as it did, never re-translated', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: { apiMode: 'independent', streamingWriteback: true } });
+  // Neither shape had a built-in rule before v0.36.1: the card's three lines, joined only by <br> with
+  // no real newline between them, were sent as one glued paragraph, and the play-time line — digits, so
+  // the old "no letters, no digits" preserve check missed it — was sent to be translated as if it were
+  // prose.
+  const source = 'NOW PLAYING<br>今日の空<br>作词：陽炎\n\n00:42 / 03:15\n\n彼は笑った。';
+  const legacy = { ...settings, segmentationVersion: 1 };
+  const segmented = segmentSource(source, legacy);
+  assert.equal(segmented.segments.length, 3, 'the fixture reflects what v0.36.0 actually did: three paragraphs, all of them sent off');
+  const translations = new Map([
+    [segmented.segments[0].id, 'NOW PLAYING今日的天空作词：陽炎'],
+    [segmented.segments[1].id, '00:42 / 03:15'],
+    [segmented.segments[2].id, '他笑了。'],
+  ]);
+  const bilingual = assembleBilingual(segmented.layout, translations, legacy);
+  const inner = `\n${bilingual}\n`;
+  context.chat.push({
+    mes: `<story_scene>${inner}</story_scene>`,
+    swipe_id: 0,
+    extra: {
+      [MESSAGE_META_KEY]: {
+        // No segmentation_version field at all — exactly what a floor translated through v0.36.0 has.
+        schema_version: 4, swipe_id: 0, complete: true,
+        source_hash: await hashText(createTranslationSignature([{ tagName: 'story_scene', segments: segmentSource(inner, legacy).segments }])),
+        segment_prefix: settings.segmentPrefix ?? '', segment_suffix: settings.segmentSuffix ?? '',
+        translation_prefix: settings.translationPrefix ?? '{', translation_suffix: settings.translationSuffix ?? '}',
+        paragraph_per_line: false,
+      },
+    },
+  });
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.segments.length, 3, 'the fresh pass agrees with what is stored: the new <br> and play-time rules did not re-split or re-classify an old floor');
+  assert.equal(snapshot.existingTranslations.size, 3, 'every paragraph\'s translation is found, none orphaned by a segment the new rules stopped creating');
+  assert.equal(snapshot.translated, true, 'a floor already fully translated under the old rules is not seen as needing anything more');
+  const gate = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(gate.reason, 'already-translated', 'nothing is asked for again — the reason the v0.36.1 rules must not touch a floor v0.36.0 already finished');
+});
+
+test('a floor written by main v0.38.0 (segmentation_version 2) — a card, plain <br> prose, a ruby row and a replace-tag lyric — all still read back translated, nothing re-sent', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost();
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', bodyTags: ['story_scene'], replaceTags: ['replace_scene'],
+      musicCardRules: true, lyricLineRules: 'prefix:♪',
+    },
+  });
+  // Everything below is segmented and assembled at segmentation_version 2 — v0.40.0's own tightening
+  // (SEGMENTATION_RULES_VERSION 3) did not exist yet, so this is exactly what main 8f76124 would have
+  // written: the card's first row still merges into the narration before it, the <br> prose is split
+  // unconditionally into lyric guesses, and the already-bilingual check is the broader, un-tightened one.
+  const legacy = { ...settings, segmentationVersion: 2 };
+
+  // story_scene (bilingual): narration + a NOW PLAYING card with a ruby-style row, plus a run of plain
+  // <br>-separated prose that v2's own broad catch-all still turns into lyric guesses.
+  const storySource = '她哼起了一段旋律。\nNOW PLAYING<br>そらにひびけ<br>星(ほし)<br>作词：风铃\n\n信里写着地址<br>还有电话号码';
+  const storySegmented = segmentSource(storySource, legacy);
+  const storyTranslations = new Map(storySegmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const storyBody = assembleBilingual(storySegmented.layout, storyTranslations, legacy);
+
+  // replace_scene: a 「歌词行」-matched lyric line beside ordinary narration. main 8f76124's assembleReplace
+  // had no part.lyric branch at all — a lyric row went through the same translation-only path as any
+  // other replace segment — so the fixture is built the same way (part.lyric stripped before assembling).
+  const replaceSource = '♪ 星の歌\n彼女は歌った。';
+  const replaceSegmented = segmentSource(replaceSource, legacy);
+  assert.ok(replaceSegmented.layout.some(part => part.lyric), '这句歌词规则命中的行确实被判成了 lyric，样例才有意义');
+  const mainStyleLayout = replaceSegmented.layout.map(part => (part.lyric ? { ...part, lyric: false } : part));
+  const replaceTranslations = new Map(replaceSegmented.segments.map((segment, index) => [segment.id, `替换译${index + 1}`]));
+  const replaceBody = assembleReplace(mainStyleLayout, replaceTranslations, legacy);
+
+  const storyInner = `\n${storyBody}\n`;
+  const replaceInner = `\n${replaceBody}\n`;
+  context.chat.push({
+    mes: `<story_scene>${storyInner}</story_scene>\n<replace_scene>${replaceInner}</replace_scene>`,
+    swipe_id: 0,
+    extra: {
+      [MESSAGE_META_KEY]: {
+        schema_version: 4, swipe_id: 0, complete: true, segmentation_version: 2,
+        source_hash: await hashText(createTranslationSignature([
+          { tagName: 'story_scene', segments: segmentSource(storyInner, legacy).segments },
+          { tagName: 'replace_scene', segments: segmentSource(replaceInner, legacy).segments },
+        ])),
+        segment_prefix: settings.segmentPrefix ?? '', segment_suffix: settings.segmentSuffix ?? '',
+        translation_prefix: settings.translationPrefix ?? '{', translation_suffix: settings.translationSuffix ?? '}',
+        paragraph_per_line: false,
+      },
+    },
+  });
+
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  const expectedCount = storySegmented.segments.length + replaceSegmented.segments.length;
+  assert.equal(snapshot.segments.length, expectedCount, '按 segmentation_version 2 重新分段的结果和存量一致，段数没变');
+  assert.equal(snapshot.existingTranslations.size, expectedCount, '卡片、<br> 正文、假名读音行和替换标签里的歌词行，译文一个都没漏');
+  assert.equal(snapshot.translated, true, '一楼已经翻译完的旧楼层不会被判定成还差什么');
+  const gate = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(gate.reason, 'already-translated', '旧楼层不会被重新分段、重发任何一段');
+});
+
+test('a fresh swipe carrying a copy of a translated swipe\'s own `extra` is never pinned to that copy\'s old segmentation rules', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: {} });
+  // Swipe 0 was translated under v0.36.0's own rules and carries a real record of it.
+  context.chat.push(await translatedFloor('雨が降っている。', [[1, '下雨了。']], settings));
+  const message = context.chat[0];
+  // The host's own behaviour on a fresh generation: swipe 1 is brand new prose — nothing this extension
+  // has ever written to it, no boundary markers of any kind — but its `extra` starts life as a *copy* of
+  // swipe 0's, segmentation_version and all (see readFloor's and resolveSegmentationVersion's own notes).
+  const card = 'NOW PLAYING<br>今日の空';
+  message.swipes = [message.mes, `<story_scene>\n${card}\n</story_scene>`];
+  message.swipe_id = 1;
+  message.mes = message.swipes[1];
+  message.extra = { [MESSAGE_META_KEY]: { ...message.extra[MESSAGE_META_KEY], segmentation_version: 1, swipe_id: 1 } };
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.segmentationVersion, SEGMENTATION_RULES_VERSION, 'nothing has translated this text, so a copied record\'s rules are never trusted for it');
+  assert.deepEqual(snapshot.segments.map(item => item.text), ['NOW PLAYING\n今日の空'], 'segmented under the latest rules, not glued as the copied v1 record would read it');
 });
 
 test('worldbook key matching honours regex, whole words and case, and skips secondary logic', async t => {
@@ -1118,6 +1244,82 @@ test('putting the originals back reaches hidden floors, and each swipe gets its 
   assert.equal(message.mes, message.swipes[1]);
 });
 
+test('a swipe while 恢复本聊天的原文’s confirm is open puts back whichever page ends up shown, not the one that was current before the wait', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context } = translationOnlyHost([
+    [{ id: 1, text: '是的。' }, { id: 2, text: '风很大。' }],
+    [{ id: 1, text: '是的。' }, { id: 2, text: '风很大。' }],
+  ]);
+  const message = context.chat[0];
+  const first = '<story_scene>\nはい。\n<image>rain, city</image>\n風が強い。\n</story_scene>';
+  const second = '<story_scene>\nはい！\n<image>rain, city</image>\n風が強い。\n</story_scene>';
+  message.mes = first;
+  message.swipes = [first, second];
+  message.swipe_info = [{ extra: {} }, { extra: {} }];
+  message.swipe_id = 0;
+  await __testing.startTranslation(0, { quiet: true });
+  message.swipe_info[0].extra = structuredClone(message.extra);
+  message.swipe_id = 1;
+  message.mes = second;
+  message.extra = structuredClone(message.swipe_info[1].extra);
+  await __testing.startTranslation(0, { quiet: true });
+  // Page 1 is shown when the confirm opens.
+  const mirror0 = message.swipe_info[0].extra[MESSAGE_META_KEY].mirror;
+  const mirror1 = message.extra[MESSAGE_META_KEY].mirror;
+
+  // While the confirm waits, the reader swipes left to page 0 — the same sequence SillyTavern's own
+  // swipe() runs (script.js syncMesToSwipe then syncSwipeToMes).
+  const ask = async () => {
+    message.swipes[1] = message.mes;
+    message.swipe_info[1] = { ...message.swipe_info[1], extra: structuredClone(message.extra) };
+    message.swipe_id = 0;
+    message.mes = message.swipes[0];
+    message.extra = structuredClone(message.swipe_info[0].extra);
+    return true;
+  };
+
+  const result = await __testing.restoreChatOriginals({ ask });
+  assert.equal(result.restored, 2);
+  // Page 0 — the one actually shown once the confirm resolved — gets its own bilingual text and its
+  // own record cleared, not page 1's.
+  assert.equal(message.swipe_id, 0);
+  assert.equal(message.mes, mirror0);
+  assert.equal(message.swipes[0], mirror0);
+  assert.equal(message.extra[MESSAGE_META_KEY].stripped, undefined);
+  assert.equal(message.extra[MESSAGE_META_KEY].mirror, undefined);
+  // Page 1, off screen by the time the write happened, still gets its own original back.
+  assert.equal(message.swipes[1], mirror1);
+});
+
+test('恢复本聊天的原文: a 继续 that finishes on this floor while the confirm dialog is still open is not overwritten by the stale bilingual text once confirmed', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context } = translationOnlyHost([
+    [{ id: 1, text: '是的。' }, { id: 2, text: '风很大。' }],
+  ]);
+  const message = context.chat[0];
+  await __testing.startTranslation(0, { quiet: true });
+  const mes = message.mes;
+  const mirror = message.extra[MESSAGE_META_KEY].mirror;
+
+  // While the confirm dialog waits, a main generation («继续») finishes on this exact page and appends
+  // to it — the same effect a real continuation has on message.mes and, once it lands, on this page's
+  // own entry in message.swipes. runtime.mainGenerationActive is already back to false by the time the
+  // dialog resolves, same as after any other finished generation.
+  const ask = async () => {
+    message.mes = `${mes}\n续写的一段。`;
+    message.swipes[0] = message.mes;
+    return true;
+  };
+
+  await assert.rejects(__testing.restoreChatOriginals({ ask }), /改过|重新点/, '放回原文中止，而不是把续写内容换成确认前读到的双语文本');
+  // Nothing was written: the continuation survives, and so does the translation record it still needs.
+  assert.equal(message.mes, `${mes}\n续写的一段。`);
+  assert.equal(message.swipes[0], message.mes);
+  assert.equal(message.extra[MESSAGE_META_KEY].mirror, mirror);
+});
+
 test('世界书开关: only the books switched on bring their ticked entries, and a card saved before keeps its picks', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });
@@ -1446,4 +1648,338 @@ test('on a host with no record per swipe, another swipe\'s record never puts its
     const text = message.mes.replace(/[\u200b-\u200d\u2060-\u2064\ufeff]/g, '');
     assert.match(text, new RegExp(`\n${prefix}下雨了。${suffix}\n`), `after ${prefix}${suffix}`);
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// A reply with nothing to translate (a gasp, a stammer, a short onomatopoeia) used to be echoed back
+// unchanged, read as still-Japanese, dropped, sent to repair, echoed again, and left missing forever —
+// 补译缺失段落 then repeated the same failure. See core.js's looksUntranslated/isShortExactEcho and
+// index.js's withoutUntranslated/translateOneBatch.
+// ---------------------------------------------------------------------------------------------
+
+test('four lines with nothing but a gasp or a stammer in them translate on the first request, never sent to repair', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  // The model hands every one of these back exactly as it received them, there is nothing in any of
+  // them to translate, so the mock simply echoes whatever it was asked for.
+  let segments;
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify(segments.map(item => ({ id: item.id, text: item.text }))));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  const lines = ['「……っ」', '「……え？」', '「ッ！」', '「……うん。」'];
+  const source = lines.join('\n\n');
+  segments = segmentSource(source, settings).segments;
+  assert.equal(segments.length, 4, 'four separate paragraphs, one per reported line');
+  context.chat.push({ mes: `<story_scene>\n${source}\n</story_scene>`, swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(asked.length, 1, 'the model handing every line back unchanged settles it on the first request, no repair');
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'the floor is written back complete');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+  for (const line of lines) {
+    const seg = segments.find(item => item.text === line);
+    assert.equal(snapshot.existingTranslations.get(seg.id), line, `"${line}" is kept as its own translation`);
+  }
+});
+
+test('a short katakana onomatopoeia echoed unchanged twice in a row is accepted, not repaired a third time', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([{ id: 1, text: 'ドキドキ' }]));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  context.chat.push({ mes: '<story_scene>\nドキドキ\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  // Primary request, then one repair: the repair's answer matches the primary's, and that second match
+  // is what accepts it, never a third request.
+  assert.equal(asked.length, 2);
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'the floor is written back complete, not left partial');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+  assert.equal(snapshot.existingTranslations.get(1), 'ドキドキ');
+});
+
+test('a long segment echoed unchanged twice in a row stays missing, never silently accepted', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const longLine = '雨が降っていて、風も強くなってきた。';
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([
+        { id: 1, text: '天气晴朗。' },
+        { id: 2, text: longLine },
+      ]));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  context.chat.push({ mes: `<story_scene>\n天気がいい。\n\n${longLine}\n</story_scene>`, swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  // Primary request, then the one repair the retry budget allows; over the 8-letter ceiling, a second
+  // matching echo is never enough to accept it.
+  assert.equal(asked.length, 2);
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, true, 'never silently accepted: the floor is written back partial');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, false);
+  assert.equal(snapshot.existingTranslations.has(2), false, 'the long segment is not written down as if it were a translation');
+  assert.equal(snapshot.existingTranslations.get(1), '天气晴朗。', 'the ordinary paragraph beside it still translated normally');
+});
+
+test('补译缺失段落 completes a floor left partial on an echoed interjection, without a second failing request', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([{ id: 2, text: '「……っ」' }]));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  const source = '雨が降っている。\n\n「……っ」';
+  const segmented = segmentSource(source, settings);
+  // What a floor left behind before this fix: the ordinary line translated, the echoed interjection
+  // dropped by the old untranslated-echo check and never recovered, so the write-back was partial.
+  const partial = assembleBilingual(segmented.layout, new Map([[1, '下雨了。']]), { ...settings, allowMissing: true });
+  const inner = `\n${partial}\n`;
+  context.chat.push({
+    mes: `<story_scene>${inner}</story_scene>`,
+    swipe_id: 0,
+    extra: {
+      [MESSAGE_META_KEY]: {
+        schema_version: 4, swipe_id: 0, complete: false, missing_ids: [2],
+        source_hash: await hashText(createTranslationSignature([{ tagName: 'story_scene', segments: segmentSource(inner, settings).segments }])),
+        segment_prefix: settings.segmentPrefix ?? '', segment_suffix: settings.segmentSuffix ?? '',
+        translation_prefix: settings.translationPrefix ?? '{', translation_suffix: settings.translationSuffix ?? '}',
+        paragraph_per_line: false,
+      },
+    },
+  });
+  // The button itself asks for nothing more than a normal, unforced translate: readMessageSnapshot's
+  // own seeding already sends only what has no translation yet (see the "补译 asks only" test above).
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(asked.length, 1, 'accepted on this one request, no second, failing repair request follows');
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'the floor now reports complete');
+  assert.match(context.chat[0].mes, /「……っ」/);
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Reviewer follow-up on the echo fix above: the two-echo rule (core.js's isShortExactEcho) was wide
+// enough to accept a real short sentence, name or greeting the model was simply too lazy to translate,
+// not only a gasp or an onomatopoeia — and the confirming second request could be starved by a shared
+// retry budget, or never sent at all once streaming or retries: 0 were involved. See core.js's
+// isShortExactEcho/isTrivialInterjectionSource and index.js's translateOneBatch/translateMessageStreaming.
+// ---------------------------------------------------------------------------------------------
+
+test('two real short kana phrases echoed twice in a row are never written down as their own translation', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const input = JSON.parse(prompt.at(-1).content);
+      asked.push(input.segments.map(segment => segment.id));
+      // Line 1 translates normally; ありがとう and ごめんなさい — real, ordinary, kana-only lines with
+      // no Han in them, so the old rule's Han check alone did not save them — come back unchanged
+      // every time, the way a lazy model answers a short line it could have just translated.
+      return Promise.resolve(JSON.stringify(input.segments.map(segment => ({
+        id: segment.id,
+        text: segment.id === 1 ? '下雨了。' : segment.text,
+      }))));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  context.chat.push({ mes: '<story_scene>\n雨が降っている。\n\nありがとう\n\nごめんなさい\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.ok(asked.length > 0);
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, true, 'a real "thank you" or "sorry" echoed twice is still a translation failure, never accepted as itself');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, false);
+  assert.equal(snapshot.existingTranslations.get(1), '下雨了。', 'the ordinary line beside them still translated normally');
+  assert.equal(snapshot.existingTranslations.has(2), false, 'ありがとう is never written down as its own translation');
+  assert.equal(snapshot.existingTranslations.has(3), false, 'ごめんなさい is never written down as its own translation');
+});
+
+test('two onomatopoeia segments split across concurrent lanes are both confirmed, not only whichever lane spent the one shared retry', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const input = JSON.parse(prompt.at(-1).content);
+      // Every request is answered with an exact echo of whatever it asked for.
+      return Promise.resolve(JSON.stringify(input.segments.map(segment => ({ id: segment.id, text: segment.text }))));
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'follow', streamingWriteback: false, retries: 1,
+      channels: [{ id: 'default', maxTokens: 4096, timeoutSec: 30, concurrency: 2 }],
+    },
+    initialized: true,
+  });
+  context.chat.push({ mes: '<story_scene>\nドキドキ\n\nワクワク\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'both onomatopoeia lines are accepted — the confirming request is free, not charged to the one shared retry');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+  assert.equal(snapshot.existingTranslations.get(1), 'ドキドキ');
+  assert.equal(snapshot.existingTranslations.get(2), 'ワクワク');
+});
+
+test('an onomatopoeia accepted after two echoes keeps the speaker/emotion mark it was returned with', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const input = JSON.parse(prompt.at(-1).content);
+      const items = input.segments.map(segment => (segment.id === 1
+        ? { id: 1, text: '天气真好。', speaker: '英梨梨', emotion: 'happy' }
+        : { id: segment.id, text: segment.text, speaker: '英梨梨', emotion: 'whisper' }));
+      return Promise.resolve(JSON.stringify(items));
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { ...coloringSettings, apiMode: 'follow', streamingWriteback: false, retries: 1 },
+    initialized: true,
+  });
+  context.chat.push({ mes: '<story_scene>\n天気がいい。\n\nドキドキ\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined);
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.existingAnnotations.get(1)?.speaker, '英梨梨');
+  assert.equal(snapshot.existingAnnotations.get(2)?.speaker, '英梨梨', 'the accepted echo keeps the speaker mark it was returned with, not just its text');
+  assert.equal(snapshot.existingAnnotations.get(2)?.emotion, 'whisper');
+});
+
+test('a run that succeeds by accepting an echoed onomatopoeia leaves no error-level diagnostic behind', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  clearDiagnostics();
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const input = JSON.parse(prompt.at(-1).content);
+      return Promise.resolve(JSON.stringify(input.segments.map(segment => ({
+        id: segment.id,
+        text: segment.id === 1 ? '天气真好。' : segment.text,
+      }))));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  context.chat.push({ mes: '<story_scene>\n天気がいい。\n\nドキドキ\n</story_scene>', swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined);
+  const errors = readDiagnostics().filter(entry => entry.level === 'error');
+  assert.deepEqual(errors, [], 'the run succeeded by recognising an echo; nothing in its own log should read as a failure');
+});
+
+test('a streamed echo is remembered across the whole-request repair, settling in one repair call instead of two', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n天気がいい。\n\nドキドキ\n</story_scene>', swipe_id: 0 };
+  const repairs = [];
+  mockHost([message], {
+    ChatCompletionService: {
+      async processRequest(payload) {
+        const input = JSON.parse(payload.messages.at(-1).content);
+        repairs.push(input.segments.map(segment => segment.id));
+        return { content: JSON.stringify(input.segments.map(segment => ({ id: segment.id, text: 'ドキドキ' }))) };
+      },
+    },
+  });
+  __testing.configureForTest({
+    settings: { ...streamingSettings, retries: 1, channels: [{ ...streamingSettings.channels[0], concurrency: 1 }] },
+    initialized: true,
+  });
+  globalThis.fetch = async (_url, init) => {
+    const input = JSON.parse(JSON.parse(init.body).messages.at(-1).content);
+    const payload = JSON.stringify(input.segments.map(segment => ({
+      id: segment.id,
+      text: segment.id === 1 ? '天气真好。' : 'ドキドキ',
+    })));
+    return sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: payload } }] })}\n\n`, 'data: [DONE]\n\n']);
+  };
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  assert.equal(repairs.length, 1, 'the streamed echo already counts as the first sighting, so one whole-request repair confirms it, not a second one');
+  assert.match(message.mes, /ドキドキ/);
+  assert.equal(message.extra[MESSAGE_META_KEY].complete, true);
+});
+
+test('at retries 0, a streamed echo is still confirmed through one free whole-request repair, not left missing forever', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n天気がいい。\n\nドキドキ\n</story_scene>', swipe_id: 0 };
+  const repairs = [];
+  mockHost([message], {
+    ChatCompletionService: {
+      async processRequest(payload) {
+        const input = JSON.parse(payload.messages.at(-1).content);
+        repairs.push(input.segments.map(segment => segment.id));
+        return { content: JSON.stringify(input.segments.map(segment => ({ id: segment.id, text: 'ドキドキ' }))) };
+      },
+    },
+  });
+  __testing.configureForTest({
+    settings: { ...streamingSettings, retries: 0, channels: [{ ...streamingSettings.channels[0], concurrency: 1 }] },
+    initialized: true,
+  });
+  globalThis.fetch = async (_url, init) => {
+    const input = JSON.parse(JSON.parse(init.body).messages.at(-1).content);
+    const payload = JSON.stringify(input.segments.map(segment => ({
+      id: segment.id,
+      text: segment.id === 1 ? '天气真好。' : 'ドキドキ',
+    })));
+    return sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: payload } }] })}\n\n`, 'data: [DONE]\n\n']);
+  };
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.skipped, false);
+  assert.equal(repairs.length, 1, 'retries: 0 still allows the one free confirming request — it never spends the (empty) retry budget');
+  assert.match(message.mes, /ドキドキ/);
+  assert.equal(message.extra[MESSAGE_META_KEY].complete, true, 'no longer stuck partial forever just because retries is 0');
+});
+
+test('a restyle while a floor is still translating redraws only the floors it rewrote and never reloads the chat', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; __testing.configureForTest({ inflight: new Map() }); });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: { translationPrefix: '<jy-t>', translationSuffix: '</jy-t>' } });
+  context.chat.push({ mes: 'こんにちは', is_user: true, extra: {} });
+  context.chat.push(await translatedFloor('雨が降っている。', [[1, '下雨了。']], settings));
+  context.chat.push({ mes: 'まだ訳していない。', extra: {} });
+  const drawn = [];
+  let reloads = 0;
+  context.updateMessageBlock = id => { drawn.push(id); };
+  context.reloadCurrentChat = async () => { reloads += 1; };
+  __testing.configureForTest({ inflight: new Map([[2, { promise: new Promise(() => {}), controller: new AbortController() }]]) });
+  await __testing.restyleCurrentChat({ ...settings, translationPrefix: '【', translationSuffix: '】' }, { paintOnly: true });
+  assert.equal(reloads, 0, '有楼层在翻译时不整页重载');
+  assert.deepEqual(drawn, [1], '纯取色只重绘这次改写过的那一楼');
+  // A regex or affix change can change how a floor renders without changing its text, so it draws every floor.
+  drawn.length = 0;
+  await __testing.restyleCurrentChat({ ...settings, translationPrefix: '<jy-u>', translationSuffix: '</jy-u>' });
+  assert.equal(reloads, 0);
+  assert.deepEqual(drawn, [0, 1, 2], '改正则、前后缀时每一楼都重绘');
 });
