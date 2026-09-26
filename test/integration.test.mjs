@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   MESSAGE_META_KEY,
+  SEGMENTATION_RULES_VERSION,
   assembleBilingual,
   extractGeneratedTranslations,
   createTranslationSignature,
@@ -222,7 +223,7 @@ test('a fresh swipe carrying a copy of a translated swipe\'s own `extra` is neve
   message.mes = message.swipes[1];
   message.extra = { [MESSAGE_META_KEY]: { ...message.extra[MESSAGE_META_KEY], segmentation_version: 1, swipe_id: 1 } };
   const snapshot = await __testing.readMessageSnapshot(0, settings);
-  assert.equal(snapshot.segmentationVersion, 2, 'nothing has translated this text, so a copied record\'s rules are never trusted for it');
+  assert.equal(snapshot.segmentationVersion, SEGMENTATION_RULES_VERSION, 'nothing has translated this text, so a copied record\'s rules are never trusted for it');
   assert.deepEqual(snapshot.segments.map(item => item.text), ['NOW PLAYING\n今日の空'], 'segmented under the latest rules, not glued as the copied v1 record would read it');
 });
 

@@ -2056,6 +2056,56 @@ test('with the music-card group off, a <br>-joined card is read exactly as v0.36
   );
 });
 
+test('v0.40.0: a card\'s first row starts its own unit instead of merging into the narration before it', () => {
+  const source = '她哼起了一段旋律。\nNOW PLAYING<br>そらにひびけ<br>作词：风铃';
+  const segmented = segmentSource(source, { musicCardRules: true });
+  const units = segmented.layout.filter(part => part.type === 'segment');
+  assert.equal(units[0].text, '她哼起了一段旋律。');
+  assert.equal(units[0].sourceText, '她哼起了一段旋律。', 'the NOW PLAYING row that follows is never folded into this unit');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['她哼起了一段旋律。', 'そらにひびけ']);
+  // An old floor (segmented before this fix) keeps reading the same text the way it always did — the
+  // narration and the card's first row still merge into one unit, so its stored translation still matches.
+  const oldFloor = segmentSource(source, { musicCardRules: true, segmentationVersion: 2 });
+  const oldUnits = oldFloor.layout.filter(part => part.type === 'segment');
+  assert.equal(oldUnits[0].sourceText, '她哼起了一段旋律。\nNOW PLAYING<br>', 'segmentation_version 2 stays on the old, unfixed merge');
+});
+
+test('v0.40.0: the music-card catch-all only fires inside an actual card, so plain <br>-separated prose is left as ordinary text', () => {
+  const prose = '写着地址的第一行<br>写着地址的第二行<br>写着地址的第三行';
+  const segmented = segmentSource(prose, { musicCardRules: true });
+  assert.equal(segmented.lyricLines, 0, '没有 NOW PLAYING 字样、双语行或歌词行命中，这里就不该被当成音乐卡片');
+  assert.deepEqual(
+    segmented.segments.map(item => item.text),
+    ['写着地址的第一行\n写着地址的第二行\n写着地址的第三行'],
+    '当成普通正文整体翻译，和 musicCardRules 关闭时读法一致',
+  );
+  // An old floor still runs the broader, unsignalled split — every <br> row becomes its own lyric guess.
+  const oldFloor = segmentSource(prose, { musicCardRules: true, segmentationVersion: 2 });
+  assert.equal(oldFloor.lyricLines, 3, 'segmentation_version 2 stays on the old catch-all, so a floor already translated that way still matches');
+});
+
+test('v0.40.0: the already-bilingual row check only counts a parenthesised part that is actually Chinese', () => {
+  const ruby = 'NOW PLAYING<br>星(ほし)<br>もう一つの行';
+  const segmented = segmentSource(ruby, { musicCardRules: true });
+  assert.equal(segmented.cardPreservedLines, 1, 'NOW PLAYING only — a ruby-style kana reading is not mistaken for our own bilingual pairing');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['星(ほし)', 'もう一つの行']);
+
+  const real = 'NOW PLAYING<br>灯りが揺れる (灯光摇曳)<br>次の一行';
+  assert.equal(segmentSource(real, { musicCardRules: true }).cardPreservedLines, 2, '一句真正写好的中文仍然照常识别、保留');
+});
+
+test('a lyric line lays out "原文 (译文)" inside a replace region too, its own <br> intact', () => {
+  const card = 'NOW PLAYING<br>そらにひびけ<br>作词：风铃';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(card, options);
+  const translations = new Map([[segmented.segments[0].id, '响彻天空']]);
+  const rendered = assembleReplace(segmented.layout, translations, { ...options, allowMissing: true });
+  const visible = rendered.replace(/[\u200b\u200c\u2060-\u2064]/g, '');
+  assert.match(visible, /そらにひびけ \(响彻天空\)<br>/, '替换模式下也排成和双语/只留译文一样的「原文 (译文)」，卡片行自己的 <br> 还在');
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, card, '还原时严丝合缝地拿回原文，两个 <br> 都还在');
+});
+
 // -------------------------------------------------------------------------------------------
 // 控制中心 foundation (DESIGN §15): uiMode / preset settings, the rail's page list per mode, the
 // one-click packages, and the connection-use helpers behind 「用在」.
