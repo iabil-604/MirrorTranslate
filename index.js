@@ -6979,12 +6979,17 @@ async function ttsPrepared(messageId, side = null, { fresh = false } = {}) {
   return prepared;
 }
 
-// voiceSummary shows a pause or stress by the same anchor the reading is held to — the shortest run
-// that still finds its word, often one character. The panel alone gets more: the word or short phrase
-// that anchor sits in, widened from the sentence's own text (tts-deep's pauseDisplay/stressDisplay).
-// A voice from before this existed, or an anchor a later edit moved out from under, still shows exactly
-// what it always did — widening only ever replaces the anchor with something that contains it.
-function widenPauseStressSummary(summary, voice, text) {
+// voiceSummary shows a pause or stress by the same anchor the reading is held to. For the deep reading
+// that anchor is the shortest run that still finds its word (anchorForward/anchorBackward in
+// tts-deep.js), often one character, and the panel alone gets more: the word or short phrase it sits
+// in, widened from the sentence's own text (tts-deep's pauseDisplay/stressDisplay). Every other reading
+// — simple, the translation's own marks, a correction — stores the word the model actually named, in
+// full, so widening it would only misstate which word is stressed or where the pause falls; this is
+// gated on depth === 'deep' for exactly that reason. A voice from before this existed, or an anchor a
+// later edit moved out from under, still shows exactly what it always did — widening only ever replaces
+// the anchor with something that contains it.
+function widenPauseStressSummary(summary, voice, text, depth) {
+  if (depth !== 'deep') return summary;
   if (!voice?.pauses?.length && !voice?.stress?.length) return summary;
   return summary.map(([term, value]) => {
     if (term === '停顿' && voice.pauses?.length) {
@@ -7009,15 +7014,16 @@ async function ttsInspect(messageId, utteranceId, side = null) {
   const analysis = runtime.tts.analysis.get(ttsLabelKey(prepared.floor));
   const automatic = { ...item, override: undefined };
   const entry = await findTtsEntry(prepared.floor, item, prepared.settings);
+  const depth = analysis?.depth ?? prepared.depth ?? null;
   return {
     messageId,
     side: prepared.floor.side,
     segment,
     voiceId: item.voiceId,
     voice: segment.voice,
-    summary: widenPauseStressSummary(voiceSummary(segment.voice ?? (segment.emotion ? { emotion: segment.emotion, intensity: segment.intensity } : null)), segment.voice, segment.text),
+    summary: widenPauseStressSummary(voiceSummary(segment.voice ?? (segment.emotion ? { emotion: segment.emotion, intensity: segment.intensity } : null)), segment.voice, segment.text, depth),
     original: prepared.floor.side === 'translation' || prepared.floor.side === 'dialogue_source' ? (prepared.floor.sources?.get(segment.lineId) ?? null) : (prepared.floor.references?.get(segment.lineId) ?? null),
-    depth: analysis?.depth ?? prepared.depth ?? null,
+    depth,
     derived: analysis?.derived === true,
     text: provider.sentenceText(automatic, tts),
     prosody: provider.prosody(automatic, tts),

@@ -273,24 +273,32 @@ test('SOUND_END_RULE, shared by every prompt that uses it, no longer names an "e
   assert.ok(DEEP_PROMPT.includes(SOUND_END_RULE), 'the deep prompt still carries the rule itself, just not the bare English word');
 });
 
-test('a pause anchor is widened toward its own start for the panel, keeping the edge the pause actually lands on untouched', () => {
-  const text = '你别靠这么近会让人看见的。';
-  assert.equal(pauseDisplay(text, '近'), '你别靠这么近', 'widens left, all the way to the start of this clause');
+test('a pause anchor is widened toward its own start for the panel, by the real word it opens rather than a character class, keeping the edge the pause actually lands on untouched', () => {
+  const text = '他们说的那些话我都听见了只是不想理。';
+  // '听见了' is one word to real word segmentation (Intl.Segmenter); the old character-class/margin
+  // widening cut in mid-word instead, landing on '些话我都听见了'.
+  assert.equal(pauseDisplay(text, '了'), '听见了', 'widens left to the start of the word segment the anchor itself sits in');
+  const wholeAlready = '你别靠这么近会让人看见的。';
+  assert.equal(pauseDisplay(wholeAlready, '近'), '近', '近 is already a whole word by itself, so there is nothing to widen it into');
   assert.equal(pauseDisplay(text, '不存在的词'), '不存在的词', 'an anchor the text no longer has shows exactly as it is, unchanged');
   assert.equal(pauseDisplay(text, ''), '', 'no anchor, nothing to widen');
 });
 
-test('a stress anchor is widened toward its own end for the panel, keeping the edge the stress actually starts on untouched', () => {
-  const text = '你去给别人喝吧，也不是不行。';
-  assert.equal(stressDisplay(text, '喝'), '喝吧', 'widens right, stopping at the comma');
-  assert.equal(stressDisplay(text, '别人喝'), '别人喝吧', 'widening never moves the start the model actually pointed at');
+test('a stress anchor is widened toward its own end for the panel, by the real word it starts rather than a character class, keeping the edge the stress actually starts on untouched', () => {
+  const text = '我根本不在乎你说什么。';
+  // '根本' is one word to real word segmentation; the old character-class/margin widening ran on past
+  // it to the six-character cap, landing on '根本不在乎你说'.
+  assert.equal(stressDisplay(text, '根'), '根本', 'widens right to the end of the word segment the anchor itself sits in');
+  const wholeAlready = '你去给别人喝吧，也不是不行。';
+  assert.equal(stressDisplay(wholeAlready, '喝'), '喝', '喝 is already a whole word by itself, so there is nothing to widen it into');
+  assert.equal(stressDisplay(wholeAlready, '别人喝'), '别人喝', 'widening never moves the start the model actually pointed at, nor shrinks what was already there');
 });
 
-test('widening a pause/stress anchor for the panel does not run past a fixed margin on text with no punctuation to stop it', () => {
-  // A long run of the same word character with nothing else to stop at: the anchor itself is unique
-  // only at the very end, so widening left has nowhere to give up except its own bounded margin.
-  const text = `${'啊'.repeat(20)}喝`;
-  const widened = pauseDisplay(text, '喝');
-  assert.ok(widened.endsWith('喝'));
-  assert.ok(widened.length <= 7, `widening stops at a fixed margin rather than running to the start of the text: "${widened}"`);
+test('widening a pause/stress anchor for the panel follows the real word boundary (Intl.Segmenter) past the old fixed character margin, rather than cutting a longer word short', () => {
+  // A run of digits or Latin letters with nothing else in it is one word to a segmenter however long,
+  // unlike the old character-class margin, which gave up after six characters no matter what.
+  const stressText = '打这个号码13800138000就对了';
+  assert.equal(stressDisplay(stressText, '1'), '13800138000', 'widens right across the whole number, well past the old six-character margin');
+  const pauseText = '输入这个网址abcdefghij就能看到';
+  assert.equal(pauseDisplay(pauseText, 'j'), 'abcdefghij', 'widens left across the whole word, well past the old six-character margin');
 });

@@ -714,10 +714,11 @@ export const SOUND_GROUNDS = soundGrounds(Object.keys(SOUND_CUES));
 // trailing-off mark, and moves one written after a line that trails off to where the line starts.
 export const SOUND_PLACE_RULE = '声音不能紧挨省略号、破折号、波浪号：句首挨着就写在句尾，句尾挨着就写在句首，两头都挨着就不写。';
 // The analyses keep end for a line with more of its paragraph after it, so a line that trails off at its
-// start and ends its paragraph has nowhere left for a sound. Spelled out in full — the same condition,
-// not the bare English word "end" — so a prompt whose own output format never has a field called that
-// (the deep reading's inline tags have no such field) still asks for something it actually defines.
-export const SOUND_END_RULE = '句首挨着、这一句所在段落后面又没有别的正文时也不写。';
+// start and ends its paragraph has nowhere left for a sound. Spelled out in full — the same condition as
+// rule 6 below (同一段里这句后面还有正文时用 end), not the bare English word "end" — so a prompt whose own
+// output format never has a field called that (the deep reading's inline tags have no such field) still
+// asks for something it actually defines.
+export const SOUND_END_RULE = '句首挨着、同一段里这句后面又没有别的正文时也不写。';
 
 // The moods that fold into the palette's tender and shy. Laid over nothing but 嗯 and 啊 they are the
 // moan itself, so the check before Fish drops them there, and every prompt names them one by one.

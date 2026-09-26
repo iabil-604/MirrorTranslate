@@ -289,15 +289,45 @@ function anchorBackward(text, end) {
 // stored as everywhere else — the same string a reader's own text search would use to locate it, kept
 // exactly as it is. A reader looking at the panel is not searching, though: shown "近" by itself for a
 // pause that trails a whole clause, they see one character. These two widen the anchor back out to the
-// word or short phrase it sits in, purely for that display — the letters/digits run around whichever
-// edge anchorForward/anchorBackward left loose (the far edge, the one tag.offset itself pinned, is never
-// moved), capped a few characters out so a run with no punctuation in it does not widen without end.
-// Nothing stored anywhere is this value; a floor edited since the analysis, or a result read back from
-// before this existed, simply shows the anchor itself, exactly as the panel always has.
+// word or short phrase it sits in, purely for that display — the far edge, the one tag.offset itself
+// pinned, is never moved; only the loose edge (the start for a pause, the end for a stress) moves out
+// to the boundary of the word its own character sits in. Chinese and Japanese have no spaces between
+// words, so that boundary comes from Intl.Segmenter's word segmentation rather than a character class —
+// a run of CJK letters has no gaps for a naive class to stop at, and stopping instead at punctuation or
+// a fixed number of characters (the old approach) just as often lands mid-word. Where Intl.Segmenter is
+// missing entirely, the old letters/digits-run, capped a few characters out so a run with no punctuation
+// in it does not widen without end, is what is left to fall back on. Nothing stored anywhere is this
+// value; a floor edited since the analysis, or a result read back from before this existed, simply shows
+// the anchor itself, exactly as the panel always has.
 // ---------------------------------------------------------------------------------------------
 
 const DISPLAY_WORD_RE = /[\p{L}\p{N}]/u;
 const DISPLAY_MARGIN = 6;
+
+// Word segmentation does not depend on locale for the languages this extension reads (Chinese, Japanese,
+// English all come out the same either way), so one shared segmenter covers all of them. Older runtimes
+// without Intl.Segmenter fall back to the character-class/margin widening below instead.
+let wordSegmenter = null;
+try {
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') wordSegmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
+} catch {
+  wordSegmenter = null;
+}
+
+/** The [start, end) span of the word segment `at` falls inside, or null when Intl.Segmenter is
+ * unavailable, `at` is out of range, or (should it ever happen) no segment covers it. */
+function wordBoundsAt(source, at) {
+  if (!wordSegmenter || at < 0 || at >= source.length) return null;
+  try {
+    for (const piece of wordSegmenter.segment(source)) {
+      const end = piece.index + piece.segment.length;
+      if (at < end) return at >= piece.index ? { start: piece.index, end } : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 function widenAnchor(text, anchor, side) {
   const source = String(text ?? '');
@@ -306,10 +336,14 @@ function widenAnchor(text, anchor, side) {
   const at = source.indexOf(word);
   if (at < 0) return word;
   if (side === 'left') {
+    const bounds = wordBoundsAt(source, at);
+    if (bounds) return source.slice(bounds.start, at + word.length);
     let start = at;
     for (let steps = 0; start > 0 && steps < DISPLAY_MARGIN && DISPLAY_WORD_RE.test(source[start - 1]); steps += 1) start -= 1;
     return source.slice(start, at + word.length);
   }
+  const bounds = wordBoundsAt(source, at + word.length - 1);
+  if (bounds) return source.slice(at, bounds.end);
   let end = at + word.length;
   for (let steps = 0; end < source.length && steps < DISPLAY_MARGIN && DISPLAY_WORD_RE.test(source[end]); steps += 1) end += 1;
   return source.slice(at, end);
