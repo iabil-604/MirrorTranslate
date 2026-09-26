@@ -4737,40 +4737,46 @@ export function assembleTranslationOnly(layout, translationMap, options = {}) {
       ? part.lineParts
       : ids.map(() => ({ semantic: true, source: '', lead: '', trail: '' }));
     let index = 0;
-    const body = lineParts.map(line => {
-      if (!line.semantic) return line.source;
+    // Joined with each line's own `separator` (a card row's own trailing <br> is the break, an ordinary
+    // physical-line boundary is '\n'), the same way replaceUnitBody joins a replace region's lineParts —
+    // a fixed '\n' here doubled a card row's own <br> with a real line break (v0.40.0).
+    const body = lineParts.map((line, at) => {
+      const separator = at < lineParts.length - 1 ? (typeof line.separator === 'string' ? line.separator : '\n') : '';
+      if (!line.semantic) return `${line.source}${separator}`;
       const id = ids[index];
       const format = carry ? formats[index] : null;
       index += 1;
       const translation = translationMap.get(id);
-      if (!translation) return line.source;
+      if (!translation) return `${line.source}${separator}`;
       const shaped = styledBody(String(translation), decoration.styleBody, plain, id);
       const wrapped = format?.open
         ? `${paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open}${shaped}${format.close}`
         : shaped;
-      return `${line.lead ?? ''}${wrapped}${line.trail ?? ''}`;
-    }).join('\n');
+      return `${line.lead ?? ''}${wrapped}${line.trail ?? ''}${separator}`;
+    }).join('');
     pieces.push(`${decoration.stylePrefix ?? ''}${body}${decoration.styleSuffix ?? ''}`);
   }
   return pieces.join('');
 }
 
 /**
- * A replace pair's visible side read back along the paragraph it was built from (replaceUnitBody): a
- * line not for translation must be there exactly as written, a translated line is its translation with
- * the line's excluded blocks beside it, a line not translated yet has nothing left once the markers are
- * gone. Blocks and pictures may run over several lines, so the reading follows the text, not a line
- * count. Anything that does not follow (a floor written before this, an edited floor) gives null, and
- * the older line-count reading is used.
+ * One reading pass over a replace pair's visible side, along the paragraph it was built from
+ * (replaceUnitBody): a line not for translation must be there exactly as written, a translated line is
+ * its translation with the line's excluded blocks beside it, a line not translated yet has nothing left
+ * once the markers are gone. Blocks and pictures may run over several lines, so the reading follows the
+ * text, not a line count.
  *
- * Between two lines, the separator consumed is whatever `replaceUnitBody` actually joined them with
- * (v0.40.0: a card row's own trailing <br> is '', an ordinary line boundary is '\n') — except a boundary
- * expecting '' also tolerates one stray leading '\n', because a floor written before this fix always
- * inserted one there regardless of what actually separated the two lines. A floor written after the fix
- * has no such byte to tolerate; either way the boundary is consumed and reading continues.
+ * `legacy` picks which separator every boundary is read with. False (the exact reading, tried first):
+ * whatever `replaceUnitBody` actually joined that pair of lines with (v0.40.0: a card row's own trailing
+ * <br> is '', an ordinary line boundary is '\n') — a floor written by the current code always matches
+ * this exactly, with nothing left over. True (tried only once that fails): every boundary is '\n'
+ * regardless of what `line.separator` records, because a floor written before this fix always joined
+ * every line with a literal '\n', even a card row whose own <br> already was the break. Trying the exact
+ * reading greedily on both shapes at once used to consume a '\n' that in fact belonged to a *later*
+ * boundary whenever a card row's own <br>-ended row left an empty trailing row behind it, breaking the
+ * read at the boundary after — hence two separate passes instead of one tolerant one.
  */
-function readReplaceBodyByLine(body, lineParts, ids) {
-  if (!Array.isArray(lineParts) || !lineParts.length) return null;
+function readReplaceBodyByLineOnce(body, lineParts, ids, legacy) {
   const found = new Map();
   let rest = body;
   let index = 0;
@@ -4796,20 +4802,22 @@ function readReplaceBodyByLine(body, lineParts, ids) {
       }
     }
     if (at < lineParts.length - 1) {
-      const expected = typeof line.separator === 'string' ? line.separator : '\n';
+      const expected = legacy ? '\n' : (typeof line.separator === 'string' ? line.separator : '\n');
       if (expected) {
         if (!rest.startsWith(expected)) return null;
         rest = rest.slice(expected.length);
-      } else if (rest.startsWith('\n')) {
-        // Backward compatibility: a floor written before this fix always inserted a '\n' here even
-        // when nothing actually separated the two lines (two rows of the same <br>-joined physical
-        // line) — tolerate consuming that leftover byte so an old floor still reads back correctly. A
-        // floor written after the fix has none to consume.
-        rest = rest.slice(1);
       }
     }
   }
   return rest === '' ? found : null;
+}
+
+// Anything that does not follow either shape (an edited floor, a shape neither pass expects) gives null,
+// and the caller falls back to the older line-count reading.
+function readReplaceBodyByLine(body, lineParts, ids) {
+  if (!Array.isArray(lineParts) || !lineParts.length) return null;
+  return readReplaceBodyByLineOnce(body, lineParts, ids, false)
+    ?? readReplaceBodyByLineOnce(body, lineParts, ids, true);
 }
 
 // Seeds for 补译: each replace pair's source block holds that part's translation.
