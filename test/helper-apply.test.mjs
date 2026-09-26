@@ -472,3 +472,14 @@ test('askHelper treats an independent connection\'s empty { content, reasoning }
     globalThis.SillyTavern = beforeSillyTavern;
   }
 });
+
+test('extractControlCenterKnowledge scopes a row title to its own row, against the real control center markup', () => {
+  const lines = extractControlCenterKnowledge(CONTROL_CENTER_MARKUP);
+  assert.ok(lines.includes('翻译台 › 自动 › 翻译失败后自动重试'), '重试次数这一行属于「自动」卡，不属于前面那一行的「自动接续翻译」');
+  assert.ok(lines.some(line => line.startsWith('朗读 › 让主模型给台词标上说话人和情绪 › 打开后，主模型每写一次回复')), '独占一组的勾选框，名下是紧跟着的那段说明');
+  assert.ok(!lines.some(line => line.startsWith('朗读 › 多国语言 › ') && line.includes('主模型每写一次回复')));
+  assert.ok(lines.includes('朗读 › 音色 › 角色表保存范围'));
+  assert.ok(lines.includes('微调 › 翻译 › 翻译文风'), '微调页「翻译」卡里的行，不归到前面那行的「只留译文」；隐藏的「改过」药丸不算字');
+  assert.ok(lines.includes('微调 › 显示 › 内置美化'));
+  assert.ok(!lines.some(line => /改过$/.test(line)));
+});

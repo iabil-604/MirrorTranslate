@@ -266,26 +266,18 @@ const KNOWLEDGE_LINES_PER_PAGE = 300;
 /** "页 › 区 › 文字" lines pulled straight from the control center's own markup, so this text is never
  * out of sync with what the reader actually sees on the page.
  *
- * Two heading levels name the "区" a line files under: <h2> (a card's own title) and <h3> (a card-row's
- * own title, the level the real markup actually uses for most individual settings — 只留译文, 朗读（有
- * 声小说）, and the whole finetune page's rows are all <h3>, not <h2>) — and a <summary>, heading or not,
- * since a fold's own name (with or without a nested <h2>) is exactly the same kind of label (review
- * finding helper.js:254: without <h3> and bare <summary>, several rows were being filed under whatever
- * unrelated <h2> happened to come earlier in the page, and 微调/小助手 contributed nothing at all).
- * Whichever of these was seen most recently wins, same as before.
+ * The markup is walked as a tree, not as a flat run of headings: a heading names the 区 only for the
+ * element that contains it. A card's <h2> covers the whole card; a row's own <h3> (自动接续翻译, 只留译文)
+ * covers that row and nothing after it; a fold's name — the <h2> inside its <summary>, or the summary's
+ * own text when it has none — covers the whole <details>. A description line takes the nearest heading
+ * among its own ancestors, so a row title never leaks onto an unrelated row further down the same card.
  *
- * A <label class="jy-check"> immediately paired with its own <p class="…jy-muted…"> (流式写回, 特效字) is
- * filed under the label's own text instead — but only for that one paired line, without overwriting
- * `section` for anything after it. Most jy-check rows share one description across several checkboxes
- * (「Fish 参数」's 数字与符号规范化/…/连续的！！！压成一个 all trail one shared paragraph), and none of
- * those own that shared paragraph the way a real <h2>/<h3> heading owns everything under it (review
- * finding helper.js:286: 流式写回's own reason line was being filed under the previous unrelated <h3>,
- * 自动接续翻译, because nothing updated `section` in between).
+ * A <label class="jy-check"> is the 区 for the one jy-muted paragraph right after it (流式写回, 特效字,
+ * 让主模型给台词标上说话人和情绪) when it is the only checkbox in its own group; a paragraph after a group
+ * of several checkboxes is shared by all of them and stays under the card's own heading.
  *
- * Description text is anything carrying a jy-muted or jy-label class — matched as a class the element
- * *has*, not as the whole class attribute, since the real markup freely mixes them with other classes
- * (class="jy-muted jy-dependent-reason", "jy-label" on a nested <span>, …) that an exact-match regex
- * never saw. */
+ * Description text is a <p> or <span> carrying jy-muted, a <span class="jy-label">, or any title
+ * attribute. */
 export function extractControlCenterKnowledge(markup) {
   const text = String(markup ?? '');
   const lines = [];
@@ -295,49 +287,113 @@ export function extractControlCenterKnowledge(markup) {
     const pageId = pageMatch[1];
     const pageLabel = KNOWLEDGE_PAGE_LABELS[pageId] || pageId;
     // The shared per-connection edit form (index.js's single reusable <div data-jy-channel-detail>,
-    // moved under whichever channel card is expanded) sits right under the built-in 跟随酒馆 card and
-    // has no heading of its own until its first fold ("请求参数"). Its own 连接名称/API 基础地址/API
-    // 密钥/当前模型 fields used to be filed under 跟随酒馆 — which needs none of them — because nothing
-    // updated `section` in between (review finding helper.js:286). Cut just that headerless prefix
-    // rather than invent a label that appears nowhere in the real markup (the same "don't invent"
-    // rule DEFAULT_HELPER_PROMPT itself follows); everything from 请求参数 on (its own real headings)
-    // is untouched.
+    // moved under whichever channel card is expanded) has no heading of its own until its first fold
+    // (请求参数); its 连接名称/API 基础地址/API 密钥/当前模型 fields belong to whichever card it is moved
+    // under, which the static markup cannot say. That headerless prefix is left out rather than filed
+    // under a label that appears nowhere on the page.
     const body = pageMatch[2].replace(
       /<div\s+class="jy-connection-form"[^>]*data-jy-channel-detail[^>]*>[\s\S]*?(?=<details\s+class="jy-fold"\s+data-jy-fold="channel-request")/,
       '',
     );
-    let section = pageLabel;
     let countThisPage = 0;
-    // The label-check alternative's own text is captured as [^<]* (plain text only, past its one
-    // <input>), never [\s\S]*? — a lazy [\s\S]*? here would happily cross into the *next* sibling
-    // <label class="jy-check"> (切换滑动页时补译, right before 流式写回) looking for a </label><p…> pair,
-    // swallowing that unrelated label's own text into this one's "heading" once it found one.
-    const partRe = /<h2[^>]*>([\s\S]*?)<\/h2>|<h3[^>]*>([\s\S]*?)<\/h3>|<summary[^>]*>([\s\S]*?)<\/summary>|<label\s+class="[^"]*\bjy-check\b[^"]*"[^>]*>(?:<input\b[^>]*>)?([^<]*)<\/label>\s*<p\s+class="[^"]*\bjy-muted\b[^"]*"[^>]*>([\s\S]*?)<\/p>|<p\s+class="[^"]*\bjy-muted\b[^"]*"[^>]*>([\s\S]*?)<\/p>|<span\s+class="[^"]*\b(?:jy-muted|jy-label)\b[^"]*"[^>]*>([^<]*)|title="([^"]+)"/g;
-    let part;
-    while ((part = partRe.exec(body)) && countThisPage < KNOWLEDGE_LINES_PER_PAGE) {
-      if (part[1] !== undefined || part[2] !== undefined || part[3] !== undefined) {
-        const heading = stripTags(part[1] ?? part[2] ?? part[3]);
-        if (heading) section = heading;
-        continue;
-      }
-      if (part[4] !== undefined) {
-        const heading = stripTags(part[4]);
-        const cleaned = stripTags(part[5]);
-        if (heading && cleaned) {
-          const line = `${pageLabel} › ${heading} › ${cleaned}`;
-          lines.push(line.length > KNOWLEDGE_LINE_CAP ? `${line.slice(0, KNOWLEDGE_LINE_CAP)}…` : line);
-          countThisPage += 1;
-        }
-        continue;
-      }
-      const cleaned = stripTags(part[6] ?? part[7] ?? part[8]);
-      if (!cleaned) continue;
-      const line = `${pageLabel} › ${section} › ${cleaned}`;
+    walkKnowledgeMarkup(body, pageLabel, (area, raw) => {
+      const cleaned = stripTags(raw);
+      if (cleaned.length < 2 || countThisPage >= KNOWLEDGE_LINES_PER_PAGE) return;
+      const line = `${pageLabel} › ${area || pageLabel} › ${cleaned}`;
       lines.push(line.length > KNOWLEDGE_LINE_CAP ? `${line.slice(0, KNOWLEDGE_LINE_CAP)}…` : line);
       countThisPage += 1;
-    }
+    });
   }
   return [...new Set(lines)];
+}
+
+const KNOWLEDGE_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
+const KNOWLEDGE_TOKEN_RE = /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|([^<]+)/g;
+
+function hasClass(attrs, name) {
+  const match = /\bclass\s*=\s*"([^"]*)"/.exec(attrs);
+  return Boolean(match && match[1].split(/\s+/).includes(name));
+}
+
+/** The nearest heading on the frames below index `end` (exclusive) — the ancestors of whatever sits at `end`. */
+function headingAbove(stack, end, fallback) {
+  for (let index = end - 1; index >= 0; index -= 1) if (stack[index].heading) return stack[index].heading;
+  return fallback;
+}
+
+/** The tree walk behind extractControlCenterKnowledge: `emit(area, rawText)` once per description line. */
+function walkKnowledgeMarkup(body, pageLabel, emit) {
+  const stack = [{ tag: '#page', heading: pageLabel, checks: 0 }];
+  // What is being read into right now — a heading, a checkbox label or a description element — and
+  // the stack index of the element that opened it, so its own closing tag is the one that ends it.
+  let capture = null;
+  // The one checkbox label that may name the paragraph right after it; any other element opening in
+  // between cancels it, and so does its own group turning out to hold more than one checkbox.
+  let pendingCheck = null;
+  const pattern = new RegExp(KNOWLEDGE_TOKEN_RE.source, 'g');
+  let token;
+  while ((token = pattern.exec(body))) {
+    if (token[0].startsWith('<!--')) continue;
+    if (token[4] !== undefined) {
+      // Text inside a hidden element (a 「改过」 pill before anything has changed) is not what the page shows.
+      if (capture && !stack.slice(capture.at + 1).some(frame => frame.hidden)) capture.text += token[4];
+      continue;
+    }
+    const tag = token[2].toLowerCase();
+    const attrs = token[3] || '';
+    if (token[1] !== '/') {
+      const title = /\btitle\s*=\s*"([^"]+)"/.exec(attrs);
+      if (title) emit(headingAbove(stack, stack.length, pageLabel), title[1]);
+      if (capture) capture.text += token[0];
+      if (KNOWLEDGE_VOID_TAGS.has(tag) || /\/\s*$/.test(attrs)) continue;
+      stack.push({ tag, heading: null, checks: 0, hidden: /(?:^|\s)hidden(?:[\s=]|$)/.test(attrs) });
+      if (capture) continue;
+      const description = (tag === 'p' || tag === 'span') && hasClass(attrs, 'jy-muted');
+      const at = stack.length - 1;
+      if (tag === 'h2' || tag === 'h3' || tag === 'summary') capture = { kind: 'heading', at, text: '' };
+      else if (tag === 'label' && hasClass(attrs, 'jy-check')) capture = { kind: 'check', at, text: '' };
+      else if (description || (tag === 'span' && hasClass(attrs, 'jy-label'))) {
+        capture = { kind: 'line', at, text: '', area: description && tag === 'p' && pendingCheck ? pendingCheck.text : null };
+      }
+      pendingCheck = null;
+      continue;
+    }
+    const at = stack.map(frame => frame.tag).lastIndexOf(tag);
+    if (at <= 0) {
+      if (capture) capture.text += token[0];
+      continue;
+    }
+    if (capture && at > capture.at) {
+      capture.text += token[0];
+      stack.length = at;
+      continue;
+    }
+    if (capture) {
+      const done = capture;
+      capture = null;
+      if (done.kind === 'heading') {
+        // A heading names the element that holds it. A summary's name — the heading inside it when it
+        // has one — names the <details> it opens, so every line anywhere in that fold files under it.
+        const inner = tag === 'summary' ? /<h[23]\b[^>]*>([\s\S]*?)<\/h[23]>/i.exec(done.text) : null;
+        const heading = stripTags(inner ? inner[1] : done.text);
+        let owner = stack[done.at - 1];
+        if (owner?.tag === 'summary') owner = stack[done.at - 2];
+        if (heading && owner) owner.heading = heading;
+      } else if (done.kind === 'check') {
+        const owner = stack[done.at - 1];
+        if (owner) owner.checks += 1;
+        const label = stripTags(done.text);
+        pendingCheck = label && owner ? { text: label, owner } : null;
+      } else {
+        emit(done.area || headingAbove(stack, done.at, pageLabel), done.text);
+      }
+    }
+    // Closing a group that held more than one checkbox: its last label no longer speaks for what follows.
+    for (let index = stack.length - 1; index >= at; index -= 1) {
+      if (pendingCheck && pendingCheck.owner === stack[index] && stack[index].checks > 1) pendingCheck = null;
+    }
+    stack.length = at;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
