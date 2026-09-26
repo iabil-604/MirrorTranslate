@@ -11344,9 +11344,13 @@ function buildRegexCleanupPlan({ next, currentRegex, engine }) {
   const presetRemove = presetPlan?.toRemove ?? 0;
   const totalRemove = toRemove + scopedRemove + presetRemove;
   if (!totalRemove && !toInstall) return null;
+  // A scope with nothing to remove is left out of the message entirely rather than named with "0 条" --
+  // the real getScriptsByType(SCOPED) returns [] rather than throwing when no character is selected (or
+  // in a group chat), so scopedPlan is a normal, non-null plan even then, and mentioning it would claim
+  // an angle that never applied.
   const scopeParts = [];
-  if (scopedPlan) scopeParts.push(`角色绑定 ${scopedRemove} 条`);
-  if (presetPlan) scopeParts.push(`预设绑定 ${presetRemove} 条`);
+  if (scopedRemove > 0) scopeParts.push(`角色绑定 ${scopedRemove} 条`);
+  if (presetRemove > 0) scopeParts.push(`预设绑定 ${presetRemove} 条`);
   const removalClause = scopeParts.length
     ? `删除多余的镜译正则：全局 ${toRemove} 条、${scopeParts.join('、')}`
     : `删除 ${toRemove} 条多余的镜译正则`;
@@ -11361,8 +11365,17 @@ function buildRegexCleanupPlan({ next, currentRegex, engine }) {
 // too, and a scope with nothing to remove is never saved back for no reason.
 async function applyScopedRegexCleanup(plan, engine) {
   if (!engine) return;
-  if (plan.scopedPlan?.toRemove) await engine.saveScriptsByType(plan.scopedPlan.kept, engine.SCRIPT_TYPES.SCOPED);
-  if (plan.presetPlan?.toRemove) await engine.saveScriptsByType(plan.presetPlan.kept, engine.SCRIPT_TYPES.PRESET);
+  let wrote = false;
+  if (plan.scopedPlan?.toRemove) { await engine.saveScriptsByType(plan.scopedPlan.kept, engine.SCRIPT_TYPES.SCOPED); wrote = true; }
+  if (plan.presetPlan?.toRemove) { await engine.saveScriptsByType(plan.presetPlan.kept, engine.SCRIPT_TYPES.PRESET); wrote = true; }
+  if (!wrote) return;
+  // 酒馆's own saveRegexScript/deleteRegexScript both reload the chat after writing a character- or
+  // preset-scoped list, which is what makes the native regex panel rebuild and re-render the floors.
+  // Do the same here (same guard as restyleCurrentChat) -- otherwise the panel keeps showing the rows
+  // just removed, still bound to their old array index, and the next click on one of them writes a
+  // stale copy of a 镜译 rule straight back over whatever the reader has in that slot now.
+  const context = getContext();
+  if (!runtime.mainGenerationActive && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
 }
 
 function createControlCenter(rootDocument = document) {

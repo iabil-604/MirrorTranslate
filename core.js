@@ -405,12 +405,43 @@ const KANA_REAL_WORDS = new Set([
 // A bare ん/ン next to a real mora is letter-for-letter what a short name looks like (アン, ケン, カン…)
 // as much as it is a real interjection (うん, ふん…) — the shapes are identical, so only a small fixed
 // set of the real words is trusted outright. ううん carries two real morae (う, う) and still belongs
-// here for the same reason.
-const INTERJECTION_N_WORDS = new Set(['うん', 'ううん', 'ウン', 'ふん']);
+// here for the same reason, and so do フン (katakana ふん), ウウン and ふうん (both a doubled vowel plus
+// ん, spelled without ー).
+const INTERJECTION_N_WORDS = new Set(['うん', 'ううん', 'ウン', 'ふん', 'フン', 'ウウン', 'ふうん']);
 // A moan's own extra marker: a stammered glottal stop, a heart, or a drawn-out vowel — none of which a
-// bare name is ever written with. Checked against the untouched source so ♡, which residueLetters never
-// keeps, still counts.
-const MOAN_MARKER_RE = /[っッ♡ー～〜]/;
+// bare name is ever written with. Checked against the untouched source so ♡/♥/❤, which residueLetters
+// never keeps, still count.
+const MOAN_MARKER_RE = /[っッ♡♥❤ー～〜~]/;
+
+// The vowel each full-size mora (あいうえお/アイウエオ/はひふへほ/ハヒフヘホ/かきくけこ/カキクケコ) and
+// each small vowel kana (ぁぃぅぇぉ/ァィゥェォ) carries. Used only to spot a drawn-out gasp spelled by
+// doubling a vowel instead of by ー — ふぅ, あぁ, ああ, ウウ — without also matching a yōon name that
+// happens to share a consonant (ファン, フィン: フ carries u, ァ/ィ carry a/i, so the vowels differ).
+const SMALL_VOWEL_KANA = new Set('ぁぃぅぇぉァィゥェォ');
+const VOWEL_OF = new Map();
+for (const [group, vowels] of [
+  ['あいうえお', 'aiueo'], ['アイウエオ', 'aiueo'],
+  ['はひふへほ', 'aiueo'], ['ハヒフヘホ', 'aiueo'],
+  ['かきくけこ', 'aiueo'], ['カキクケコ', 'aiueo'],
+  ['ぁぃぅぇぉ', 'aiueo'], ['ァィゥェォ', 'aiueo'],
+]) {
+  for (let index = 0; index < group.length; index += 1) VOWEL_OF.set(group[index], vowels[index]);
+}
+
+// Whether the untouched source spells a drawn-out gasp by doubling a vowel rather than by ー: a mora
+// immediately followed by a small vowel kana carrying the same vowel (ふぅ, あぁ, はぁ, ひぃ), or a mora
+// immediately followed by an exact repeat of itself (ああ, ウウ). Checking the vowel — not just "some
+// kana follows" — is what keeps a yōon name (ファン, フィン) from matching.
+function hasDrawnOutVowel(rawSource) {
+  const chars = [...String(rawSource ?? '')];
+  for (let index = 1; index < chars.length; index += 1) {
+    const before = chars[index - 1], here = chars[index];
+    const vowel = VOWEL_OF.get(before);
+    if (vowel === undefined || VOWEL_OF.get(here) !== vowel) continue;
+    if (SMALL_VOWEL_KANA.has(here) || before === here) return true;
+  }
+  return false;
+}
 
 function residueLetters(text) {
   return [...String(text ?? '')].filter(ch => RESIDUE_LETTER_RE.test(ch));
@@ -419,13 +450,14 @@ function residueLetters(text) {
 // Whether a bare ん/ン sitting among `letters` (every one of which is already known to be filler or a
 // real mora) is genuinely free filler here, rather than the one real thing that turns "gasp" into
 // "name": a small fixed set of real ん-interjections (INTERJECTION_N_WORDS), a moan carrying its own
-// extra marker anywhere in the untouched source (MOAN_MARKER_RE), or a shape built by repeating a
-// shorter unit two or more times over (あんあん). Only meaningful once the caller already knows `letters`
-// contains at least one real mora — with none at all (ん, んん, んー…) there is nothing left to mistake
-// for a name in the first place.
+// extra marker anywhere in the untouched source (MOAN_MARKER_RE or a doubled vowel, hasDrawnOutVowel),
+// or a shape built by repeating a shorter unit two or more times over (あんあん). Only meaningful once
+// the caller already knows `letters` contains at least one real mora — with none at all (ん, んん, んー…)
+// there is nothing left to mistake for a name in the first place.
 function bareNIsFreeFiller(letters, rawSource) {
   if (INTERJECTION_N_WORDS.has(letters.join(''))) return true;
   if (MOAN_MARKER_RE.test(String(rawSource ?? ''))) return true;
+  if (hasDrawnOutVowel(rawSource)) return true;
   return isReduplicatedSound(letters);
 }
 
@@ -437,13 +469,18 @@ function bareNIsFreeFiller(letters, rawSource) {
 // short name (アン, ケン, カン…) as much as a real stammer (うん, ふん…), so that narrow shape is
 // accepted only when bareNIsFreeFiller above says so — a fixed real word, a moan's own extra marker, or
 // a repeated unit (あんあん, which is why this only otherwise caps at one real mora and yet still takes
-// あんあん's two) — never on letter shape alone.
+// あんあん's two) — never on letter shape alone. The one-real-mora cap still applies once ん brings a
+// *second* real mora into the mix (オーエン, ハーケン, けっこん): bareNIsFreeFiller's own moan-marker
+// check would otherwise wave through an untranslated multi-mora word just because ー or っ appears
+// somewhere in it (a promotion mark and a geminate consonant, not a moan), so a second real mora is
+// only ever forgiven by a fixed real word (ううん) or an actually repeated unit (あんあん).
 function isTrivialInterjectionSource(source) {
   const letters = residueLetters(source);
   if (!letters.length || letters.length > 4) return false;
   if (!letters.every(ch => INTERJECTION_FILLER.has(ch) || INTERJECTION_MORA.has(ch))) return false;
   const morae = letters.filter(ch => INTERJECTION_MORA.has(ch));
   if (!letters.includes('ん') && !letters.includes('ン')) return morae.length <= 1;
+  if (morae.length > 1) return INTERJECTION_N_WORDS.has(letters.join('')) || isReduplicatedSound(letters);
   return !morae.length || bareNIsFreeFiller(letters, source);
 }
 

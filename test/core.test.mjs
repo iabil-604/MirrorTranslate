@@ -1527,6 +1527,34 @@ test('isShortExactEcho draws the same name-versus-interjection line as isTrivial
   }
 });
 
+test('a two-mora word or name that happens to carry a bare ん still needs translation even when ー, っ or ～ appear elsewhere in it', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // Each of these has two real morae plus a bare ん — the same shape ううん and あんあん are forgiven
+  // for, but here nothing repeats and none of them is a fixed real interjection, so the moan-marker and
+  // reduplication checks must not wave them through just because ー or っ appears somewhere in the word.
+  for (const line of ['オーエン', 'オーエン！', 'ハーケン', 'ホーキン', 'コーエン', 'はっけん！', 'けっこん']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a two-mora ん word, not a gasp — it needs translation`);
+  }
+});
+
+test('real ん-interjections and moans not on the short allow-list are still accepted, including katakana フン, doubled vowels, and ♥/❤ as moan markers', async () => {
+  const { looksUntranslated, isShortExactEcho } = await import('../core.js');
+  // Accepted on the first sighting: a fixed real word (フン, ウウン, ふうん) or a moan carrying its own
+  // extra marker — a drawn-out vowel spelled with small kana instead of ー, or a heart.
+  for (const line of ['フン！', 'ウウン', 'ふうん', 'ふぅん', 'うぅん', 'あぁん……', 'はぁん', 'あん♥', 'あん❤']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a real interjection or a marked moan, not a name`);
+  }
+  // ファン/フィン are yōon names built from the same consonant as フ but a different vowel (a/i, not u),
+  // so the drawn-out-vowel check must not mistake them for ふぅ-style gasps.
+  for (const line of ['ファン', 'フィン']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a name, not a gasp — it needs translation`);
+  }
+  // ああん doubles a full-size vowel instead of marking it with ー or a small kana, so it is not caught
+  // on the first sighting the way あぁん is — but a model that repeats it verbatim is still believed.
+  assert.equal(looksUntranslated('ああん', 'ああん'), true);
+  assert.equal(isShortExactEcho('ああん', 'ああん'), true);
+});
+
 test('a floor that fits one batch is spread evenly across parallel lanes', () => {
   const segments = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
   assert.equal(planTranslationBatches(segments, { maxChars: 48000 }).length, 1);

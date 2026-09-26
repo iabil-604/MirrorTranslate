@@ -790,25 +790,63 @@ test('buildRegexCleanupPlan reports nothing to do when every scope the engine ca
 });
 
 test('applyScopedRegexCleanup saves back only the scopes that actually had something removed, and never touches the host at all when there is no engine', async () => {
+  const previousHost = globalThis.SillyTavern;
   const calls = [];
   const engine = {
     SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 },
     async saveScriptsByType(scripts, type) { calls.push({ scripts, type }); },
   };
+  let reloads = 0;
+  const context = { reloadCurrentChat: async () => { reloads += 1; } };
+  globalThis.SillyTavern = { getContext: () => context };
+  try {
+    const planBoth = { scopedPlan: { kept: ['a'], toRemove: 1 }, presetPlan: { kept: ['b'], toRemove: 2 } };
+    await __testing.applyScopedRegexCleanup(planBoth, engine);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[0], { scripts: ['a'], type: 1 });
+    assert.deepEqual(calls[1], { scripts: ['b'], type: 2 });
+    assert.equal(reloads, 1, '写完角色/预设范围后重新加载聊天，酒馆自己的正则面板才会跟着重建');
 
-  const planBoth = { scopedPlan: { kept: ['a'], toRemove: 1 }, presetPlan: { kept: ['b'], toRemove: 2 } };
-  await __testing.applyScopedRegexCleanup(planBoth, engine);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0], { scripts: ['a'], type: 1 });
-  assert.deepEqual(calls[1], { scripts: ['b'], type: 2 });
+    calls.length = 0; reloads = 0;
+    const planScopedOnly = { scopedPlan: { kept: ['a'], toRemove: 1 }, presetPlan: { kept: ['b', 'c'], toRemove: 0 } };
+    await __testing.applyScopedRegexCleanup(planScopedOnly, engine);
+    assert.equal(calls.length, 1, '没有可删的范围不写回，即使那个范围本身是可用的');
+    assert.equal(calls[0].type, 1);
+    assert.equal(reloads, 1);
 
-  calls.length = 0;
-  const planScopedOnly = { scopedPlan: { kept: ['a'], toRemove: 1 }, presetPlan: { kept: ['b', 'c'], toRemove: 0 } };
-  await __testing.applyScopedRegexCleanup(planScopedOnly, engine);
-  assert.equal(calls.length, 1, '没有可删的范围不写回，即使那个范围本身是可用的');
-  assert.equal(calls[0].type, 1);
+    calls.length = 0; reloads = 0;
+    await __testing.applyScopedRegexCleanup(planBoth, null);
+    assert.equal(calls.length, 0, '没有引擎就完全不写');
+    assert.equal(reloads, 0, '什么都没写，就不用重新加载聊天');
+  } finally {
+    globalThis.SillyTavern = previousHost;
+  }
+});
 
-  calls.length = 0;
-  await __testing.applyScopedRegexCleanup(planBoth, null);
-  assert.equal(calls.length, 0, '没有引擎就完全不写');
+test('buildRegexCleanupPlan leaves the scoped clause out of the message when no character is selected -- getScriptsByType(SCOPED) returns [] rather than throwing, so the scope is not "unavailable", just empty', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  settings.processingProfiles = [profile];
+  settings.selectedProcessingProfileId = profile.id;
+  const full = syncNativeRegex([], profile);
+  const ruleName = `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  const ruleCopy = full.find(rule => rule.scriptName === ruleName);
+  const polluted = [...full, { ...ruleCopy }];
+  const movedFixed = { ...full.find(rule => rule.id === `${MODULE_ID}:prompt-affix`) };
+  // The real host never throws for "no character selected" -- characters[undefined] is just undefined,
+  // so getScriptsByType(SCOPED) returns [] like any other scope with nothing 镜译-owned in it.
+  const engine = {
+    SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 },
+    getScriptsByType(type) {
+      if (type === 1) return [];
+      if (type === 2) return [movedFixed];
+      return [];
+    },
+  };
+  const plan = __testing.buildRegexCleanupPlan({ next: settings, currentRegex: polluted, engine });
+  assert.ok(plan);
+  assert.equal(plan.scopedRemove, 0);
+  assert.equal(plan.presetRemove, 1);
+  assert.doesNotMatch(plan.message, /角色绑定/, '角色范围没有可删的，干脆不提，不写成"角色绑定 0 条"');
+  assert.match(plan.message, /预设绑定 1 条/);
 });
