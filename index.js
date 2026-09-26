@@ -172,7 +172,7 @@ import {
 } from './tts.js?v=0.38.0';
 import { createTtsStore } from './tts-store.js?v=0.38.0';
 import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.38.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis } from './tts-deep.js?v=0.38.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.38.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -6979,6 +6979,24 @@ async function ttsPrepared(messageId, side = null, { fresh = false } = {}) {
   return prepared;
 }
 
+// voiceSummary shows a pause or stress by the same anchor the reading is held to — the shortest run
+// that still finds its word, often one character. The panel alone gets more: the word or short phrase
+// that anchor sits in, widened from the sentence's own text (tts-deep's pauseDisplay/stressDisplay).
+// A voice from before this existed, or an anchor a later edit moved out from under, still shows exactly
+// what it always did — widening only ever replaces the anchor with something that contains it.
+function widenPauseStressSummary(summary, voice, text) {
+  if (!voice?.pauses?.length && !voice?.stress?.length) return summary;
+  return summary.map(([term, value]) => {
+    if (term === '停顿' && voice.pauses?.length) {
+      return [term, voice.pauses.map(pause => `「${pauseDisplay(text, pause.after)}」后${pause.length === 'long' ? '长停' : '短停'}`).join('，')];
+    }
+    if (term === '重音' && voice.stress?.length) {
+      return [term, voice.stress.map(word => stressDisplay(text, word)).join('、')];
+    }
+    return [term, value];
+  });
+}
+
 /** Everything the inspector shows for one sentence. */
 async function ttsInspect(messageId, utteranceId, side = null) {
   const prepared = await ttsPrepared(messageId, side);
@@ -6997,7 +7015,7 @@ async function ttsInspect(messageId, utteranceId, side = null) {
     segment,
     voiceId: item.voiceId,
     voice: segment.voice,
-    summary: voiceSummary(segment.voice ?? (segment.emotion ? { emotion: segment.emotion, intensity: segment.intensity } : null)),
+    summary: widenPauseStressSummary(voiceSummary(segment.voice ?? (segment.emotion ? { emotion: segment.emotion, intensity: segment.intensity } : null)), segment.voice, segment.text),
     original: prepared.floor.side === 'translation' || prepared.floor.side === 'dialogue_source' ? (prepared.floor.sources?.get(segment.lineId) ?? null) : (prepared.floor.references?.get(segment.lineId) ?? null),
     depth: analysis?.depth ?? prepared.depth ?? null,
     derived: analysis?.derived === true,

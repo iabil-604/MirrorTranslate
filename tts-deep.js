@@ -47,7 +47,7 @@ export const DEEP_STATUS = Object.freeze({ available: true, note: '可用' });
 
 export const DEEP_PROMPT = [
   '你是有声小说的配音导演。lines 是一楼正文，按段给出，引号里的话前面标着 ⟦编号⟧；references 里有角色资料、世界书和前面几楼；roster 是登记过的名字；character 是角色卡的名字，user 是用户扮演的角色；styles 是角色的表达习惯和用户在调音台上定下的规则，是硬性要求，只有声音例外：第 10、11 条的限制 styles 也不能放宽。你只管带编号的句子：由谁念、开头是什么情绪、这句怎么念。旁白不用管，也不用输出。不改写、不复述、不翻译任何句子。',
-  '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"林浅","emotion":"nervous","pace":"fast","line":"[nervous] 你别靠这么近…… [pause] 会让人看见的。"},{"id":5,"type":"narration"}]}。line 是这句话本身，一字不改地抄一遍，只能往里面插 [标签]，标签和它紧挨着的字之间空一格；旁白只写 type，不写 line。speaker、emotion、pace 看不出就不写。',
+  '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"林浅","emotion":"nervous","pace":"fast","line":"[nervous] 你别靠这么近 [pause] 会让人看见的。"},{"id":5,"type":"narration"}]}。line 是这句话本身，一字不改地抄一遍，只能往里面插 [标签]，标签和它紧挨着的字之间空一格；旁白只写 type，不写 line。speaker、emotion、pace 看不出就不写。',
   '1. 编号：每个 ⟦编号⟧ 都要回答，按编号从小到大，每个只出现一次，一个都不能漏。',
   '2. 不是说出口的话：引号里是书名、招牌、标语、信和文件上的字、拟声词（「砰」「咔嚓」）时（比如门上写着「闲人免进」），只写 {"id":N,"type":"narration"}。引号里心里想的话算这个人的话，照常写 speaker。speakers 里的编号都是说出口的话。',
   '3. speaker：从 roster 里逐字照抄名字，不加敬称，不加括号说明。正文用昵称、姓或称呼（「学姐」「那家伙」）指 roster 里的人，也写 roster 里的名字；正文用「你」「我」指某个人，写这个人的名字；roster 里没有的人，写正文对他的称呼。按这个顺序判断：引号前后写明的说话人和动作 → 话里叫到的名字（被叫到的是听的人，不是说的人）→ 话里的自称、口癖和语尾 → 对话一来一回的顺序。不要写「他」「她」「众人」「旁白」「未知」。character 可能是整个故事或旁白的名字，正文没显示是这个人在说，就不要写它。{{user}}看不出是谁说的就省略 speaker，不要猜。输入里的 speakers 是用户手动定的说话人，这些编号照抄。',
@@ -281,6 +281,50 @@ function anchorBackward(text, end) {
     if (text.indexOf(candidate) === end - length) return candidate;
   }
   return text.slice(0, end);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The edit panel shows a reader the word a pause or a stress sits on. anchorForward/anchorBackward
+// above keep that word the shortest run that still finds it, which is what pauses.after and stress are
+// stored as everywhere else — the same string a reader's own text search would use to locate it, kept
+// exactly as it is. A reader looking at the panel is not searching, though: shown "近" by itself for a
+// pause that trails a whole clause, they see one character. These two widen the anchor back out to the
+// word or short phrase it sits in, purely for that display — the letters/digits run around whichever
+// edge anchorForward/anchorBackward left loose (the far edge, the one tag.offset itself pinned, is never
+// moved), capped a few characters out so a run with no punctuation in it does not widen without end.
+// Nothing stored anywhere is this value; a floor edited since the analysis, or a result read back from
+// before this existed, simply shows the anchor itself, exactly as the panel always has.
+// ---------------------------------------------------------------------------------------------
+
+const DISPLAY_WORD_RE = /[\p{L}\p{N}]/u;
+const DISPLAY_MARGIN = 6;
+
+function widenAnchor(text, anchor, side) {
+  const source = String(text ?? '');
+  const word = String(anchor ?? '');
+  if (!word) return word;
+  const at = source.indexOf(word);
+  if (at < 0) return word;
+  if (side === 'left') {
+    let start = at;
+    for (let steps = 0; start > 0 && steps < DISPLAY_MARGIN && DISPLAY_WORD_RE.test(source[start - 1]); steps += 1) start -= 1;
+    return source.slice(start, at + word.length);
+  }
+  let end = at + word.length;
+  for (let steps = 0; end < source.length && steps < DISPLAY_MARGIN && DISPLAY_WORD_RE.test(source[end]); steps += 1) end += 1;
+  return source.slice(at, end);
+}
+
+/** A pause's anchor, widened toward its own start — a pause lands right where the anchor already ends,
+ * so that edge is kept exactly and only the word it opens on is guessed at. Panel display only. */
+export function pauseDisplay(text, after) {
+  return widenAnchor(text, after, 'left');
+}
+
+/** A stress anchor, widened toward its own end — stress lands right where the anchor already starts,
+ * so that edge is kept exactly and only the rest of the word is guessed at. Panel display only. */
+export function stressDisplay(text, word) {
+  return widenAnchor(text, word, 'right');
 }
 
 /**

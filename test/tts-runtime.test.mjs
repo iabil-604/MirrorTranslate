@@ -260,6 +260,11 @@ test('the deep reading carries the card and the recent floors, and every sentenc
 
   const inspected = await __testing.ttsInspect(1, 2);
   assert.equal(inspected.text, '[frustrated] 我操 [pause] 好 [emphasis] 热啊！', 'Fish\'s own words only: the mood, the pause, the stress');
+  // The stored anchor locating the pause and the stress is a single character ('操', '热') — good for
+  // finding them, but the edit panel widens each to the word it actually sits in, without moving the
+  // one-character anchor the reading itself is held to (still '操' above).
+  assert.deepEqual(inspected.summary.find(([term]) => term === '停顿'), ['停顿', '「我操」后短停'], 'the panel shows the whole word the pause trails, not just the single character that locates it');
+  assert.deepEqual(inspected.summary.find(([term]) => term === '重音'), ['重音', '热啊'], 'the panel shows the whole word being stressed, not just the single character that locates it');
   assert.deepEqual(inspected.prosody, { speed: 1.12, volume: 0 });
   assert.equal(inspected.depth, 'deep');
   assert.equal(requests.length, 1);
