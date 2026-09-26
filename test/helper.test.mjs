@@ -562,3 +562,14 @@ test('applyHelperSuggestion clearing preset back to \'\' is a plain field write 
   const suggestion = validateHelperSuggestion({ type: 'set', field: 'preset', value: '' }, settings);
   assert.equal(applyHelperSuggestion(settings, suggestion).preset, '');
 });
+
+test('parseHelperReply strips only a leading reasoning block and keeps tags the answer itself talks about', async () => {
+  const { parseHelperReply } = await import('../helper.js');
+  assert.equal(parseHelperReply('<think>先想想</think>\n1. 去正文处理页。').text, '1. 去正文处理页。');
+  assert.equal(parseHelperReply('<thinking>先想想</thinking>1. 好。').text, '1. 好。');
+  const quoted = '1. 你的正文包在 <thinking>…</thinking> 里，镜译默认只取 <content>。';
+  assert.equal(parseHelperReply(quoted).text, quoted, '正文里提到的标签不能被当成思考块删掉');
+  const fenced = '排除标签可以写 <think> 或 <thinking>：\n```\n<thinking>思考</thinking>\n```';
+  assert.equal(parseHelperReply(fenced).text, fenced);
+  assert.equal(parseHelperReply({ content: '', reasoning: '' }).text, '', '空的回复信封就是空回答');
+});

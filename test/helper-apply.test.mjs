@@ -450,3 +450,25 @@ test('askHelper renders its finished answer into the currently open panel\'s own
     configureForTest({ panel: null });
   }
 });
+
+test('askHelper treats an independent connection\'s empty { content, reasoning } envelope as a failed ask, never as the answer "[object Object]"', async () => {
+  clearDiagnostics();
+  configureForTest({ settings: helperTestSettings(), panel: null, resetHelper: true });
+  const beforeSillyTavern = globalThis.SillyTavern;
+  globalThis.SillyTavern = {
+    getContext: () => ({
+      mainApi: 'openai',
+      extensionSettings: { regex: [] },
+      ChatCompletionService: { processRequest: async () => ({ content: '', reasoning: '' }) },
+    }),
+  };
+  try {
+    const { root } = fakeHelperRoot();
+    const turn = await askHelper(root, '我怎么没办法翻译？');
+    assert.notEqual(turn.answer, '[object Object]');
+    assert.match(turn.error, /^没问到：连接回了空内容/);
+    assert.ok(readDiagnostics().some(entry => entry.scope === 'helper.ask-failed'), '空回答记成一次失败');
+  } finally {
+    globalThis.SillyTavern = beforeSillyTavern;
+  }
+});

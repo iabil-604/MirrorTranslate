@@ -12489,6 +12489,7 @@ async function askHelper(root, question) {
     ];
     const raw = await requestSubModelRaw(messages, request, controller.signal);
     const parsed = parseHelperReply(raw);
+    if (!parsed.text && !parsed.rawSuggestions.length) throw new Error('连接回了空内容');
     turn.answer = parsed.text || '（没有回答）';
     turn.suggestions = validateHelperSuggestions(parsed.rawSuggestions, runtime.settings);
     recordDiagnostic('info', 'helper.ask', `小助手回答完成，用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒。`, {

@@ -669,10 +669,11 @@ const SUGGEST_BLOCK_RE = /```jingyi-suggest\s*([\s\S]*?)```/i;
 // (review finding helper.js:533).
 const SUGGEST_BLOCK_OPEN_RE = /```jingyi-suggest\s*([\s\S]*)$/i;
 
-// Same pattern core.js's own parseJsonCandidates strips before it ever looks for JSON — a reasoning
-// model's <think>/<thinking> block is never part of the answer, and outside a code fence there is
-// nothing else here to strip it out.
-const THINK_BLOCK_RE = /<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi;
+// A reasoning model's own <think>/<thinking> block, only where such a block actually sits: at the very
+// start of the reply, closed by the same tag it opened with. Anywhere else a tag like this is part of
+// the answer itself — explaining 排除标签 or a floor full of <thinking> blocks is exactly what this
+// helper is asked about.
+const LEADING_THINK_BLOCK_RE = /^\s*<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>\s*/i;
 
 /**
  * A reply's display text (the block removed, trimmed) and whatever the model put in its suggestion
@@ -691,7 +692,11 @@ const THINK_BLOCK_RE = /<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi;
  */
 export function parseHelperReply(raw) {
   const unwrapped = unwrapResponseContent(raw);
-  const text = String(unwrapped ?? '').replace(THINK_BLOCK_RE, '').trim();
+  // An envelope with neither content nor reasoning (a reply cut off by length or a content filter, or a
+  // reasoning model that spent its whole budget thinking) comes back from the unwrap as the object
+  // itself: that is an empty reply, not text.
+  const body = typeof unwrapped === 'string' ? unwrapped : '';
+  const text = body.replace(LEADING_THINK_BLOCK_RE, '').trim();
   const match = text.match(SUGGEST_BLOCK_RE) || text.match(SUGGEST_BLOCK_OPEN_RE);
   if (!match) return { text: text.trim(), rawSuggestions: [] };
   const display = `${text.slice(0, match.index)}${text.slice(match.index + match[0].length)}`.trim();
