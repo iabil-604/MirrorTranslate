@@ -14,6 +14,9 @@ import {
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
 import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.38.0';
+// A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
+// same maths index.js `moveStyleFor` used to paint it the first time.
+import { resolveMoveStyle } from './palette.js?v=0.38.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
@@ -3919,6 +3922,15 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
   const TEXT_KEYS = ['text', 'chinese', 'translation', 'zh', 'cn', 'id', 'segment_id', 'segmentId', 'index'];
   const ID_KEYS = ['id', 'segment_id', 'segmentId', 'index'];
   const runMarks = new Set();
+  // An item's own `runs` (特效字 layer 3, prompts.js) is a plain array of strings, not objects — the
+  // same bracket scan that recovers a truncated JSON reply also finds this array on its own and hands
+  // it to `translationItems` as if it were the top-level `translations` array, each of its strings then
+  // read as an id-less translation. `isRunMark` below only ever catches an *object* item; a `runs`
+  // entry is a bare string, so nothing stops it from joining `items` and, having no id, throwing off
+  // the position count `items.length === expected.length` gates the id-less recovery fallback on. The
+  // fix is not to filter it back out item by item but to never walk into it as a fallback list of
+  // items at all: its own signature is recorded here and the candidate is skipped outright below.
+  const consumedRunArrays = new Set();
   const collectRuns = value => {
     if (Array.isArray(value)) {
       value.forEach(collectRuns);
@@ -3926,12 +3938,14 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
     }
     if (!value || typeof value !== 'object') return;
     if (Array.isArray(value.quotes)) for (const quote of value.quotes) if (quote && typeof quote === 'object') runMarks.add(JSON.stringify(quote));
+    if (Array.isArray(value.runs)) consumedRunArrays.add(JSON.stringify(value.runs));
     for (const key of ['translations', 'items', 'results', 'data']) if (Array.isArray(value[key])) value[key].forEach(collectRuns);
   };
   parsedCandidates.forEach(collectRuns);
   const isRunMark = item => item && typeof item === 'object' && !Array.isArray(item)
     && (!TEXT_KEYS.some(key => Object.hasOwn(item, key)) || (!ID_KEYS.some(key => Object.hasOwn(item, key)) && runMarks.has(JSON.stringify(item))));
   for (const parsed of parsedCandidates) {
+    if (Array.isArray(parsed) && consumedRunArrays.has(JSON.stringify(parsed))) continue;
     for (const item of translationItems(parsed)) {
       if (isRunMark(item)) continue;
       const signature = typeof item === 'string' ? `text:${item}` : `json:${JSON.stringify(item)}`;
@@ -4215,6 +4229,17 @@ export function liftSplitQuotes(pieces) {
   return lifted;
 }
 
+// Written into a move's own span (below) so a later restyle (`restyleBilingual`) can recompute its
+// colour against a new band without needing the chat's own annotations again. A move's name or element
+// is otherwise free-form model output, so it is escaped exactly like an ordinary HTML attribute value.
+function escapeMoveAttribute(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function unescapeMoveAttribute(value) {
+  return String(value ?? '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+}
+
 // `id` is the line's segment id, so a unit with more than one speaker in it can paint each line's
 // quoted runs by that line's own marks.
 function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) {
@@ -4242,6 +4267,11 @@ function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) 
       const attributes = [
         piece.className ? `class="${piece.className}"` : '',
         piece.css ? `style="${piece.css}"` : '',
+        // A move's own element/name/tier (index.js `moveStyleFor`), carried on the span so a restyle
+        // can recolour it later without the chat's annotations — see `recolorMoveSpans` below.
+        piece.moveElement !== undefined ? `data-jy-move-element="${escapeMoveAttribute(piece.moveElement)}"` : '',
+        piece.moveName !== undefined ? `data-jy-move-name="${escapeMoveAttribute(piece.moveName)}"` : '',
+        piece.moveTier !== undefined ? `data-jy-move-tier="${escapeMoveAttribute(piece.moveTier)}"` : '',
       ].filter(Boolean).join(' ');
       const inner = attributes
         ? `${wrap(`<span ${attributes}>`)}${piece.text}${wrap('</span>')}`
@@ -4254,29 +4284,21 @@ function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) 
     .join('');
 }
 
-/**
- * Carves named runs out of a piece list, each run's own text found and given its own rendering while
- * whatever piece it sat inside keeps its own `css`/`className` on the rest of its text. Used for both
- * 招式 colouring and layer 3's carried inline fragments (design §2): the two differ only in what a
- * `runs` entry carries — a colour (`css`) for a move, a literal tag pair (`rawOpen`/`rawClose`) for a
- * carried fragment — not in how they are placed.
- *
- * Longer run texts are placed first, so a move name that is itself a substring of another run (rare,
- * but not impossible) never steals characters that belong to the longer one. Only the first occurrence
- * of each run's text is carved — a name mentioned twice in one segment is uncommon, and carving every
- * occurrence would let one wrong `indexOf` match repaint the whole segment.
- */
-export function splitPiecesByRuns(pieces, runs) {
-  const list = Array.isArray(runs) ? runs.filter(run => run?.text) : [];
-  if (!Array.isArray(pieces) || !pieces.length || !list.length) return pieces;
-  const ordered = [...list].sort((left, right) => right.text.length - left.text.length);
+// One pass of splitPiecesByRuns's own carving: each run in `subset`, longest text first, is found by
+// its first remaining occurrence and cut into its own piece, tagged `flag` so a shorter run in the
+// *same* pass never re-slices a piece a longer one of this pass already claimed. `...run` rides onto
+// the carved piece ahead of the computed fields below, so any field a caller put on the run (a move's
+// `moveElement`/`moveName`/`moveTier`, say) reaches the rendered piece without this function having to
+// know its name.
+function carveRuns(pieces, subset, flag) {
+  const ordered = [...subset].sort((left, right) => right.text.length - left.text.length);
   let result = pieces;
   for (const run of ordered) {
     let claimed = false;
     const next = [];
     for (const piece of result) {
       const text = piece?.text ?? '';
-      const at = !claimed && !piece.runApplied ? text.indexOf(run.text) : -1;
+      const at = !claimed && !piece[flag] ? text.indexOf(run.text) : -1;
       if (at < 0) {
         next.push(piece);
         continue;
@@ -4284,16 +4306,21 @@ export function splitPiecesByRuns(pieces, runs) {
       claimed = true;
       if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
       next.push({
-        text: run.text,
+        ...piece,
+        ...run,
         // A carried run that is itself a size change (a fragment carried as <big>/<small>, design §2
         // "字号二选一") drops whatever font-size the piece it sat inside was already carrying — an
         // emotion's rhythm scale, most often — instead of multiplying the two: `dropSurroundingCss`
-        // is only ever set for exactly that case (index.js `carriedRunsFor`).
+        // is only ever set for exactly that case (index.js `carriedRunsFor`), and only ever on a
+        // carried run, never on a move's own colour run, so a move's `css` below is never the one
+        // this drops.
         css: run.css ?? (run.dropSurroundingCss ? '' : piece.css),
         className: run.className ?? piece.className,
-        rawOpen: run.rawOpen,
-        rawClose: run.rawClose,
-        runApplied: true,
+        // A run with no wrapper of its own (a move) keeps whatever wrapper the piece it was cut from
+        // already had, instead of erasing it — the point of carving moves out in a second pass below.
+        rawOpen: run.rawOpen ?? piece.rawOpen,
+        rawClose: run.rawClose ?? piece.rawClose,
+        [flag]: true,
       });
       const rest = text.slice(at + run.text.length);
       if (rest) next.push({ ...piece, text: rest });
@@ -4301,6 +4328,36 @@ export function splitPiecesByRuns(pieces, runs) {
     result = next;
   }
   return result;
+}
+
+/**
+ * Carves named runs out of a piece list, each run's own text found and given its own rendering while
+ * whatever piece it sat inside keeps its own `css`/`className` on the rest of its text. Used for both
+ * 招式 colouring and layer 3's carried inline fragments (design §2): the two differ only in what a
+ * `runs` entry carries — a colour (`css`) for a move, a literal tag pair (`rawOpen`/`rawClose`) for a
+ * carried fragment — not in how they are placed.
+ *
+ * A carried run is always carved first, in its own pass, regardless of a move's length: its job is to
+ * claim the whole span the original tag covered, and once a move has cut that span into three pieces
+ * there is no single piece left holding the full text to find it by. A move's own colour run is carved
+ * second, in a pass of its own, straight out of whatever piece it now sits in — including one the first
+ * pass just produced — so a move name that lands inside an already-carried half-sentence run still gets
+ * coloured, inside that run's own wrapper, exactly as if the two never overlapped.
+ *
+ * Within each pass, longer run texts are placed first, so a name that is itself a substring of another
+ * run in the same pass (rare, but not impossible) never steals characters that belong to the longer
+ * one. Only the first remaining occurrence of each run's text is carved — a name mentioned twice in one
+ * segment is uncommon, and carving every occurrence would let one wrong `indexOf` match repaint the
+ * whole segment.
+ */
+export function splitPiecesByRuns(pieces, runs) {
+  const list = Array.isArray(runs) ? runs.filter(run => run?.text) : [];
+  if (!Array.isArray(pieces) || !pieces.length || !list.length) return pieces;
+  const isCarried = run => Boolean(run.rawOpen || run.rawClose);
+  const carried = list.filter(isCarried);
+  const uncarried = list.filter(run => !isCarried(run));
+  const afterCarried = carried.length ? carveRuns(pieces, carried, 'runApplied') : pieces;
+  return uncarried.length ? carveRuns(afterCarried, uncarried, 'moveApplied') : afterCarried;
 }
 
 export function renderSourceBlock(source, options = {}) {
@@ -4612,6 +4669,36 @@ function translationBlockBody(translation, metadata) {
   return { body, wrapper, padAfter };
 }
 
+// Matches a move's own opening span (index.js `moveStyleFor`, above `escapeMoveAttribute`) by the
+// data attribute nothing else on a translation body writes, whatever else the tag carries and in
+// whatever order — a speaker's own class can sit on the same span when a move lands inside a painted
+// quote.
+const MOVE_SPAN_OPEN_RE = /<span\b[^>]*\sdata-jy-move-element="[^"]*"[^>]*>/g;
+
+/**
+ * A restyle keeps a translation body byte for byte (`translationBlockBody`, below) because it has no
+ * annotations left to rebuild rhythm or speaker paint from — but a move's own colour is not read back
+ * from an annotation either; it is recomputed here, the same `resolveMoveStyle` call `moveStyleFor`
+ * (index.js) made the first time, against whatever band `options.coloring` carries now. Skipped
+ * entirely while 特效字 is off or there is no band to resolve against, in which case the span is left
+ * exactly as it already reads.
+ */
+function recolorMoveSpans(body, options) {
+  if (typeof body !== 'string' || !body.includes('data-jy-move-element="')) return body;
+  const coloring = normalizeColoring(options?.coloring);
+  if (!coloring.speakers || !coloring.effects || !coloring.band) return body;
+  return body.replace(MOVE_SPAN_OPEN_RE, tag => {
+    const element = unescapeMoveAttribute(tag.match(/\sdata-jy-move-element="([^"]*)"/)?.[1]);
+    const name = unescapeMoveAttribute(tag.match(/\sdata-jy-move-name="([^"]*)"/)?.[1]);
+    const tier = unescapeMoveAttribute(tag.match(/\sdata-jy-move-tier="([^"]*)"/)?.[1]);
+    const resolved = resolveMoveStyle({ element, name, tier, band: coloring.band, vividness: coloring.vividness });
+    if (!resolved) return tag;
+    return /\sstyle="[^"]*"/.test(tag)
+      ? tag.replace(/\sstyle="[^"]*"/, ` style="${resolved.css}"`)
+      : tag.replace(/>$/, ` style="${resolved.css}">`);
+  });
+}
+
 export function restyleBilingual(text, options = {}, metadata) {
   return upgradeLegacyBilingual(text, metadata)
     .replace(SOURCE_BLOCK_RE, (match, source, offset, whole) => {
@@ -4634,7 +4721,7 @@ export function restyleBilingual(text, options = {}, metadata) {
       // original's carried formatting inside the body are kept as they are.
       const kept = translationBlockBody(translation, metadata);
       if (kept) {
-        return `${match.startsWith('\n') ? '\n' : ''}${renderTranslationBlock(kept.body, {
+        return `${match.startsWith('\n') ? '\n' : ''}${renderTranslationBlock(recolorMoveSpans(kept.body, options), {
           ...options, padAfter: kept.padAfter, stylePrefix: kept.wrapper, styleSuffix: kept.wrapper ? '</span>' : '', styleBody: null,
         })}`;
       }

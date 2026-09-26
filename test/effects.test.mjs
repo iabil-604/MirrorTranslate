@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  AFFIX_END,
+  AFFIX_START,
   MESSAGE_META_KEY,
   assembleBilingual,
   interceptGenerationChat,
@@ -9,6 +11,9 @@ import {
   inlineFormatRuns,
   lineFormatting,
   recoverStructuredTranslations,
+  renderSourceBlock,
+  renderTranslationBlock,
+  restyleBilingual,
   segmentSource,
   splitPiecesByRuns,
   stripGeneratedTranslationLines,
@@ -222,6 +227,33 @@ test('splitPiecesByRuns only carves the first occurrence, and rawOpen/rawClose r
   assert.equal(stripGeneratedTranslationLines(floor), '原文。', '剥离后逐字还原原文，标签不泄漏给主模型');
 });
 
+test('a move name that sits inside an already-carried run is still coloured, keeps the run\'s own wrapper, and the wrapper\'s size drop never touches the move\'s colour', () => {
+  // The carried run (layer 3, a whole half-sentence) is far longer than the move name inside it, so
+  // the old length-only sort carved it first and its `runApplied` flag then hid the move's own text
+  // from ever being found — length no longer decides which pass goes first.
+  const pieces = [{ text: '他压低声音说道，白虎神拳，天地为证！', css: 'font-size:1.05em !important' }];
+  const runs = [
+    { text: '白虎神拳，天地为证！', rawOpen: '<big>', rawClose: '</big>', dropSurroundingCss: true },
+    { text: '白虎神拳', css: 'color:#f97316 !important;-webkit-text-fill-color:#f97316 !important' },
+  ];
+  const out = splitPiecesByRuns(pieces, runs);
+  assert.equal(out.map(piece => piece.text).join(''), pieces[0].text, '重新拼接必须逐字还原');
+  const move = out.find(piece => piece.text === '白虎神拳');
+  assert.ok(move, '招式名即使落在已经搬运的半句里，仍然要能被单独切出来上色');
+  assert.equal(move.css, runs[1].css, '招式的颜色不受外层「字号二选一」影响');
+  assert.equal(move.rawOpen, '<big>', '招式片段仍在被搬运的半句自己的包装里');
+  assert.equal(move.rawClose, '</big>');
+  // Every other piece the carried run produced keeps its own wrapper and its dropped (size-only) css.
+  for (const piece of out) {
+    if (piece.text === pieces[0].text || piece.text === move.text) continue;
+    if (piece.rawOpen || piece.rawClose) {
+      assert.equal(piece.rawOpen, '<big>');
+      assert.equal(piece.rawClose, '</big>');
+      assert.equal(piece.css, '', '被搬运半句自己的字号必须让位给 <big>，而不是叠加原来的字号');
+    }
+  }
+});
+
 // ---------------------------------------------------------------------------------------------
 // core.js — the translator's own answer: readAnnotation reads moves and runs, verbatim-checked
 // ---------------------------------------------------------------------------------------------
@@ -242,6 +274,21 @@ test('runs are read back as an ordered plain-text list, blank answers dropped', 
   const raw = JSON.stringify({ translations: [{ id: 1, text: '这半句特别加重，其余照常。', runs: ['特别加重', ''] }] });
   const recovered = recoverStructuredTranslations(raw, [{ id: 1 }]);
   assert.deepEqual(recovered.annotations.get(1).runs, ['特别加重', '']);
+});
+
+test('an item\'s own runs array is not also read as an id-less extra translation item, so positional recovery still fires for a genuinely id-less item', () => {
+  // The bracket scan that recovers a truncated reply also finds `runs`'s own `[...]` as a candidate
+  // on its own, each of its bare strings then read as if it were a whole extra `translations` item —
+  // which used to inflate `items.length` past `expected.length` and silently turn off the id-less
+  // positional fallback for every segment in the batch, this one included.
+  const raw = JSON.stringify({ translations: [
+    { id: 1, text: '这半句特别加重，其余照常。', runs: ['特别加重'] },
+    { text: '第二段没有 id。' },
+  ] });
+  const recovered = recoverStructuredTranslations(raw, [{ id: 1 }, { id: 2 }]);
+  assert.equal(recovered.translations.get(1), '这半句特别加重，其余照常。');
+  assert.equal(recovered.translations.get(2), '第二段没有 id。', 'runs 数组不应该被当成额外一项，挤掉按位置恢复');
+  assert.equal(recovered.missingIds.length, 0);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -288,6 +335,47 @@ test('collectTtsFloor\'s reading drops a hidden run\'s own words, keeping the re
 test('stripHiddenRuns leaves the text untouched when there is nothing hidden to drop', () => {
   assert.equal(__testing.stripHiddenRuns('一切如常。', [], []), '一切如常。');
   assert.equal(__testing.stripHiddenRuns('一切如常。', null, null), '一切如常。');
+});
+
+test('stripHiddenRuns does not strip an earlier, unrelated occurrence of the same words as the hidden run', () => {
+  // Both fragments translate to the same three characters; only the second is hidden. A plain
+  // text.replace(run, '') over the whole line matches the *first* occurrence regardless of which
+  // fragment is actually hidden, stripping the visible one and leaving the hidden one to be heard.
+  const fragments = [
+    { text: '红莲拳', format: null, hidden: false },
+    { text: '红莲拳', format: { open: '<s>', close: '</s>' }, hidden: true },
+  ];
+  const runs = ['红莲拳', '红莲拳'];
+  const stripped = __testing.stripHiddenRuns('他先喊出红莲拳试探，随即又是一声红莲拳，终结了战斗。', fragments, runs);
+  assert.equal(stripped, '他先喊出红莲拳试探，随即又是一声，终结了战斗。');
+});
+
+// ---------------------------------------------------------------------------------------------
+// core.js — restyleBilingual recomputes a move's colour on restyle (design: theme/background change)
+// ---------------------------------------------------------------------------------------------
+
+test('a restyle recomputes a move span\'s colour against the new band, leaving the rest of the body untouched', () => {
+  const oldBand = computeSafeBand(['#ffffff']);
+  const newBand = computeSafeBand(['#101010']);
+  const oldStyle = resolveMoveStyle({ element: '火焰', name: '红莲拳', tier: 1, band: oldBand, vividness: 0.7 });
+  const newStyle = resolveMoveStyle({ element: '火焰', name: '红莲拳', tier: 1, band: newBand, vividness: 0.7 });
+  assert.notEqual(oldStyle.hex, newStyle.hex, '两个背景下算出的颜色本身要不同，测试才有意义');
+  const moveOpen = `<span data-jy-move-element="火焰" data-jy-move-name="红莲拳" data-jy-move-tier="1" style="${oldStyle.css}">`;
+  const body = `他打出了${AFFIX_START}${moveOpen}${AFFIX_END}红莲拳${AFFIX_START}</span>${AFFIX_END}，震碎了地面。`;
+  const floor = `${renderSourceBlock('原文。')}\n${renderTranslationBlock(body, { translationPrefix: '{', translationSuffix: '}' })}`;
+  const metadata = { schema_version: 4, translation_prefix: '{', translation_suffix: '}' };
+  const options = {
+    translationPrefix: '【', translationSuffix: '】',
+    coloring: { speakers: true, effects: true, band: newBand, vividness: 0.7 },
+  };
+  const restyled = restyleBilingual(floor, options, metadata);
+  assert.ok(restyled.includes(`style="${newStyle.css}"`), '招式的颜色要按新背景重新算出');
+  assert.ok(!restyled.includes(oldStyle.css), '旧背景算出的颜色不应该继续留着');
+  assert.ok(restyled.includes('data-jy-move-element="火焰"'), '标注属性本身原样保留，供下一次 restyle 使用');
+  assert.match(restyled, /他打出了.*红莲拳.*，震碎了地面。/s, '文字本身一个字都没有变');
+  // 特效字 off: the span is left exactly as it already read, old colour and all.
+  const effectsOff = restyleBilingual(floor, { ...options, coloring: { speakers: true, effects: false, band: newBand } }, metadata);
+  assert.ok(effectsOff.includes(oldStyle.css), '特效字关闭时不重新计算，保留原样');
 });
 
 // ---------------------------------------------------------------------------------------------

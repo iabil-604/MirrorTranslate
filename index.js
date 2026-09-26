@@ -1764,7 +1764,10 @@ function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new M
     const element = moveElements.get(move.name)?.element || move.element;
     const tier = moveTiers.get(`${id}:${position}`) ?? move.tier;
     const resolved = resolveMoveStyle({ element, name: move.name, tier, band, vividness: coloring.vividness });
-    return resolved ? { text: move.name, css: resolved.css } : null;
+    // element/name/tier ride on the piece as data attributes (core.js `styledBody`) so a later restyle
+    // (theme or background change) can recompute this exact move's colour against the new band without
+    // the chat's annotations — see core.js `restyleBilingual`'s `recolorMoveSpans`.
+    return resolved ? { text: move.name, css: resolved.css, moveElement: element || '', moveName: move.name, moveTier: resolved.tier } : null;
   };
   // Layer 3's carried fragments (design §2 item 3): the translator's own words for the numbered
   // fragment, re-wrapped in that fragment's original tag. Colour still yields to a speaker's — the
@@ -3703,17 +3706,22 @@ function primaryTtsSide(settings = runtime.settings) {
 
 // 特效字 layer 3, the reading's half: `fragments` is that segment's own structural list
 // (segmentSource's `fragmentsById`, format and `hidden` included), `runs` the translator's answer for
-// each one, in the same order. Only a `hidden` fragment's own run is removed — its text is looked for
-// with a plain (non-regex) match, the same first-occurrence rule `splitPiecesByRuns` renders it with.
+// each one, in the same order. Only a `hidden` fragment's own words are removed from the reading.
+//
+// Every fragment's run is handed to `splitPiecesByRuns` — not only the hidden ones — so the same
+// context-aware carving the display renders with also decides where each hidden run actually sits: a
+// plain `text.replace(run, '')` over the whole line, done per hidden fragment in isolation, matches
+// that run's *first* occurrence anywhere in the text, which is the wrong span whenever the same words
+// were also written earlier by a fragment that is not hidden. Carving every fragment's run in one pass
+// claims each one's own occurrence in order before a later, coincidentally identical run can steal it.
 function stripHiddenRuns(text, fragments, runs) {
   if (!Array.isArray(fragments) || !fragments.length || !Array.isArray(runs) || !runs.length) return text;
-  let result = String(text ?? '');
-  fragments.forEach((fragment, position) => {
-    if (!fragment?.hidden) return;
-    const run = runs[position];
-    if (run) result = result.replace(run, '');
-  });
-  return result;
+  const runList = fragments
+    .map((fragment, position) => (runs[position] ? { text: runs[position], hidden: Boolean(fragment?.hidden) } : null))
+    .filter(Boolean);
+  if (!runList.length) return text;
+  const pieces = splitPiecesByRuns([{ text: String(text ?? '') }], runList);
+  return pieces.filter(piece => !piece.hidden).map(piece => piece.text).join('');
 }
 
 async function collectTtsFloor(messageId, settings = runtime.settings, sideOverride = null) {
