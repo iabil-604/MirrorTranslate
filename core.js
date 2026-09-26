@@ -23,11 +23,14 @@ export const APP_NAME = '镜译 · 正文翻译器';
 export const APP_VERSION = '0.38.0';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
-// built-in-regex fixes. A floor already translated keeps whichever rules produced what is stored on
+// built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
+// card when it actually shows one of the three documented signals, a kana-holding parenthesis no longer
+// counts as an already-bilingual row, and a card's first row starts its own unit apart from whatever
+// narration precedes it. A floor already translated keeps whichever rules produced what is stored on
 // it — recorded on its metadata as `segmentation_version` — so re-deriving its segments for matching
 // never disagrees with what was actually written; a floor with no record yet always starts on the
 // latest rules. See segmentSource's `segmentationVersion` option.
-export const SEGMENTATION_RULES_VERSION = 2;
+export const SEGMENTATION_RULES_VERSION = 3;
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -3047,9 +3050,18 @@ const TRAILING_BR_RE = /(<br\s*\/?>)\s*$/i;
 // The one caption every such card is assumed to carry verbatim, decoration marks either side allowed
 // ("♪ NOW PLAYING ♪", "- NOW PLAYING -"): unambiguous, so it needs no rule of the reader's own.
 const MUSIC_CARD_CAPTION_RE = /^[^\p{L}\p{N}]*now\s*playing[^\p{L}\p{N}]*$/iu;
-// A row the card already wrote as "原文 (译文)": the parenthesised half must itself hold a CJK
-// character, or an untranslated "(2024)"-style year or count would be mistaken for one.
-const MUSIC_CARD_BILINGUAL_RE = /[(（][^()（）]*[一-鿿㐀-䶿][^()（）]*[)）]\s*$/u;
+// A row the card already wrote as "原文 (译文)": before v0.40.0 (segmentation_version 3) any Han
+// character inside the parens was enough, which also caught a still-untranslated parenthetical that
+// mixes kana into its kanji — a ruby reading, or a phrase like "Hoshi (星の歌)" — as if it were already
+// Chinese. An old floor keeps being read this way.
+const MUSIC_CARD_BILINGUAL_LEGACY_RE = /[(（][^()（）]*[一-鿿㐀-䶿][^()（）]*[)）]\s*$/u;
+// v0.40.0 and up: captures the parenthesised half so isCardBilingualRow can judge it the same way
+// looksAlreadyTranslatedLyric judges a lyric line — a CJK ideograph and no kana in it — so a
+// parenthetical with any kana in it is no longer taken for an already-translated row. A parenthetical
+// written entirely in kanji (a Japanese gloss such as あんた(貴方), with no kana to tell it apart from
+// Chinese) is still counted as already-translated, same as before this change — a known, accepted limit
+// shared with looksAlreadyTranslatedLyric itself (design §7 item 9).
+const MUSIC_CARD_BILINGUAL_RE = /[(（]([^()（）]*)[)）]\s*$/u;
 
 // Hiragana/katakana (no 'g' flag — see KANA_RE's own note above on why a global one is unsafe to
 // `.test()` repeatedly) and any CJK ideograph.
@@ -3065,6 +3077,18 @@ const HAN_TEST_RE = /[一-鿿㐀-䶿]/u;
 function looksAlreadyTranslatedLyric(text) {
   const value = String(text ?? '');
   return HAN_TEST_RE.test(value) && !KANA_TEST_RE.test(value);
+}
+
+/**
+ * Whether a row's trailing parenthesised half is itself Chinese — see MUSIC_CARD_BILINGUAL_RE. `v3`
+ * false reads it the pre-v0.40.0 way (MUSIC_CARD_BILINGUAL_LEGACY_RE), so an old floor's stored
+ * translations still match what it was actually segmented with.
+ */
+function isCardBilingualRow(text, v3) {
+  const value = String(text ?? '');
+  if (!v3) return MUSIC_CARD_BILINGUAL_LEGACY_RE.test(value);
+  const match = value.match(MUSIC_CARD_BILINGUAL_RE);
+  return Boolean(match) && looksAlreadyTranslatedLyric(match[1]);
 }
 
 /**
@@ -3096,6 +3120,28 @@ function splitCardRows(line) {
   // trailing row from an ordinary physical line that merely happens to have no <br> anywhere in it.
   rows.push({ text: buffer, separator: line.separator, fromBr: true });
   return rows;
+}
+
+/**
+ * Whether a would-be run of card rows actually looks like a card at all — one of the three documented
+ * shapes: NOW PLAYING's own caption, a row already written "原文 (译文)", or a hit from the reader's own
+ * 「歌词行」 rules. Checked before a run of `<br>`-joined rows is even treated as a card (see `rawLines`
+ * in segmentSource), so ordinary prose that merely uses `<br>` for its own line breaks never reaches the
+ * catch-all that would otherwise assume every row it cannot otherwise classify is a lyric.
+ */
+function cardRowsShowSignal(rows, lyricRules, blocks, modern) {
+  return rows.some(row => {
+    if (!row.fromBr) return false;
+    const withoutExcluded = replaceMaskedBlocks(row.text, blocks, 'remove');
+    const translationText = withoutDecorativeSublines(
+      stripStructuralTags(withoutExcluded, null, { modern }).trim(),
+      { modern },
+    );
+    // Only called under musicCardRulesV3 (see rawLines in segmentSource), so the v3 bilingual test applies.
+    if (MUSIC_CARD_CAPTION_RE.test(translationText) || isCardBilingualRow(translationText, true)) return true;
+    const matchSubject = replaceMaskedBlocks(row.text, blocks, 'restore').replace(TRAILING_BR_RE, '');
+    return matchesPreserveLine(matchSubject, lyricRules.rules, { modern });
+  });
 }
 
 // A play-time readout — "01:23 / 04:56", with a played/total pair of m:ss clocks and whatever icons or
@@ -3166,11 +3212,17 @@ export function segmentSource(text, options = {}) {
   const prefix = typeof options.segmentPrefix === 'string' ? options.segmentPrefix : '';
   const suffix = typeof options.segmentSuffix === 'string' ? options.segmentSuffix : '';
   const startId = clampInteger(options.startId, 1, Number.MAX_SAFE_INTEGER, 1);
-  // Which of the v0.36.1 built-in-regex fixes apply: see SEGMENTATION_RULES_VERSION. A caller with no
-  // opinion gets the latest rules; a legacy (pre-schema-4) wrapper predates the option entirely and is
-  // always read with the old ones, whatever it was passed.
-  const modern = options.legacyWrappers === true ? false
-    : (options.segmentationVersion == null || Number(options.segmentationVersion) >= SEGMENTATION_RULES_VERSION);
+  // Which rule generation a floor's own segmentation_version speaks for: see SEGMENTATION_RULES_VERSION.
+  // A caller with no opinion gets the latest rules; a legacy (pre-schema-4) wrapper predates the option
+  // entirely and is always exactly version 1.
+  const segmentationRules = options.legacyWrappers === true ? 1
+    : (options.segmentationVersion == null ? SEGMENTATION_RULES_VERSION : Number(options.segmentationVersion));
+  // v0.36.1's built-in-regex fixes (version 2 and up).
+  const modern = segmentationRules >= 2;
+  // v0.40.0's 「音乐卡片」 tightening (version 3 and up) — see SEGMENTATION_RULES_VERSION's own note. An
+  // old floor keeps reading with the broader, unsignalled rules it was actually segmented and translated
+  // with, so its stored translations still match.
+  const musicCardRulesV3 = segmentationRules >= 3;
   const parsedRules = parsePreserveLineRulesWithErrors(options.preserveLineRules);
   const lyricRules = parseLyricLineRulesWithErrors(options.lyricLineRules);
   if (parsedRules.errors.length || lyricRules.errors.length) {
@@ -3239,8 +3291,33 @@ export function segmentSource(text, options = {}) {
     // The 「音乐卡片」 group turns each <br>-joined card row into its own "physical line" before anything
     // else runs, so every rule below (preserve, lyric, builtin, format) already applies per row with no
     // further special-casing. Off (the default), splitCardRows is never called and this is the exact
-    // array `physicalLines` already was.
-    const rawLines = options.musicCardRules === true ? physicalLines.flatMap(splitCardRows) : physicalLines;
+    // array `physicalLines` already was. Since musicCardRulesV3, a run of physical lines is only split
+    // this way when cardRowsShowSignal finds one of the three documented card shapes among the whole
+    // run's would-be rows, so ordinary prose that happens to use <br> stays the physical lines it always
+    // was, never fed to the lyric catch-all; an older floor keeps the broader, unconditional split it was
+    // segmented with.
+    const rawLines = options.musicCardRules === true ? (() => {
+      // The signal is judged once per run of *consecutive* physical lines that each have a <br> of their
+      // own, not once per physical line — a NOW PLAYING card pretty-printed with every row on its own
+      // source line only shows its signal on the caption's line, and every other row of that same card
+      // would otherwise lose lyric handling entirely (v0.40.0). A run of exactly one physical line (the
+      // ordinary case, several rows sharing one <br>-joined line) behaves exactly as before.
+      const result = [];
+      let run = [];
+      const flushRun = () => {
+        if (!run.length) return;
+        const split = !musicCardRulesV3 || cardRowsShowSignal(run.flatMap(item => item.rows), lyricRules, blocks, modern);
+        for (const item of run) result.push(...(split ? item.rows : [item.line]));
+        run = [];
+      };
+      for (const line of physicalLines) {
+        const rows = splitCardRows(line);
+        if (rows.length < 2) { flushRun(); result.push(line); continue; }
+        run.push({ line, rows });
+      }
+      flushRun();
+      return result;
+    })() : physicalLines;
     // What `lineFormatting`/`lineQuoteFormats`/`inlineFormatRuns` all read: a card row's own trailing
     // <br> dropped first, so a wrapper's closing tag right before it still looks like it closes at the
     // row's end.
@@ -3279,7 +3356,7 @@ export function segmentSource(text, options = {}) {
       const cardCaption = options.musicCardRules === true && line.fromBr && !customPreserved && !builtinPreserved
         && MUSIC_CARD_CAPTION_RE.test(translationText);
       const cardBilingual = options.musicCardRules === true && line.fromBr && !customPreserved && !builtinPreserved
-        && MUSIC_CARD_BILINGUAL_RE.test(translationText);
+        && isCardBilingualRow(translationText, musicCardRulesV3);
       const cardPreserved = cardCaption || cardBilingual;
       if (cardPreserved) cardPreservedLines += 1;
       const lyricByRule = matchesPreserveLine(matchSubject, lyricRules.rules, { modern });
@@ -3304,6 +3381,9 @@ export function segmentSource(text, options = {}) {
         speech: speechMarkedLine(withoutExcluded),
         semantic,
         lyric,
+        // Carried through so the chunk-building below can tell a run of card rows apart from the
+        // ordinary line that may precede it (a card's first row always starts its own unit).
+        fromBr: Boolean(line.fromBr),
         closingTagOnly: isClosingTagOnlyLine(withoutExcluded),
         // `format`/`quoteFormats`/`inlineFragments` are all read off the masked text (via
         // `formatSource`) so an excluded block inside the line cannot be mistaken for part of a
@@ -3354,6 +3434,13 @@ export function segmentSource(text, options = {}) {
           pendingRaw = '';
         }
         const segment = { id: startId + segments.length, text: line.translationText };
+        const fragments = line.inlineFragments ?? [];
+        // Same as the ordinary (non-paragraphPerLine) branch below: only present when this line
+        // actually carries one, so a line with nothing to carry costs nothing beyond the length check.
+        if (fragments.length) {
+          segment.fragments = fragments.map(fragment => fragment.text);
+          fragmentsById.set(segment.id, fragments);
+        }
         segments.push(segment);
         if (line.speech) speech.set(segment.id, line.speech);
         if (line.readingText !== line.translationText) reading.set(segment.id, line.readingText);
@@ -3365,6 +3452,10 @@ export function segmentSource(text, options = {}) {
           text: segment.text,
           sourceText: line.source,
           formats: [line.format ?? null],
+          // Layers 2 and 3 (design §2), aligned with `ids`/`formats` one entry per line — the same shape
+          // the ordinary branch's own chunk carries, so 特效字's carried formatting works in this mode too.
+          quoteFormats: [line.quoteFormats ?? []],
+          fragments: [fragments],
           lineParts: [{ semantic: true, source: line.source, lead: line.lead, trail: line.trail }],
           padAfter: index !== lastSemantic,
           ...(line.lyric ? { lyric: true } : {}),
@@ -3391,9 +3482,18 @@ export function segmentSource(text, options = {}) {
         if (current.length) chunks.push(current);
         chunks.push([line]);
         current = [];
-      } else {
-        current.push(line);
+        continue;
       }
+      // v0.40.0 (musicCardRulesV3): a card's first row must start its own unit too, never merge into
+      // the narration that precedes it. Only the transition from an ordinary line into a run of
+      // <br>-joined card rows forces this boundary — later rows of the same run still group with each
+      // other exactly as before. Gated the same as the rest of musicCardRulesV3, so an older floor's
+      // units still match what it was actually segmented and translated with.
+      if (musicCardRulesV3 && line.fromBr && current.length && !current[current.length - 1].fromBr) {
+        chunks.push(current);
+        current = [];
+      }
+      current.push(line);
     }
     if (current.length) chunks.push(current);
 
@@ -3461,8 +3561,14 @@ export function segmentSource(text, options = {}) {
             quoteFormats: unitQuoteFormats,
             fragments: unitFragments,
             // Every line of the unit in order, translatable or not: a replace-tag region rebuilds the
-            // paragraph from these so what is not for translation stays where it stood.
-            lineParts: chunk.map(line => ({ semantic: line.semantic, source: line.source, lead: line.lead, trail: line.trail })),
+            // paragraph from these so what is not for translation stays where it stood. `separator` is
+            // the same value `sourceText` above was actually built with — a card row's own trailing
+            // <br> already is the break (separator ''), an ordinary physical-line boundary is '\n' —
+            // so replaceUnitBody can join with what really separated these lines instead of assuming
+            // '\n' for all of them (v0.40.0).
+            lineParts: chunk.map((line, index) => (
+              { semantic: line.semantic, source: line.source, lead: line.lead, trail: line.trail, separator: heldSeparator(line, index) }
+            )),
           });
         } else {
           // A run of nothing but preserved/card-caption lines between two lyric lines: nothing to
@@ -4092,6 +4198,36 @@ function renderLyricPair(part, translation, options = {}) {
 }
 
 /**
+ * A lyric line, replace mode: still "原文 (译文)" in place (design §2, same as bilingual/只留译文), but
+ * built as an ordinary replace pair — visible SOURCE-block position, hidden original — instead of
+ * `renderLyricPair`'s own SOURCE+TRANSLATION shape, which has no hidden block at all for a replace
+ * region's reader (`extractReplaceTranslations`) to find: the lyric id was never in `existingTranslations`,
+ * so the row was re-sent on every run, and the main model saw the original in its prompt (stripped down
+ * to whatever a plain SOURCE block holds) instead of the translation replace mode is supposed to show it.
+ *
+ * "原文 (" and ")" ride as marked affixes either side of the bare translation, exactly like the visible
+ * decoration around an ordinary replace segment's translation — `extractReplaceTranslations` already
+ * strips every marked affix off a pair's translation half (`AFFIX_RE`), so it reads the plain translation
+ * straight out from between them with no changes of its own needed.
+ *
+ * The row's own trailing `<br>` (if it had one), like `renderLyricPair`'s, is bare text outside every
+ * block rather than folded into either half: inside the hidden block it would double up on restore (the
+ * source view already gets it back once, from the hidden bare source that keeps it); inside the visible
+ * half it would vanish from the prompt view along with the rest of that half's marked affixes, taking the
+ * card's own line break out of what the main model sees with it. Kept bare after the whole pair, it
+ * survives both.
+ */
+function renderReplaceLyricPair(part, translation, options = {}) {
+  const sourceFull = String(part?.sourceText ?? '');
+  const trailingBr = sourceFull.match(TRAILING_BR_RE);
+  const bareSource = trailingBr ? sourceFull.slice(0, trailingBr.index) : sourceFull;
+  const trailer = trailingBr ? trailingBr[1] : '';
+  if (!translation) return sourceFull; // Not translated yet: stay as plain original text, ready for 补译.
+  const visible = `${markedAffix(`${bareSource} (`)}${String(translation)}${markedAffix(')')}`;
+  return `${SOURCE_START}${visible}${SOURCE_END}\n${HIDDEN_START}${bareSource}${HIDDEN_END}${trailer}`;
+}
+
+/**
  * Builds one unit's translated body, line by line.
  *
  * Two things happen per line rather than per block. The rhythm contour reads one line at a time, and
@@ -4396,20 +4532,34 @@ export function renderReplacePair(translation, source, decoration = {}) {
 function replaceUnitBody(part, ids, translationMap, options, decoration = {}) {
   const carry = options.carryFormatting !== false;
   const formats = Array.isArray(part?.formats) ? part.formats : [];
+  const lineParts = part.lineParts;
   let index = 0;
-  return part.lineParts.map(line => {
-    if (!line.semantic) return line.source;
-    const id = ids[index];
-    const format = carry ? formats[index] : null;
-    index += 1;
-    const translation = translationMap.get(id);
-    if (!translation) return markedAffix(line.source);
-    const shaped = styledBody(String(translation), decoration.styleBody, markedAffix, id);
-    const body = format?.open
-      ? `${markedAffix(paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open)}${shaped}${markedAffix(format.close)}`
-      : shaped;
-    return `${line.lead ?? ''}${body}${line.trail ?? ''}`;
-  }).join('\n');
+  return lineParts.map((line, at) => {
+    let body;
+    if (!line.semantic) {
+      body = line.source;
+    } else {
+      const id = ids[index];
+      const format = carry ? formats[index] : null;
+      index += 1;
+      const translation = translationMap.get(id);
+      if (!translation) {
+        body = markedAffix(line.source);
+      } else {
+        const shaped = styledBody(String(translation), decoration.styleBody, markedAffix, id);
+        const painted = format?.open
+          ? `${markedAffix(paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open)}${shaped}${markedAffix(format.close)}`
+          : shaped;
+        body = `${line.lead ?? ''}${painted}${line.trail ?? ''}`;
+      }
+    }
+    // v0.40.0: each line's own separator (a card row's own trailing <br> already is the break, an
+    // ordinary physical-line boundary is a real '\n') instead of assuming '\n' joined every line —
+    // see the `lineParts` note in segmentSource that carries it, and readReplaceBodyByLine's own note
+    // on reading both this and what a floor written before this fix already has stored.
+    const separator = at < lineParts.length - 1 ? (typeof line.separator === 'string' ? line.separator : '\n') : '';
+    return `${body}${separator}`;
+  }).join('');
 }
 
 export function assembleReplace(layout, translationMap, options = {}) {
@@ -4421,6 +4571,17 @@ export function assembleReplace(layout, translationMap, options = {}) {
       continue;
     }
     const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
+    // A lyric line keeps its own "原文 (译文)" layout inside a replace region too (design §2 「歌词怎么译、
+    // 怎么排」 applies regardless of mode) — but as its own replace pair (renderReplaceLyricPair), not
+    // assembleBilingual's renderLyricPair: that shape has no hidden block for extractReplaceTranslations
+    // to read the translation back from, and would show the main model the original instead of the
+    // translation replace mode is meant to keep visible to it.
+    if (part.lyric) {
+      const missingIds = ids.filter(id => !translationMap.get(id));
+      if (missingIds.length && !allowMissing) throw new Error(`缺少第 ${missingIds.join('、')} 段译文。`);
+      pieces.push(renderReplaceLyricPair(part, translationMap.get(ids[0]), options));
+      continue;
+    }
     const sourceText = part.sourceText ?? part.text;
     const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''), part.quoteFormats, part.fragments);
     const byLine = Array.isArray(part.lineParts) && part.lineParts.length > 0;
@@ -4500,6 +4661,12 @@ export function assembleTranslationOnly(layout, translationMap, options = {}) {
  * gone. Blocks and pictures may run over several lines, so the reading follows the text, not a line
  * count. Anything that does not follow (a floor written before this, an edited floor) gives null, and
  * the older line-count reading is used.
+ *
+ * Between two lines, the separator consumed is whatever `replaceUnitBody` actually joined them with
+ * (v0.40.0: a card row's own trailing <br> is '', an ordinary line boundary is '\n') — except a boundary
+ * expecting '' also tolerates one stray leading '\n', because a floor written before this fix always
+ * inserted one there regardless of what actually separated the two lines. A floor written after the fix
+ * has no such byte to tolerate; either way the boundary is consumed and reading continues.
  */
 function readReplaceBodyByLine(body, lineParts, ids) {
   if (!Array.isArray(lineParts) || !lineParts.length) return null;
@@ -4528,8 +4695,17 @@ function readReplaceBodyByLine(body, lineParts, ids) {
       }
     }
     if (at < lineParts.length - 1) {
-      if (!rest.startsWith('\n')) return null;
-      rest = rest.slice(1);
+      const expected = typeof line.separator === 'string' ? line.separator : '\n';
+      if (expected) {
+        if (!rest.startsWith(expected)) return null;
+        rest = rest.slice(expected.length);
+      } else if (rest.startsWith('\n')) {
+        // Backward compatibility: a floor written before this fix always inserted a '\n' here even
+        // when nothing actually separated the two lines (two rows of the same <br>-joined physical
+        // line) — tolerate consuming that leftover byte so an old floor still reads back correctly. A
+        // floor written after the fix has none to consume.
+        rest = rest.slice(1);
+      }
     }
   }
   return rest === '' ? found : null;
@@ -4548,10 +4724,17 @@ export function extractReplaceTranslations(text, options = {}) {
   const translations = new Map();
   let cursor = 0;
   for (const part of segmented.layout.filter(item => item.type === 'segment')) {
-    const sourceText = String(part.sourceText ?? part.text ?? '');
+    const rawSourceText = String(part.sourceText ?? part.text ?? '');
+    // renderReplaceLyricPair's hidden half holds only the bare source, its own trailing <br> kept
+    // outside every block (see its own note) — the same way extractGeneratedTranslations already reads
+    // a lyric part's rendered source by its bare text alone. 「歌词行」 predates that pair shape (v0.37.0):
+    // a lyric part in a replace region written before this fix went through the ordinary path instead,
+    // its hidden half holding the full source, trailing <br> included — so a lyric part accepts either
+    // form here, whichever this particular floor was actually written with.
+    const bareSourceText = part.lyric ? rawSourceText.replace(TRAILING_BR_RE, '') : rawSourceText;
     const pair = pairs[cursor];
     // An untranslated segment has no pair of its own; leave the queue where it is for the next one.
-    if (!pair || pair.original !== sourceText) continue;
+    if (!pair || (pair.original !== rawSourceText && pair.original !== bareSourceText)) continue;
     cursor += 1;
     const body = pair.translation;
     if (typeof body !== 'string' || !body.trim()) continue;

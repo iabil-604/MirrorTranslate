@@ -181,6 +181,19 @@ test('segmentSource carries quoteFormats and fragments on the layout, and fragme
   assert.deepEqual(segmented.fragmentsById.get(secondId).map(fragment => fragment.text), ['特别轻']);
 });
 
+test('paragraphPerLine carries quoteFormats and fragments the same way the ordinary branch does, so 特效字 is not silently dropped', () => {
+  const source = '「<b>危险</b>」\n\n他压低声音：这半句<i>特别轻</i>，其余照常。';
+  const segmented = segmentSource(source, { paragraphPerLine: true });
+  const units = segmented.layout.filter(part => part.type === 'segment');
+  assert.equal(units.length, 2);
+  assert.deepEqual(units[0].quoteFormats, [[]], '整行已经被 lineFormatting 接管，这里不再用 quoteFormats 重复携带同一个包裹');
+  assert.equal(units[1].fragments[0].length, 1);
+  assert.equal(units[1].fragments[0][0].text, '特别轻');
+  const secondId = units[1].ids[0];
+  assert.deepEqual(segmented.segments.find(segment => segment.id === secondId).fragments, ['特别轻']);
+  assert.deepEqual(segmented.fragmentsById.get(secondId).map(fragment => fragment.text), ['特别轻']);
+});
+
 // ---------------------------------------------------------------------------------------------
 // core.js — splitPiecesByRuns (shared by 招式 colouring and layer 3's carried fragments)
 // ---------------------------------------------------------------------------------------------
