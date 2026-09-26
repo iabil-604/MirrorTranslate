@@ -22,6 +22,7 @@ import {
   readFloor,
   restoreStrippedForPrompt,
   HIDDEN_START,
+  HIDDEN_END,
   MESSAGE_META_KEY,
   renderReplacePair,
   renderSourceBlock,
@@ -2084,26 +2085,117 @@ test('v0.40.0: the music-card catch-all only fires inside an actual card, so pla
   assert.equal(oldFloor.lyricLines, 3, 'segmentation_version 2 stays on the old catch-all, so a floor already translated that way still matches');
 });
 
+test('v0.40.0: the card signal is judged over the whole run of <br>-bearing lines, not each physical line alone', () => {
+  // A NOW PLAYING card pretty-printed with every row on its own source line: only the caption's own
+  // physical line shows a signal by itself, but the whole run (caption + two lyric rows, each ending in
+  // its own <br>) is one card and every row of it must be read as one.
+  const pretty = '<div class="player">\n<b>♪ NOW PLAYING ♪</b><br>\nそらにひびけ<br>\nもう一度だけ<br>\n</div>';
+  const segmented = segmentSource(pretty, { musicCardRules: true });
+  assert.deepEqual([...segmented.lyricIds].length, 2, '两行歌词都被识别，不止判过信号的那一行');
+  assert.deepEqual(segmented.segments.map(item => item.text), ['そらにひびけ', 'もう一度だけ']);
+  // An old floor already ran the whole run unconditionally (musicCardRules alone was always enough),
+  // so it agrees with the fixed v3 reading on this exact shape — nothing here needed a version bump.
+  const oldFloor = segmentSource(pretty, { musicCardRules: true, segmentationVersion: 2 });
+  assert.deepEqual(oldFloor.segments.map(item => item.text), ['そらにひびけ', 'もう一度だけ']);
+
+  // Plain <br>-separated prose spread one row per physical line still shows no signal anywhere in the
+  // run, so it is still left alone under v3 — the run-wide check does not turn ordinary prose into a
+  // card just because it happens to end each of its lines in <br>.
+  const prose = '写着地址的第一行<br>\n写着地址的第二行<br>\n写着地址的第三行';
+  assert.equal(segmentSource(prose, { musicCardRules: true }).lyricLines, 0, '没有信号的一组 <br> 行，逐行拆开也不该被当成卡片');
+});
+
 test('v0.40.0: the already-bilingual row check only counts a parenthesised part that is actually Chinese', () => {
+  // A bare kana reading has no Han character in the parens at all, so the legacy check never matched
+  // it either — this case alone proves nothing about the fix (v2 and v3 always agreed on it).
   const ruby = 'NOW PLAYING<br>星(ほし)<br>もう一つの行';
   const segmented = segmentSource(ruby, { musicCardRules: true });
-  assert.equal(segmented.cardPreservedLines, 1, 'NOW PLAYING only — a ruby-style kana reading is not mistaken for our own bilingual pairing');
+  assert.equal(segmented.cardPreservedLines, 1, 'NOW PLAYING only — a bare kana reading was never mistaken for our own bilingual pairing, on either version');
   assert.deepEqual(segmented.segments.map(item => item.text), ['星(ほし)', 'もう一つの行']);
 
   const real = 'NOW PLAYING<br>灯りが揺れる (灯光摇曳)<br>次の一行';
   assert.equal(segmentSource(real, { musicCardRules: true }).cardPreservedLines, 2, '一句真正写好的中文仍然照常识别、保留');
+
+  // The case that actually changed: a parenthetical that mixes kana into its kanji — still untranslated
+  // Japanese, not a finished Chinese gloss. The legacy (segmentation_version 2) check only asked for any
+  // Han character and took it for one; v3 asks whether the parenthesised part itself reads as Chinese
+  // (Han present, no kana) and no longer does.
+  const mixed = 'NOW PLAYING<br>そらにひびけ (空に響け)<br>次の一行';
+  assert.equal(segmentSource(mixed, { musicCardRules: true }).cardPreservedLines, 1, 'v3：括号里混着假名，不算已经写好的中文译文，照常按歌词处理');
+  assert.equal(
+    segmentSource(mixed, { musicCardRules: true, segmentationVersion: 2 }).cardPreservedLines, 2,
+    '旧楼层（segmentation_version 2）照旧按当时更宽松的判断读，存量译文不会对不上',
+  );
+
+  // A known, accepted limit shared with looksAlreadyTranslatedLyric (design §7 item 9): a Japanese gloss
+  // written entirely in kanji, with no kana to tell it apart from Chinese, is still misjudged as already
+  // translated — this has not changed, and the fix above does not claim otherwise.
+  const kanjiGloss = 'NOW PLAYING<br>あんた(貴方)<br>次の一行';
+  assert.equal(segmentSource(kanjiGloss, { musicCardRules: true }).cardPreservedLines, 2, '纯汉字注解仍然会被当成已翻译，这是已知的限制，不是这次修复要解决的');
 });
 
-test('a lyric line lays out "原文 (译文)" inside a replace region too, its own <br> intact', () => {
+test('a lyric line lays out "原文 (译文)" inside a replace region too, its own <br> intact, and reads back translated', () => {
   const card = 'NOW PLAYING<br>そらにひびけ<br>作词：风铃';
   const options = { musicCardRules: true };
   const segmented = segmentSource(card, options);
   const translations = new Map([[segmented.segments[0].id, '响彻天空']]);
   const rendered = assembleReplace(segmented.layout, translations, { ...options, allowMissing: true });
-  const visible = rendered.replace(/[\u200b\u200c\u2060-\u2064]/g, '');
+  // 什么是读者真正看到的：隐藏的原文连同它自己的边界一起去掉，剩下的不可见标记也一并去掉（替换对总是把隐藏的那一半留在原始楼层文本里，真正的隐藏由另一套机制完成，这里不模拟它）。
+  const visible = rendered
+    .replace(new RegExp(`\\n?${HIDDEN_START}[\\s\\S]*?${HIDDEN_END}`, 'g'), '')
+    .replace(/[\u200b\u200c\u2060-\u2064]/g, '');
   assert.match(visible, /そらにひびけ \(响彻天空\)<br>/, '替换模式下也排成和双语/只留译文一样的「原文 (译文)」，卡片行自己的 <br> 还在');
   const restored = stripGeneratedTranslationLines(rendered);
   assert.equal(restored, card, '还原时严丝合缝地拿回原文，两个 <br> 都还在');
+  // 高优先级部分：替换标签区域里歌词行的译文必须能被 extractReplaceTranslations 读回来（readMessageSnapshot 对替换区域唯一的读法），否则这楼层永远不会被判定成已翻译，每次都会重发。
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '响彻天空', '替换标签区域里的歌词行译文能被读回，楼层不会被判定成没翻译、每次都重发');
+  // 中优先级部分：主模型自己的提示词里看到的是译文，不是原文。
+  const prompt = stripGeneratedTranslationLines(rendered, undefined, 'prompt');
+  assert.equal(prompt, 'NOW PLAYING<br>响彻天空<br>作词：风铃', '主模型在提示词里看到的是译文，不是日文原文');
+});
+
+test('a replace-tag lyric line written before this fix (「歌词行」 predates it, v0.37.0) still reads back translated', () => {
+  // main 8f76124's assembleReplace had no part.lyric branch at all — a 「歌词行」-matched line inside a
+  // replace region went through the same ordinary path as any other segment, its hidden half holding the
+  // full source (trailing <br> included, since the ordinary path never strips it). extractReplaceTranslations
+  // must still recognise that shape, not only the new renderReplaceLyricPair one.
+  const source = '♪ 星の歌\n彼女は歌った。';
+  const options = { lyricLineRules: 'prefix:♪' };
+  const segmented = segmentSource(source, options);
+  assert.ok(segmented.layout.some(part => part.lyric), '这句歌词规则命中的行确实被判成了 lyric，样例才有意义');
+  const mainStyleLayout = segmented.layout.map(part => (part.lyric ? { ...part, lyric: false } : part));
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(mainStyleLayout, translations, options);
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.size, segmented.segments.length, '旧写法（main 8f76124）留下的替换标签歌词行，读回时一段都不少');
+});
+
+test('a non-lyric card row sharing a unit with narration keeps only its own <br> in a replace region, no extra blank line', () => {
+  // "NOW PLAYING<br>作词：风铃" is one physical line split into two preserved rows; 彼女は止まった。 is the
+  // next physical line, joined to them by a real newline. Before this fix replaceUnitBody joined every
+  // line of the unit with a literal '\n' regardless of what actually separated them, so the caption row
+  // gained an extra blank line after its own <br> once rendered.
+  const source = '她哼起了。\nNOW PLAYING<br>作词：风铃\n彼女は止まった。';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(segmented.layout, translations, options);
+  const prompt = stripGeneratedTranslationLines(rendered, undefined, 'prompt');
+  assert.equal(prompt, '译1\nNOW PLAYING<br>作词：风铃\n译2', '卡片行自己的 <br> 后面不再多出一个换行，也没有丢掉真正的段内换行');
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, source, '原文一字不差地还原');
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '译1');
+  assert.equal(seenAgain.get(segmented.segments[1].id), '译2');
+
+  // A floor written before this fix always inserted a real '\n' there regardless — reading it back
+  // still has to work, so an already-translated floor is never seen as needing anything more.
+  const oldStyleIndex = rendered.indexOf('NOW PLAYING<br>') + 'NOW PLAYING<br>'.length;
+  const oldStyle = `${rendered.slice(0, oldStyleIndex)}\n${rendered.slice(oldStyleIndex)}`;
+  const seenOldStyle = extractReplaceTranslations(oldStyle, options);
+  assert.equal(seenOldStyle.get(segmented.segments[0].id), '译1', '旧写法多出来的换行，读的时候能容忍');
+  assert.equal(seenOldStyle.get(segmented.segments[1].id), '译2');
 });
 
 // -------------------------------------------------------------------------------------------

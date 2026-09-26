@@ -5,6 +5,7 @@ import {
   MESSAGE_META_KEY,
   SEGMENTATION_RULES_VERSION,
   assembleBilingual,
+  assembleReplace,
   extractGeneratedTranslations,
   createTranslationSignature,
   hashText,
@@ -204,6 +205,67 @@ test('a floor already translated under v0.36.0 or older — a <br>-joined card l
   assert.equal(snapshot.translated, true, 'a floor already fully translated under the old rules is not seen as needing anything more');
   const gate = await __testing.startTranslation(0, { quiet: true, force: false });
   assert.equal(gate.reason, 'already-translated', 'nothing is asked for again — the reason the v0.36.1 rules must not touch a floor v0.36.0 already finished');
+});
+
+test('a floor written by main v0.38.0 (segmentation_version 2) — a card, plain <br> prose, a ruby row and a replace-tag lyric — all still read back translated, nothing re-sent', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const context = mockHost();
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', bodyTags: ['story_scene'], replaceTags: ['replace_scene'],
+      musicCardRules: true, lyricLineRules: 'prefix:♪',
+    },
+  });
+  // Everything below is segmented and assembled at segmentation_version 2 — v0.40.0's own tightening
+  // (SEGMENTATION_RULES_VERSION 3) did not exist yet, so this is exactly what main 8f76124 would have
+  // written: the card's first row still merges into the narration before it, the <br> prose is split
+  // unconditionally into lyric guesses, and the already-bilingual check is the broader, un-tightened one.
+  const legacy = { ...settings, segmentationVersion: 2 };
+
+  // story_scene (bilingual): narration + a NOW PLAYING card with a ruby-style row, plus a run of plain
+  // <br>-separated prose that v2's own broad catch-all still turns into lyric guesses.
+  const storySource = '她哼起了一段旋律。\nNOW PLAYING<br>そらにひびけ<br>星(ほし)<br>作词：风铃\n\n信里写着地址<br>还有电话号码';
+  const storySegmented = segmentSource(storySource, legacy);
+  const storyTranslations = new Map(storySegmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const storyBody = assembleBilingual(storySegmented.layout, storyTranslations, legacy);
+
+  // replace_scene: a 「歌词行」-matched lyric line beside ordinary narration. main 8f76124's assembleReplace
+  // had no part.lyric branch at all — a lyric row went through the same translation-only path as any
+  // other replace segment — so the fixture is built the same way (part.lyric stripped before assembling).
+  const replaceSource = '♪ 星の歌\n彼女は歌った。';
+  const replaceSegmented = segmentSource(replaceSource, legacy);
+  assert.ok(replaceSegmented.layout.some(part => part.lyric), '这句歌词规则命中的行确实被判成了 lyric，样例才有意义');
+  const mainStyleLayout = replaceSegmented.layout.map(part => (part.lyric ? { ...part, lyric: false } : part));
+  const replaceTranslations = new Map(replaceSegmented.segments.map((segment, index) => [segment.id, `替换译${index + 1}`]));
+  const replaceBody = assembleReplace(mainStyleLayout, replaceTranslations, legacy);
+
+  const storyInner = `\n${storyBody}\n`;
+  const replaceInner = `\n${replaceBody}\n`;
+  context.chat.push({
+    mes: `<story_scene>${storyInner}</story_scene>\n<replace_scene>${replaceInner}</replace_scene>`,
+    swipe_id: 0,
+    extra: {
+      [MESSAGE_META_KEY]: {
+        schema_version: 4, swipe_id: 0, complete: true, segmentation_version: 2,
+        source_hash: await hashText(createTranslationSignature([
+          { tagName: 'story_scene', segments: segmentSource(storyInner, legacy).segments },
+          { tagName: 'replace_scene', segments: segmentSource(replaceInner, legacy).segments },
+        ])),
+        segment_prefix: settings.segmentPrefix ?? '', segment_suffix: settings.segmentSuffix ?? '',
+        translation_prefix: settings.translationPrefix ?? '{', translation_suffix: settings.translationSuffix ?? '}',
+        paragraph_per_line: false,
+      },
+    },
+  });
+
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  const expectedCount = storySegmented.segments.length + replaceSegmented.segments.length;
+  assert.equal(snapshot.segments.length, expectedCount, '按 segmentation_version 2 重新分段的结果和存量一致，段数没变');
+  assert.equal(snapshot.existingTranslations.size, expectedCount, '卡片、<br> 正文、假名读音行和替换标签里的歌词行，译文一个都没漏');
+  assert.equal(snapshot.translated, true, '一楼已经翻译完的旧楼层不会被判定成还差什么');
+  const gate = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.equal(gate.reason, 'already-translated', '旧楼层不会被重新分段、重发任何一段');
 });
 
 test('a fresh swipe carrying a copy of a translated swipe\'s own `extra` is never pinned to that copy\'s old segmentation rules', async t => {
