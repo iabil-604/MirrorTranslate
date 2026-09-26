@@ -261,6 +261,9 @@ function annotationRequest(settings, phase, requestMeta) {
     emotions,
     effects,
     hasFragments: Boolean(requestMeta?.hasFragments),
+    // Already-known moves are only ever worth telling the translator about while 特效字 asks for moves
+    // at all — the same gate `effects` already is (see index.js knownMovesForRequest).
+    knownMoves: effects ? knownMoveEntries(requestMeta?.knownMoves) : [],
     roster: rosterEntries(requestMeta?.roster),
     // A name the roster lacks still earns a colour of its own and still reaches the reading; only
     // with both of those off is there nothing a name outside the roster could be used for.
@@ -304,4 +307,19 @@ function rosterEntries(value) {
   return [...entries.values()].slice(0, 40).map(entry => ({ ...entry, aliases: entry.aliases.filter(alias => !names.has(alias)) }));
 }
 
-export const __workflowTesting = Object.freeze({ cleanReferenceText, worldInfoChunks });
+// index.js's knownMovesForRequest has already picked, ordered and capped these; this only guards the
+// shape of what crosses the module boundary, the same reason rosterEntries re-checks the roster.
+function knownMoveEntries(value) {
+  const seen = new Set();
+  const entries = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const name = String(item?.name ?? '').trim();
+    const element = String(item?.element ?? '').trim();
+    if (!name || !element || seen.has(name)) continue;
+    seen.add(name);
+    entries.push({ name, element });
+  }
+  return entries.slice(0, 40);
+}
+
+export const __workflowTesting = Object.freeze({ cleanReferenceText, worldInfoChunks, knownMoveEntries });

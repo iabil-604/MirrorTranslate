@@ -258,6 +258,68 @@ test('the chat-wide move index remembers the first floor\'s own element for a na
   assert.equal(index.get('红莲拳').element, '火焰', '第二楼报的属性不同也不改颜色');
 });
 
+// Regression: a floor that named the move with no element used to permanently occupy that name in the
+// chat-wide index (buildChatMoveIndex only checked `!index.has`), so a later floor's real element was
+// discarded and a floor rendered afterwards still fell back to a name-hash hue — two colours for the
+// same move (同招同色 broken). The first floor to actually name an element must win instead, regardless
+// of which floor came first.
+test('a floor that names a move with no element does not block a later floor\'s real element from becoming the chat-wide one', () => {
+  const chat = [
+    { extra: { [MESSAGE_META_KEY]: { annotations: { 1: { moves: [{ name: '红莲拳', element: '', tier: 1 }] } } } } },
+    { extra: { [MESSAGE_META_KEY]: { annotations: { 5: { moves: [{ name: '红莲拳', element: '火焰', tier: 1 }] } } } } },
+  ];
+  mockHost(chat);
+  const index = __testing.buildChatMoveIndex();
+  assert.equal(index.get('红莲拳').element, '火焰', '空属性的先出现不该挡住后面楼层真正定下的属性');
+});
+
+test('once the chat-wide index has learned an element, a later floor reporting a different one for the same name does not override it', () => {
+  const chat = [
+    { extra: { [MESSAGE_META_KEY]: { annotations: { 1: { moves: [{ name: '红莲拳', element: '', tier: 1 }] } } } } },
+    { extra: { [MESSAGE_META_KEY]: { annotations: { 5: { moves: [{ name: '红莲拳', element: '火焰', tier: 1 }] } } } } },
+    { extra: { [MESSAGE_META_KEY]: { annotations: { 9: { moves: [{ name: '红莲拳', element: '冰霜', tier: 1 }] } } } } },
+  ];
+  mockHost(chat);
+  const index = __testing.buildChatMoveIndex();
+  assert.equal(index.get('红莲拳').element, '火焰', '第一个真正定下的属性之后不再改');
+});
+
+test('resolveMoveElementIndex lets this floor\'s own real element fill a name the chat-wide index only has a placeholder for', () => {
+  // chatMoveIndex carries a name with no element yet (an earlier, element-less mention this session has
+  // not re-scanned); this floor is the first to actually name one, and it must win, the same as if
+  // buildChatMoveIndex itself had already resolved it (see the two tests above).
+  const chatMoveIndex = new Map([['红莲拳', { element: '' }]]);
+  const annotations = new Map([[1, { moves: [{ name: '红莲拳', element: '火焰', tier: 1 }] }]]);
+  const resolved = __testing.resolveMoveElementIndex(annotations, chatMoveIndex);
+  assert.equal(resolved.get('红莲拳').element, '火焰');
+});
+
+// index.js — knownMovesForRequest: what the translator is reminded of (prompts.js/workflow.js turn this
+// into the actual request text; see test/prompts.test.mjs and test/workflow.test.mjs).
+test('knownMovesForRequest lists moves with a fixed element, most recently mentioned first, and leaves out ones with none yet', () => {
+  const chat = [
+    { extra: { [MESSAGE_META_KEY]: { annotations: { 1: { moves: [{ name: '红莲拳', element: '火焰', tier: 1 }] } } } } },
+    { extra: { [MESSAGE_META_KEY]: { annotations: { 2: { moves: [{ name: '无属性招', element: '', tier: 1 }] } } } } },
+    { extra: { [MESSAGE_META_KEY]: { annotations: { 3: { moves: [{ name: '霜针', element: '冰霜', tier: 1 }] } } } } },
+    // Mentioned again later with no new information: the element stays 火焰, but its recency updates.
+    { extra: { [MESSAGE_META_KEY]: { annotations: { 4: { moves: [{ name: '红莲拳', element: '', tier: 1 }] } } } } },
+  ];
+  mockHost(chat);
+  const known = __testing.knownMovesForRequest();
+  assert.deepEqual(known, [{ name: '红莲拳', element: '火焰' }, { name: '霜针', element: '冰霜' }], '最近提到的在前，没有属性的招式不列入');
+});
+
+test('knownMovesForRequest caps at 40, keeping the most recently mentioned ones', () => {
+  const chat = Array.from({ length: 45 }, (_, index) => ({
+    extra: { [MESSAGE_META_KEY]: { annotations: { 1: { moves: [{ name: `招${index}`, element: '火', tier: 1 }] } } } },
+  }));
+  mockHost(chat);
+  const known = __testing.knownMovesForRequest();
+  assert.equal(known.length, 40);
+  assert.equal(known[0].name, '招44', '最后一楼提到的招式排在最前');
+  assert.ok(!known.some(entry => entry.name === '招0'), '最早的招式被最近的挤出四十条的名额');
+});
+
 test('tier caps are counted once per floor: at most one tier 3, and tier 2 caps a few paragraphs down to tier 1', () => {
   const annotations = new Map([
     [1, { moves: [{ name: '招A', element: '火', tier: 3 }] }],
@@ -276,6 +338,32 @@ test('tier caps are counted once per floor: at most one tier 3, and tier 2 caps 
   assert.equal(capped.get('4:0'), 1, '超出二级上限的招式降为一级');
   assert.equal(capped.get('5:0'), 1);
   assert.equal(capped.get('6:0'), 1);
+});
+
+// Regression: a move whose name never turns up in the text it was reported against (a stale mark left
+// on a re-translated line, most often) is never drawn at all, but capMoveTiersForFloor used to count it
+// anyway — a phantom tier-3 spent the floor's only tier-3 slot, demoting the real tier-3 move right
+// after it to tier 2 for nothing.
+test('capMoveTiersForFloor does not count a move whose name never turns up in the text it was reported against', () => {
+  const annotations = new Map([
+    [1, { moves: [{ name: '幻影拳', element: '虚', tier: 3 }] }],
+    [2, { moves: [{ name: '招B', element: '冰', tier: 3 }] }],
+  ]);
+  // Id 1's actual rendered text never mentions 幻影拳 at all (a stale mark); id 2's text does carry 招B.
+  const textFor = id => (id === 1 ? '这一段其实没有提到那招。' : '他打出了招B。');
+  const capped = __testing.capMoveTiersForFloor(annotations, textFor);
+  assert.equal(capped.has('1:0'), false, '找不到文字的招式不占用这一楼的三级名额');
+  assert.equal(capped.get('2:0'), 3, '真正会画出来的三级招式因此保住了三级');
+});
+
+test('capMoveTiersForFloor keeps counting every occurrence when no textFor is given (old behaviour, still relied on by callers with no text yet)', () => {
+  const annotations = new Map([
+    [1, { moves: [{ name: '招A', element: '火', tier: 3 }] }],
+    [2, { moves: [{ name: '招B', element: '冰', tier: 3 }] }],
+  ]);
+  const capped = __testing.capMoveTiersForFloor(annotations);
+  assert.equal(capped.get('1:0'), 3);
+  assert.equal(capped.get('2:0'), 2, '没有 textFor 时两个都照旧参与计数，第二个三级仍会被降级');
 });
 
 test('collectTtsFloor\'s reading drops a hidden run\'s own words, keeping the rest of the line', () => {
@@ -324,6 +412,27 @@ test('a move\'s colour wins only on its own characters inside a speaker-painted 
   assert.ok(pieces, '整句都是台词、只有一个说话人时，颜色本来在外层，但招式片段仍要能单独切出来');
   const move = pieces.find(piece => piece.text === '红莲拳');
   assert.ok(move, '招式片段被切了出来，即使外层已经是说话人色');
+});
+
+// Regression, end to end: buildSegmentStyler's own tier cap must not spend the floor's one tier-3 slot
+// on a move whose id's actual translation (the 4th argument, exactly what writeTranslation now passes
+// as effectiveTranslations) never mentions it — see the capMoveTiersForFloor tests above for the unit
+// version of this same fix.
+test('buildSegmentStyler, given the floor\'s real translations, does not let a phantom move demote a real tier-3 one', () => {
+  mockHost([]);
+  const band = computeSafeBand(['#ffffff']);
+  const settings = { coloring: { speakers: true, emotions: true, effects: true, band } };
+  const annotations = new Map([
+    [1, { moves: [{ name: '幻影拳', element: '虚', tier: 3 }] }],
+    [2, { moves: [{ name: '究极奥义', element: '雷', tier: 3 }] }],
+  ]);
+  // Id 1 was re-translated after the mark was made and no longer says 幻影拳 anywhere; id 2's text does
+  // carry 究极奥义.
+  const translationsById = new Map([[1, '这一段已经改写，不再提那一招。'], [2, '他使出了究极奥义！']]);
+  const styleFor = __testing.buildSegmentStyler(settings, annotations, new Map(), translationsById);
+  const secondPieces = styleFor([2], ['他使出了究极奥义！']).emphasis('他使出了究极奥义！', 2);
+  const move = secondPieces.find(piece => piece.text === '究极奥义');
+  assert.match(move?.css ?? '', /font-size:1\.12em/, '真正会画出来的三级招式没有被幻影招式挤掉，仍然是三级（加粗+发光+大一号）');
 });
 
 // ---------------------------------------------------------------------------------------------

@@ -1458,6 +1458,13 @@ function coloringEnabled(settings = runtime.settings) {
   return (coloring.speakers || coloring.emotions) && Boolean(coloring.band);
 }
 
+// 特效字's own gate, same as buildSegmentStyler's effectsOn and workflow.js annotationRequest's effects —
+// kept as one place so a future change to what "on" means cannot drift between the three.
+function effectsEnabled(settings = runtime.settings) {
+  const coloring = activeColoring(settings);
+  return coloring.speakers === true && coloring.effects === true;
+}
+
 function speakerPaletteFor(settings = runtime.settings) {
   return normalizeSpeakerList(settings?.speakerPalette?.[worldInfoCharacterKey()]);
 }
@@ -1681,6 +1688,9 @@ function canonicalAnnotations(settings, annotations) {
 // spirit; 常夜灯 may want them tuned once a chat with real 特效字 output is on screen.
 const MOVE_TIER2_FLOOR_CAP = 3;
 const MOVE_TIER3_FLOOR_CAP = 1;
+// How many already-known moves the translator is reminded of per request (knownMovesForRequest below) —
+// forty is the same headroom `rosterEntries` (workflow.js) gives the speaker roster.
+const KNOWN_MOVES_REQUEST_CAP = 40;
 
 /**
  * A move's colour is fixed by its element, and an element stays fixed by the first floor that named
@@ -1695,18 +1705,40 @@ function resolveMoveElementIndex(annotations, chatMoveIndex) {
   const ids = [...annotations.keys()].sort((left, right) => left - right);
   for (const id of ids) {
     for (const move of annotations.get(id)?.moves ?? []) {
-      if (move?.name && !index.has(move.name)) index.set(move.name, { element: move.element });
+      if (!move?.name) continue;
+      const known = index.get(move.name);
+      // A name already in the index but still waiting on its own element (an earlier mention, in this
+      // floor or an older one, that named the move without saying what it draws on) is not yet "known" —
+      // the first mention that actually names an element is the one that wins, not the first mention
+      // full stop, or a later floor's real element could never reach a name a blank mention already
+      // occupied (see buildChatMoveIndex, which fills this same gap chat-wide).
+      if (move.element && !known?.element) index.set(move.name, { element: move.element });
+      else if (!known) index.set(move.name, { element: move.element });
     }
   }
   return index;
 }
 
-/** Every move occurrence in the floor, in reported order, each tier capped against its neighbours. */
-function capMoveTiersForFloor(annotations) {
+/**
+ * Every move occurrence in the floor that will actually be drawn, in reported order, each tier capped
+ * against its neighbours.
+ *
+ * A move whose name never turns up verbatim in the text it was reported against (splitPiecesByRuns'
+ * own "找不到的丢掉", design §2 item 4 — a stale mark left over from an edited line, most often) is
+ * never inked at all, so it must not spend this floor's own tier-3/tier-2 slot either: a real move
+ * reported right after a phantom one would otherwise be capped down for a neighbour nobody ever sees.
+ * `textFor(id)`, when given, returns the exact text that id's moves are checked against; omitted, every
+ * occurrence counts, unchanged from before this function could tell a phantom move from a real one.
+ */
+function capMoveTiersForFloor(annotations, textFor = null) {
   const ids = [...annotations.keys()].sort((left, right) => left - right);
   const occurrences = [];
   for (const id of ids) {
-    (annotations.get(id)?.moves ?? []).forEach((move, position) => occurrences.push({ id, position, tier: move.tier }));
+    const text = typeof textFor === 'function' ? String(textFor(id) ?? '') : null;
+    (annotations.get(id)?.moves ?? []).forEach((move, position) => {
+      if (text !== null && !(move?.name && text.includes(move.name))) return;
+      occurrences.push({ id, position, tier: move.tier });
+    });
   }
   let tier3Used = 0;
   const afterTier3 = occurrences.map(item => {
@@ -1724,9 +1756,15 @@ function capMoveTiersForFloor(annotations) {
 }
 
 /**
- * Reads every past floor's own stored moves, first-seen element winning per name (design §2's "打开
- * 聊天时扫一遍，建一张…索引" — done fresh from the chat's own record on every render rather than kept
- * in memory across a reload, the same reason `autoSpeakerNames` could not be reused for this).
+ * Reads every past floor's own stored moves, the first floor to actually name an element winning per
+ * name (design §2's "打开聊天时扫一遍，建一张…索引" — done fresh from the chat's own record on every
+ * render rather than kept in memory across a reload, the same reason `autoSpeakerNames` could not be
+ * reused for this).
+ *
+ * A floor that merely mentions a move without saying what it draws on does not get to occupy that
+ * name in the index: it is only a placeholder, so a later floor's real element still moves in and
+ * takes over, and every floor re-rendered afterwards (including that first, element-less one) then
+ * paints from the same real element instead of the two disagreeing (同招同色).
  */
 function buildChatMoveIndex(chat = getContext().chat) {
   const index = new Map();
@@ -1738,14 +1776,49 @@ function buildChatMoveIndex(chat = getContext().chat) {
     for (const value of Object.values(stored)) {
       for (const raw of Array.isArray(value?.moves) ? value.moves : []) {
         const move = readMoveMark(raw);
-        if (move && !index.has(move.name)) index.set(move.name, { element: move.element });
+        if (!move) continue;
+        const known = index.get(move.name);
+        if (move.element && !known?.element) index.set(move.name, { element: move.element });
+        else if (!known) index.set(move.name, { element: move.element });
       }
     }
   }
   return index;
 }
 
-function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new Map()) {
+/**
+ * Already-known moves worth telling the translator about, so it reuses the same element for a name it
+ * has already been given one for instead of guessing a new one next time (design §2 「同招同色」) — the
+ * translator otherwise never learns what a move's element was fixed to, only the reader-facing colour
+ * code works that out afterwards.
+ *
+ * Only moves with a real, already-fixed element are worth sending (one with none yet has nothing to
+ * reuse), most recently mentioned first and capped, so a very long chat's earliest moves — least likely
+ * to come up again — do not crowd out ones from the floors right before this one.
+ */
+function knownMovesForRequest(chat = getContext().chat) {
+  const elements = buildChatMoveIndex(chat);
+  if (!elements.size || !Array.isArray(chat)) return [];
+  const lastSeenAt = new Map();
+  chat.forEach((message, messageIndex) => {
+    if (!message || message.is_user || message.is_system) return;
+    const stored = message.extra?.[MESSAGE_META_KEY]?.annotations;
+    if (!stored || typeof stored !== 'object') return;
+    for (const value of Object.values(stored)) {
+      for (const raw of Array.isArray(value?.moves) ? value.moves : []) {
+        const move = readMoveMark(raw);
+        if (move?.name) lastSeenAt.set(move.name, messageIndex);
+      }
+    }
+  });
+  return [...elements]
+    .filter(([, value]) => value?.element)
+    .sort((left, right) => (lastSeenAt.get(right[0]) ?? -1) - (lastSeenAt.get(left[0]) ?? -1))
+    .slice(0, KNOWN_MOVES_REQUEST_CAP)
+    .map(([name, value]) => ({ name, element: value.element }));
+}
+
+function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new Map(), translationsById = null) {
   const coloring = activeColoring(settings);
   const band = coloring.band;
   const hasAnnotations = reportedAnnotations instanceof Map && reportedAnnotations.size > 0;
@@ -1759,7 +1832,12 @@ function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new M
   // not a 特效字 reader's floor to begin with.
   const effectsOn = coloring.speakers && coloring.effects === true;
   const moveElements = effectsOn ? resolveMoveElementIndex(annotations, chatMoveIndex) : new Map();
-  const moveTiers = effectsOn ? capMoveTiersForFloor(annotations) : new Map();
+  // The floor's own texts are already known by the time this is built (writeTranslation has the whole
+  // translation map in hand), so capMoveTiersForFloor can pre-scan them and leave a phantom move — one
+  // that never turns up in its own id's text — out of the tier count. A caller with no texts to offer
+  // (a test, chiefly) gets the old, unfiltered count.
+  const textFor = translationsById instanceof Map ? id => String(translationsById.get(id) ?? '') : null;
+  const moveTiers = effectsOn ? capMoveTiersForFloor(annotations, textFor) : new Map();
   const moveStyleFor = (move, id, position) => {
     const element = moveElements.get(move.name)?.element || move.element;
     const tier = moveTiers.get(`${id}:${position}`) ?? move.tier;
@@ -2384,6 +2462,7 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
         {
           roster: state.roster ?? [],
           styles: state.styles ?? [],
+          knownMoves: state.knownMoves ?? [],
           hasLyrics: pending.some(segment => state.lyricIds?.has(segment.id)),
           hasFragments: pending.some(segment => segment.fragments?.length),
         },
@@ -2534,7 +2613,15 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
   // carries in an id already echoed once before this call started — translateMessageStreaming's own
   // streamed batch, before it falls back to this whole-request repair, for one — so that reply counts
   // as the first sighting instead of being forgotten the moment the stream hands off.
-  const state = { requests: 0, roster: annotationRoster(settings), styles: translationStyles(settings), seeded: translations.size > 0, lyricIds, echoSeen: new Map(seedEchoSeen) };
+  const state = {
+    requests: 0,
+    roster: annotationRoster(settings),
+    styles: translationStyles(settings),
+    knownMoves: effectsEnabled(settings) ? knownMovesForRequest() : [],
+    seeded: translations.size > 0,
+    lyricIds,
+    echoSeen: new Map(seedEchoSeen),
+  };
   let lastError;
   recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
     segments: needed.length,
@@ -2639,7 +2726,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
   // Labels the model returned this run win over the ones already stored on the floor.
   const effectiveAnnotations = new Map([...latest.existingAnnotations, ...(annotations instanceof Map ? annotations : [])]);
   for (const id of effectiveAnnotations.keys()) if (!effectiveTranslations.has(id)) effectiveAnnotations.delete(id);
-  const styleFor = buildSegmentStyler(settings, effectiveAnnotations, buildChatMoveIndex());
+  const styleFor = buildSegmentStyler(settings, effectiveAnnotations, buildChatMoveIndex(), effectiveTranslations);
   const bilingual = rebuildTaggedRegions(latest.extraction, region => region.mode === 'replace'
     ? assembleReplace(region.layout, effectiveTranslations, { allowMissing: !complete, styleFor })
     : assembleBilingual(
@@ -3049,6 +3136,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     const seeded = translations.size > 0;
     const roster = annotationRoster(settings);
     const styles = translationStyles(settings);
+    const knownMoves = effectsEnabled(settings) ? knownMovesForRequest() : [];
     const total = snapshot.segments.length;
     // A streamed batch's own echo, carried into the whole-request repair below as that repair's
     // `seedEchoSeen`: without it, a segment the model already echoed once here needs two more
@@ -3142,7 +3230,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       const phase = seeded ? 'repair' : 'primary';
       const hasLyrics = pending.some(segment => snapshot.lyricIds?.has(segment.id));
       const hasFragments = pending.some(segment => segment.fragments?.length);
-      const messages = buildTranslationMessages(pending, settings, packet, phase, { roster, styles, hasLyrics, hasFragments });
+      const messages = buildTranslationMessages(pending, settings, packet, phase, { roster, styles, knownMoves, hasLyrics, hasFragments });
       // Each batch thinks afresh; carrying the previous batch's thinking into this one would read as
       // the model having already written what it has not started.
       if (lanes === 1) {
@@ -3159,7 +3247,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
           segments: pending.length,
           error: safeError(error),
         });
-        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, hasLyrics, hasFragments });
+        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, knownMoves, hasLyrics, hasFragments });
         for (const [id, value] of recovered.translations) translations.set(id, value);
         for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
         for (const [id, echo] of recovered.echoes ?? []) {
@@ -16293,6 +16381,7 @@ export const __testing = Object.freeze({
   buildTranslationMessages,
   buildSegmentStyler,
   buildChatMoveIndex,
+  knownMovesForRequest,
   capMoveTiersForFloor,
   resolveMoveElementIndex,
   stripHiddenRuns,
