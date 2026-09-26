@@ -1558,6 +1558,59 @@ test('real ん-interjections and moans not on the short allow-list are still acc
   assert.equal(isShortExactEcho('ああん', 'ああん'), true);
 });
 
+test('a doubled full-size vowel right against a bare ん is recognised on a second sighting even without ー or a small kana, ゃ/ゅ/ょ\'s own vowel included', async () => {
+  const { looksUntranslated, isShortExactEcho } = await import('../core.js');
+  // Two real morae plus ん, the second mora doubling the first one's vowel in full-size kana (はあ, ひい,
+  // へえ, く+う, and ひゃ/きゃ's own ゃ doubled by a following full-size vowel) — round 2 only recognised
+  // this when the second half was ー or a *small* vowel kana, so a doubled full-size vowel right next to
+  // ん went unrecognised on every sighting and translateOneBatch retried it forever.
+  for (const line of ['はあん', 'ひいん', 'へえん', 'ひゃあん', 'きゃあん', 'くうん', 'きゅうん']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} still needs a real translation attempt first`);
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a moan doubling its own vowel, not a name`);
+  }
+  // The pair has to sit right against the ん, not merely somewhere earlier in the line, or this would
+  // repeat issue reviewer finding 2's own mistake in the opposite direction.
+  assert.equal(isShortExactEcho('はあ、ケン', 'はあ、ケン'), false, 'はあ 在这里离 ン 太远，不能替 ケン 洗白');
+});
+
+test('うふん/あはん/はうん are fixed moans (three distinct morae, not one drawn out) accepted on the first sighting too', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  for (const line of ['うふん', 'あはん', 'はうん']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a fixed moan, not a name`);
+  }
+});
+
+test('a single hiragana mora next to a bare ん is taken as a moan on a second sighting, but still needs a real attempt on the first', async () => {
+  const { looksUntranslated, isShortExactEcho } = await import('../core.js');
+  // Exactly the shape a short katakana name takes (アン, ケン, カン) — real moans just happen to be
+  // written in hiragana far more often than names are, so only a second identical sighting gets the
+  // benefit of the doubt, and only once nothing else marks it as one already.
+  for (const line of ['あん！', 'あん……', '「あん……」', 'ん、あん', 'あんん', 'ひゃん！', 'きゃん！']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} still needs a real translation attempt first`);
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a hiragana moan, not a name, on a second sighting`);
+  }
+  // The katakana spelling of the exact same shape is still never forgiven, first sighting or second.
+  for (const line of ['アン', 'ケン', 'カン', 'アン！', '「カン。」']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a name, not a gasp`);
+    assert.equal(isShortExactEcho(line, line), false, `${line} stays a name even on a second sighting`);
+  }
+});
+
+test('a marker or doubled vowel elsewhere in the line never waves a katakana name through, on either sighting', async () => {
+  const { looksUntranslated, isShortExactEcho } = await import('../core.js');
+  // Reviewer finding: hasDrawnOutVowel used to scan the whole line for a marker or a doubled vowel
+  // anywhere in it, so an aside before a real bare-ん name (ええ、/ああ、/おお、/はぁ、/あぁ、) waved the
+  // name through on a second sighting exactly as if it had marked the ん itself.
+  for (const line of ['ええ、ケン', 'ああ、アン！', 'おお、ケン', 'はぁ、ケン', 'あぁ、アン']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} 里的语气词离 ん 太远，不能证明这不是一个人名`);
+  }
+  // A two-mora ん word already covered (core.test.mjs 「a two-mora word or name…」) stays rejected on a
+  // second sighting too, ー/っ elsewhere in the word included.
+  for (const line of ['オーエン', 'オーエン！', 'ハーケン', 'ホーキン', 'コーエン', 'はっけん！', 'けっこん']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} 是双假名音节的词/名，不是语气词`);
+  }
+});
+
 test('a floor that fits one batch is spread evenly across parallel lanes', () => {
   const segments = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
   assert.equal(planTranslationBatches(segments, { maxChars: 48000 }).length, 1);
