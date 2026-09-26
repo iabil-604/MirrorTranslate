@@ -6,6 +6,7 @@ import {
   assembleBilingual,
   createTranslationSignature,
   hashText,
+  mergeSettings,
   normalizeChannel,
   segmentSource,
 } from '../core.js';
@@ -411,4 +412,28 @@ test('dialogueSourceLineAnchorIds falls back to the line’s own ids once it tru
   assert.deepEqual(utterances.map(item => item.kind), ['quoted']);
   const line = { lineId: 1, ids: [utterances[0].id] };
   assert.deepEqual(__testing.dialogueSourceLineAnchorIds(line, utterances), [utterances[0].id]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// streamReplyLines (边写边读): the reply as far as it is streamed must agree with what the finished
+// floor's own reading (collectTtsFloor) will do with the same text, or the live reading says out loud
+// what the recorded floor then silently skips.
+// ---------------------------------------------------------------------------------------------
+
+test('streamReplyLines leaves out a 歌词行 the same way the finished floor’s own reading does', () => {
+  const settings = mergeSettings({ bodyTags: ['content'], lyricLineRules: '星が降る夜に' });
+  const raw = '<content>\n她轻声唱着。\n星が降る夜に\n「你好。」\n</content>';
+  const lines = __testing.streamReplyLines(raw, settings);
+  // Regression: streamReplyLines used to keep its own copy of the segmentation options, never passing
+  // lyricLineRules through and never dropping segmented.lyricIds, so 边写边读 sent the lyric line to
+  // Fish and read it aloud even though collectTtsFloor's own reading leaves 歌词行 out by default.
+  assert.deepEqual(lines.map(line => line.text), ['她轻声唱着。', '「你好。」'], 'the lyric line is not among the streamed lines');
+  assert.ok(!lines.some(line => line.text.includes('星が降る夜に')), 'the lyric text itself is never streamed to Fish');
+});
+
+test('streamReplyLines still carries a story’s own speaker marks once the lyric check is added', () => {
+  const settings = mergeSettings({ bodyTags: ['content'] });
+  const raw = '<content>\n<say who="樱井" mood="开心">「你好」</say>她笑了。\n</content>';
+  const [line] = __testing.streamReplyLines(raw, settings);
+  assert.deepEqual(line.marks, [{ speaker: '樱井', mood: '开心', open: false }]);
 });

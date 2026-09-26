@@ -17993,14 +17993,26 @@ function streamReplyLines(raw, settings = runtime.settings) {
     paragraphPerLine: settings.paragraphPerLine,
     excludedTags: settings.excludedTags,
     preserveLineRules: settings.preserveLineRules,
+    lyricLineRules: settings.lyricLineRules,
+    musicCardRules: settings.musicCardRules,
+    // A reply still streaming has no floor metadata yet to agree with — always the latest rules,
+    // the same as resolveSegmentationVersion's own no-record case (review finding index.js:18000).
+    segmentationVersion: resolveSegmentationVersion(readable, null),
   };
   const lines = [];
   let nextId = 1;
   for (const region of extraction.regions) {
     const segmented = segmentSource(region.inner, { ...options, startId: nextId });
     for (const segment of segmented.segments) {
+      // 歌词行 default out of the reading (design §2 「朗读怎么处理」), the same way collectTtsFloor
+      // drops them from the floor's own recording: 边写边读 must not read aloud what the finished
+      // floor will skip.
+      if (segmented.lyricIds?.has(segment.id)) continue;
       const marked = segmented.speech?.get(segment.id);
-      lines.push(marked ? { lineId: segment.id, text: marked.text, marks: marked.marks } : { lineId: segment.id, text: segment.text });
+      if (marked) { lines.push({ lineId: segment.id, text: marked.text, marks: marked.marks }); continue; }
+      // A music-card row or other hidden-markup difference is read off its own text, matching
+      // collectTtsFloor's `originalLine`.
+      lines.push({ lineId: segment.id, text: segmented.reading?.get(segment.id) ?? segment.text });
     }
     nextId += segmented.segments.length;
   }
@@ -18978,6 +18990,11 @@ async function openCallSettings() {
   writeTtsFold('tts-call', true);
   const panel = await openControlCenter();
   const root = panel?.shadow;
+  // 朗读 only exists in 高级模式 (DESIGN §15.1) — switch there first, the same way goto-advanced
+  // does, before selecting a page the 正常模式 rail cannot reach (review finding index.js:18981).
+  if (runtime.settings.uiMode !== 'advanced') {
+    root?.querySelector('[data-jy-action="set-ui-mode"][data-jy-ui-mode="advanced"]')?.click();
+  }
   root?.querySelector('[data-jy-tab="tts"]')?.click();
   const fold = root?.querySelector('[data-jy-fold="tts-call"]');
   if (fold) {
