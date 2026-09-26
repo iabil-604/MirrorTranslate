@@ -999,7 +999,14 @@ function saveSettings(next) {
   // object — none of those are in VISUAL_FIELDS (the four affix strings), so without this a floor's
   // move colours would never be recomputed after a theme or background change, only after an affix or
   // regex edit that happened to be saved alongside it.
-  const coloringBefore = normalizeColoring(previous.coloring);
+  // `previous` is not safe to read the old vividness off, though: the 彩度 slider's own `input` handler
+  // (live preview, so the number beside it tracks the drag) already writes the new value straight into
+  // `runtime.settings` on every tick, long before the blur that lands here calls this. By then `previous`
+  // *is* `runtime.settings` with the new value already in it, so comparing the two here always reads as
+  // no change. What was actually saved last is untouched by that live preview — it only reaches
+  // `context.extensionSettings` a few lines below, once this save actually commits — so that is what a
+  // coloring change is measured against instead.
+  const coloringBefore = normalizeColoring(context.extensionSettings[MODULE_ID]?.coloring);
   const coloringAfter = normalizeColoring(runtime.settings.coloring);
   const coloringChanged = coloringBefore.speakers !== coloringAfter.speakers
     || coloringBefore.effects !== coloringAfter.effects
@@ -1091,14 +1098,24 @@ async function restyleCurrentChat(settings) {
   // none of the translation markers restyleBilingual looks for — its colour is recomputed straight on
   // the text instead, the same recolorMoveSpans a marked block already gets. `meta` is whatever record
   // (if any) this exact text was written under; passing none for a swipe that owns no record of its own
-  // leaves it alone, same as restyleBilingual already does above.
-  const restyleStrippedShown = (text, meta) => (meta?.stripped === true ? recolorMoveSpans(text, settings) : text);
-  // readFloor (core.js) tells an untouched stripped floor from a hand-edited one by projection_hash
-  // matching what is actually shown; any restyle that changes a stripped record's own text has to keep
-  // that fingerprint in step, or the very next read would call a floor nobody touched "diverged".
-  const refreshStrippedHash = (text, extra) => {
+  // leaves it alone, same as restyleBilingual already does above. But a record with `stripped: true` is
+  // not always this text's own: the host starts a new swipe with a structuredClone of the previous
+  // swipe's `extra` (readFloor's own doc above), and a hand-edited floor keeps its old record while its
+  // text has moved on. `originalText` is this swipe's text as it stood before this restyle; only when
+  // the record's fingerprint already matches it — the same "written" check readFloor makes — is this
+  // really the record this text was produced under, safe to recolour.
+  const restyleStrippedShown = (originalText, text, meta) => (
+    meta?.stripped === true && meta.projection_hash === hashTextSync(originalText) ? recolorMoveSpans(text, settings) : text
+  );
+  // readFloor (core.js) tells an untouched stripped floor from a hand-edited one, and a copied record
+  // from the floor it was actually written to, by projection_hash matching what is actually shown before
+  // this restyle. Only then does the fingerprint belong to this text at all, and only then may a restyle
+  // that changes the record's own text keep it in step; a copied or diverged record must be left exactly
+  // as it was, or the next read would mistake it for a different floor's mirror (or its hand-edit for
+  // untouched).
+  const refreshStrippedHash = (originalText, text, extra) => {
     const meta = extra?.[MESSAGE_META_KEY];
-    if (meta?.stripped !== true) return extra;
+    if (meta?.stripped !== true || meta.projection_hash !== hashTextSync(originalText)) return extra;
     const hash = hashTextSync(text);
     return meta.projection_hash === hash ? extra : { ...extra, [MESSAGE_META_KEY]: { ...meta, projection_hash: hash } };
   };
@@ -1113,10 +1130,10 @@ async function restyleCurrentChat(settings) {
     const ownRecord = !Array.isArray(message.swipes) || Boolean(message.swipe_info?.[shown])
       || !(Number(record?.schema_version) >= 4) || Number(record?.swipe_id) === shown;
     const usedRecord = ownRecord ? record : undefined;
-    const mes = restyleStrippedShown(restyleBilingual(message.mes, settings, usedRecord), usedRecord);
+    const mes = restyleStrippedShown(message.mes, restyleBilingual(message.mes, settings, usedRecord), usedRecord);
     const next = { mes, extra: message.extra };
     if (next.mes !== message.mes) next.extra = updateExtra(message.extra, next.mes);
-    next.extra = refreshStrippedHash(next.mes, next.extra);
+    next.extra = refreshStrippedHash(message.mes, next.mes, next.extra);
     next.extra = restyleMirror(next.extra);
     if (Array.isArray(message.swipes)) {
       next.swipes = [...message.swipes];
@@ -1124,9 +1141,10 @@ async function restyleCurrentChat(settings) {
       for (let index = 0; index < next.swipes.length; index += 1) {
         const extra = message.swipe_info?.[index]?.extra;
         const swipeRecord = extra?.[MESSAGE_META_KEY];
-        const text = index === shown ? next.mes : restyleStrippedShown(restyleBilingual(next.swipes[index], settings, swipeRecord), swipeRecord);
+        const originalSwipeText = index === shown ? message.mes : next.swipes[index];
+        const text = index === shown ? next.mes : restyleStrippedShown(originalSwipeText, restyleBilingual(originalSwipeText, settings, swipeRecord), swipeRecord);
         if (text !== next.swipes[index] && next.swipe_info?.[index]) next.swipe_info[index].extra = updateExtra(extra, text);
-        if (next.swipe_info?.[index]) next.swipe_info[index].extra = refreshStrippedHash(text, next.swipe_info[index].extra);
+        if (next.swipe_info?.[index]) next.swipe_info[index].extra = refreshStrippedHash(originalSwipeText, text, next.swipe_info[index].extra);
         if (next.swipe_info?.[index]) next.swipe_info[index].extra = restyleMirror(next.swipe_info[index].extra);
         next.swipes[index] = text;
       }

@@ -7,12 +7,16 @@ import {
   HIDDEN_END,
   HIDDEN_START,
   MESSAGE_META_KEY,
+  MODULE_ID,
   assembleBilingual,
+  assembleTranslationOnly,
   hashTextSync,
   interceptGenerationChat,
   lineQuoteFormats,
   inlineFormatRuns,
   lineFormatting,
+  normalizeColoring,
+  readFloor,
   recoverStructuredTranslations,
   renderReplacePair,
   renderSourceBlock,
@@ -637,6 +641,29 @@ test('a move carved from a fully-invisible carried run (涂黑/删除线) is lef
   assert.doesNotMatch(blacked.css ?? '', /#b55920/, '招式颜色不能出现在涂黑的片段上');
 });
 
+test('a hidden carried run inside a longer move name still stays hidden, instead of vanishing into the move\'s colour', () => {
+  // Regression: the mirror case of the test above. The move's own name ('红莲拳') is longer than the
+  // hidden span inside it ('红莲'), so the longest-first pass carved the move first and left no separate
+  // occurrence of '红莲' behind for the hidden run to find — the redaction wrapper disappeared entirely
+  // and '红莲' rendered in the move's colour.
+  const pieces = [{ text: '他使出了红莲拳，转身离开。' }];
+  const runs = [
+    { text: '红莲', rawOpen: '<span style="background-color:currentColor">', rawClose: '</span>', hidden: true },
+    { text: '红莲拳', css: 'color:#b55920 !important;-webkit-text-fill-color:#b55920 !important', moveElement: '火焰', moveName: '红莲拳', moveTier: 1 },
+  ];
+  const out = splitPiecesByRuns(pieces, runs);
+  assert.equal(out.map(piece => piece.text).join(''), pieces[0].text, '重新拼接必须逐字还原');
+  const blacked = out.find(piece => piece.rawOpen);
+  assert.ok(blacked, '涂黑的搬运片段不能整个消失');
+  assert.equal(blacked.text, '红莲', '涂黑片段只盖住自己那两个字');
+  assert.doesNotMatch(blacked.css ?? '', /#b55920/, '被涂黑的字不能显出招式颜色');
+  assert.equal(blacked.moveElement, undefined, '涂黑片段不能带着招式的 data-jy-move-* 身份，否则换背景重新上色时又会被点亮');
+  assert.equal(blacked.moveName, undefined);
+  const rest = out.find(piece => piece.text === '拳');
+  assert.ok(rest, '招式名里没被涂黑的那个字还在');
+  assert.match(rest.css ?? '', /#b55920/, '没被涂黑的字仍然按招式上色');
+});
+
 test('dropSurroundingCss only removes font-size, never a speaker\'s own colour, from the piece it sat inside', () => {
   // Regression: dropSurroundingCss used to blank the whole piece.css, which also erased a speaker's
   // colour on a quote (paintSpeech's pieces carry colour only, never font-size) the moment a <big>/
@@ -710,6 +737,72 @@ test('a stripped (只留译文) floor\'s own shown text gets its move recoloured
   assert.notEqual(message.extra[MESSAGE_META_KEY].projection_hash, metadata.projection_hash);
 });
 
+test('restyleCurrentChat leaves a fresh swipe\'s copied stripped record alone instead of pointing its fingerprint at the new reply', async () => {
+  const context = mockHost([]);
+  const oldSettings = { translationPrefix: '{', translationSuffix: '}', segmentPrefix: '', segmentSuffix: '' };
+  const layout = segmentSource('\n雨が降っている。\n', oldSettings).layout;
+  const translations = new Map([[1, '下雨了。']]);
+  const mirror = assembleBilingual(layout, translations, oldSettings);
+  const projection = assembleTranslationOnly(layout, translations, oldSettings);
+  const meta = {
+    schema_version: 4, swipe_id: 0, stripped: true, mirror, projection_hash: hashTextSync(projection),
+    translation_prefix: '{', translation_suffix: '}', segment_prefix: '', segment_suffix: '',
+  };
+  // The host starts a freshly generated swipe with a structuredClone of the previous swipe's `extra`
+  // (see readFloor's own doc in core.js): both message.extra and swipe_info[1].extra still say
+  // `stripped: true` and point at swipe 0's mirror, even though swipe 1 is an untranslated reply that
+  // has nothing to do with that record.
+  const freshReply = '<story_scene>\nHe threw the Crimson Fist and left.\n</story_scene>';
+  const copiedMeta = { ...meta };
+  const message = {
+    mes: freshReply, is_user: false, swipe_id: 1,
+    swipes: [projection, freshReply],
+    extra: { [MESSAGE_META_KEY]: copiedMeta },
+    swipe_info: [{ extra: { [MESSAGE_META_KEY]: meta } }, { extra: { [MESSAGE_META_KEY]: copiedMeta } }],
+  };
+  context.chat.push(message);
+  assert.deepEqual(readFloor(message), { text: freshReply, stripped: false, diverged: false, metadata: null });
+
+  // An affix-only restyle still restyles swipe 0's real mirror (and so counts as a change worth saving);
+  // that must not be the moment the copied record on swipe 1 gets its fingerprint corrupted.
+  await __testing.restyleCurrentChat({ ...oldSettings, translationPrefix: '【', translationSuffix: '】' });
+
+  assert.equal(message.mes, freshReply, '这条未翻译的新回复文字不该被改动');
+  assert.equal(message.extra[MESSAGE_META_KEY].projection_hash, meta.projection_hash, '复制来的指纹不能被重新指向这条新回复');
+  assert.deepEqual(
+    readFloor(message), { text: freshReply, stripped: false, diverged: false, metadata: null },
+    '换了译文前缀之后，这一楼仍然是没翻译过的普通楼层，不能被读成上一条 swipe 的译文',
+  );
+});
+
+test('restyleCurrentChat leaves a hand-edited (diverged) stripped floor\'s fingerprint and text alone', async () => {
+  const context = mockHost([]);
+  const oldSettings = { translationPrefix: '{', translationSuffix: '}', segmentPrefix: '', segmentSuffix: '' };
+  const source = '\n夕暮れの教室には、誰もいなかった。\n窓から差し込む光が、机を淡く照らしている。\n';
+  const layout = segmentSource(source, oldSettings).layout;
+  const translations = new Map([[1, '傍晚的教室里，一个人也没有。'], [2, '从窗外照进来的光，淡淡地照着桌面。']]);
+  const mirror = assembleBilingual(layout, translations, oldSettings);
+  const projection = assembleTranslationOnly(layout, translations, oldSettings);
+  // Changed by hand, but still mostly the translation's own wording: readFloor calls this "diverged",
+  // not a fresh untranslated floor, and refuses to let anything translate over it again.
+  const edited = projection.replace('一个人也没有', '一个人都没有');
+  const meta = {
+    schema_version: 4, swipe_id: 0, stripped: true, mirror, projection_hash: hashTextSync(projection),
+    translation_prefix: '{', translation_suffix: '}', segment_prefix: '', segment_suffix: '',
+  };
+  const message = { mes: edited, is_user: false, extra: { [MESSAGE_META_KEY]: meta } };
+  context.chat.push(message);
+  assert.equal(readFloor(message).diverged, true);
+
+  await __testing.restyleCurrentChat({ ...oldSettings, translationPrefix: '【', translationSuffix: '】' });
+
+  assert.equal(message.mes, edited, '手改过的文字不该被换样式覆盖回旧译文');
+  assert.equal(message.extra[MESSAGE_META_KEY].projection_hash, meta.projection_hash, '手改楼层的指纹不该被重新指向手改后的文字');
+  const after = readFloor(message);
+  assert.equal(after.diverged, true, '手改过的楼层换样式之后仍然算被手改过，重新翻译才不会把它覆盖掉');
+  assert.equal(after.text, edited, '读到的仍然是手改的文字，不是回退成旧译文');
+});
+
 test('saveSettings schedules a restyle when only coloring (band/vividness/speakers/effects) changes, not only on an affix or regex edit', async t => {
   const context = mockHost([]);
   // saveSettings also syncs the floating button and the speaker stylesheet while runtime.initialized is
@@ -739,5 +832,50 @@ test('saveSettings schedules a restyle when only coloring (band/vividness/speake
   __testing.saveSettings({ ...base, coloring: { ...base.coloring, band: newBand } });
   await __testing.processingRefresh();
   assert.ok(message.mes.includes(newStyle.css), '仅改背景色也要触发既有译文的重新上色');
+  assert.ok(!message.mes.includes(oldStyle.css));
+});
+
+test('a 彩度 slider drag still triggers a restyle on save, even though the slider\'s own live preview already wrote the new value into runtime.settings first', async t => {
+  const context = mockHost([]);
+  globalThis.document = { getElementById: () => null, createElement: () => ({ style: {} }), head: { appendChild: () => {} } };
+  t.after(() => {
+    delete globalThis.document;
+    __testing.configureForTest({ initialized: false });
+  });
+  __testing.configureForTest({ initialized: true });
+  const band = computeSafeBand(['#ffffff']);
+  // recolorMoveSpans (core.js) resolves a move's style off `normalizeColoring(options.coloring).band`,
+  // not the raw band a caller passed in — going through the same normalization here keeps this test's
+  // expected colours byte-identical to what a real restyle actually writes.
+  const styleAt = vividness => {
+    const normalized = normalizeColoring({ speakers: true, effects: true, band, vividness });
+    return resolveMoveStyle({ element: '火焰', name: '红莲拳', tier: 1, band: normalized.band, vividness: normalized.vividness });
+  };
+  const oldStyle = styleAt(0.7);
+  const newStyle = styleAt(0.2);
+  const moveOpen = `<span data-jy-move-element="火焰" data-jy-move-name="红莲拳" data-jy-move-tier="1" style="${oldStyle.css}">`;
+  const body = `他打出了${AFFIX_START}${moveOpen}${AFFIX_END}红莲拳${AFFIX_START}</span>${AFFIX_END}，震碎了地面。`;
+  const floor = `${renderSourceBlock('原文。')}\n${renderTranslationBlock(body, { translationPrefix: '{', translationSuffix: '}' })}`;
+  const message = { mes: floor, is_user: false, extra: { [MESSAGE_META_KEY]: { schema_version: 4, translation_prefix: '{', translation_suffix: '}' } } };
+  context.chat.push(message);
+  const base = __testing.configureForTest({
+    settings: {
+      translationPrefix: '{', translationSuffix: '}', showFloatingButton: false,
+      coloring: { speakers: true, effects: true, band, vividness: 0.7 },
+    },
+  });
+  // A real save already happened once, so context.extensionSettings holds exactly this as "last saved" —
+  // exactly like production, where initializeSettings (or an earlier saveSettings) always leaves it there.
+  context.extensionSettings[MODULE_ID] = base;
+
+  // The 彩度 slider's own `input` handler (index.js onInput, data-jy-field="coloringVividness") is a live
+  // preview: it writes the dragged value straight into runtime.settings on every tick, well before the
+  // reader lets go and the blur's `change` handler calls saveSettings(collectSettings(root)) — which then
+  // reads that very same already-live-previewed value back off the slider.
+  __testing.configureForTest({ settings: { coloring: { ...base.coloring, vividness: 0.2 } } });
+  const dragged = __testing.configureForTest({});
+  __testing.saveSettings({ ...dragged, coloring: { ...dragged.coloring, vividness: 0.2 } });
+  await __testing.processingRefresh();
+  assert.ok(message.mes.includes(newStyle.css), '彩度改变也要触发既有译文里招式的重新上色');
   assert.ok(!message.mes.includes(oldStyle.css));
 });

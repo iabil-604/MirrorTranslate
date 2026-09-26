@@ -4544,6 +4544,17 @@ function dropSizeCss(css) {
 // ever skips a piece another move already claimed, or one carried fully invisible (`hidden`, design §2
 // 涂黑/删除线): a move's own colour would make a blacked-out or struck-through name readable again, so
 // it is left inside the hidden piece uncoloured instead of carved out on its own.
+//
+// The one exception to "never land inside a piece an earlier run already carved" is a hidden carried
+// run meeting a move piece: when the move's own name is *longer* than the hidden span inside it (a name
+// carrying a blacked-out prefix, say), the move is carved first (longest-first) and would otherwise
+// leave nothing behind for the hidden run to find — the redaction would vanish and its characters would
+// render in the move's colour, the exact leak this run exists to prevent. So a hidden run alone may
+// still carve out of a move-applied piece, and the piece it takes does not keep the move's own colour or
+// its data-jy-move-* identity: leaving either would let a later restyle's recolorMoveSpans (core.js,
+// which matches by that same data attribute and adds a `style` back onto a tag missing one) repaint or
+// re-tag exactly the characters this run hides. Whatever text of the move piece is left over keeps the
+// move's colour as it did before, since none of it is hidden.
 function carveRuns(pieces, ordered) {
   let result = pieces;
   for (const run of ordered) {
@@ -4553,7 +4564,8 @@ function carveRuns(pieces, ordered) {
     const next = [];
     for (const piece of result) {
       const text = piece?.text ?? '';
-      const blocked = carried ? Boolean(piece.runApplied || piece.moveApplied) : Boolean(piece.moveApplied || piece.hidden);
+      const unhidesMove = carried && Boolean(run.hidden) && Boolean(piece.moveApplied);
+      const blocked = carried ? Boolean(piece.runApplied || (piece.moveApplied && !unhidesMove)) : Boolean(piece.moveApplied || piece.hidden);
       const at = !claimed && !blocked ? text.indexOf(run.text) : -1;
       if (at < 0) {
         next.push(piece);
@@ -4561,7 +4573,7 @@ function carveRuns(pieces, ordered) {
       }
       claimed = true;
       if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
-      next.push({
+      const carvedPiece = {
         ...piece,
         ...run,
         css: run.css ?? (run.dropSurroundingCss ? dropSizeCss(piece.css) : piece.css),
@@ -4575,7 +4587,16 @@ function carveRuns(pieces, ordered) {
         // back to whatever the piece already had.
         hidden: run.hidden ?? piece.hidden,
         [flag]: true,
-      });
+      };
+      if (unhidesMove) {
+        carvedPiece.css = undefined;
+        carvedPiece.className = undefined;
+        carvedPiece.moveElement = undefined;
+        carvedPiece.moveName = undefined;
+        carvedPiece.moveTier = undefined;
+        carvedPiece.moveApplied = false;
+      }
+      next.push(carvedPiece);
       const rest = text.slice(at + run.text.length);
       if (rest) next.push({ ...piece, text: rest });
     }
@@ -4596,9 +4617,11 @@ function carveRuns(pieces, ordered) {
  * an already-carried half-sentence still get coloured without a short carried run inside an earlier,
  * longer move name stealing the move's own characters first. Ties (a carried run and a move of the same
  * length) carve the carried run first, since its whole point is to claim its span before anything else
- * can. Only the first remaining occurrence of each run's text is carved — a name mentioned twice in one
- * segment is uncommon, and carving every occurrence would let one wrong `indexOf` match repaint the
- * whole segment.
+ * can. A hidden carried run is the one exception to the ordering itself: even when a longer move name
+ * carves first and leaves nothing behind for it, it still gets to carve out of the move's own piece
+ * afterward (`carveRuns`'s `unhidesMove`) rather than lose its redaction to the move's colour. Only the
+ * first remaining occurrence of each run's text is carved — a name mentioned twice in one segment is
+ * uncommon, and carving every occurrence would let one wrong `indexOf` match repaint the whole segment.
  */
 export function splitPiecesByRuns(pieces, runs) {
   const list = Array.isArray(runs) ? runs.filter(run => run?.text) : [];
