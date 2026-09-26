@@ -7,12 +7,16 @@ import {
   HIDDEN_END,
   HIDDEN_START,
   MESSAGE_META_KEY,
+  MODULE_ID,
   assembleBilingual,
+  assembleTranslationOnly,
   hashTextSync,
   interceptGenerationChat,
   lineQuoteFormats,
   inlineFormatRuns,
   lineFormatting,
+  normalizeColoring,
+  readFloor,
   recoverStructuredTranslations,
   renderReplacePair,
   renderSourceBlock,
@@ -271,6 +275,27 @@ test('a move name that sits inside an already-carried run is still coloured, kee
   }
 });
 
+test('a tier-3 move carved out of a carried <big>/<small> fragment drops its own font-size, keeping only the wrapper\'s', () => {
+  // Regression: the move's own css (tier 3 adds `font-size:1.12em`) rode straight onto the carved piece
+  // regardless of `piece.dropSurroundingCss`, so the move ended up wrapped in <big> *and* sized up again
+  // on top of it — the two multiplied instead of the wrapper's own size decision winning alone.
+  const band = computeSafeBand(['#101010']);
+  const moveStyle = resolveMoveStyle({ element: '雷电', name: '究极奥义', tier: 3, band });
+  assert.match(moveStyle.css, /font-size:1\.12em/, '前提：三级招式本身确实带字号');
+  const pieces = [{ text: '最后，他终于使出了究极奥义。' }];
+  const runs = [
+    { text: '他终于使出了究极奥义', rawOpen: '<big>', rawClose: '</big>', dropSurroundingCss: true },
+    { text: '究极奥义', css: moveStyle.css, moveElement: '雷电', moveName: '究极奥义', moveTier: 3 },
+  ];
+  const out = splitPiecesByRuns(pieces, runs);
+  assert.equal(out.map(piece => piece.text).join(''), pieces[0].text, '重新拼接必须逐字还原');
+  const move = out.find(piece => piece.text === '究极奥义');
+  assert.ok(move, '招式名要能从 <big> 包着的半句里被单独切出来上色');
+  assert.equal(move.rawOpen, '<big>', '招式片段仍在被搬运半句自己的包装里');
+  assert.doesNotMatch(move.css ?? '', /font-size/, '外层 <big> 已经决定了字号，招式自己的字号不能再叠加一次');
+  assert.match(move.css ?? '', /color:/, '颜色本身不受字号二选一影响，还在');
+});
+
 // ---------------------------------------------------------------------------------------------
 // core.js — the translator's own answer: readAnnotation reads moves and runs, verbatim-checked
 // ---------------------------------------------------------------------------------------------
@@ -455,6 +480,23 @@ test('stripHiddenRuns does not strip an earlier, unrelated occurrence of the sam
   assert.equal(stripped, '他先喊出红莲拳试探，随即又是一声，终结了战斗。');
 });
 
+test('a hidden run whose translated words sit only inside another fragment\'s translated run is still dropped from the reading', () => {
+  // The source cannot nest fragments, but the translator's own answer can still make one fragment's run
+  // sit only inside another's: here the hidden <s>全力で</s> comes back as '全力以赴', which is also
+  // contained in the *visible* <b>歯を食いしばって</b> fragment's own answer '咬着牙全力以赴地'. Carving
+  // both runs in one longest-first pass claims the visible (longer) one first, and the hidden run then
+  // finds no piece left to carve out of — it must fall back to a plain removal instead of staying in
+  // the reading.
+  const fragments = [
+    { text: '歯を食いしばって', format: { open: '<b>', close: '</b>' }, hidden: false },
+    { text: '全力で', format: { open: '<s>', close: '</s>' }, hidden: true },
+  ];
+  const runs = ['咬着牙全力以赴地', '全力以赴'];
+  const stripped = __testing.stripHiddenRuns('樱井咬着牙全力以赴地扑了上去。「上了」', fragments, runs);
+  assert.equal(stripped, '樱井咬着牙地扑了上去。「上了」');
+  assert.doesNotMatch(stripped, /全力以赴/);
+});
+
 // ---------------------------------------------------------------------------------------------
 // core.js — restyleBilingual recomputes a move's colour on restyle (design: theme/background change)
 // ---------------------------------------------------------------------------------------------
@@ -637,6 +679,56 @@ test('a move carved from a fully-invisible carried run (涂黑/删除线) is lef
   assert.doesNotMatch(blacked.css ?? '', /#b55920/, '招式颜色不能出现在涂黑的片段上');
 });
 
+test('a hidden carried run inside a longer move name still stays hidden, instead of vanishing into the move\'s colour', () => {
+  // Regression: the mirror case of the test above. The move's own name ('红莲拳') is longer than the
+  // hidden span inside it ('红莲'), so the longest-first pass carved the move first and left no separate
+  // occurrence of '红莲' behind for the hidden run to find — the redaction wrapper disappeared entirely
+  // and '红莲' rendered in the move's colour.
+  const pieces = [{ text: '他使出了红莲拳，转身离开。' }];
+  const runs = [
+    { text: '红莲', rawOpen: '<span style="background-color:currentColor">', rawClose: '</span>', hidden: true },
+    { text: '红莲拳', css: 'color:#b55920 !important;-webkit-text-fill-color:#b55920 !important', moveElement: '火焰', moveName: '红莲拳', moveTier: 1 },
+  ];
+  const out = splitPiecesByRuns(pieces, runs);
+  assert.equal(out.map(piece => piece.text).join(''), pieces[0].text, '重新拼接必须逐字还原');
+  const blacked = out.find(piece => piece.rawOpen);
+  assert.ok(blacked, '涂黑的搬运片段不能整个消失');
+  assert.equal(blacked.text, '红莲', '涂黑片段只盖住自己那两个字');
+  assert.doesNotMatch(blacked.css ?? '', /#b55920/, '被涂黑的字不能显出招式颜色');
+  assert.equal(blacked.moveElement, undefined, '涂黑片段不能带着招式的 data-jy-move-* 身份，否则换背景重新上色时又会被点亮');
+  assert.equal(blacked.moveName, undefined);
+  const rest = out.find(piece => piece.text === '拳');
+  assert.ok(rest, '招式名里没被涂黑的那个字还在');
+  assert.match(rest.css ?? '', /#b55920/, '没被涂黑的字仍然按招式上色');
+});
+
+test('a carried fragment whose translated run sits only inside another carried run\'s span keeps its own wrapper, nested inside it', () => {
+  // The source cannot nest fragments (inlineFormatRuns jumps past each one it finds), but the
+  // translator's own answer can still put one fragment's run only inside another's already-carved span
+  // (word reordering, most often). Regression: the inner fragment's own tag (here a blackout span)
+  // disappeared entirely instead of nesting inside the outer <b>, so the words it exists to hide
+  // rendered as plain, legible text.
+  const pieces = [{ text: '他咬着牙拼尽全力地扑了上去' }];
+  const runs = [
+    { text: '咬着牙拼尽全力地', rawOpen: '<b>', rawClose: '</b>' },
+    { text: '拼尽全力', rawOpen: '<span style="background-color:currentColor">', rawClose: '</span>', hidden: true },
+  ];
+  const out = splitPiecesByRuns(pieces, runs);
+  assert.equal(out.map(piece => piece.text).join(''), pieces[0].text, '重新拼接必须逐字还原');
+  const blacked = out.find(piece => piece.text === '拼尽全力');
+  assert.ok(blacked, '涂黑片段的文字不能整段消失');
+  assert.equal(blacked.rawOpen, '<b><span style="background-color:currentColor">', '涂黑片段套在外层 <b> 里面，两层包装都要在');
+  assert.equal(blacked.rawClose, '</span></b>');
+  assert.equal(blacked.hidden, true, '嵌套之后涂黑标记本身还在');
+  const before = out.find(piece => piece.text === '咬着牙');
+  const after = out.find(piece => piece.text === '地');
+  assert.ok(before && after, '外层片段自己没被嵌套占用的文字还在');
+  assert.equal(before.rawOpen, '<b>');
+  assert.equal(before.rawClose, '</b>');
+  assert.equal(after.rawOpen, '<b>');
+  assert.equal(after.rawClose, '</b>');
+});
+
 test('dropSurroundingCss only removes font-size, never a speaker\'s own colour, from the piece it sat inside', () => {
   // Regression: dropSurroundingCss used to blank the whole piece.css, which also erased a speaker's
   // colour on a quote (paintSpeech's pieces carry colour only, never font-size) the moment a <big>/
@@ -710,6 +802,72 @@ test('a stripped (只留译文) floor\'s own shown text gets its move recoloured
   assert.notEqual(message.extra[MESSAGE_META_KEY].projection_hash, metadata.projection_hash);
 });
 
+test('restyleCurrentChat leaves a fresh swipe\'s copied stripped record alone instead of pointing its fingerprint at the new reply', async () => {
+  const context = mockHost([]);
+  const oldSettings = { translationPrefix: '{', translationSuffix: '}', segmentPrefix: '', segmentSuffix: '' };
+  const layout = segmentSource('\n雨が降っている。\n', oldSettings).layout;
+  const translations = new Map([[1, '下雨了。']]);
+  const mirror = assembleBilingual(layout, translations, oldSettings);
+  const projection = assembleTranslationOnly(layout, translations, oldSettings);
+  const meta = {
+    schema_version: 4, swipe_id: 0, stripped: true, mirror, projection_hash: hashTextSync(projection),
+    translation_prefix: '{', translation_suffix: '}', segment_prefix: '', segment_suffix: '',
+  };
+  // The host starts a freshly generated swipe with a structuredClone of the previous swipe's `extra`
+  // (see readFloor's own doc in core.js): both message.extra and swipe_info[1].extra still say
+  // `stripped: true` and point at swipe 0's mirror, even though swipe 1 is an untranslated reply that
+  // has nothing to do with that record.
+  const freshReply = '<story_scene>\nHe threw the Crimson Fist and left.\n</story_scene>';
+  const copiedMeta = { ...meta };
+  const message = {
+    mes: freshReply, is_user: false, swipe_id: 1,
+    swipes: [projection, freshReply],
+    extra: { [MESSAGE_META_KEY]: copiedMeta },
+    swipe_info: [{ extra: { [MESSAGE_META_KEY]: meta } }, { extra: { [MESSAGE_META_KEY]: copiedMeta } }],
+  };
+  context.chat.push(message);
+  assert.deepEqual(readFloor(message), { text: freshReply, stripped: false, diverged: false, metadata: null });
+
+  // An affix-only restyle still restyles swipe 0's real mirror (and so counts as a change worth saving);
+  // that must not be the moment the copied record on swipe 1 gets its fingerprint corrupted.
+  await __testing.restyleCurrentChat({ ...oldSettings, translationPrefix: '【', translationSuffix: '】' });
+
+  assert.equal(message.mes, freshReply, '这条未翻译的新回复文字不该被改动');
+  assert.equal(message.extra[MESSAGE_META_KEY].projection_hash, meta.projection_hash, '复制来的指纹不能被重新指向这条新回复');
+  assert.deepEqual(
+    readFloor(message), { text: freshReply, stripped: false, diverged: false, metadata: null },
+    '换了译文前缀之后，这一楼仍然是没翻译过的普通楼层，不能被读成上一条 swipe 的译文',
+  );
+});
+
+test('restyleCurrentChat leaves a hand-edited (diverged) stripped floor\'s fingerprint and text alone', async () => {
+  const context = mockHost([]);
+  const oldSettings = { translationPrefix: '{', translationSuffix: '}', segmentPrefix: '', segmentSuffix: '' };
+  const source = '\n夕暮れの教室には、誰もいなかった。\n窓から差し込む光が、机を淡く照らしている。\n';
+  const layout = segmentSource(source, oldSettings).layout;
+  const translations = new Map([[1, '傍晚的教室里，一个人也没有。'], [2, '从窗外照进来的光，淡淡地照着桌面。']]);
+  const mirror = assembleBilingual(layout, translations, oldSettings);
+  const projection = assembleTranslationOnly(layout, translations, oldSettings);
+  // Changed by hand, but still mostly the translation's own wording: readFloor calls this "diverged",
+  // not a fresh untranslated floor, and refuses to let anything translate over it again.
+  const edited = projection.replace('一个人也没有', '一个人都没有');
+  const meta = {
+    schema_version: 4, swipe_id: 0, stripped: true, mirror, projection_hash: hashTextSync(projection),
+    translation_prefix: '{', translation_suffix: '}', segment_prefix: '', segment_suffix: '',
+  };
+  const message = { mes: edited, is_user: false, extra: { [MESSAGE_META_KEY]: meta } };
+  context.chat.push(message);
+  assert.equal(readFloor(message).diverged, true);
+
+  await __testing.restyleCurrentChat({ ...oldSettings, translationPrefix: '【', translationSuffix: '】' });
+
+  assert.equal(message.mes, edited, '手改过的文字不该被换样式覆盖回旧译文');
+  assert.equal(message.extra[MESSAGE_META_KEY].projection_hash, meta.projection_hash, '手改楼层的指纹不该被重新指向手改后的文字');
+  const after = readFloor(message);
+  assert.equal(after.diverged, true, '手改过的楼层换样式之后仍然算被手改过，重新翻译才不会把它覆盖掉');
+  assert.equal(after.text, edited, '读到的仍然是手改的文字，不是回退成旧译文');
+});
+
 test('saveSettings schedules a restyle when only coloring (band/vividness/speakers/effects) changes, not only on an affix or regex edit', async t => {
   const context = mockHost([]);
   // saveSettings also syncs the floating button and the speaker stylesheet while runtime.initialized is
@@ -740,4 +898,128 @@ test('saveSettings schedules a restyle when only coloring (band/vividness/speake
   await __testing.processingRefresh();
   assert.ok(message.mes.includes(newStyle.css), '仅改背景色也要触发既有译文的重新上色');
   assert.ok(!message.mes.includes(oldStyle.css));
+});
+
+test('a 彩度 slider drag still triggers a restyle on save, even though the slider\'s own live preview already wrote the new value into runtime.settings first', async t => {
+  const context = mockHost([]);
+  globalThis.document = { getElementById: () => null, createElement: () => ({ style: {} }), head: { appendChild: () => {} } };
+  t.after(() => {
+    delete globalThis.document;
+    __testing.configureForTest({ initialized: false });
+  });
+  __testing.configureForTest({ initialized: true });
+  const band = computeSafeBand(['#ffffff']);
+  // recolorMoveSpans (core.js) resolves a move's style off `normalizeColoring(options.coloring).band`,
+  // not the raw band a caller passed in — going through the same normalization here keeps this test's
+  // expected colours byte-identical to what a real restyle actually writes.
+  const styleAt = vividness => {
+    const normalized = normalizeColoring({ speakers: true, effects: true, band, vividness });
+    return resolveMoveStyle({ element: '火焰', name: '红莲拳', tier: 1, band: normalized.band, vividness: normalized.vividness });
+  };
+  const oldStyle = styleAt(0.7);
+  const newStyle = styleAt(0.2);
+  const moveOpen = `<span data-jy-move-element="火焰" data-jy-move-name="红莲拳" data-jy-move-tier="1" style="${oldStyle.css}">`;
+  const body = `他打出了${AFFIX_START}${moveOpen}${AFFIX_END}红莲拳${AFFIX_START}</span>${AFFIX_END}，震碎了地面。`;
+  const floor = `${renderSourceBlock('原文。')}\n${renderTranslationBlock(body, { translationPrefix: '{', translationSuffix: '}' })}`;
+  const message = { mes: floor, is_user: false, extra: { [MESSAGE_META_KEY]: { schema_version: 4, translation_prefix: '{', translation_suffix: '}' } } };
+  context.chat.push(message);
+  const base = __testing.configureForTest({
+    settings: {
+      translationPrefix: '{', translationSuffix: '}', showFloatingButton: false,
+      coloring: { speakers: true, effects: true, band, vividness: 0.7 },
+    },
+  });
+  // A real save already happened once, so context.extensionSettings holds exactly this as "last saved" —
+  // exactly like production, where initializeSettings (or an earlier saveSettings) always leaves it there.
+  context.extensionSettings[MODULE_ID] = base;
+
+  // The 彩度 slider's own `input` handler (index.js onInput, data-jy-field="coloringVividness") is a live
+  // preview: it writes the dragged value straight into runtime.settings on every tick, well before the
+  // reader lets go and the blur's `change` handler calls saveSettings(collectSettings(root)) — which then
+  // reads that very same already-live-previewed value back off the slider.
+  __testing.configureForTest({ settings: { coloring: { ...base.coloring, vividness: 0.2 } } });
+  const dragged = __testing.configureForTest({});
+  __testing.saveSettings({ ...dragged, coloring: { ...dragged.coloring, vividness: 0.2 } });
+  await __testing.processingRefresh();
+  assert.ok(message.mes.includes(newStyle.css), '彩度改变也要触发既有译文里招式的重新上色');
+  assert.ok(!message.mes.includes(oldStyle.css));
+});
+
+test('a coloring paint-only save (band/vividness) does not cancel a translation already in flight, and repaints its floor once that settles', async t => {
+  const context = mockHost([]);
+  globalThis.document = { getElementById: () => null, createElement: () => ({ style: {} }), head: { appendChild: () => {} } };
+  t.after(() => {
+    delete globalThis.document;
+    __testing.configureForTest({ initialized: false, inflight: new Map() });
+  });
+  __testing.configureForTest({ initialized: true });
+  const oldBand = computeSafeBand(['#ffffff']);
+  const newBand = computeSafeBand(['#101010']);
+  const styleAt = band => {
+    const normalized = normalizeColoring({ speakers: true, effects: true, band, vividness: 0.7 });
+    return resolveMoveStyle({ element: '火焰', name: '红莲拳', tier: 1, band: normalized.band, vividness: normalized.vividness });
+  };
+  const oldStyle = styleAt(oldBand);
+  const newStyle = styleAt(newBand);
+  const moveOpen = `<span data-jy-move-element="火焰" data-jy-move-name="红莲拳" data-jy-move-tier="1" style="${oldStyle.css}">`;
+  const body = `他打出了${AFFIX_START}${moveOpen}${AFFIX_END}红莲拳${AFFIX_START}</span>${AFFIX_END}，震碎了地面。`;
+  const floor = `${renderSourceBlock('原文。')}\n${renderTranslationBlock(body, { translationPrefix: '{', translationSuffix: '}' })}`;
+  const message = { mes: floor, is_user: false, extra: { [MESSAGE_META_KEY]: { schema_version: 4, translation_prefix: '{', translation_suffix: '}' } } };
+  context.chat.push(message);
+  const base = __testing.configureForTest({
+    settings: {
+      translationPrefix: '{', translationSuffix: '}', showFloatingButton: false,
+      coloring: { speakers: true, effects: true, band: oldBand, vividness: 0.7 },
+    },
+  });
+  context.extensionSettings[MODULE_ID] = base;
+
+  // A translation for some other floor is still running when the reader only touches 取色/彩度.
+  let aborted = false;
+  let settleInflight;
+  const inflightPromise = new Promise(resolve => { settleInflight = resolve; });
+  __testing.configureForTest({
+    inflight: new Map([['fake-lock', {
+      promise: inflightPromise, controller: { abort: () => { aborted = true; } },
+      sourceHash: 'x', messageId: 0, message: null, since: Date.now(),
+    }]]),
+  });
+
+  __testing.saveSettings({ ...base, coloring: { ...base.coloring, band: newBand } });
+  assert.equal(aborted, false, '仅改背景色/彩度不该取消正在进行的翻译');
+
+  // Once that run settles, the floor it (hypothetically) wrote under the old band still gets repainted.
+  settleInflight();
+  await __testing.pendingRepaint();
+  assert.ok(message.mes.includes(newStyle.css), '正在进行的翻译写完之后，它涉及的楼层也要按新背景补上色');
+  assert.ok(!message.mes.includes(oldStyle.css));
+});
+
+test('turning 说话人着色/特效字 on or off still cancels a translation in flight, since that changes the request itself', async t => {
+  const context = mockHost([]);
+  globalThis.document = { getElementById: () => null, createElement: () => ({ style: {} }), head: { appendChild: () => {} } };
+  t.after(() => {
+    delete globalThis.document;
+    __testing.configureForTest({ initialized: false, inflight: new Map() });
+  });
+  __testing.configureForTest({ initialized: true });
+  const band = computeSafeBand(['#ffffff']);
+  const base = __testing.configureForTest({
+    settings: {
+      translationPrefix: '{', translationSuffix: '}', showFloatingButton: false,
+      coloring: { speakers: true, effects: true, band, vividness: 0.7 },
+    },
+  });
+  context.extensionSettings[MODULE_ID] = base;
+
+  let aborted = false;
+  __testing.configureForTest({
+    inflight: new Map([['fake-lock', {
+      promise: new Promise(() => {}), controller: { abort: () => { aborted = true; } },
+      sourceHash: 'x', messageId: 0, message: null, since: Date.now(),
+    }]]),
+  });
+
+  __testing.saveSettings({ ...base, coloring: { ...base.coloring, effects: false } });
+  assert.equal(aborted, true, '特效字这类改变翻译请求本身的开关，仍然要取消正在进行的翻译');
 });

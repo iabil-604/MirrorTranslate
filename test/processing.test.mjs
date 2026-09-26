@@ -766,6 +766,31 @@ test('buildRegexCleanupPlan names 全局 alongside a scoped/preset clause only w
   assert.match(plan.message, /全局 1 条、角色绑定 1 条/, '全局这次确实有多余的，和角色绑定一起列出');
 });
 
+test('buildRegexCleanupPlan does name the global count once it actually has something to remove, alongside a scoped/preset cleanup', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  settings.processingProfiles = [profile];
+  settings.selectedProcessingProfileId = profile.id;
+  const full = syncNativeRegex([], profile);
+  const ruleName = `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  const ruleCopy = full.find(rule => rule.scriptName === ruleName);
+  const polluted = [...full, { ...ruleCopy }]; // one surplus global copy
+  const movedFixed = { ...full.find(rule => rule.id === `${MODULE_ID}:prompt-affix`) };
+  const engine = {
+    SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 },
+    getScriptsByType(type) {
+      if (type === 2) return [movedFixed];
+      return [];
+    },
+  };
+  const plan = __testing.buildRegexCleanupPlan({ next: settings, currentRegex: polluted, engine });
+  assert.ok(plan);
+  assert.equal(plan.toRemove, 1);
+  assert.equal(plan.presetRemove, 1);
+  assert.match(plan.message, /全局 1 条/, '全局确实有多余的时候，还是要报出来');
+  assert.match(plan.message, /预设绑定 1 条/);
+});
+
 test('buildRegexCleanupPlan skips a scope the host cannot give an answer for -- no engine at all, or one scope throwing (no character selected) -- without blocking the other scopes or the global cleanup', () => {
   const settings = normalizeProcessingSettings();
   const profile = makeBuiltinReadingProfile(settings, 'cute');
@@ -873,6 +898,41 @@ test('applyScopedRegexCleanup saves back only the scopes that actually had somet
   } finally {
     globalThis.SillyTavern = previousHost;
   }
+});
+
+test('reloadRegexPanelAfterGlobalCleanup reloads a global-only cleanup itself, since applyScopedRegexCleanup never does', async t => {
+  const previousHost = globalThis.SillyTavern;
+  let reloads = 0;
+  const context = { reloadCurrentChat: async () => { reloads += 1; } };
+  globalThis.SillyTavern = { getContext: () => context };
+  t.after(() => {
+    globalThis.SillyTavern = previousHost;
+    __testing.configureForTest({ mainGenerationActive: false });
+  });
+
+  // Regression: a global-only cleanup (the common case) never writes a character- or preset-scoped
+  // list, so applyScopedRegexCleanup's own reload never fires; saveSettings's own restyleCurrentChat is
+  // no help either when the dedupe left active.regexScripts itself unchanged. 酒馆's regex panel was
+  // left showing the rows just removed, still bound to their old array index.
+  const globalOnly = { scopedPlan: { kept: [], toRemove: 0 }, presetPlan: null };
+  await __testing.reloadRegexPanelAfterGlobalCleanup(globalOnly);
+  assert.equal(reloads, 1, '全局清理也要自己触发一次重新加载');
+
+  // applyScopedRegexCleanup already reloaded once it wrote a scoped or preset list -- this must not
+  // reload a second time on top of that.
+  reloads = 0;
+  await __testing.reloadRegexPanelAfterGlobalCleanup({ scopedPlan: { kept: ['a'], toRemove: 1 }, presetPlan: null });
+  assert.equal(reloads, 0, 'applyScopedRegexCleanup 已经加载过一次了，这里不重复加载');
+  reloads = 0;
+  await __testing.reloadRegexPanelAfterGlobalCleanup({ scopedPlan: null, presetPlan: { kept: ['b'], toRemove: 2 } });
+  assert.equal(reloads, 0, '预设范围同理');
+
+  // Skipped, not deferred, while the main reply is generating -- same tradeoff applyScopedRegexCleanup
+  // itself already takes.
+  reloads = 0;
+  __testing.configureForTest({ mainGenerationActive: true });
+  await __testing.reloadRegexPanelAfterGlobalCleanup(globalOnly);
+  assert.equal(reloads, 0, '主回复还在生成时不重新加载聊天');
 });
 
 test('buildRegexCleanupPlan leaves the scoped clause out of the message when no character is selected -- getScriptsByType(SCOPED) returns [] rather than throwing, so the scope is not "unavailable", just empty', () => {

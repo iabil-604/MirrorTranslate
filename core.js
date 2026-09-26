@@ -412,8 +412,11 @@ const KANA_REAL_WORDS = new Set([
 // as much as it is a real interjection (うん, ふん…) — the shapes are identical, so only a small fixed
 // set of the real words is trusted outright. ううん carries two real morae (う, う) and still belongs
 // here for the same reason, and so do フン (katakana ふん), ウウン and ふうん (both a doubled vowel plus
-// ん, spelled without ー).
-const INTERJECTION_N_WORDS = new Set(['うん', 'ううん', 'ウン', 'ふん', 'フン', 'ウウン', 'ふうん']);
+// ん, spelled without ー). うふん/あはん/はうん are the same kind of fixed moan, just not shaped like a
+// doubled vowel at all (う-ふ-ん, あ-は-ん, は-う-ん are three distinct morae, not one mora drawn out).
+const INTERJECTION_N_WORDS = new Set([
+  'うん', 'ううん', 'ウン', 'ふん', 'フン', 'ウウン', 'ふうん', 'うふん', 'あはん', 'はうん',
+]);
 // A moan's own extra marker: a stammered glottal stop, a heart, or a drawn-out vowel — none of which a
 // bare name is ever written with. Checked against the untouched source so ♡/♥/❤, which residueLetters
 // never keeps, still count.
@@ -448,6 +451,11 @@ function isDrawnOutVowelPair(before, here) {
   if (vowel === undefined || VOWEL_OF.get(here) !== vowel) return false;
   return PURE_VOWEL_KANA.has(here) || before === here;
 }
+
+// Full katakana letters only (ァ–ヺ, ヽヾヿ, the phonetic extensions) — never ー, which a hiragana moan
+// drawn out with it (あーん) still spells entirely in hiragana otherwise. Used only to tell a hiragana
+// moan from the katakana name the same bare-ん shape could just as easily be (see isInterjectionShaped).
+const KATAKANA_LETTER_RE = /[ァ-ヺヽ-ヿㇰ-ㇿ]/;
 
 function residueLetters(text) {
   return [...String(text ?? '')].filter(ch => RESIDUE_LETTER_RE.test(ch));
@@ -4579,8 +4587,32 @@ function dropSizeCss(css) {
 // ever skips a piece another move already claimed, or one carried fully invisible (`hidden`, design §2
 // 涂黑/删除线): a move's own colour would make a blacked-out or struck-through name readable again, so
 // it is left inside the hidden piece uncoloured instead of carved out on its own.
+//
+// The one exception to "never land inside a piece an earlier run already carved" is a hidden carried
+// run meeting a move piece: when the move's own name is *longer* than the hidden span inside it (a name
+// carrying a blacked-out prefix, say), the move is carved first (longest-first) and would otherwise
+// leave nothing behind for the hidden run to find — the redaction would vanish and its characters would
+// render in the move's colour, the exact leak this run exists to prevent. So a hidden run alone may
+// still carve out of a move-applied piece, and the piece it takes does not keep the move's own colour or
+// its data-jy-move-* identity: leaving either would let a later restyle's recolorMoveSpans (core.js,
+// which matches by that same data attribute and adds a `style` back onto a tag missing one) repaint or
+// re-tag exactly the characters this run hides. Whatever text of the move piece is left over keeps the
+// move's colour as it did before, since none of it is hidden.
+//
+// 字号二选一 (design §2 item 4): a run carved out of a piece that is itself a <big>/<small> carried
+// fragment (`piece.dropSurroundingCss`, set on that fragment's own run and carried forward on every piece
+// it produced) must not add its own `font-size` on top of the wrapper's — the wrapper already made that
+// size decision. A carried run with no `css` of its own instead drops any font-size the *piece* it is cut
+// from was carrying, the same rule from the other side.
+function carvedCss(run, piece) {
+  return run.css !== undefined
+    ? (piece.dropSurroundingCss ? dropSizeCss(run.css) : run.css)
+    : (run.dropSurroundingCss ? dropSizeCss(piece.css) : piece.css);
+}
+
 function carveRuns(pieces, ordered) {
   let result = pieces;
+  const placed = new Set();
   for (const run of ordered) {
     const carried = Boolean(run.rawOpen || run.rawClose);
     const flag = carried ? 'runApplied' : 'moveApplied';
@@ -4588,7 +4620,8 @@ function carveRuns(pieces, ordered) {
     const next = [];
     for (const piece of result) {
       const text = piece?.text ?? '';
-      const blocked = carried ? Boolean(piece.runApplied || piece.moveApplied) : Boolean(piece.moveApplied || piece.hidden);
+      const unhidesMove = carried && Boolean(run.hidden) && Boolean(piece.moveApplied);
+      const blocked = carried ? Boolean(piece.runApplied || (piece.moveApplied && !unhidesMove)) : Boolean(piece.moveApplied || piece.hidden);
       const at = !claimed && !blocked ? text.indexOf(run.text) : -1;
       if (at < 0) {
         next.push(piece);
@@ -4596,10 +4629,10 @@ function carveRuns(pieces, ordered) {
       }
       claimed = true;
       if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
-      next.push({
+      const carvedPiece = {
         ...piece,
         ...run,
-        css: run.css ?? (run.dropSurroundingCss ? dropSizeCss(piece.css) : piece.css),
+        css: carvedCss(run, piece),
         className: run.className ?? piece.className,
         // A run with no wrapper of its own (a move) keeps whatever wrapper the piece it was cut from
         // already had, instead of erasing it.
@@ -4610,6 +4643,53 @@ function carveRuns(pieces, ordered) {
         // back to whatever the piece already had.
         hidden: run.hidden ?? piece.hidden,
         [flag]: true,
+      };
+      if (unhidesMove) {
+        carvedPiece.css = undefined;
+        carvedPiece.className = undefined;
+        carvedPiece.moveElement = undefined;
+        carvedPiece.moveName = undefined;
+        carvedPiece.moveTier = undefined;
+        carvedPiece.moveApplied = false;
+      }
+      next.push(carvedPiece);
+      const rest = text.slice(at + run.text.length);
+      if (rest) next.push({ ...piece, text: rest });
+    }
+    if (claimed) placed.add(run);
+    result = next;
+  }
+  // The source cannot nest fragments (inlineFormatRuns jumps past each one it finds), but the
+  // translator's own answer can still make one carried run's text sit only inside another carried run's
+  // already-carved span (word reordering, most often). The pass above never lets a carried run land
+  // there (a carried run may never land inside a piece any earlier run of either kind already carved,
+  // the whole point of "carried" being to claim its own span), so that run's own wrapper — a struck-
+  // through or blacked-out fragment, `run.hidden` most often — would otherwise disappear entirely and
+  // render as plain, legible text. Nested inside that span instead, both wrappers apply: the outer
+  // fragment's tag stays on the rest of its own text, the inner run's tag (and `hidden`) wraps only its
+  // own characters.
+  for (const run of ordered) {
+    if (placed.has(run) || !(run.rawOpen || run.rawClose)) continue;
+    let claimed = false;
+    const next = [];
+    for (const piece of result) {
+      const text = piece?.text ?? '';
+      const at = !claimed && piece.runApplied && !piece.moveApplied ? text.indexOf(run.text) : -1;
+      if (at < 0) {
+        next.push(piece);
+        continue;
+      }
+      claimed = true;
+      if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
+      next.push({
+        ...piece,
+        ...run,
+        css: carvedCss(run, piece),
+        className: run.className ?? piece.className,
+        rawOpen: `${piece.rawOpen ?? ''}${run.rawOpen ?? ''}`,
+        rawClose: `${run.rawClose ?? ''}${piece.rawClose ?? ''}`,
+        hidden: Boolean(run.hidden) || Boolean(piece.hidden),
+        runApplied: true,
       });
       const rest = text.slice(at + run.text.length);
       if (rest) next.push({ ...piece, text: rest });
@@ -4631,9 +4711,11 @@ function carveRuns(pieces, ordered) {
  * an already-carried half-sentence still get coloured without a short carried run inside an earlier,
  * longer move name stealing the move's own characters first. Ties (a carried run and a move of the same
  * length) carve the carried run first, since its whole point is to claim its span before anything else
- * can. Only the first remaining occurrence of each run's text is carved — a name mentioned twice in one
- * segment is uncommon, and carving every occurrence would let one wrong `indexOf` match repaint the
- * whole segment.
+ * can. A hidden carried run is the one exception to the ordering itself: even when a longer move name
+ * carves first and leaves nothing behind for it, it still gets to carve out of the move's own piece
+ * afterward (`carveRuns`'s `unhidesMove`) rather than lose its redaction to the move's colour. Only the
+ * first remaining occurrence of each run's text is carved — a name mentioned twice in one segment is
+ * uncommon, and carving every occurrence would let one wrong `indexOf` match repaint the whole segment.
  */
 export function splitPiecesByRuns(pieces, runs) {
   const list = Array.isArray(runs) ? runs.filter(run => run?.text) : [];

@@ -249,6 +249,11 @@ const runtime = {
   epoch: 0,
   settings: normalizeProcessingSettings(),
   processingRefresh: Promise.resolve(),
+  // A band/vividness-only save's own catch-up restyle (saveSettings, once every translation in flight at
+  // save time settles) chains onto this instead of `processingRefresh`: persistProcessing awaits that one
+  // to update the panel right after a save, and a translation still running can take tens of seconds, far
+  // longer than a save should ever make the panel wait.
+  pendingRepaint: Promise.resolve(),
   processingRevision: 0,
   nativeRegexInstalled: false,
   mainGenerationActive: false,
@@ -999,17 +1004,43 @@ function saveSettings(next) {
   // object — none of those are in VISUAL_FIELDS (the four affix strings), so without this a floor's
   // move colours would never be recomputed after a theme or background change, only after an affix or
   // regex edit that happened to be saved alongside it.
-  const coloringBefore = normalizeColoring(previous.coloring);
+  // `previous` is not safe to read the old vividness off, though: the 彩度 slider's own `input` handler
+  // (live preview, so the number beside it tracks the drag) already writes the new value straight into
+  // `runtime.settings` on every tick, long before the blur that lands here calls this. By then `previous`
+  // *is* `runtime.settings` with the new value already in it, so comparing the two here always reads as
+  // no change. What was actually saved last is untouched by that live preview — it only reaches
+  // `context.extensionSettings` a few lines below, once this save actually commits — so that is what a
+  // coloring change is measured against instead.
+  const coloringBefore = normalizeColoring(context.extensionSettings[MODULE_ID]?.coloring);
   const coloringAfter = normalizeColoring(runtime.settings.coloring);
-  const coloringChanged = coloringBefore.speakers !== coloringAfter.speakers
-    || coloringBefore.effects !== coloringAfter.effects
-    || coloringBefore.vividness !== coloringAfter.vividness
+  // Only speakers/effects change what the translation *request* itself asks for (prompts.js
+  // annotationRequest fires only while both are on) — a band or vividness change is purely how a floor
+  // already written gets repainted, and a reply already sent under the old band is still exactly the
+  // reply that was asked for.
+  const coloringRequestChanged = coloringBefore.speakers !== coloringAfter.speakers || coloringBefore.effects !== coloringAfter.effects;
+  const coloringPaintChanged = coloringBefore.vividness !== coloringAfter.vividness
     || JSON.stringify(coloringBefore.band) !== JSON.stringify(coloringAfter.band);
-  const visualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
-    || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts)
-    || coloringChanged;
-  // A change of look re-renders translations already written; the reply being generated is still owed one.
-  if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || visualChanged) cancelPendingWork({ gate: false });
+  const coloringChanged = coloringRequestChanged || coloringPaintChanged;
+  const nonColoringVisualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
+    || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
+  const visualChanged = nonColoringVisualChanged || coloringChanged;
+  // A change of look re-renders translations already written; the reply being generated is still owed
+  // one — except a pure repaint (band/vividness only), which never touched the request and must not
+  // abort it: cancelling here used to turn a 特效字/说话人着色 colour switch, or 取色 itself, into a
+  // cancelled, paid-for translation ("翻译已取消") the reader has to ask for all over again.
+  if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || nonColoringVisualChanged || coloringRequestChanged) {
+    cancelPendingWork({ gate: false });
+  } else if (coloringPaintChanged && runtime.inflight.size) {
+    // Left running, that reply still finishes and writes itself styled with the coloring translateMessage
+    // captured when it started, not this save's — once every run in flight at this moment settles, the
+    // floor(s) it wrote are repainted too, or they would sit there in the old band until something else
+    // happened to trigger another restyle.
+    const settling = Promise.allSettled([...runtime.inflight.values()].map(entry => entry.promise));
+    runtime.pendingRepaint = runtime.pendingRepaint.catch(() => {}).then(() => settling).then(() => {
+      if (runtime.initialized) return restyleCurrentChat(runtime.settings);
+    });
+    runtime.pendingRepaint.catch(error => toast('error', `设置已保存，刷新已有译文失败：${safeError(error)}`));
+  }
   context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, active);
   context.extensionSettings[MODULE_ID] = runtime.settings;
   context.saveSettingsDebounced?.();
@@ -1091,14 +1122,24 @@ async function restyleCurrentChat(settings) {
   // none of the translation markers restyleBilingual looks for — its colour is recomputed straight on
   // the text instead, the same recolorMoveSpans a marked block already gets. `meta` is whatever record
   // (if any) this exact text was written under; passing none for a swipe that owns no record of its own
-  // leaves it alone, same as restyleBilingual already does above.
-  const restyleStrippedShown = (text, meta) => (meta?.stripped === true ? recolorMoveSpans(text, settings) : text);
-  // readFloor (core.js) tells an untouched stripped floor from a hand-edited one by projection_hash
-  // matching what is actually shown; any restyle that changes a stripped record's own text has to keep
-  // that fingerprint in step, or the very next read would call a floor nobody touched "diverged".
-  const refreshStrippedHash = (text, extra) => {
+  // leaves it alone, same as restyleBilingual already does above. But a record with `stripped: true` is
+  // not always this text's own: the host starts a new swipe with a structuredClone of the previous
+  // swipe's `extra` (readFloor's own doc above), and a hand-edited floor keeps its old record while its
+  // text has moved on. `originalText` is this swipe's text as it stood before this restyle; only when
+  // the record's fingerprint already matches it — the same "written" check readFloor makes — is this
+  // really the record this text was produced under, safe to recolour.
+  const restyleStrippedShown = (originalText, text, meta) => (
+    meta?.stripped === true && meta.projection_hash === hashTextSync(originalText) ? recolorMoveSpans(text, settings) : text
+  );
+  // readFloor (core.js) tells an untouched stripped floor from a hand-edited one, and a copied record
+  // from the floor it was actually written to, by projection_hash matching what is actually shown before
+  // this restyle. Only then does the fingerprint belong to this text at all, and only then may a restyle
+  // that changes the record's own text keep it in step; a copied or diverged record must be left exactly
+  // as it was, or the next read would mistake it for a different floor's mirror (or its hand-edit for
+  // untouched).
+  const refreshStrippedHash = (originalText, text, extra) => {
     const meta = extra?.[MESSAGE_META_KEY];
-    if (meta?.stripped !== true) return extra;
+    if (meta?.stripped !== true || meta.projection_hash !== hashTextSync(originalText)) return extra;
     const hash = hashTextSync(text);
     return meta.projection_hash === hash ? extra : { ...extra, [MESSAGE_META_KEY]: { ...meta, projection_hash: hash } };
   };
@@ -1113,10 +1154,10 @@ async function restyleCurrentChat(settings) {
     const ownRecord = !Array.isArray(message.swipes) || Boolean(message.swipe_info?.[shown])
       || !(Number(record?.schema_version) >= 4) || Number(record?.swipe_id) === shown;
     const usedRecord = ownRecord ? record : undefined;
-    const mes = restyleStrippedShown(restyleBilingual(message.mes, settings, usedRecord), usedRecord);
+    const mes = restyleStrippedShown(message.mes, restyleBilingual(message.mes, settings, usedRecord), usedRecord);
     const next = { mes, extra: message.extra };
     if (next.mes !== message.mes) next.extra = updateExtra(message.extra, next.mes);
-    next.extra = refreshStrippedHash(next.mes, next.extra);
+    next.extra = refreshStrippedHash(message.mes, next.mes, next.extra);
     next.extra = restyleMirror(next.extra);
     if (Array.isArray(message.swipes)) {
       next.swipes = [...message.swipes];
@@ -1124,9 +1165,10 @@ async function restyleCurrentChat(settings) {
       for (let index = 0; index < next.swipes.length; index += 1) {
         const extra = message.swipe_info?.[index]?.extra;
         const swipeRecord = extra?.[MESSAGE_META_KEY];
-        const text = index === shown ? next.mes : restyleStrippedShown(restyleBilingual(next.swipes[index], settings, swipeRecord), swipeRecord);
+        const originalSwipeText = index === shown ? message.mes : next.swipes[index];
+        const text = index === shown ? next.mes : restyleStrippedShown(originalSwipeText, restyleBilingual(originalSwipeText, settings, swipeRecord), swipeRecord);
         if (text !== next.swipes[index] && next.swipe_info?.[index]) next.swipe_info[index].extra = updateExtra(extra, text);
-        if (next.swipe_info?.[index]) next.swipe_info[index].extra = refreshStrippedHash(text, next.swipe_info[index].extra);
+        if (next.swipe_info?.[index]) next.swipe_info[index].extra = refreshStrippedHash(originalSwipeText, text, next.swipe_info[index].extra);
         if (next.swipe_info?.[index]) next.swipe_info[index].extra = restyleMirror(next.swipe_info[index].extra);
         next.swipes[index] = text;
       }
@@ -3888,8 +3930,26 @@ function stripHiddenRuns(text, fragments, runs) {
     .map((fragment, position) => (runs[position] ? { text: runs[position], hidden: Boolean(fragment?.hidden) } : null))
     .filter(Boolean);
   if (!runList.length) return text;
-  const pieces = splitPiecesByRuns([{ text: String(text ?? '') }], runList);
-  return pieces.filter(piece => !piece.hidden).map(piece => piece.text).join('');
+  // Tagged with its own index so a run that never lands on any piece can still be told apart afterward
+  // (splitPiecesByRuns spreads `...run` onto the piece it carves, `runIndex` included).
+  const tagged = runList.map((run, index) => ({ ...run, runIndex: index }));
+  const pieces = splitPiecesByRuns([{ text: String(text ?? '') }], tagged);
+  const placed = new Set(pieces.map(piece => piece.runIndex).filter(index => index !== undefined));
+  let visible = pieces.filter(piece => !piece.hidden).map(piece => piece.text).join('');
+  // The source cannot nest fragments (inlineFormatRuns jumps past each one it finds), but the
+  // translator's answer can still make two fragments' runs overlap — reordering words so a hidden
+  // fragment's own run now sits only inside another, non-hidden fragment's run, or a collapsed
+  // repetition where the visible run happens to sort first. carveRuns then blocks the hidden run from
+  // ever being carved out on its own (a later run never lands inside a piece an earlier one already
+  // claimed), and it would otherwise stay in the reading uncut. Falling back to removing its first
+  // remaining occurrence — v0.38.0's own approach, before every fragment went through one shared carve —
+  // still keeps it out of what is read.
+  for (const run of tagged) {
+    if (!run.hidden || placed.has(run.runIndex)) continue;
+    const at = visible.indexOf(run.text);
+    if (at >= 0) visible = visible.slice(0, at) + visible.slice(at + run.text.length);
+  }
+  return visible;
 }
 
 async function collectTtsFloor(messageId, settings = runtime.settings, sideOverride = null) {
@@ -11805,6 +11865,22 @@ async function applyScopedRegexCleanup(plan, engine) {
   if (!runtime.mainGenerationActive && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
 }
 
+// The other half of the same reload: applyScopedRegexCleanup above only ever reloads once it has actually
+// written a character- or preset-scoped list back, so a global-only cleanup -- the common case, and the
+// only one persistProcessing's own saveSettings handles -- never reloads through it at all. saveSettings's
+// own restyleCurrentChat (the only other place a reload happens) is no help either: it only runs when
+// something in `visualChanged` moved, and a dedupe that leaves active.regexScripts itself unchanged (only
+// the raw native list carried surplus copies) never counts as a regexScripts change. Left unreloaded,
+// 酒馆's own regex panel keeps showing the rows dedupe just removed, still bound to their old array index
+// (applyScopedRegexCleanup's own comment above). Skipped, not deferred, while a reply is generating --
+// the same guard and the same tradeoff applyScopedRegexCleanup itself already takes.
+async function reloadRegexPanelAfterGlobalCleanup(plan) {
+  if (plan.scopedPlan?.toRemove || plan.presetPlan?.toRemove) return; // applyScopedRegexCleanup already did
+  if (runtime.mainGenerationActive) return;
+  const context = getContext();
+  if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+}
+
 function createControlCenter(rootDocument = document) {
   const container = rootDocument.createElement('div');
   container.innerHTML = CONTROL_CENTER_MARKUP;
@@ -11986,6 +12062,7 @@ function createControlCenter(rootDocument = document) {
         if (!plan) throw new Error('这些正则已经清理过了。');
         await persistProcessing(root, next);
         await applyScopedRegexCleanup(plan, engine);
+        await reloadRegexPanelAfterGlobalCleanup(plan);
         toast('success', `已整理镜译正则：删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条，当前方案需要的 ${plan.expected.length} 条都在。`);
       } else if (action === 'adopt-speakers') {
         // Every reported name the palette has not got yet, with no colour of its own. The hue each
@@ -16863,13 +16940,23 @@ if (typeof document !== 'undefined') {
 // stands in for the module loadHostRegex would otherwise dynamically import from the host -- a path
 // that does not resolve outside a real browser -- so a mocked SCRIPT_TYPES/getScriptsByType/
 // saveScriptsByType can be exercised without ever reaching the real import.
-function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine, editingChannelId: editingChannelIdOverride } = {}) {
+function configureForTest({
+  settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine,
+  editingChannelId: editingChannelIdOverride, inflight, mainGenerationActive,
+} = {}) {
   if (settings) runtime.settings = { ...runtime.settings, ...settings };
   if (worldInfoEntries !== undefined) runtime.wiEntries = worldInfoEntries;
   if (initialized !== undefined) runtime.initialized = initialized === true;
   if (deskExpandedChannelId !== undefined) runtime.deskExpandedChannelId = deskExpandedChannelId;
   if (regexEngine !== undefined) runtime.hostRegex = regexEngine;
   if (editingChannelIdOverride !== undefined) runtime.editingChannelId = editingChannelIdOverride;
+  // A translation "in flight" for saveSettings's own cancel/catch-up decision (see there): a plain
+  // Map of the same shape `runtime.inflight` already keeps ({ promise, controller, ... }), placed
+  // directly since a headless run never actually starts a real translation request.
+  if (inflight !== undefined) runtime.inflight = inflight;
+  // Same idea, for whatever a caller's own "skip while the main reply is generating" guard reads
+  // (放回原文/清除译文/reloadRegexPanelAfterGlobalCleanup) -- a headless run never actually starts one.
+  if (mainGenerationActive !== undefined) runtime.mainGenerationActive = mainGenerationActive === true;
   return runtime.settings;
 }
 
@@ -16899,6 +16986,7 @@ export const __testing = Object.freeze({
   configureForTest,
   buildRegexCleanupPlan,
   applyScopedRegexCleanup,
+  reloadRegexPanelAfterGlobalCleanup,
   startTranslation,
   translateMessageStreaming,
   worldInfoKeyMatches,
@@ -16924,6 +17012,10 @@ export const __testing = Object.freeze({
   // The restyle a coloring/affix/regex change schedules (saveSettings's own `visualChanged`) chains onto
   // this promise rather than running inline, so a test that needs to see its effect awaits it here.
   processingRefresh: () => runtime.processingRefresh,
+  // A coloring-paint-only save's catch-up restyle, scheduled once whatever was in flight at save time
+  // settles (saveSettings) — kept apart from `processingRefresh` above precisely so a real save is never
+  // stuck waiting on it; a test that needs to see the catch-up restyle land awaits this one instead.
+  pendingRepaint: () => runtime.pendingRepaint,
   syncTtsTransport,
   runTtsTransport,
   playTtsUtterance,
