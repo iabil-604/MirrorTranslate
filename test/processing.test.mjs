@@ -734,9 +734,36 @@ test('buildRegexCleanupPlan folds a character-scoped and a preset regex cleanup 
   assert.equal(plan.totalRemove, 3);
   assert.deepEqual(plan.scopedPlan.kept, [readerScoped], '角色自己的规则不受影响');
   assert.equal(plan.presetPlan.kept.length, 0);
-  assert.match(plan.message, /全局 0 条/);
+  // Global itself has nothing to remove here, so it is left out of the clause the same way an
+  // already-clean scoped/preset list already was -- naming it "全局 0 条" would claim an angle that
+  // never applied.
+  assert.doesNotMatch(plan.message, /全局/, '全局没有多余的，就不该在弹窗里被提到');
   assert.match(plan.message, /角色绑定 1 条/);
   assert.match(plan.message, /预设绑定 2 条/);
+  assert.match(plan.message, /只留当前方案需要的 \d+ 条/, '即使全局这次什么都不用做，这句收尾仍然说得通');
+});
+
+test('buildRegexCleanupPlan names 全局 alongside a scoped/preset clause only when it actually has something to remove itself', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  settings.processingProfiles = [profile];
+  settings.selectedProcessingProfileId = profile.id;
+  const full = syncNativeRegex([], profile);
+  const ruleName = `镜译 · ${profile.name} · ${profile.regexScripts[0].scriptName}`;
+  const polluted = [...full, { ...full.find(rule => rule.scriptName === ruleName) }]; // one surplus global copy too
+  const readerScoped = { id: 'user-scoped', scriptName: '角色自己的规则', findRegex: '/z/g', replaceString: '' };
+  const engine = {
+    SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 },
+    getScriptsByType(type) {
+      if (type === 1) return [readerScoped, { ...full.find(rule => rule.scriptName === ruleName) }];
+      return [];
+    },
+  };
+  const plan = __testing.buildRegexCleanupPlan({ next: settings, currentRegex: polluted, engine });
+  assert.ok(plan);
+  assert.equal(plan.toRemove, 1);
+  assert.equal(plan.scopedRemove, 1);
+  assert.match(plan.message, /全局 1 条、角色绑定 1 条/, '全局这次确实有多余的，和角色绑定一起列出');
 });
 
 test('buildRegexCleanupPlan skips a scope the host cannot give an answer for -- no engine at all, or one scope throwing (no character selected) -- without blocking the other scopes or the global cleanup', () => {
@@ -818,6 +845,31 @@ test('applyScopedRegexCleanup saves back only the scopes that actually had somet
     await __testing.applyScopedRegexCleanup(planBoth, null);
     assert.equal(calls.length, 0, '没有引擎就完全不写');
     assert.equal(reloads, 0, '什么都没写，就不用重新加载聊天');
+
+    // A purely global cleanup: persistProcessing's own saveSettings → syncNativeRegex has already
+    // dropped the surplus global copies by the time this runs, so there is nothing left for this
+    // function itself to write -- but 酒馆's regex panel still needs the same reload, or it keeps
+    // showing the now-removed rows bound to their old array index.
+    calls.length = 0; reloads = 0;
+    const planGlobalOnly = { toRemove: 1, toInstall: 0, scopedPlan: null, presetPlan: null };
+    await __testing.applyScopedRegexCleanup(planGlobalOnly, engine);
+    assert.equal(calls.length, 0, '全局的清理已经在 persistProcessing 里做完，这里不用再写一次');
+    assert.equal(reloads, 1, '全局单独有多余的也要刷新面板，不能只在角色/预设范围写了东西时才刷新');
+
+    // Same, but with no engine at all -- a host without the regex engine module still gets its panel
+    // refreshed after a purely global cleanup.
+    calls.length = 0; reloads = 0;
+    await __testing.applyScopedRegexCleanup(planGlobalOnly, null);
+    assert.equal(calls.length, 0);
+    assert.equal(reloads, 1, '没有引擎也不该拦住全局清理该有的刷新');
+
+    // Nothing anywhere actually needed cleaning (defensive: buildRegexCleanupPlan itself would have
+    // returned null before this is ever called, but this function makes its own decision either way).
+    calls.length = 0; reloads = 0;
+    const planNothing = { toRemove: 0, toInstall: 0, scopedPlan: { kept: ['a'], toRemove: 0 }, presetPlan: { kept: ['b'], toRemove: 0 } };
+    await __testing.applyScopedRegexCleanup(planNothing, engine);
+    assert.equal(calls.length, 0);
+    assert.equal(reloads, 0, '哪个范围都没有多余的，就不用刷新');
   } finally {
     globalThis.SillyTavern = previousHost;
   }

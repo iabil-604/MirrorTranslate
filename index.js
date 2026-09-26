@@ -11760,12 +11760,15 @@ function buildRegexCleanupPlan({ next, currentRegex, engine }) {
   // A scope with nothing to remove is left out of the message entirely rather than named with "0 条" --
   // the real getScriptsByType(SCOPED) returns [] rather than throwing when no character is selected (or
   // in a group chat), so scopedPlan is a normal, non-null plan even then, and mentioning it would claim
-  // an angle that never applied.
+  // an angle that never applied. 全局 is held to the same rule once a scope clause is actually present:
+  // the common case there is a reader who moved a 镜译 rule out with 酒馆's own "移到角色/预设" and the
+  // global copy 镜译 reinstalled on the next sync is already exactly right, so 全局 has nothing of its
+  // own to report and is left out rather than named with the same misleading "0 条".
   const scopeParts = [];
   if (scopedRemove > 0) scopeParts.push(`角色绑定 ${scopedRemove} 条`);
   if (presetRemove > 0) scopeParts.push(`预设绑定 ${presetRemove} 条`);
   const removalClause = scopeParts.length
-    ? `删除多余的镜译正则：全局 ${toRemove} 条、${scopeParts.join('、')}`
+    ? `删除多余的镜译正则：${[...(toRemove > 0 ? [`全局 ${toRemove} 条`] : []), ...scopeParts].join('、')}`
     : `删除 ${toRemove} 条多余的镜译正则`;
   const message = toInstall
     ? `${removalClause}，补上 ${toInstall} 条缺失的固定正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`
@@ -11775,18 +11778,29 @@ function buildRegexCleanupPlan({ next, currentRegex, engine }) {
 
 // The one part of "删除多余正则" that writes to the host's scoped/preset regex lists, called only
 // after the reader has confirmed. A scope buildRegexCleanupPlan could not read is left untouched here
-// too, and a scope with nothing to remove is never saved back for no reason.
+// too, and a scope with nothing to remove is never saved back for no reason. The global list itself is
+// already written by then -- persistProcessing (the caller, just before this) runs saveSettings, whose
+// own syncNativeRegex drops every surplus global copy -- so this never writes for that scope, only
+// decides whether the reload below needs to happen because of it.
 async function applyScopedRegexCleanup(plan, engine) {
-  if (!engine) return;
   let wrote = false;
-  if (plan.scopedPlan?.toRemove) { await engine.saveScriptsByType(plan.scopedPlan.kept, engine.SCRIPT_TYPES.SCOPED); wrote = true; }
-  if (plan.presetPlan?.toRemove) { await engine.saveScriptsByType(plan.presetPlan.kept, engine.SCRIPT_TYPES.PRESET); wrote = true; }
-  if (!wrote) return;
+  if (engine) {
+    if (plan.scopedPlan?.toRemove) { await engine.saveScriptsByType(plan.scopedPlan.kept, engine.SCRIPT_TYPES.SCOPED); wrote = true; }
+    if (plan.presetPlan?.toRemove) { await engine.saveScriptsByType(plan.presetPlan.kept, engine.SCRIPT_TYPES.PRESET); wrote = true; }
+  }
+  // Reload whenever anything at all changed -- the global scope included, not only a scoped/preset
+  // write this function itself just made. A purely global cleanup (by far the common case: 酒馆's own
+  // regex editor stripping our marker on Save, see syncNativeRegex's own note) used to leave `wrote`
+  // false and skip the reload entirely, so 酒馆's regex panel kept showing the rows just removed, still
+  // bound to their old array index (renderScript(script, index) in 酒馆's own regex/index.js) -- the next
+  // click on one of those stale rows then wrote a stale copy of a 镜译 rule straight back into whatever
+  // now sits in that slot.
+  if (!wrote && !plan.toRemove && !plan.toInstall) return;
   // 酒馆's own saveRegexScript/deleteRegexScript both reload the chat after writing a character- or
   // preset-scoped list, which is what makes the native regex panel rebuild and re-render the floors.
-  // Do the same here (same guard as restyleCurrentChat) -- otherwise the panel keeps showing the rows
-  // just removed, still bound to their old array index, and the next click on one of them writes a
-  // stale copy of a 镜译 rule straight back over whatever the reader has in that slot now.
+  // Do the same here -- skipped rather than queued for afterwards while a main reply is generating: the
+  // caller already refuses the whole "删除多余正则" action up front in that case, so this only guards a
+  // generation that started in the gap while the confirm dialog was still open.
   const context = getContext();
   if (!runtime.mainGenerationActive && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
 }
@@ -11954,7 +11968,11 @@ function createControlCenter(rootDocument = document) {
         // copies never sees a negative count. Claims a rule as 镜译's own by its marker or its id
         // prefix (see isJingyiRegex), never by name alone, so a reader's own rule is never touched
         // even when it happens to share a name. Destructive, so it asks first, same as the other
-        // bulk-remove buttons on this page.
+        // bulk-remove buttons on this page. Refused up front while a main reply is generating, the same
+        // way 放回原文/清除译文 refuse themselves -- 酒馆's regex panel reload this triggers (see
+        // applyScopedRegexCleanup) has no business running mid-reply, and nothing here is urgent enough
+        // to be worth the reader coming back to a chat that just reshuffled itself underneath a reply.
+        if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再删除多余正则。');
         const engine = runtime.hostRegex || await loadHostRegex();
         // Read only for the confirm dialog's own wording (review finding index.js:11734): `next`/`plan`
         // are rebuilt below, after the confirm resolves, from whatever is current then — collectSettings

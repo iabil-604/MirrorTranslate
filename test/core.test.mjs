@@ -1558,6 +1558,52 @@ test('real ん-interjections and moans not on the short allow-list are still acc
   assert.equal(isShortExactEcho('ああん', 'ああん'), true);
 });
 
+test('a drawn-out vowel spelled with a full-size vowel kana or a ゃ/ゅ/ょ glide is recognised the same as ー or a small kana, on a second sighting', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // はあ/ひい/へえ/くう double a full-size vowel kana instead of ー or a small one (ぁぃぅぇぉ) — the same
+  // gasp, just spelled a third way. Each of these carries two real morae once the vowel counts as one
+  // (は+あ, ひ+い, へ+え, く+う), so — same as ううん's own two real morae — the first sighting still asks
+  // for a translation; only a second identical echo is believed.
+  for (const line of ['はあん', 'はあん……', 'ひいん', 'へえん', 'くうん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a drawn-out vowel gasp spelled with a full-size vowel kana`);
+  }
+  // ひゃあ/きゅう elongate a ゃ/ゅ/ょ glide's own vowel (a/u/o) rather than a plain mora's.
+  for (const line of ['ひゃあん', 'きゃあん', 'きゅうん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} draws out a glide's own vowel, same as a plain mora's`);
+  }
+});
+
+test('on a second sighting, a hiragana-only bare ん beside its own real morae with nothing else decorating it is accepted as a moan, never the katakana name shape', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // A single vowel mora, a glide's own mora, or two real morae touching directly, all hiragana and
+  // nothing else beside the ん — no marker needed once the model has said it twice.
+  for (const line of ['あん！', 'あん……', '「あん……」', 'ん、あん', 'あんん', 'ひゃん！', 'きゃん！', 'うふん', 'あはん', 'はうん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a hiragana moan, accepted on a second identical echo`);
+  }
+  // The identical letter-for-letter shape, but a single plain は/か行 mora rather than a vowel or a
+  // glide, still reads as an ordinary word (けん, かん, はん, こん…) and is never accepted this way.
+  for (const line of ['けん', 'かん', 'はん', 'こん']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} is an ordinary word, not a moan, even hiragana and even on a second sighting`);
+  }
+});
+
+test('a marker beside one bare ん never forgives an unrelated name or word earlier in the same line', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // ええ/ああ/おお/はぁ/あぁ each carry a marker or a doubled vowel of their own, but it sits beside a
+  // comma and an entirely different word — a name's own ん, untouched by any of it — so the line as a
+  // whole still needs translation, on a second sighting exactly as much as on a first.
+  for (const line of ['ええ、ケン', 'ああ、アン！', 'おお、ケン', 'はぁ、ケン', 'あぁ、アン']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} pairs an unrelated marker with a name's own ん — the marker must not reach across the comma`);
+  }
+  // オーエン/ハーケン/ホーキン/コーエン and けっこん/はっけん！ all carry ー or っ somewhere in them, but never
+  // touching their own ん directly (a real mora always sits between the marker and the ん) — the same
+  // reason the reviewer's own two-mora-plus-ん test above already covers on the first sighting; here it
+  // must hold on the second sighting too.
+  for (const line of ['オーエン', 'ハーケン', 'ホーキン', 'コーエン', 'けっこん', 'はっけん！']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} has no marker directly beside its own ん`);
+  }
+});
+
 test('a floor that fits one batch is spread evenly across parallel lanes', () => {
   const segments = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
   assert.equal(planTranslationBatches(segments, { maxChars: 48000 }).length, 1);
@@ -2099,6 +2145,28 @@ test('a lyric line in 只留译文 mode also pairs inline, plain text, no marker
   assert.equal(output, '叙述译文一\nそらにひびけ (响彻天空)\n叙述译文二');
 });
 
+test('只留译文 keeps only a card row\'s own <br> between it and the narration after it, no extra blank line', () => {
+  // "NOW PLAYING<br>作词：风铃" is one physical line split into two preserved rows sharing a unit with the
+  // narration lines around it. assembleTranslationOnly used to join every lineParts entry with a fixed
+  // '\n' regardless of what actually separated them, so the caption row gained an extra line break after
+  // its own <br> — replaceUnitBody already joins with each line's real separator (see the replace-region
+  // test above); this is the same fix for the 只留译文 path.
+  const source = '她哼起了。\nNOW PLAYING<br>作词：风铃\n彼女は止まった。';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const output = assembleTranslationOnly(segmented.layout, translations, options);
+  assert.equal(output, '译1\nNOW PLAYING<br>作词：风铃\n译2', '卡片行自己的 <br> 后面不再多出一个换行，也没有丢掉真正的段内换行');
+
+  // The same card, but with its own row ending its own physical line in <br> (an empty trailing row) —
+  // the shape that also caught the replace-region reader off guard.
+  const bareBr = '她哼起了。\nNOW PLAYING<br>\n彼女は止まった。';
+  const segmentedBareBr = segmentSource(bareBr, options);
+  const translationsBareBr = new Map(segmentedBareBr.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const outputBareBr = assembleTranslationOnly(segmentedBareBr.layout, translationsBareBr, options);
+  assert.equal(outputBareBr, '译1\nNOW PLAYING<br>\n译2', '卡片自己独占一整行的 <br> 也不会被多插一个换行');
+});
+
 test('inspectTagConfiguration counts lyric and music-card-preserved lines separately from the rest', () => {
   const card = '<story_scene>NOW PLAYING<br>そらにひびけ<br>もう一つの行</story_scene>';
   const report = inspectTagConfiguration(card, ['story_scene'], [], { musicCardRules: true });
@@ -2255,6 +2323,41 @@ test('a non-lyric card row sharing a unit with narration keeps only its own <br>
   const seenOldStyle = extractReplaceTranslations(oldStyle, options);
   assert.equal(seenOldStyle.get(segmented.segments[0].id), '译1', '旧写法多出来的换行，读的时候能容忍');
   assert.equal(seenOldStyle.get(segmented.segments[1].id), '译2');
+});
+
+test('a card row whose own physical line ends in <br> reads back correctly, one narration line after it', () => {
+  // "NOW PLAYING<br>" is a whole physical line ending in its own <br>: splitCardRows leaves an empty
+  // trailing row behind it (the row after the last <br>, carrying the physical line's own separator).
+  // That empty row used to make readReplaceBodyByLine's old tolerance eat a '\n' that in fact belonged to
+  // the *next* boundary, breaking the read one step later. Here the whole card sits in the same unit as
+  // the narration that follows it (nothing forces a boundary going from card rows back to plain text), so
+  // this empty row and the translated narration share one lineParts array — the exact shape that broke.
+  const source = '彼は言った。\nNOW PLAYING<br>\n彼女は答えた。';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(segmented.layout, translations, options);
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, source, '原文一字不差地还原');
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '译1');
+  assert.equal(seenAgain.get(segmented.segments[1].id), '译2', '卡片自己的空行不会被错误吞掉的换行连累，叙述句译文照常读回');
+});
+
+test('a card row whose own physical line ends in <br> reads back correctly, two narration lines after it', () => {
+  // Same shape as above, but with two narration lines sharing the unit after the card — before the fix
+  // this landed on the "two or more ids, line count mismatch" branch and read back nothing at all.
+  const source = '彼は言った。\nNOW PLAYING<br>\n彼女は答えた。\n彼はうなずいた。';
+  const options = { musicCardRules: true };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(segmented.layout, translations, options);
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, source, '原文一字不差地还原');
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '译1');
+  assert.equal(seenAgain.get(segmented.segments[1].id), '译2', '两句叙述句的译文都能读回，不会因为行数对不上而整段丢失');
+  assert.equal(seenAgain.get(segmented.segments[2].id), '译3');
 });
 
 // -------------------------------------------------------------------------------------------

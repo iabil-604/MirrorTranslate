@@ -419,51 +419,84 @@ const INTERJECTION_N_WORDS = new Set(['うん', 'ううん', 'ウン', 'ふん',
 // never keeps, still count.
 const MOAN_MARKER_RE = /[っッ♡♥❤ー～〜~]/;
 
-// The vowel each full-size mora (あいうえお/アイウエオ/はひふへほ/ハヒフヘホ/かきくけこ/カキクケコ) and
-// each small vowel kana (ぁぃぅぇぉ/ァィゥェォ) carries. Used only to spot a drawn-out gasp spelled by
-// doubling a vowel instead of by ー — ふぅ, あぁ, ああ, ウウ — without also matching a yōon name that
-// happens to share a consonant (ファン, フィン: フ carries u, ァ/ィ carry a/i, so the vowels differ).
-const SMALL_VOWEL_KANA = new Set('ぁぃぅぇぉァィゥェォ');
+// The vowel each full-size mora (あいうえお/アイウエオ/はひふへほ/ハヒフヘホ/かきくけこ/カキクケコ), each
+// small vowel kana (ぁぃぅぇぉ/ァィゥェォ) and each ゃ/ゅ/ょ glide (which always carries exactly a/u/o,
+// whatever consonant it rides on) carries. Used only to spot a drawn-out gasp spelled by doubling a
+// vowel instead of by ー — ふぅ, はあ, ひゃあ, ああ, ウウ — without also matching a yōon name that happens
+// to share a consonant (ファン, フィン: フ carries u, ァ/ィ carry a/i, so the vowels differ).
 const VOWEL_OF = new Map();
 for (const [group, vowels] of [
   ['あいうえお', 'aiueo'], ['アイウエオ', 'aiueo'],
   ['はひふへほ', 'aiueo'], ['ハヒフヘホ', 'aiueo'],
   ['かきくけこ', 'aiueo'], ['カキクケコ', 'aiueo'],
   ['ぁぃぅぇぉ', 'aiueo'], ['ァィゥェォ', 'aiueo'],
+  ['ゃゅょ', 'auo'], ['ャュョ', 'auo'],
 ]) {
   for (let index = 0; index < group.length; index += 1) VOWEL_OF.set(group[index], vowels[index]);
 }
+// The kana that carry nothing but a vowel — a full-size or small vowel kana, or a ゃ/ゅ/ょ glide — as
+// against an ordinary consonant+vowel mora that merely happens to share a vowel with the one before it
+// (う followed by ふ both carry "u", but ふ is its own mora, not う drawn out).
+const PURE_VOWEL_KANA = new Set('あいうえおアイウエオぁぃぅぇぉァィゥェォゃゅょャュョ');
 
-// Whether the untouched source spells a drawn-out gasp by doubling a vowel rather than by ー: a mora
-// immediately followed by a small vowel kana carrying the same vowel (ふぅ, あぁ, はぁ, ひぃ), or a mora
-// immediately followed by an exact repeat of itself (ああ, ウウ). Checking the vowel — not just "some
-// kana follows" — is what keeps a yōon name (ファン, フィン) from matching.
-function hasDrawnOutVowel(rawSource) {
-  const chars = [...String(rawSource ?? '')];
-  for (let index = 1; index < chars.length; index += 1) {
-    const before = chars[index - 1], here = chars[index];
-    const vowel = VOWEL_OF.get(before);
-    if (vowel === undefined || VOWEL_OF.get(here) !== vowel) continue;
-    if (SMALL_VOWEL_KANA.has(here) || before === here) return true;
-  }
-  return false;
+// Whether `here`, right after `before`, reads as `before`'s own vowel drawn out — a pure vowel kana
+// carrying the same vowel (ふぅ, はあ, ひい, へえ, ひゃあ, きゅう) or an exact repeat of the same kana
+// (ああ, ウウ). Checking the vowel — not just "some kana follows" — is what keeps a yōon name (ファン,
+// フィン) from matching.
+function isDrawnOutVowelPair(before, here) {
+  const vowel = VOWEL_OF.get(before);
+  if (vowel === undefined || VOWEL_OF.get(here) !== vowel) return false;
+  return PURE_VOWEL_KANA.has(here) || before === here;
 }
 
 function residueLetters(text) {
   return [...String(text ?? '')].filter(ch => RESIDUE_LETTER_RE.test(ch));
 }
 
+// Whether a marker of a moan — a stammered glottal stop, a heart, or a drawn-out vowel — sits directly
+// against one of `rawSource`'s ん/ン: immediately before it (あーん, ああん, はぁん, はあん) or
+// immediately after it (あんっ, アンッ♡). Checked against the untouched source so ♡/♥/❤, which
+// residueLetters never keeps, still count. A marker sitting elsewhere in the line — beside a different
+// word entirely (オーエン, はっけん, ええ、ケン) — must not count: forgiving a bare ん just because some
+// unrelated interjection or geminate consonant appears earlier in the same line would forgive a real,
+// untranslated word or name right next to it.
+function hasMarkerBesideN(rawSource) {
+  const chars = [...String(rawSource ?? '')];
+  return chars.some((ch, index) => {
+    if (ch !== 'ん' && ch !== 'ン') return false;
+    const before = chars[index - 1];
+    if (before !== undefined && (MOAN_MARKER_RE.test(before) || isDrawnOutVowelPair(chars[index - 2], before))) return true;
+    const after = chars[index + 1];
+    return after !== undefined && MOAN_MARKER_RE.test(after);
+  });
+}
+
+// A hiragana-only bare ん read alongside its real morae with nothing else decorating it — あん, ひゃん,
+// うふん, あはん, はうん — reads exactly like a moan spelled out in hiragana, not a name: the katakana
+// shapes this same letter pattern is otherwise indistinguishable from (アン, ケン, カン, オーエン) are
+// never written in hiragana. Only ever consulted for a *second* identical echo (isShortExactEcho's own
+// caller, isInterjectionShaped) — never the first sighting, isTrivialInterjectionSource — on the same
+// reasoning isReduplicatedSound already accepts a repeated shape outright: a plain repeat is stronger
+// evidence than the shape alone would be, and short of a real dictionary check nothing here can tell
+// うふん apart from a genuine hiragana word or name of the identical shape (はけん, 派遣) — the same
+// accepted trade-off, just for a different shape.
+function isBareHiraganaMoan(letters, morae, rawSource) {
+  if (letters.length > 3 || /\p{Script=Katakana}/u.test(String(rawSource ?? ''))) return false;
+  if (morae.length !== 1) return true; // two real morae touching directly (うふん, あはん, はうん)
+  if (letters.length === 2) return 'あいうえお'.includes(morae[0]); // bare mora+ん: only the vowels (あん…), never は/か行 (けん, かん…), which read as an ordinary word
+  return true; // the lone real mora's own glide sits between it and ん (ひゃん, きゃん) — no plain word or name is spelled that way
+}
+
 // Whether a bare ん/ン sitting among `letters` (every one of which is already known to be filler or a
 // real mora) is genuinely free filler here, rather than the one real thing that turns "gasp" into
 // "name": a small fixed set of real ん-interjections (INTERJECTION_N_WORDS), a moan carrying its own
-// extra marker anywhere in the untouched source (MOAN_MARKER_RE or a doubled vowel, hasDrawnOutVowel),
-// or a shape built by repeating a shorter unit two or more times over (あんあん). Only meaningful once
-// the caller already knows `letters` contains at least one real mora — with none at all (ん, んん, んー…)
-// there is nothing left to mistake for a name in the first place.
+// extra marker directly beside the ん itself (hasMarkerBesideN), or a shape built by repeating a shorter
+// unit two or more times over (あんあん). Only meaningful once the caller already knows `letters`
+// contains at least one real mora — with none at all (ん, んん, んー…) there is nothing left to mistake
+// for a name in the first place.
 function bareNIsFreeFiller(letters, rawSource) {
   if (INTERJECTION_N_WORDS.has(letters.join(''))) return true;
-  if (MOAN_MARKER_RE.test(String(rawSource ?? ''))) return true;
-  if (hasDrawnOutVowel(rawSource)) return true;
+  if (hasMarkerBesideN(rawSource)) return true;
   return isReduplicatedSound(letters);
 }
 
@@ -543,13 +576,15 @@ function isReduplicatedSound(letters) {
 
 // Every letter drawn from INTERJECTION_FILLER or INTERJECTION_MORA, with no cap at all on how many real
 // morae are among them — isShortExactEcho's own looser half of the shape isTrivialInterjectionSource
-// caps at one. A bare ん/ン still needs bareNIsFreeFiller's say-so, same as there: an unmarked, non-
-// repeating mora-plus-ん is a short name (アン, ケン…) whether it is sighted once or twice in a row.
+// caps at one. A bare ん/ン still needs bareNIsFreeFiller's say-so, same as there — an unmarked, non-
+// repeating mora-plus-ん is a short name (アン, ケン…) whether it is sighted once or twice in a row — with
+// one further allowance only here, on a second sighting: isBareHiraganaMoan's own hiragana-only shapes.
 function isInterjectionShaped(letters, rawSource) {
   if (!letters.every(ch => INTERJECTION_FILLER.has(ch) || INTERJECTION_MORA.has(ch))) return false;
   if (!letters.includes('ん') && !letters.includes('ン')) return true;
   const morae = letters.filter(ch => INTERJECTION_MORA.has(ch));
-  return !morae.length || bareNIsFreeFiller(letters, rawSource);
+  if (!morae.length) return true;
+  return bareNIsFreeFiller(letters, rawSource) || isBareHiraganaMoan(letters, morae, rawSource);
 }
 
 /**
@@ -4737,40 +4772,46 @@ export function assembleTranslationOnly(layout, translationMap, options = {}) {
       ? part.lineParts
       : ids.map(() => ({ semantic: true, source: '', lead: '', trail: '' }));
     let index = 0;
-    const body = lineParts.map(line => {
-      if (!line.semantic) return line.source;
+    // Joined with each line's own `separator` (a card row's own trailing <br> is the break, an ordinary
+    // physical-line boundary is '\n'), the same way replaceUnitBody joins a replace region's lineParts —
+    // a fixed '\n' here doubled a card row's own <br> with a real line break (v0.40.0).
+    const body = lineParts.map((line, at) => {
+      const separator = at < lineParts.length - 1 ? (typeof line.separator === 'string' ? line.separator : '\n') : '';
+      if (!line.semantic) return `${line.source}${separator}`;
       const id = ids[index];
       const format = carry ? formats[index] : null;
       index += 1;
       const translation = translationMap.get(id);
-      if (!translation) return line.source;
+      if (!translation) return `${line.source}${separator}`;
       const shaped = styledBody(String(translation), decoration.styleBody, plain, id);
       const wrapped = format?.open
         ? `${paintsLine(decoration, id) ? withoutCarriedColor(format.open) : format.open}${shaped}${format.close}`
         : shaped;
-      return `${line.lead ?? ''}${wrapped}${line.trail ?? ''}`;
-    }).join('\n');
+      return `${line.lead ?? ''}${wrapped}${line.trail ?? ''}${separator}`;
+    }).join('');
     pieces.push(`${decoration.stylePrefix ?? ''}${body}${decoration.styleSuffix ?? ''}`);
   }
   return pieces.join('');
 }
 
 /**
- * A replace pair's visible side read back along the paragraph it was built from (replaceUnitBody): a
- * line not for translation must be there exactly as written, a translated line is its translation with
- * the line's excluded blocks beside it, a line not translated yet has nothing left once the markers are
- * gone. Blocks and pictures may run over several lines, so the reading follows the text, not a line
- * count. Anything that does not follow (a floor written before this, an edited floor) gives null, and
- * the older line-count reading is used.
+ * One reading pass over a replace pair's visible side, along the paragraph it was built from
+ * (replaceUnitBody): a line not for translation must be there exactly as written, a translated line is
+ * its translation with the line's excluded blocks beside it, a line not translated yet has nothing left
+ * once the markers are gone. Blocks and pictures may run over several lines, so the reading follows the
+ * text, not a line count.
  *
- * Between two lines, the separator consumed is whatever `replaceUnitBody` actually joined them with
- * (v0.40.0: a card row's own trailing <br> is '', an ordinary line boundary is '\n') — except a boundary
- * expecting '' also tolerates one stray leading '\n', because a floor written before this fix always
- * inserted one there regardless of what actually separated the two lines. A floor written after the fix
- * has no such byte to tolerate; either way the boundary is consumed and reading continues.
+ * `legacy` picks which separator every boundary is read with. False (the exact reading, tried first):
+ * whatever `replaceUnitBody` actually joined that pair of lines with (v0.40.0: a card row's own trailing
+ * <br> is '', an ordinary line boundary is '\n') — a floor written by the current code always matches
+ * this exactly, with nothing left over. True (tried only once that fails): every boundary is '\n'
+ * regardless of what `line.separator` records, because a floor written before this fix always joined
+ * every line with a literal '\n', even a card row whose own <br> already was the break. Trying the exact
+ * reading greedily on both shapes at once used to consume a '\n' that in fact belonged to a *later*
+ * boundary whenever a card row's own <br>-ended row left an empty trailing row behind it, breaking the
+ * read at the boundary after — hence two separate passes instead of one tolerant one.
  */
-function readReplaceBodyByLine(body, lineParts, ids) {
-  if (!Array.isArray(lineParts) || !lineParts.length) return null;
+function readReplaceBodyByLineOnce(body, lineParts, ids, legacy) {
   const found = new Map();
   let rest = body;
   let index = 0;
@@ -4796,20 +4837,22 @@ function readReplaceBodyByLine(body, lineParts, ids) {
       }
     }
     if (at < lineParts.length - 1) {
-      const expected = typeof line.separator === 'string' ? line.separator : '\n';
+      const expected = legacy ? '\n' : (typeof line.separator === 'string' ? line.separator : '\n');
       if (expected) {
         if (!rest.startsWith(expected)) return null;
         rest = rest.slice(expected.length);
-      } else if (rest.startsWith('\n')) {
-        // Backward compatibility: a floor written before this fix always inserted a '\n' here even
-        // when nothing actually separated the two lines (two rows of the same <br>-joined physical
-        // line) — tolerate consuming that leftover byte so an old floor still reads back correctly. A
-        // floor written after the fix has none to consume.
-        rest = rest.slice(1);
       }
     }
   }
   return rest === '' ? found : null;
+}
+
+// Anything that does not follow either shape (an edited floor, a shape neither pass expects) gives null,
+// and the caller falls back to the older line-count reading.
+function readReplaceBodyByLine(body, lineParts, ids) {
+  if (!Array.isArray(lineParts) || !lineParts.length) return null;
+  return readReplaceBodyByLineOnce(body, lineParts, ids, false)
+    ?? readReplaceBodyByLineOnce(body, lineParts, ids, true);
 }
 
 // Seeds for 补译: each replace pair's source block holds that part's translation.
