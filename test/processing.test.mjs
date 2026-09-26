@@ -900,41 +900,6 @@ test('applyScopedRegexCleanup saves back only the scopes that actually had somet
   }
 });
 
-test('reloadRegexPanelAfterGlobalCleanup reloads a global-only cleanup itself, since applyScopedRegexCleanup never does', async t => {
-  const previousHost = globalThis.SillyTavern;
-  let reloads = 0;
-  const context = { reloadCurrentChat: async () => { reloads += 1; } };
-  globalThis.SillyTavern = { getContext: () => context };
-  t.after(() => {
-    globalThis.SillyTavern = previousHost;
-    __testing.configureForTest({ mainGenerationActive: false });
-  });
-
-  // Regression: a global-only cleanup (the common case) never writes a character- or preset-scoped
-  // list, so applyScopedRegexCleanup's own reload never fires; saveSettings's own restyleCurrentChat is
-  // no help either when the dedupe left active.regexScripts itself unchanged. 酒馆's regex panel was
-  // left showing the rows just removed, still bound to their old array index.
-  const globalOnly = { scopedPlan: { kept: [], toRemove: 0 }, presetPlan: null };
-  await __testing.reloadRegexPanelAfterGlobalCleanup(globalOnly);
-  assert.equal(reloads, 1, '全局清理也要自己触发一次重新加载');
-
-  // applyScopedRegexCleanup already reloaded once it wrote a scoped or preset list -- this must not
-  // reload a second time on top of that.
-  reloads = 0;
-  await __testing.reloadRegexPanelAfterGlobalCleanup({ scopedPlan: { kept: ['a'], toRemove: 1 }, presetPlan: null });
-  assert.equal(reloads, 0, 'applyScopedRegexCleanup 已经加载过一次了，这里不重复加载');
-  reloads = 0;
-  await __testing.reloadRegexPanelAfterGlobalCleanup({ scopedPlan: null, presetPlan: { kept: ['b'], toRemove: 2 } });
-  assert.equal(reloads, 0, '预设范围同理');
-
-  // Skipped, not deferred, while the main reply is generating -- same tradeoff applyScopedRegexCleanup
-  // itself already takes.
-  reloads = 0;
-  __testing.configureForTest({ mainGenerationActive: true });
-  await __testing.reloadRegexPanelAfterGlobalCleanup(globalOnly);
-  assert.equal(reloads, 0, '主回复还在生成时不重新加载聊天');
-});
-
 test('buildRegexCleanupPlan leaves the scoped clause out of the message when no character is selected -- getScriptsByType(SCOPED) returns [] rather than throwing, so the scope is not "unavailable", just empty', () => {
   const settings = normalizeProcessingSettings();
   const profile = makeBuiltinReadingProfile(settings, 'cute');

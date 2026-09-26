@@ -11865,22 +11865,6 @@ async function applyScopedRegexCleanup(plan, engine) {
   if (!runtime.mainGenerationActive && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
 }
 
-// The other half of the same reload: applyScopedRegexCleanup above only ever reloads once it has actually
-// written a character- or preset-scoped list back, so a global-only cleanup -- the common case, and the
-// only one persistProcessing's own saveSettings handles -- never reloads through it at all. saveSettings's
-// own restyleCurrentChat (the only other place a reload happens) is no help either: it only runs when
-// something in `visualChanged` moved, and a dedupe that leaves active.regexScripts itself unchanged (only
-// the raw native list carried surplus copies) never counts as a regexScripts change. Left unreloaded,
-// 酒馆's own regex panel keeps showing the rows dedupe just removed, still bound to their old array index
-// (applyScopedRegexCleanup's own comment above). Skipped, not deferred, while a reply is generating --
-// the same guard and the same tradeoff applyScopedRegexCleanup itself already takes.
-async function reloadRegexPanelAfterGlobalCleanup(plan) {
-  if (plan.scopedPlan?.toRemove || plan.presetPlan?.toRemove) return; // applyScopedRegexCleanup already did
-  if (runtime.mainGenerationActive) return;
-  const context = getContext();
-  if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
-}
-
 function createControlCenter(rootDocument = document) {
   const container = rootDocument.createElement('div');
   container.innerHTML = CONTROL_CENTER_MARKUP;
@@ -12062,7 +12046,6 @@ function createControlCenter(rootDocument = document) {
         if (!plan) throw new Error('这些正则已经清理过了。');
         await persistProcessing(root, next);
         await applyScopedRegexCleanup(plan, engine);
-        await reloadRegexPanelAfterGlobalCleanup(plan);
         toast('success', `已整理镜译正则：删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条，当前方案需要的 ${plan.expected.length} 条都在。`);
       } else if (action === 'adopt-speakers') {
         // Every reported name the palette has not got yet, with no colour of its own. The hue each
@@ -16955,7 +16938,7 @@ function configureForTest({
   // directly since a headless run never actually starts a real translation request.
   if (inflight !== undefined) runtime.inflight = inflight;
   // Same idea, for whatever a caller's own "skip while the main reply is generating" guard reads
-  // (放回原文/清除译文/reloadRegexPanelAfterGlobalCleanup) -- a headless run never actually starts one.
+  // (放回原文/清除译文/删除多余正则) -- a headless run never actually starts one.
   if (mainGenerationActive !== undefined) runtime.mainGenerationActive = mainGenerationActive === true;
   return runtime.settings;
 }
@@ -16986,7 +16969,6 @@ export const __testing = Object.freeze({
   configureForTest,
   buildRegexCleanupPlan,
   applyScopedRegexCleanup,
-  reloadRegexPanelAfterGlobalCleanup,
   startTranslation,
   translateMessageStreaming,
   worldInfoKeyMatches,
