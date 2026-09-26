@@ -275,6 +275,27 @@ test('a move name that sits inside an already-carried run is still coloured, kee
   }
 });
 
+test('a tier-3 move carved out of a carried <big>/<small> fragment drops its own font-size, keeping only the wrapper\'s', () => {
+  // Regression: the move's own css (tier 3 adds `font-size:1.12em`) rode straight onto the carved piece
+  // regardless of `piece.dropSurroundingCss`, so the move ended up wrapped in <big> *and* sized up again
+  // on top of it — the two multiplied instead of the wrapper's own size decision winning alone.
+  const band = computeSafeBand(['#101010']);
+  const moveStyle = resolveMoveStyle({ element: '雷电', name: '究极奥义', tier: 3, band });
+  assert.match(moveStyle.css, /font-size:1\.12em/, '前提：三级招式本身确实带字号');
+  const pieces = [{ text: '最后，他终于使出了究极奥义。' }];
+  const runs = [
+    { text: '他终于使出了究极奥义', rawOpen: '<big>', rawClose: '</big>', dropSurroundingCss: true },
+    { text: '究极奥义', css: moveStyle.css, moveElement: '雷电', moveName: '究极奥义', moveTier: 3 },
+  ];
+  const out = splitPiecesByRuns(pieces, runs);
+  assert.equal(out.map(piece => piece.text).join(''), pieces[0].text, '重新拼接必须逐字还原');
+  const move = out.find(piece => piece.text === '究极奥义');
+  assert.ok(move, '招式名要能从 <big> 包着的半句里被单独切出来上色');
+  assert.equal(move.rawOpen, '<big>', '招式片段仍在被搬运半句自己的包装里');
+  assert.doesNotMatch(move.css ?? '', /font-size/, '外层 <big> 已经决定了字号，招式自己的字号不能再叠加一次');
+  assert.match(move.css ?? '', /color:/, '颜色本身不受字号二选一影响，还在');
+});
+
 // ---------------------------------------------------------------------------------------------
 // core.js — the translator's own answer: readAnnotation reads moves and runs, verbatim-checked
 // ---------------------------------------------------------------------------------------------

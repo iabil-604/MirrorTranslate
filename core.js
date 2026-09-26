@@ -4576,7 +4576,14 @@ function carveRuns(pieces, ordered) {
       const carvedPiece = {
         ...piece,
         ...run,
-        css: run.css ?? (run.dropSurroundingCss ? dropSizeCss(piece.css) : piece.css),
+        // 字号二选一 (design §2 item 4) runs the other way too: a move carved out of a piece that is
+        // itself a <big>/<small> carried fragment (`piece.dropSurroundingCss`, set on that fragment's own
+        // run and carried forward on every piece it produced) must not add tier 3's own `font-size` on
+        // top of the wrapper's — the wrapper already made that size decision, so the move keeps only its
+        // colour here.
+        css: run.css !== undefined
+          ? (piece.dropSurroundingCss ? dropSizeCss(run.css) : run.css)
+          : (run.dropSurroundingCss ? dropSizeCss(piece.css) : piece.css),
         className: run.className ?? piece.className,
         // A run with no wrapper of its own (a move) keeps whatever wrapper the piece it was cut from
         // already had, instead of erasing it.
