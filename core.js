@@ -1064,6 +1064,32 @@ export function voiceLibraryFoldSummary(voiceLibrary) {
   return list.length ? `${list.length} 个音色` : '空';
 }
 
+/** "超时 240s · 上限 60000 tokens · 温度 0.15" (plus 并发/推理强度/排除参数/节约模式 only when actually set) —
+ * 模型连接 每条连接卡「请求参数」fold's summary (DESIGN §15.4). */
+export function channelRequestFoldSummary(channel = {}) {
+  const timeoutSec = Number.isFinite(channel.timeoutSec) ? channel.timeoutSec : DEFAULT_CHANNEL.timeoutSec;
+  const maxTokens = Number.isFinite(channel.maxTokens) ? channel.maxTokens : DEFAULT_CHANNEL.maxTokens;
+  const temperature = Number.isFinite(channel.temperature) ? channel.temperature : DEFAULT_CHANNEL.temperature;
+  const concurrency = Number.isFinite(channel.concurrency) ? channel.concurrency : DEFAULT_CHANNEL.concurrency;
+  const excludeCount = Array.isArray(channel.excludeParams) ? channel.excludeParams.length : 0;
+  return [
+    `超时 ${timeoutSec}s`,
+    `上限 ${maxTokens} tokens`,
+    `温度 ${temperature}`,
+    concurrency > 1 ? `并发 ${concurrency}` : '',
+    channel.reasoningEffort ? `推理强度 ${channel.reasoningEffort}` : '',
+    excludeCount ? `排除 ${excludeCount} 项` : '',
+    channel.tokenSaving ? '节约 token 模式' : '',
+  ].filter(Boolean).join(' · ');
+}
+
+/** "user · 未设置" / "system · 已设置（12 字）" — 模型连接「后置提示词」fold's summary (DESIGN §15.4). */
+export function channelPostscriptFoldSummary(channel = {}) {
+  const role = ['system', 'user', 'assistant'].includes(channel.postscriptRole) ? channel.postscriptRole : 'user';
+  const text = String(channel.postscript || '').trim();
+  return `${role} · ${text ? `已设置（${text.length} 字）` : '未设置'}`;
+}
+
 export function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }

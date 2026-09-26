@@ -855,8 +855,11 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-fold[open] > summary .jy-fold-summary { display: none; }
 .jy-fold > .jy-form-body { padding-top: 16px; }
 /* DESIGN §15.4 折叠组 nested inside a card (正文处理/朗读's always-open cards): a hairline separates it
-   from the row above, matching the card's own row rhythm. */
-.jy-text-scope > .jy-fold { padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--jy-line-soft); }
+   from the row above, matching the card's own row rhythm. 模型连接's request/postscript folds sit in
+   the same kind of row list (`.jy-connection-form`, the shared per-connection editor) and get the same
+   treatment — they used to be `.jy-advanced`, which supplied its own 21px padding + bottom border; the
+   plain `.jy-fold` they became has none on its own. */
+.jy-text-scope > .jy-fold, .jy-connection-form > .jy-fold { padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--jy-line-soft); }
 /* DESIGN §15.4 依赖: a child field 28px in from its parent switch; grayed with a reason line once the
    parent is off (JS toggles `[data-jy-dependent-off]` — see syncColoringFields in index.js). */
 .jy-dependent { margin-left: 28px; }
@@ -974,6 +977,11 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 /* 片段跳转: the row a chat click landed on, flashed once so the reader can find it. */
 .jy-mini-row-jump { animation: jy-mini-row-jump 1100ms ease-out; will-change: background-color; }
 @keyframes jy-mini-row-jump { 0% { background: var(--jy-accent-soft); } 100% { background: transparent; } }
+/* DESIGN §14 减少动态效果: the keyframe above is suppressed by the global animation:none rule further
+   down this file, which used to leave 片段跳转 with no highlight at all (review finding style.css:975).
+   This holds the same colour as a plain background instead; index.js's focusRow adds it, waits about
+   2s, then removes it again — no animation involved. */
+.jy-mini-row-jump-static { background: var(--jy-accent-soft); }
 .jy-mini-sentence[data-current="true"] { background: var(--jy-accent-soft); }
 .jy-mini-row-mark, .jy-mini-sentence-mark { font-size: 12px; line-height: 1.6; color: var(--jy-muted); text-align: center; }
 .jy-mini-row[data-state="done"] .jy-mini-row-mark, .jy-mini-sentence[data-ready="true"] .jy-mini-sentence-mark { color: var(--jy-ok); }
