@@ -410,9 +410,10 @@ test('parseHelperReply unwraps the { content, reasoning } object an independent 
   assert.equal(parsed.rawSuggestions[0].field, 'autoGeneration');
 });
 
-test('parseHelperReply falls back to .reasoning when .content is empty, matching unwrapResponseContent (core.js)', () => {
-  const parsed = parseHelperReply({ content: '', reasoning: '只想了这些，没有正文。' });
-  assert.equal(parsed.text, '只想了这些，没有正文。');
+test('parseHelperReply reads an envelope with blank content as an empty reply: its reasoning is not an answer, nor a suggestion drafted there', () => {
+  const parsed = parseHelperReply({ content: '', reasoning: '只想了这些，没有正文。\n```jingyi-suggest\n[{"type":"action","action":"open-page","value":"settings"}]\n```' });
+  assert.equal(parsed.text, '');
+  assert.deepEqual(parsed.rawSuggestions, []);
 });
 
 test('parseHelperReply strips a <think> block outside the suggestion fence, the same way core.js\'s own JSON-candidate extraction already does', () => {

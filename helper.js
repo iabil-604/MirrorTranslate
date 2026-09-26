@@ -346,7 +346,8 @@ function walkKnowledgeMarkup(body, pageLabel, emit) {
       if (title) emit(headingAbove(stack, stack.length, pageLabel), title[1]);
       if (capture) capture.text += token[0];
       if (KNOWLEDGE_VOID_TAGS.has(tag) || /\/\s*$/.test(attrs)) continue;
-      stack.push({ tag, heading: null, checks: 0, hidden: /(?:^|\s)hidden(?:[\s=]|$)/.test(attrs) });
+      const cls = /\bclass\s*=\s*"([^"]*)"/.exec(attrs)?.[1] ?? '';
+      stack.push({ tag, cls, heading: null, checks: 0, hidden: /(?:^|\s)hidden(?:[\s=]|$)/.test(attrs) });
       if (capture) continue;
       const description = (tag === 'p' || tag === 'span') && hasClass(attrs, 'jy-muted');
       const at = stack.length - 1;
@@ -376,8 +377,11 @@ function walkKnowledgeMarkup(body, pageLabel, emit) {
         // has one — names the <details> it opens, so every line anywhere in that fold files under it.
         const inner = tag === 'summary' ? /<h[23]\b[^>]*>([\s\S]*?)<\/h[23]>/i.exec(done.text) : null;
         const heading = stripTags(inner ? inner[1] : done.text);
-        let owner = stack[done.at - 1];
-        if (owner?.tag === 'summary') owner = stack[done.at - 2];
+        // A wrapper that exists only to lay the heading out beside a pill (jy-card-head) passes it on
+        // to the card around it.
+        let index = done.at - 1;
+        if (stack[index]?.tag === 'summary' || /(?:^|\s)[\w-]+-head(?:\s|$)/.test(stack[index]?.cls ?? '')) index -= 1;
+        const owner = stack[index];
         if (heading && owner) owner.heading = heading;
       } else if (done.kind === 'check') {
         const owner = stack[done.at - 1];
@@ -747,10 +751,11 @@ const LEADING_THINK_BLOCK_RE = /^\s*<(think|thinking)\b[^>]*>[\s\S]*?<\/\1>\s*/i
  * helper.js:616).
  */
 export function parseHelperReply(raw) {
-  const unwrapped = unwrapResponseContent(raw);
-  // An envelope with neither content nor reasoning (a reply cut off by length or a content filter, or a
-  // reasoning model that spent its whole budget thinking) comes back from the unwrap as the object
-  // itself: that is an empty reply, not text.
+  // An envelope whose content is blank is an empty reply: cut off by length or a content filter, or a
+  // reasoning model that spent its whole budget thinking. Its reasoning is not an answer, and a
+  // suggestion block drafted in there was never offered.
+  const blankEnvelope = raw && typeof raw === 'object' && typeof raw.content === 'string' && !raw.content.trim();
+  const unwrapped = blankEnvelope ? '' : unwrapResponseContent(raw);
   const body = typeof unwrapped === 'string' ? unwrapped : '';
   const text = body.replace(LEADING_THINK_BLOCK_RE, '').trim();
   const match = text.match(SUGGEST_BLOCK_RE) || text.match(SUGGEST_BLOCK_OPEN_RE);

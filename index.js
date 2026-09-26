@@ -1007,7 +1007,7 @@ function initializeSettings() {
   // a match is readNativeRegexEdits' own job -- see processing.js' isJingyiRegex for why the marker
   // alone is not enough.
   const nativeEdits = readNativeRegexEdits(context.extensionSettings.regex, profile);
-  if (nativeEdits.length) profile.regexScripts = nativeEdits;
+  if (nativeEdits.length) profile.regexScripts = dedupeManagedRegexScripts(nativeEdits);
   context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, profile);
   runtime.nativeRegexInstalled = true;
   context.extensionSettings[MODULE_ID] = runtime.settings;
@@ -1037,8 +1037,10 @@ function saveSettings(next) {
   // itself -- is never silently undone by a readback of the not-yet-resynced native list.
   if (runtime.nativeRegexInstalled && previous.selectedProcessingProfileId === runtime.settings.selectedProcessingProfileId
     && JSON.stringify(previousRules) === JSON.stringify(active.regexScripts)) {
+    // Collapsed by content on the way in: a copy an export/reimport left in 酒馆's list under another
+    // id is the same rule, and reading it back as a second one would undo 删除多余正则's own dedupe.
     const nativeEdits = readNativeRegexEdits(context.extensionSettings.regex, active);
-    if (nativeEdits.length) active.regexScripts = nativeEdits;
+    if (nativeEdits.length) active.regexScripts = dedupeManagedRegexScripts(nativeEdits);
   }
   // 取色 (runThemeProbe) only ever changes `coloring.band`, and 特效字/vividness live under the same
   // object — none of those are in VISUAL_FIELDS (the four affix strings), so without this a floor's
@@ -1077,7 +1079,7 @@ function saveSettings(next) {
     // happened to trigger another restyle.
     const settling = Promise.allSettled([...runtime.inflight.values()].map(entry => entry.promise));
     runtime.pendingRepaint = runtime.pendingRepaint.catch(() => {}).then(() => settling).then(() => {
-      if (runtime.initialized) return restyleCurrentChat(runtime.settings);
+      if (runtime.initialized) return restyleCurrentChat(runtime.settings, { paintOnly: true });
     });
     runtime.pendingRepaint.catch(error => toast('error', `设置已保存，刷新已有译文失败：${safeError(error)}`));
   }
@@ -1117,16 +1119,17 @@ function saveSettings(next) {
   if (visualChanged) {
     const revision = ++runtime.processingRevision;
     const settings = runtime.settings;
+    const paintOnly = !nonColoringVisualChanged;
     runtime.processingRefresh = runtime.processingRefresh.catch(() => {}).then(() => {
       if (revision !== runtime.processingRevision || !runtime.initialized) return;
-      return restyleCurrentChat(settings);
+      return restyleCurrentChat(settings, { paintOnly });
     });
     runtime.processingRefresh.catch(error => toast('error', `设置已保存，刷新已有译文失败：${safeError(error)}`));
   }
   return runtime.settings;
 }
 
-async function restyleCurrentChat(settings) {
+async function restyleCurrentChat(settings, { paintOnly = false } = {}) {
   const context = getContext();
   const chat = context.chat;
   const chatId = getCurrentChatId(context);
@@ -1233,10 +1236,16 @@ async function restyleCurrentChat(settings) {
   // must not undo that by reloading out from under it. `updateMessageBlock` is the same fallback already
   // used while a main reply is generating, and it draws these same changes just as well.
   if (!runtime.mainGenerationActive && !runtime.inflight.size && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
-  // Only the floors this pass actually rewrote need drawing again; a long chat has far more that did not.
-  else for (const { message } of changes) {
-    const id = chat.indexOf(message);
-    if (id >= 0) context.updateMessageBlock?.(id, message);
+  // A pure repaint only rewrote the floors in `changes`, and a long chat has far more that it did not
+  // touch. A regex or affix change can alter how every floor renders without changing its text, so
+  // that one still draws them all.
+  else if (paintOnly) {
+    for (const { message } of changes) {
+      const id = chat.indexOf(message);
+      if (id >= 0) context.updateMessageBlock?.(id, message);
+    }
+  } else {
+    for (const [id, message] of chat.entries()) context.updateMessageBlock?.(id, message);
   }
 }
 
@@ -12067,7 +12076,7 @@ async function performRegexDedupe(root) {
   // Refused up front while a main reply is generating or a floor is still translating: 酒馆's regex
   // panel reload this can trigger (see applyScopedRegexCleanup) has no business running under either.
   if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再删除多余正则。');
-  if (runtime.inflight.size) throw new Error('还有楼层在翻译，等它翻完再删除多余正则。');
+  if ([...runtime.inflight.values()].some(entry => entry.message)) throw new Error('还有楼层在翻译，等它翻完再删除多余正则。');
   const engine = runtime.hostRegex || await loadHostRegex();
   // Read only for the confirm dialog's own wording: `next`/`plan` are rebuilt below, after the confirm
   // resolves, from whatever is current then — collectSettings and 酒馆's own regex list can each have
@@ -12083,9 +12092,11 @@ async function performRegexDedupe(root) {
   const regexScriptsBeforeDedupe = getActiveProcessingProfile(next).regexScripts;
   const plan = buildRegexCleanupPlan({ next, currentRegex: getContext().extensionSettings.regex ?? [], engine });
   if (!plan) throw new Error('这些正则已经清理过了。');
-  const profileDeduped = JSON.stringify(regexScriptsBeforeDedupe) !== JSON.stringify(plan.active.regexScripts);
+  // Whether saving this already restyled (and so reloaded) the chat: a profile-level dedupe does, and so
+  // does an edit to a bound rule the reader made in 酒馆's own editor that this save picks up.
+  const revision = runtime.processingRevision;
   await persistProcessing(root, next);
-  await applyScopedRegexCleanup(plan, engine, profileDeduped);
+  await applyScopedRegexCleanup(plan, engine, runtime.processingRevision !== revision);
   return plan;
 }
 

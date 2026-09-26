@@ -1057,3 +1057,24 @@ test('applyScopedRegexCleanup skips its reload while a translation is in flight,
   await __testing.applyScopedRegexCleanup(planGlobalOnly, engine);
   assert.equal(reloads, 0, '有翻译在进行时，全局清理的面板刷新也要让路，不能把它取消掉');
 });
+
+test('reading 酒馆\'s own list back never turns an export/reimport copy of a bound rule into a second rule', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  settings.processingProfiles = [profile];
+  settings.selectedProcessingProfileId = profile.id;
+  const original = profile.regexScripts[0];
+  // 酒馆's list still holds the copy an export/reimport left under another id; the profile itself has one.
+  const native = syncNativeRegex([], { ...profile, regexScripts: [original, { ...original, id: `${original.id}-dup` }, ...profile.regexScripts.slice(1)] });
+  assert.equal(readNativeRegexEdits(native, profile).length, profile.regexScripts.length + 1, '读回的原始结果确实多了一条');
+  const context = { extensionSettings: { regex: native, [MODULE_ID]: structuredClone(settings) }, chat: [], saveSettingsDebounced() {} };
+  globalThis.SillyTavern = { getContext: () => context };
+  __testing.initializeSettings();
+  const active = getActiveProcessingProfile(__testing.configureForTest({}));
+  assert.equal(active.regexScripts.length, profile.regexScripts.length, '启动时读回按内容去重');
+  assert.ok(!context.extensionSettings.regex.some(rule => rule.id === `${MODULE_ID}:${original.id}-dup` || rule.id?.endsWith(`${original.id}-dup`)), '多出来的那份也从酒馆列表里收掉');
+  __testing.saveSettings(structuredClone(__testing.configureForTest({})));
+  assert.equal(getActiveProcessingProfile(__testing.configureForTest({})).regexScripts.length, profile.regexScripts.length, '保存时读回同样按内容去重');
+});

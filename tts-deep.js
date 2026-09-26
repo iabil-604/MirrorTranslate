@@ -338,6 +338,12 @@ const NEVER_OKURIGANA = new Set([
   'は', 'が', 'を', 'の', 'へ', 'や', 'も', 'から', 'けど', 'けれど', 'ので', 'のに', 'より', 'まで',
   'とか', 'だけ', 'など', 'しか', 'なんか',
 ]);
+// When that first segment could just as well be a particle (家|に, 待|って, 変|な), only a conjugation
+// ending right after it (死に|たい, 笑わ|ない, 話し|て) shows it was okurigana; anything else stops there.
+const OKURIGANA_AUX_NEXT = new Set(['て', 'た', 'だ', 'ない', 'なかった', 'たい', 'たかった', 'ます', 'ました', 'ません', 'ず', 'ば']);
+// Walking left from a pause, these end the word: a case particle or topic marker sits between a verb and
+// whatever came before it (時間が|ない, 家に|いる, 本では|ない), never inside the verb itself.
+const LEFT_STOP_WORDS = new Set([...NEVER_OKURIGANA, 'に', 'で', 'と', 'では', 'じゃ', 'には', 'とは', 'ね', 'よ', 'わ', 'な']);
 
 // Word segmentation does not depend on locale for the languages this extension reads (Chinese, Japanese,
 // English all come out the same either way), so one shared segmenter covers all of them. Older runtimes
@@ -374,12 +380,21 @@ function extendOkuriganaRight(source, bounds) {
   if (!HAN_RUN_RE.test(seed) && !HIRAGANA_RUN_RE.test(seed)) return bounds.end;
   const seedIsHan = HAN_RUN_RE.test(seed);
   let end = bounds.end;
+  let particleShaped = false;
   for (let steps = 0; steps < OKURIGANA_MARGIN; steps += 1) {
     const next = wordBoundsAt(source, end);
     if (!next || next.start !== end) break;
     const chunk = source.slice(next.start, next.end);
-    const stops = steps === 0 && seedIsHan ? NEVER_OKURIGANA : OKURIGANA_STOP_WORDS;
-    if (!HIRAGANA_RUN_RE.test(chunk) || stops.has(chunk)) break;
+    if (!HIRAGANA_RUN_RE.test(chunk)) break;
+    if (steps === 0 && seedIsHan) {
+      if (NEVER_OKURIGANA.has(chunk)) break;
+      particleShaped = OKURIGANA_STOP_WORDS.has(chunk);
+    } else if (particleShaped) {
+      if (!OKURIGANA_AUX_NEXT.has(chunk)) break;
+      particleShaped = false;
+    } else if (OKURIGANA_STOP_WORDS.has(chunk)) {
+      break;
+    }
     end = next.end;
   }
   return end;
@@ -410,7 +425,7 @@ function extendOkuriganaLeft(source, bounds) {
     const prev = wordBoundsAt(source, start - 1);
     if (!prev || prev.end !== start) break;
     const chunk = source.slice(prev.start, prev.end);
-    if (HIRAGANA_RUN_RE.test(chunk)) { start = prev.start; continue; }
+    if (HIRAGANA_RUN_RE.test(chunk) && !LEFT_STOP_WORDS.has(chunk)) { start = prev.start; continue; }
     if (STEM_START_RE.test(chunk)) return prev.start;
     break;
   }
@@ -426,7 +441,7 @@ function reachesKanjiStem(source, start) {
     if (!prev || prev.end !== at) return false;
     const chunk = source.slice(prev.start, prev.end);
     if (STEM_START_RE.test(chunk)) return true;
-    if (!HIRAGANA_RUN_RE.test(chunk)) return false;
+    if (!HIRAGANA_RUN_RE.test(chunk) || LEFT_STOP_WORDS.has(chunk)) return false;
     at = prev.start;
   }
   return false;

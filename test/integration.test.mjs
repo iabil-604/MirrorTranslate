@@ -1974,7 +1974,12 @@ test('a restyle while a floor is still translating redraws only the floors it re
   context.updateMessageBlock = id => { drawn.push(id); };
   context.reloadCurrentChat = async () => { reloads += 1; };
   __testing.configureForTest({ inflight: new Map([[2, { promise: new Promise(() => {}), controller: new AbortController() }]]) });
-  await __testing.restyleCurrentChat({ ...settings, translationPrefix: '【', translationSuffix: '】' });
+  await __testing.restyleCurrentChat({ ...settings, translationPrefix: '【', translationSuffix: '】' }, { paintOnly: true });
   assert.equal(reloads, 0, '有楼层在翻译时不整页重载');
-  assert.deepEqual(drawn, [1], '只重绘这次改写过的那一楼');
+  assert.deepEqual(drawn, [1], '纯取色只重绘这次改写过的那一楼');
+  // A regex or affix change can change how a floor renders without changing its text, so it draws every floor.
+  drawn.length = 0;
+  await __testing.restyleCurrentChat({ ...settings, translationPrefix: '<jy-u>', translationSuffix: '</jy-u>' });
+  assert.equal(reloads, 0);
+  assert.deepEqual(drawn, [0, 1, 2], '改正则、前后缀时每一楼都重绘');
 });

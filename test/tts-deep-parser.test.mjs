@@ -368,7 +368,7 @@ test('the wider okurigana rules still stop at a real word boundary instead of ch
 });
 
 test('a stress on a kanji stem takes its first okurigana segment even when that segment looks like a particle', () => {
-  assert.equal(stressDisplay('ちょっと待ってくれ。', '待'), '待ってくれ', 'te-form: って right after the stem is its conjugation');
+  assert.equal(stressDisplay('ちょっと待ってくれ。', '待'), '待って', 'te-form: って right after the stem is its conjugation, and it stops there');
   assert.equal(stressDisplay('全部話してよ。', '話'), '話して', 'し right after the stem, then stops at よ');
   assert.equal(stressDisplay('みんな笑わないで。', '笑'), '笑わない', 'a-row negative: わ right after the stem');
   assert.equal(stressDisplay('もう死にたい。', '死'), '死にたい', 'に right after the stem');
@@ -382,4 +382,19 @@ test('a pause after an auxiliary ending shows the whole conjugated verb, not jus
   assert.equal(pauseDisplay('行きたい。', 'たい'), '行きたい', 'a stem the segmenter kept with its own kana still counts');
   assert.equal(pauseDisplay('言ったこと', 'こと'), 'こと', 'a whole word after a verb is left as it is');
   assert.equal(pauseDisplay('ここにいる。', 'いる'), 'いる', 'no kanji stem to reach, so nothing to widen into');
+});
+
+test('a stress on a noun followed by a particle stops at the particle instead of running into the next word', () => {
+  for (const [text, word, shown] of [['家にいる。', '家', '家に'], ['君といたい。', '君', '君と'], ['私にください。', '私', '私に'], ['雨でぬれた。', '雨', '雨で'], ['猫ってかわいい', '猫', '猫って'], ['変なやつ', '変', '変な'], ['前にいた', '前', '前に']]) {
+    assert.equal(stressDisplay(text, word), shown, text);
+  }
+});
+
+test('a pause after an auxiliary ending does not widen back across a particle', () => {
+  for (const [text, shown] of [['時間がない。', 'ない'], ['意味がない', 'ない'], ['誰もいない', 'ない'], ['本ではない', 'ない'], ['俺にはもう何もない', 'ない']]) {
+    assert.equal(pauseDisplay(text, 'ない'), shown, text);
+  }
+  for (const [text, shown] of [['家にいる', 'いる'], ['彼がいる', 'いる'], ['友達がいるよ', 'いる'], ['話している', '話している']]) {
+    assert.equal(pauseDisplay(text, 'いる'), shown, text);
+  }
 });

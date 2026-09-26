@@ -483,3 +483,9 @@ test('extractControlCenterKnowledge scopes a row title to its own row, against t
   assert.ok(lines.includes('微调 › 显示 › 内置美化'));
   assert.ok(!lines.some(line => /改过$/.test(line)));
 });
+
+test('extractControlCenterKnowledge files a card whose heading sits in a jy-card-head wrapper under that heading', () => {
+  const lines = extractControlCenterKnowledge(CONTROL_CENTER_MARKUP);
+  assert.ok(lines.includes('翻译台 › 朗读 · Fish Audio › 分析模式'));
+  assert.ok(!lines.includes('翻译台 › 翻译台 › 分析模式'));
+});
