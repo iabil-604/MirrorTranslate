@@ -1244,6 +1244,54 @@ test('putting the originals back reaches hidden floors, and each swipe gets its 
   assert.equal(message.mes, message.swipes[1]);
 });
 
+test('a swipe while 恢复本聊天的原文’s confirm is open puts back whichever page ends up shown, not the one that was current before the wait', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context } = translationOnlyHost([
+    [{ id: 1, text: '是的。' }, { id: 2, text: '风很大。' }],
+    [{ id: 1, text: '是的。' }, { id: 2, text: '风很大。' }],
+  ]);
+  const message = context.chat[0];
+  const first = '<story_scene>\nはい。\n<image>rain, city</image>\n風が強い。\n</story_scene>';
+  const second = '<story_scene>\nはい！\n<image>rain, city</image>\n風が強い。\n</story_scene>';
+  message.mes = first;
+  message.swipes = [first, second];
+  message.swipe_info = [{ extra: {} }, { extra: {} }];
+  message.swipe_id = 0;
+  await __testing.startTranslation(0, { quiet: true });
+  message.swipe_info[0].extra = structuredClone(message.extra);
+  message.swipe_id = 1;
+  message.mes = second;
+  message.extra = structuredClone(message.swipe_info[1].extra);
+  await __testing.startTranslation(0, { quiet: true });
+  // Page 1 is shown when the confirm opens.
+  const mirror0 = message.swipe_info[0].extra[MESSAGE_META_KEY].mirror;
+  const mirror1 = message.extra[MESSAGE_META_KEY].mirror;
+
+  // While the confirm waits, the reader swipes left to page 0 — the same sequence SillyTavern's own
+  // swipe() runs (script.js syncMesToSwipe then syncSwipeToMes).
+  const ask = async () => {
+    message.swipes[1] = message.mes;
+    message.swipe_info[1] = { ...message.swipe_info[1], extra: structuredClone(message.extra) };
+    message.swipe_id = 0;
+    message.mes = message.swipes[0];
+    message.extra = structuredClone(message.swipe_info[0].extra);
+    return true;
+  };
+
+  const result = await __testing.restoreChatOriginals({ ask });
+  assert.equal(result.restored, 2);
+  // Page 0 — the one actually shown once the confirm resolved — gets its own bilingual text and its
+  // own record cleared, not page 1's.
+  assert.equal(message.swipe_id, 0);
+  assert.equal(message.mes, mirror0);
+  assert.equal(message.swipes[0], mirror0);
+  assert.equal(message.extra[MESSAGE_META_KEY].stripped, undefined);
+  assert.equal(message.extra[MESSAGE_META_KEY].mirror, undefined);
+  // Page 1, off screen by the time the write happened, still gets its own original back.
+  assert.equal(message.swipes[1], mirror1);
+});
+
 test('世界书开关: only the books switched on bring their ticked entries, and a card saved before keeps its picks', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });

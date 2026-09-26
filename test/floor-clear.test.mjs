@@ -155,6 +155,51 @@ test('清除这一楼的译文: a floor changed by hand after 只留译文 refus
   assert.match(message.mes, /下大雨了/, 'the hand edit is left exactly as it was');
 });
 
+test('清除这一楼的译文: a swipe while the confirm is open aborts instead of writing the old page’s original over the new one', async t => {
+  restoreGlobals(t);
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: {}, initialized: true });
+  // Two independently translated swipes on the same floor — page 0 shown first, page 1 confirmed on.
+  const page0 = await translatedFloor('朝だ。', [[1, '早上了。']], settings);
+  const page1 = await translatedFloor('雨が降っている。', [[1, '下着雨。']], settings);
+  const message = {
+    mes: page1.mes,
+    swipe_id: 1,
+    swipes: [page0.mes, page1.mes],
+    swipe_info: [{ extra: { ...page0.extra } }, { extra: { ...page1.extra } }],
+    extra: { ...page1.extra },
+  };
+  context.chat.push(message);
+  const beforePage0Mes = message.swipes[0];
+  const beforePage0Extra = message.swipe_info[0].extra;
+
+  // The confirm opens on page 1; while it waits for an answer, the reader swipes left to page 0 — the
+  // same sequence SillyTavern's own swipe() runs (script.js syncMesToSwipe then syncSwipeToMes), which
+  // reaches the floor because the confirm dialog's shadow host does not swallow arrow keys (index.js
+  // issue "清除这一楼的译文：确认框开着时按方向键…").
+  const ask = async () => {
+    message.swipes[1] = message.mes;
+    message.swipe_info[1] = { ...message.swipe_info[1], extra: { ...message.extra } };
+    message.swipe_id = 0;
+    message.mes = message.swipes[0];
+    message.extra = { ...message.swipe_info[0].extra };
+    return true;
+  };
+
+  await assert.rejects(__testing.clearFloorTranslation(0, { ask }), /在确认清除的时候变了/);
+
+  // Page 0 — the one actually showing once the confirm resolved — keeps exactly what the swipe left it:
+  // still translated (not overwritten with page 1's plain original) and still carrying its own record.
+  assert.equal(message.swipe_id, 0);
+  assert.equal(message.mes, beforePage0Mes);
+  assert.match(message.mes, /早上了/, 'page 0 stays translated, not replaced by page 1’s original');
+  assert.notEqual(message.extra[MESSAGE_META_KEY], undefined, 'page 0’s own translation record survives');
+  assert.equal(message.swipes[0], beforePage0Mes);
+  assert.deepEqual(message.swipe_info[0].extra, beforePage0Extra);
+  // Page 1 (no longer shown) is untouched too — the clear never reached the write phase at all.
+  assert.equal(message.swipes[1], page1.mes);
+});
+
 test('autoTranslateSuppressed: holds while the cleared text is still on the floor, and steps aside once it changes', async t => {
   restoreGlobals(t);
   const context = mockHost();
