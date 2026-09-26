@@ -143,6 +143,31 @@ test('withFocusPreserved finds the active element through getRootNode() when roo
   assert.equal(after.focused, true, 'shadowRoot.activeElement 才是真正聚焦的节点，焦点应该转移到它的替身上');
 });
 
+// Review finding index.js:12541 (the rest of 8246): renderChannelCards moves the shared channel-detail
+// node into a different card rather than recreating it — the DOM identity is the same node, just at a new
+// parent — and a browser drops focus on its own the moment a focused node is relocated like that. The old
+// guard compared the found node only against the *pre-render* `active` reference and skipped refocusing
+// whenever they were the identical node, even though the shadow root's own activeElement had already gone
+// stale (null, here) the instant render() moved it.
+test('withFocusPreserved refocuses a node that render() only moved, once the shadow root itself has already dropped focus from it', () => {
+  const moved = fakeElement('SELECT', { 'data-jy-model-select': 'true' });
+  const shadowRoot = { activeElement: moved };
+  const root = {
+    getRootNode: () => shadowRoot,
+    contains: element => element === moved,
+    querySelector: selector => (selector === 'select[data-jy-model-select="true"]' ? moved : null),
+  };
+  const result = withFocusPreserved(root, () => {
+    // A render that only relocates the node in the DOM — the way renderChannelCards re-appends the
+    // shared detail editor into whichever card is open — the browser itself clears focus for this,
+    // it never re-fires focus back onto the very same node on its own.
+    shadowRoot.activeElement = null;
+    return 'moved';
+  });
+  assert.equal(result, 'moved');
+  assert.equal(moved.focused, true, '同一个节点被搬动后也要拿回焦点，不能因为“还是这个节点”就跳过');
+});
+
 // Review finding index.js:8246 (second half): the chevron and the toggle used to share the exact same
 // data-jy-action/data-jy-channel-id pair, so focusIdentity built the same selector for both and
 // querySelector always resolved to whichever comes first in the head (the toggle) — even when the
