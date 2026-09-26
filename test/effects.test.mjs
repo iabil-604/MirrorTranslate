@@ -480,6 +480,23 @@ test('stripHiddenRuns does not strip an earlier, unrelated occurrence of the sam
   assert.equal(stripped, '他先喊出红莲拳试探，随即又是一声，终结了战斗。');
 });
 
+test('a hidden run whose translated words sit only inside another fragment\'s translated run is still dropped from the reading', () => {
+  // The source cannot nest fragments, but the translator's own answer can still make one fragment's run
+  // sit only inside another's: here the hidden <s>全力で</s> comes back as '全力以赴', which is also
+  // contained in the *visible* <b>歯を食いしばって</b> fragment's own answer '咬着牙全力以赴地'. Carving
+  // both runs in one longest-first pass claims the visible (longer) one first, and the hidden run then
+  // finds no piece left to carve out of — it must fall back to a plain removal instead of staying in
+  // the reading.
+  const fragments = [
+    { text: '歯を食いしばって', format: { open: '<b>', close: '</b>' }, hidden: false },
+    { text: '全力で', format: { open: '<s>', close: '</s>' }, hidden: true },
+  ];
+  const runs = ['咬着牙全力以赴地', '全力以赴'];
+  const stripped = __testing.stripHiddenRuns('樱井咬着牙全力以赴地扑了上去。「上了」', fragments, runs);
+  assert.equal(stripped, '樱井咬着牙地扑了上去。「上了」');
+  assert.doesNotMatch(stripped, /全力以赴/);
+});
+
 // ---------------------------------------------------------------------------------------------
 // core.js — restyleBilingual recomputes a move's colour on restyle (design: theme/background change)
 // ---------------------------------------------------------------------------------------------
@@ -683,6 +700,33 @@ test('a hidden carried run inside a longer move name still stays hidden, instead
   const rest = out.find(piece => piece.text === '拳');
   assert.ok(rest, '招式名里没被涂黑的那个字还在');
   assert.match(rest.css ?? '', /#b55920/, '没被涂黑的字仍然按招式上色');
+});
+
+test('a carried fragment whose translated run sits only inside another carried run\'s span keeps its own wrapper, nested inside it', () => {
+  // The source cannot nest fragments (inlineFormatRuns jumps past each one it finds), but the
+  // translator's own answer can still put one fragment's run only inside another's already-carved span
+  // (word reordering, most often). Regression: the inner fragment's own tag (here a blackout span)
+  // disappeared entirely instead of nesting inside the outer <b>, so the words it exists to hide
+  // rendered as plain, legible text.
+  const pieces = [{ text: '他咬着牙拼尽全力地扑了上去' }];
+  const runs = [
+    { text: '咬着牙拼尽全力地', rawOpen: '<b>', rawClose: '</b>' },
+    { text: '拼尽全力', rawOpen: '<span style="background-color:currentColor">', rawClose: '</span>', hidden: true },
+  ];
+  const out = splitPiecesByRuns(pieces, runs);
+  assert.equal(out.map(piece => piece.text).join(''), pieces[0].text, '重新拼接必须逐字还原');
+  const blacked = out.find(piece => piece.text === '拼尽全力');
+  assert.ok(blacked, '涂黑片段的文字不能整段消失');
+  assert.equal(blacked.rawOpen, '<b><span style="background-color:currentColor">', '涂黑片段套在外层 <b> 里面，两层包装都要在');
+  assert.equal(blacked.rawClose, '</span></b>');
+  assert.equal(blacked.hidden, true, '嵌套之后涂黑标记本身还在');
+  const before = out.find(piece => piece.text === '咬着牙');
+  const after = out.find(piece => piece.text === '地');
+  assert.ok(before && after, '外层片段自己没被嵌套占用的文字还在');
+  assert.equal(before.rawOpen, '<b>');
+  assert.equal(before.rawClose, '</b>');
+  assert.equal(after.rawOpen, '<b>');
+  assert.equal(after.rawClose, '</b>');
 });
 
 test('dropSurroundingCss only removes font-size, never a speaker\'s own colour, from the piece it sat inside', () => {

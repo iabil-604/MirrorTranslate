@@ -3891,8 +3891,26 @@ function stripHiddenRuns(text, fragments, runs) {
     .map((fragment, position) => (runs[position] ? { text: runs[position], hidden: Boolean(fragment?.hidden) } : null))
     .filter(Boolean);
   if (!runList.length) return text;
-  const pieces = splitPiecesByRuns([{ text: String(text ?? '') }], runList);
-  return pieces.filter(piece => !piece.hidden).map(piece => piece.text).join('');
+  // Tagged with its own index so a run that never lands on any piece can still be told apart afterward
+  // (splitPiecesByRuns spreads `...run` onto the piece it carves, `runIndex` included).
+  const tagged = runList.map((run, index) => ({ ...run, runIndex: index }));
+  const pieces = splitPiecesByRuns([{ text: String(text ?? '') }], tagged);
+  const placed = new Set(pieces.map(piece => piece.runIndex).filter(index => index !== undefined));
+  let visible = pieces.filter(piece => !piece.hidden).map(piece => piece.text).join('');
+  // The source cannot nest fragments (inlineFormatRuns jumps past each one it finds), but the
+  // translator's answer can still make two fragments' runs overlap — reordering words so a hidden
+  // fragment's own run now sits only inside another, non-hidden fragment's run, or a collapsed
+  // repetition where the visible run happens to sort first. carveRuns then blocks the hidden run from
+  // ever being carved out on its own (a later run never lands inside a piece an earlier one already
+  // claimed), and it would otherwise stay in the reading uncut. Falling back to removing its first
+  // remaining occurrence — v0.38.0's own approach, before every fragment went through one shared carve —
+  // still keeps it out of what is read.
+  for (const run of tagged) {
+    if (!run.hidden || placed.has(run.runIndex)) continue;
+    const at = visible.indexOf(run.text);
+    if (at >= 0) visible = visible.slice(0, at) + visible.slice(at + run.text.length);
+  }
+  return visible;
 }
 
 async function collectTtsFloor(messageId, settings = runtime.settings, sideOverride = null) {

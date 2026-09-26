@@ -4555,8 +4555,21 @@ function dropSizeCss(css) {
 // which matches by that same data attribute and adds a `style` back onto a tag missing one) repaint or
 // re-tag exactly the characters this run hides. Whatever text of the move piece is left over keeps the
 // move's colour as it did before, since none of it is hidden.
+//
+// 字号二选一 (design §2 item 4): a run carved out of a piece that is itself a <big>/<small> carried
+// fragment (`piece.dropSurroundingCss`, set on that fragment's own run and carried forward on every piece
+// it produced) must not add its own `font-size` on top of the wrapper's — the wrapper already made that
+// size decision. A carried run with no `css` of its own instead drops any font-size the *piece* it is cut
+// from was carrying, the same rule from the other side.
+function carvedCss(run, piece) {
+  return run.css !== undefined
+    ? (piece.dropSurroundingCss ? dropSizeCss(run.css) : run.css)
+    : (run.dropSurroundingCss ? dropSizeCss(piece.css) : piece.css);
+}
+
 function carveRuns(pieces, ordered) {
   let result = pieces;
+  const placed = new Set();
   for (const run of ordered) {
     const carried = Boolean(run.rawOpen || run.rawClose);
     const flag = carried ? 'runApplied' : 'moveApplied';
@@ -4576,14 +4589,7 @@ function carveRuns(pieces, ordered) {
       const carvedPiece = {
         ...piece,
         ...run,
-        // 字号二选一 (design §2 item 4) runs the other way too: a move carved out of a piece that is
-        // itself a <big>/<small> carried fragment (`piece.dropSurroundingCss`, set on that fragment's own
-        // run and carried forward on every piece it produced) must not add tier 3's own `font-size` on
-        // top of the wrapper's — the wrapper already made that size decision, so the move keeps only its
-        // colour here.
-        css: run.css !== undefined
-          ? (piece.dropSurroundingCss ? dropSizeCss(run.css) : run.css)
-          : (run.dropSurroundingCss ? dropSizeCss(piece.css) : piece.css),
+        css: carvedCss(run, piece),
         className: run.className ?? piece.className,
         // A run with no wrapper of its own (a move) keeps whatever wrapper the piece it was cut from
         // already had, instead of erasing it.
@@ -4604,6 +4610,44 @@ function carveRuns(pieces, ordered) {
         carvedPiece.moveApplied = false;
       }
       next.push(carvedPiece);
+      const rest = text.slice(at + run.text.length);
+      if (rest) next.push({ ...piece, text: rest });
+    }
+    if (claimed) placed.add(run);
+    result = next;
+  }
+  // The source cannot nest fragments (inlineFormatRuns jumps past each one it finds), but the
+  // translator's own answer can still make one carried run's text sit only inside another carried run's
+  // already-carved span (word reordering, most often). The pass above never lets a carried run land
+  // there (a carried run may never land inside a piece any earlier run of either kind already carved,
+  // the whole point of "carried" being to claim its own span), so that run's own wrapper — a struck-
+  // through or blacked-out fragment, `run.hidden` most often — would otherwise disappear entirely and
+  // render as plain, legible text. Nested inside that span instead, both wrappers apply: the outer
+  // fragment's tag stays on the rest of its own text, the inner run's tag (and `hidden`) wraps only its
+  // own characters.
+  for (const run of ordered) {
+    if (placed.has(run) || !(run.rawOpen || run.rawClose)) continue;
+    let claimed = false;
+    const next = [];
+    for (const piece of result) {
+      const text = piece?.text ?? '';
+      const at = !claimed && piece.runApplied && !piece.moveApplied ? text.indexOf(run.text) : -1;
+      if (at < 0) {
+        next.push(piece);
+        continue;
+      }
+      claimed = true;
+      if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
+      next.push({
+        ...piece,
+        ...run,
+        css: carvedCss(run, piece),
+        className: run.className ?? piece.className,
+        rawOpen: `${piece.rawOpen ?? ''}${run.rawOpen ?? ''}`,
+        rawClose: `${run.rawClose ?? ''}${piece.rawClose ?? ''}`,
+        hidden: Boolean(run.hidden) || Boolean(piece.hidden),
+        runApplied: true,
+      });
       const rest = text.slice(at + run.text.length);
       if (rest) next.push({ ...piece, text: rest });
     }
