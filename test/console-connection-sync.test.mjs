@@ -99,6 +99,7 @@ function makeConsoleRoot() {
   detail.hidden = true;
   holder.hidden = true;
   const presetGrid = makeElement('div', doc); // just needs to exist so syncDeskFields does not bail out
+  const presetDriftList = makeElement('ul', doc); // [data-jy-preset-drift-list]
   const deskList = makeElement('div', doc); // [data-jy-desk-connection-list]
   const channelSummary = makeElement('p', doc); // [data-jy-channel-summary]
   const analysisSelects = [makeElement('select', doc)];
@@ -112,6 +113,7 @@ function makeConsoleRoot() {
       if (selector === '[data-jy-channel-detail]') return detail;
       if (selector === '[data-jy-channel-detail-holder]') return holder;
       if (selector === '[data-jy-preset-grid]') return presetGrid;
+      if (selector === '[data-jy-preset-drift-list]') return presetDriftList;
       if (selector === '[data-jy-desk-connection-list]') return deskList;
       if (selector === '[data-jy-channel-summary]') return channelSummary;
       const toggle = /^\[data-jy-action="desk-toggle-channel"\]\[data-jy-channel-id="([^"]+)"\]$/.exec(selector);
@@ -232,6 +234,31 @@ test('syncDeskFields({ rebuildList: false }) updates only the open row\'s own mo
   assert.equal(testButtonAfter, testButtonBefore, '「测试这条连接」按钮也没有被换掉');
   const small = toggleAfter.children.find(el => el.tagName === 'SMALL');
   assert.equal(small.textContent, 'brand-new-model', '行内的模型名跟着更新');
+});
+
+// Review finding index.js:9217: syncDeskFields(root, s, { rebuildList: false }) used to still call
+// renderPresetCards unconditionally, so the 套餐 grid — right above the API Key card, on the same
+// 正常模式 翻译台 page — was rebuilt every time a desk channel field settled too. A desk channel field is
+// not one of PRESET_MANAGED_FIELDS, so it cannot actually have changed which 套餐 is active or its drift;
+// rebuilding the grid anyway swallowed the first click on a preset radio the same way the connection
+// list's own full rebuild swallowed clicks on its rows.
+
+test('syncDeskFields({ rebuildList: false }) leaves the 套餐 grid and its drift list untouched', () => {
+  const { root } = makeConsoleRoot();
+  const settings = { ...testSettings(), preset: 'comfort' };
+  syncDeskFields(root, settings); // first, full build (rebuildList defaults to true)
+
+  const presetGrid = root.querySelector('[data-jy-preset-grid]');
+  const cardsBefore = [...presetGrid.children];
+  assert.ok(cardsBefore.length > 0, 'sanity: 套餐 grid has cards after a full build');
+  const driftList = root.querySelector('[data-jy-preset-drift-list]');
+  const driftItemsBefore = [...driftList.children];
+
+  const updated = { ...settings, channels: settings.channels.map(c => (c.id === 'a' ? { ...c, model: 'brand-new-model' } : c)) };
+  syncDeskFields(root, updated, { rebuildList: false });
+
+  assert.deepEqual(presetGrid.children, cardsBefore, '套餐卡片节点没有被换掉——正在进行中的点击不会被吞掉');
+  assert.deepEqual(driftList.children, driftItemsBefore, '改过项列表也没有被换掉');
 });
 
 test('syncDeskFields() with no options still rebuilds the connection list (add/delete/expand keep going through the full render)', () => {

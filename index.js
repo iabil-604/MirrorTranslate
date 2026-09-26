@@ -8589,6 +8589,23 @@ function withFocusPreserved(root, render) {
 // works because the existing delegated click handler is always registered on `root` first (module setup,
 // long before any field ever settles) and so always runs before this one-shot listener does. A fallback
 // timer covers the one path with no click at all — Tab, or clicking outside the panel.
+//
+// Tab off the field that just settled can land focus on a plain text input/textarea with nothing that
+// dispatches a 'click' at all — the fallback timer used to be the only thing standing between that and
+// whatever the reader typed next, and a real keystroke (or an IME composition's very first character)
+// lands well inside that 500ms window (review finding index.js:8452). keydown/beforeinput/
+// compositionstart all fire on whatever already has focus, before the character they carry is actually
+// written into the field, so catching one of them — only when the target is itself a text field, never a
+// button/checkbox/select a keyboard user might instead be about to activate with the same keydown — runs
+// the resync a moment before that keystroke would have landed in a field about to be rebuilt out from
+// under it, instead of up to half a second after.
+function isTextEntryElement(element) {
+  const tag = element?.tagName;
+  if (tag === 'TEXTAREA') return true;
+  if (tag !== 'INPUT') return false;
+  const type = String(element.type || 'text').toLowerCase();
+  return !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'range', 'color', 'image'].includes(type);
+}
 function scheduleFieldResync(root, run, { fallbackMs = 500 } = {}) {
   let settled = false;
   const finish = () => {
@@ -8596,10 +8613,17 @@ function scheduleFieldResync(root, run, { fallbackMs = 500 } = {}) {
     settled = true;
     clearTimeout(fallback);
     root.removeEventListener('click', finish);
+    root.removeEventListener('keydown', onTypingLikely);
+    root.removeEventListener('beforeinput', onTypingLikely);
+    root.removeEventListener('compositionstart', onTypingLikely);
     run();
   };
+  const onTypingLikely = event => { if (isTextEntryElement(event.target)) finish(); };
   const fallback = setTimeout(finish, fallbackMs);
   root.addEventListener('click', finish);
+  root.addEventListener('keydown', onTypingLikely);
+  root.addEventListener('beforeinput', onTypingLikely);
+  root.addEventListener('compositionstart', onTypingLikely);
 }
 
 function makePromptTextarea(doc, field, value, rows = 10, placeholder = '') {
@@ -9351,21 +9375,26 @@ function syncDeskConnectionSummary(root, settings) {
 /** DESIGN §15.2 正常模式 · 翻译台: everything the page shows besides the fields data-jy-field already syncs.
  * `rebuildList: false` skips renderDeskConnections for a field settling inside the open row's own form —
  * not one of the list's real structural changes (add, delete, or (de)expand a row) — and updates just that
- * row's own summary instead. */
+ * row's own summary instead. It also skips the 套餐 grid and its drift list for the same reason: a desk
+ * channel field is not one of PRESET_MANAGED_FIELDS, so it cannot have changed which 套餐 is active or its
+ * drift, and renderPresetCards replaces every radio — including whichever one a pointer is mid-click on
+ * (review finding index.js:9217, the same swallowed-click shape as the connection list above). */
 function syncDeskFields(root, settings, { rebuildList = true } = {}) {
   if (!root.querySelector('[data-jy-preset-grid]')) return;
-  renderPresetCards(root, settings);
-  const drift = presetDrift(settings);
-  const showDrift = Boolean(settings.preset && drift.length);
-  const driftBox = root.querySelector('[data-jy-preset-drift]');
-  if (driftBox) driftBox.hidden = !showDrift;
-  setText(root, '[data-jy-preset-drift-text]', showDrift ? `改过 ${drift.length} 项，已不是「${PRESET_LABELS[settings.preset]}」原样。` : '');
-  const driftToggle = root.querySelector('[data-jy-action="preset-drift-toggle"]');
-  const driftList = root.querySelector('[data-jy-preset-drift-list]');
-  if (driftList) driftList.replaceChildren(...drift.map(item => { const li = driftList.ownerDocument.createElement('li'); li.textContent = item.label; return li; }));
-  if (!showDrift) {
-    if (driftList) driftList.hidden = true;
-    if (driftToggle) { driftToggle.setAttribute('aria-expanded', 'false'); driftToggle.textContent = '看改了什么 ▸'; }
+  if (rebuildList) {
+    renderPresetCards(root, settings);
+    const drift = presetDrift(settings);
+    const showDrift = Boolean(settings.preset && drift.length);
+    const driftBox = root.querySelector('[data-jy-preset-drift]');
+    if (driftBox) driftBox.hidden = !showDrift;
+    setText(root, '[data-jy-preset-drift-text]', showDrift ? `改过 ${drift.length} 项，已不是「${PRESET_LABELS[settings.preset]}」原样。` : '');
+    const driftToggle = root.querySelector('[data-jy-action="preset-drift-toggle"]');
+    const driftList = root.querySelector('[data-jy-preset-drift-list]');
+    if (driftList) driftList.replaceChildren(...drift.map(item => { const li = driftList.ownerDocument.createElement('li'); li.textContent = item.label; return li; }));
+    if (!showDrift) {
+      if (driftList) driftList.hidden = true;
+      if (driftToggle) { driftToggle.setAttribute('aria-expanded', 'false'); driftToggle.textContent = '看改了什么 ▸'; }
+    }
   }
 
   // Both marks used to be hard-coded (✓ 提取标签, · 姓名与术语表) regardless of what was actually
@@ -9459,6 +9488,67 @@ function applyDeskUseChange(root, input) {
   // keyboard user just pressed Space on; withFocusPreserved keeps Tab/Space working on it afterward
   // instead of dropping to <body> (review finding index.js:12541).
   withFocusPreserved(root, () => syncFields(root, runtime.settings));
+}
+
+/** DESIGN §15.2 API Key 卡的桌面版地址/密钥/当前模型字段结算 ([data-jy-desk-channel-field], index.js:9246).
+ * syncFields() would run renderDeskConnections and replace every row — its toggle, its 用在 checkboxes,
+ * and 「测试这条连接」/「删除」 — so a blur-time change mid-mousedown/mid-Tab swallows whatever the pointer
+ * or Tab was headed for next (review finding index.js:12396, the same swallowed-click bug renderChannelCards
+ * had at index.js:12376). Only the open row's own model name can actually have changed from a field
+ * settling here; nothing else needs rebuilding until something really does add, delete or (de)expand a row,
+ * and leaving the form's own nodes alone is exactly what keeps Tab moving from 地址 to 密钥 instead of
+ * landing on <body>.
+ * collectSettings(root) always reads [data-jy-channel-field] too — 模型连接页's own copy of this same
+ * connection — regardless of whether that page is on screen right now; leaving that copy stale here let the
+ * next save made while 模型连接 sits hidden (switching to 高级模式 and touching any field there at all) write
+ * it straight back over whatever was just typed on this card (review finding index.js:12561). rebuildCards:
+ * false for the same reason as syncDeskFields above: this card is hidden in 正常模式, so nothing under a
+ * pointer gets replaced. The advanced 翻译台's own summary line and the 朗读/深度分析 pickers/fold also still
+ * showed the old name/model until refreshed here, the same way the 模型连接 fast path already does
+ * (index.js:12626). */
+function applyDeskChannelFieldChange(root) {
+  try {
+    saveSettings(collectSettings(root));
+  } catch (error) {
+    toast('error', safeError(error));
+    return false;
+  }
+  syncDeskFields(root, runtime.settings, { rebuildList: false });
+  syncChannelFields(root, runtime.settings, { rebuildCards: false });
+  updateSummary(root, runtime.settings);
+  fillTtsChannelPickers(root, runtime.settings);
+  syncTtsFoldSummaries(root, runtime.settings);
+  return true;
+}
+
+/** DESIGN §15.4 模型连接页每张卡自己的地址/密钥/模型等字段结算 ([data-jy-channel-field]). syncFields() would
+ * run renderChannelCards and rebuild every card's head — including whichever chevron, toggle or 用在
+ * checkbox the pointer is mid-click on when this field's blur fires — and that click is then dispatched to
+ * nothing (review finding index.js:12376). Only the open card's heading, its fold summaries and the desk/
+ * 微调 views need to catch up on this field; the cards themselves are left alone until something that
+ * actually adds, deletes, switches or collapses one runs. This also left several other things showing a
+ * renamed/re-modeled connection's old name (review finding index.js:12626): the advanced 翻译台's own
+ * summary line ([data-jy-channel-summary], only ever set by updateSummary) and the 朗读/微调 connection
+ * pickers plus 深度分析's fold summary (only ever set by syncTtsFields, which is not called on this fast
+ * path since most of it belongs to the 朗读 page and would touch fields the reader might be mid-editing
+ * there — this pulls out just the two pickers and the fold, both on pages that are hidden right now). */
+function applyChannelFieldChange(root) {
+  try {
+    saveSettings(collectSettings(root));
+  } catch (error) {
+    // Same reasoning as 翻译规则's autosave (review finding index.js:11889): collectSettings reads every
+    // page, so resyncing after an unrelated field's error would reset this one's freshly typed
+    // address/key/model to its last-saved value too.
+    toast('error', safeError(error));
+    return false;
+  }
+  syncChannelFields(root, runtime.settings, { rebuildCards: false });
+  syncDeskFields(root, runtime.settings);
+  syncFinetuneFields(root, runtime.settings);
+  updateSummary(root, runtime.settings);
+  fillTtsChannelPickers(root, runtime.settings);
+  syncTtsFoldSummaries(root, runtime.settings);
+  return true;
 }
 
 /** Collects the desk API Key card's own expanded-channel form, kept apart from [data-jy-channel-field]
@@ -12743,17 +12833,7 @@ function createControlCenter(rootDocument = document) {
       return;
     }
     if (event.target.matches('[data-jy-desk-channel-field]')) {
-      try {
-        saveSettings(collectSettings(root));
-      } catch (error) { toast('error', safeError(error)); return; }
-      // syncFields() would run renderDeskConnections and replace every row — its toggle, its 用在
-      // checkboxes, and 「测试这条连接」/「删除」 — so a blur-time change mid-mousedown/mid-Tab swallows
-      // whatever the pointer or Tab was headed for next (review finding index.js:12396, the same
-      // swallowed-click bug renderChannelCards had at index.js:12376). Only the open row's own model
-      // name can actually have changed from a field settling here; nothing else needs rebuilding until
-      // something really does add, delete or (de)expand a row, and leaving the form's own nodes alone
-      // is exactly what keeps Tab moving from 地址 to 密钥 instead of landing on <body>.
-      syncDeskFields(root, runtime.settings, { rebuildList: false });
+      applyDeskChannelFieldChange(root);
       return;
     }
     if (event.target.matches('[data-jy-finetune-profile-field]')) {
@@ -12975,33 +13055,7 @@ function createControlCenter(rootDocument = document) {
     // 模型连接 has no save button either (DESIGN §15.4): every field in the expanded card — name,
     // address, key, request parameters, the connection's own postscript — saves itself once it settles.
     if (event.target.matches('[data-jy-channel-field]')) {
-      try {
-        saveSettings(collectSettings(root));
-      } catch (error) {
-        // Same reasoning as 翻译规则's autosave (review finding index.js:11889): collectSettings
-        // reads every page, so resyncing after an unrelated field's error would reset this one's
-        // freshly typed address/key/model to its last-saved value too.
-        toast('error', safeError(error));
-        return;
-      }
-      // syncFields() would run renderChannelCards and rebuild every card's head — including whichever
-      // chevron, toggle or 用在 checkbox the pointer is mid-click on when this field's blur fires — and
-      // that click is then dispatched to nothing (review finding index.js:12376). Only the open card's
-      // heading, its fold summaries and the desk/微调 views need to catch up on this field; the cards
-      // themselves are left alone until something that actually adds, deletes, switches or collapses
-      // one runs.
-      syncChannelFields(root, runtime.settings, { rebuildCards: false });
-      syncDeskFields(root, runtime.settings);
-      syncFinetuneFields(root, runtime.settings);
-      // The above left several other things showing a renamed/re-modeled connection's old name (review
-      // finding index.js:12626): the advanced 翻译台's own summary line ([data-jy-channel-summary], only
-      // ever set by updateSummary) and the 朗读/微调 connection pickers plus 深度分析's fold summary (only
-      // ever set by syncTtsFields, which is not called on this fast path since most of it belongs to the
-      // 朗读 page and would touch fields the reader might be mid-editing there — this pulls out just the
-      // two pickers and the fold, both on pages that are hidden right now).
-      updateSummary(root, runtime.settings);
-      fillTtsChannelPickers(root, runtime.settings);
-      syncTtsFoldSummaries(root, runtime.settings);
+      applyChannelFieldChange(root);
       return;
     }
     if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEffects"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringAutoSpeakers"], [data-jy-field="coloringContrast"]')) {
@@ -17093,11 +17147,14 @@ export const __testing = Object.freeze({
   syncDeskFields,
   syncDeskConnectionSummary,
   applyDeskUseChange,
+  applyDeskChannelFieldChange,
+  applyChannelFieldChange,
   fillTtsChannelPickers,
   syncTtsFoldSummaries,
   syncTtsFields,
   updateSummary,
   scheduleFieldResync,
+  isTextEntryElement,
   deleteChannel,
   deleteProcessingProfile,
   fetchChannelModels,
