@@ -121,3 +121,38 @@ test('withFocusPreserved leaves focus alone when the rebuilt DOM has nothing mat
   const root = { ownerDocument: { activeElement: before }, contains: element => element === before, querySelector: () => null };
   assert.equal(withFocusPreserved(root, () => 'ok'), 'ok');
 });
+
+// Review finding index.js:8246: the control center always sits inside a shadow root (attachShadow),
+// where `root.ownerDocument.activeElement` is forever the shadow host div — never whatever is actually
+// focused inside it — so the old lookup always concluded nothing inside `root` had focus and never
+// refocused anything after a resync. `root.getRootNode()` returns that shadow root, whose own
+// `.activeElement` does track focus within it.
+test('withFocusPreserved finds the active element through getRootNode() when root sits in a shadow root, not the shadow host via ownerDocument', () => {
+  const before = fakeElement('BUTTON', { 'data-jy-channel-chevron': 'true', 'data-jy-channel-id': 'c1' });
+  const after = fakeElement('BUTTON', { 'data-jy-channel-chevron': 'true', 'data-jy-channel-id': 'c1' });
+  const shadowHost = fakeElement('DIV', {}); // what ownerDocument.activeElement is stuck on from outside the shadow tree
+  const shadowRoot = { activeElement: before };
+  const root = {
+    ownerDocument: { activeElement: shadowHost },
+    getRootNode: () => shadowRoot,
+    contains: element => element === before,
+    querySelector: selector => (selector === 'button[data-jy-channel-chevron="true"][data-jy-channel-id="c1"]' ? after : null),
+  };
+  const result = withFocusPreserved(root, () => 'rendered');
+  assert.equal(result, 'rendered', "passes the render callback's own return value through");
+  assert.equal(after.focused, true, 'shadowRoot.activeElement 才是真正聚焦的节点，焦点应该转移到它的替身上');
+});
+
+// Review finding index.js:8246 (second half): the chevron and the toggle used to share the exact same
+// data-jy-action/data-jy-channel-id pair, so focusIdentity built the same selector for both and
+// querySelector always resolved to whichever comes first in the head (the toggle) — even when the
+// chevron is what a keyboard user actually activated.
+test('focusIdentity gives the chevron its own selector once it carries data-jy-channel-chevron, distinct from the toggle sharing the same action/id', () => {
+  const toggle = fakeElement('BUTTON', { 'data-jy-action': 'edit-channel', 'data-jy-channel-id': 'c1' });
+  const chevron = fakeElement('BUTTON', { 'data-jy-action': 'edit-channel', 'data-jy-channel-id': 'c1', 'data-jy-channel-chevron': 'true' });
+  const toggleSelector = focusIdentity(toggle);
+  const chevronSelector = focusIdentity(chevron);
+  assert.equal(toggleSelector, 'button[data-jy-action="edit-channel"][data-jy-channel-id="c1"]');
+  assert.equal(chevronSelector, 'button[data-jy-action="edit-channel"][data-jy-channel-id="c1"][data-jy-channel-chevron="true"]');
+  assert.notEqual(chevronSelector, toggleSelector, '箭头和展开按钮不再共用同一个选择器');
+});

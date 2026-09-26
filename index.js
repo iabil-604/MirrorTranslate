@@ -8240,10 +8240,17 @@ function focusIdentity(element) {
  * focus to <body> and Tab/Enter/Space stop doing anything useful until the reader clicks back in
  * (review finding, index.js:11759): DESIGN §9.6's Tab loop only holds while something inside the
  * dialog is actually focused.
+ *
+ * The control center always lives inside a shadow root (attachShadow, openControlCenter). Plain
+ * `document.activeElement` there is forever the shadow host div, never the control actually focused
+ * inside it, so `root.contains(active)` used to always be false and nothing was ever refocused (review
+ * finding index.js:8246). `root.getRootNode()` returns that shadow root when `root` sits in one — and
+ * a ShadowRoot has its own `.activeElement` that does track focus within it — or plain `document`
+ * otherwise, so the same lookup covers both cases without asking which one applies here.
  */
 function withFocusPreserved(root, render) {
   const doc = root?.ownerDocument || (typeof document !== 'undefined' ? document : null);
-  const active = doc?.activeElement;
+  const active = root?.getRootNode?.().activeElement ?? doc?.activeElement;
   const inside = active && typeof root.contains === 'function' && root.contains(active);
   const selector = inside ? focusIdentity(active) : null;
   const caret = inside && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
@@ -8812,6 +8819,11 @@ function renderChannelCards(root, settings, editing) {
     chevron.className = 'jy-channel-card-chevron';
     chevron.dataset.jyAction = 'edit-channel';
     chevron.dataset.jyChannelId = channel.id;
+    // The toggle above shares the same action/id pair — without something else to tell them apart,
+    // focusIdentity() built the same selector for both, so withFocusPreserved always refocused
+    // whichever one is first in the head (the toggle) even when the chevron is what keyboard-activated
+    // the resync (review finding index.js:8246).
+    chevron.dataset.jyChannelChevron = 'true';
     // Clicking this on an open card now really collapses it — every card can collapse to its
     // one-line summary, not just switch to a different one (DESIGN §15.2/§15.4) — so the label says
     // the real action instead of the placeholder wording from when collapsing wasn't wired up yet
@@ -9127,13 +9139,26 @@ function syncChannelFoldSummaries(root, channel) {
   setText(root, '[data-jy-fold="channel-postscript"] [data-jy-fold-summary]', channelPostscriptFoldSummary(channel));
 }
 
-function syncChannelFields(root, settings) {
+// `rebuildCards: false` skips renderChannelCards: a field settling inside the open card (name,
+// address, key, request parameters, postscript) is not one of renderChannelCards' real structural
+// changes — add, delete, switch or collapse — and rebuilding every card's head for it replaces the
+// very button a click is still in flight on (mousedown already fired, mouseup has not yet), which
+// swallows that click (review finding index.js:12376). The open card's heading is the only piece of
+// the cards a field edit can actually change; its collapsed summary line and 用在 checkboxes' aria
+// labels pick up a renamed connection the next time something really does rebuild the cards.
+function syncChannelFields(root, settings, { rebuildCards = true } = {}) {
   const editing = editingChannelId(settings);
   runtime.editingChannelId = editing;
   const translation = root.querySelector('[data-jy-translation-channel]');
   if (translation) fillChannelPicker(translation, settings, translationChannelChoice(settings));
-  renderChannelCards(root, settings, editing);
   const channel = settings.channels.find(item => item.id === editing) ?? getActiveChannel(settings);
+  if (rebuildCards) {
+    renderChannelCards(root, settings, editing);
+  } else {
+    const openCard = [...root.querySelectorAll('[data-jy-channel-card]')].find(card => card.dataset.jyChannelCard === editing);
+    const heading = openCard?.querySelector('h2');
+    if (heading) heading.textContent = channel.name || DEFAULT_CHANNEL.name;
+  }
   root.dataset.jyEditingChannelId = channel.id;
   syncChannelFoldSummaries(root, channel);
   for (const element of root.querySelectorAll('[data-jy-channel-field]')) {
@@ -12370,10 +12395,15 @@ function createControlCenter(rootDocument = document) {
         toast('error', safeError(error));
         return;
       }
-      // renderChannelCards (inside syncFields) rebuilds this card; withFocusPreserved keeps Tab
-      // between 地址/密钥/模型 working the same way the desk card's own equivalent field does
-      // (review finding index.js:11759).
-      withFocusPreserved(root, () => syncFields(root, runtime.settings));
+      // syncFields() would run renderChannelCards and rebuild every card's head — including whichever
+      // chevron, toggle or 用在 checkbox the pointer is mid-click on when this field's blur fires — and
+      // that click is then dispatched to nothing (review finding index.js:12376). Only the open card's
+      // heading, its fold summaries and the desk/微调 views need to catch up on this field; the cards
+      // themselves are left alone until something that actually adds, deletes, switches or collapses
+      // one runs.
+      syncChannelFields(root, runtime.settings, { rebuildCards: false });
+      syncDeskFields(root, runtime.settings);
+      syncFinetuneFields(root, runtime.settings);
       return;
     }
     if (event.target.matches('[data-jy-field="coloringSpeakers"], [data-jy-field="coloringEffects"], [data-jy-field="coloringEmotions"], [data-jy-field="coloringRhythm"], [data-jy-field="coloringAutoSpeakers"], [data-jy-field="coloringContrast"]')) {
@@ -16425,6 +16455,7 @@ export const __testing = Object.freeze({
   channelUsers,
   editingChannelId,
   renderChannelCards,
+  syncChannelFields,
   collectDeskChannelFields,
   focusIdentity,
   withFocusPreserved,
