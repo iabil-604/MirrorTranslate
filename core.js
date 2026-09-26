@@ -461,19 +461,32 @@ function residueLetters(text) {
   return [...String(text ?? '')].filter(ch => RESIDUE_LETTER_RE.test(ch));
 }
 
-// Whether a marker of a moan — a stammered glottal stop, a heart, or a drawn-out vowel — sits directly
-// against one of `rawSource`'s ん/ン: immediately before it (あーん, ああん, はぁん, はあん) or
+// A character that never itself reads as part of a word — punctuation, an ellipsis, whitespace — and so
+// is skipped over when hasMarkerBesideN walks back from a ん/ン looking for its nearest real letter.
+// Never a moan marker (MOAN_MARKER_RE) and never a letter (RESIDUE_LETTER_RE): those are exactly what the
+// walk is looking for, not what it steps past.
+function isInterjectionGap(ch) {
+  return ch !== undefined && !RESIDUE_LETTER_RE.test(ch) && !MOAN_MARKER_RE.test(ch);
+}
+
+// Whether a marker of a moan — a stammered glottal stop, a heart, or a drawn-out vowel — sits against one
+// of `rawSource`'s ん/ン: immediately before it (あーん, ああん, はぁん, はあん), separated from it only by
+// punctuation or an ellipsis (アッ、ン, ハァ……ン — a stammer and its ん spoken as two beats), or
 // immediately after it (あんっ, アンッ♡). Checked against the untouched source so ♡/♥/❤, which
-// residueLetters never keeps, still count. A marker sitting elsewhere in the line — beside a different
-// word entirely (オーエン, はっけん, ええ、ケン) — must not count: forgiving a bare ん just because some
-// unrelated interjection or geminate consonant appears earlier in the same line would forgive a real,
-// untranslated word or name right next to it.
+// residueLetters never keeps, still count. A marker sitting beyond the nearest real letter — beside a
+// different word entirely (オーエン, はっけん, ええ、ケン) — must not count: the walk back stops at the
+// first letter it finds, marker or not, so a real mora sitting directly against the ん (across punctuation
+// or not) still blocks it, same as before. Forgiving a bare ん just because some unrelated interjection or
+// geminate consonant appears earlier in the same line would forgive a real, untranslated word or name
+// right next to it.
 function hasMarkerBesideN(rawSource) {
   const chars = [...String(rawSource ?? '')];
   return chars.some((ch, index) => {
     if (ch !== 'ん' && ch !== 'ン') return false;
-    const before = chars[index - 1];
-    if (before !== undefined && (MOAN_MARKER_RE.test(before) || isDrawnOutVowelPair(chars[index - 2], before))) return true;
+    let at = index - 1;
+    while (at >= 0 && isInterjectionGap(chars[at])) at -= 1;
+    const before = chars[at];
+    if (before !== undefined && (MOAN_MARKER_RE.test(before) || isDrawnOutVowelPair(chars[at - 1], before))) return true;
     const after = chars[index + 1];
     return after !== undefined && MOAN_MARKER_RE.test(after);
   });
@@ -582,17 +595,45 @@ function isReduplicatedSound(letters) {
   return false;
 }
 
+// Anything that never itself reads as part of a word -- punctuation, an ellipsis, whitespace, or a
+// moan's own decorative ♡/♥/❤ -- splitting a line into the punctuation-separated "beats"
+// isChunkedInterjectionShaped below judges one at a time. Unlike isInterjectionGap above (which stops
+// right at a marker symbol so hasMarkerBesideN can test it), a marker here is just another break: ♡ in
+// あっ♡あん never belongs to either half. ー/～/〜 stay out of this class (\p{L} already covers ー; ～/〜
+// are named here too) because they still have to stay glued to the letter beside them within a beat
+// (あーん's own drawn-out vowel).
+const CHUNK_BREAK_RE = /[^\p{L}\p{N}～〜]+/u;
+
+// A moan built from several short beats running together with nothing but punctuation, an ellipsis or a
+// heart between them (あっ、あん……, あっ♡あん, あ、あっ、あん！): each beat read on its own is exactly the
+// filler or bare-vowel-plus-ん shape isInterjectionShaped already knows, but residueLetters flattens the
+// *whole* line before isInterjectionShaped ever sees it, so an earlier beat's own real mora (あ in あっ)
+// ends up sitting directly in front of a later beat's ん (あん) and blocks it, same as a real name's own
+// mora would. Splitting first and judging every beat with that same isInterjectionShaped keeps every
+// existing safeguard exactly as it is: a short katakana name (ケン in ええ、ケン) still fails its own beat
+// because it is katakana, and a real two-mora word or name (オーエン, はっけん) never contains a break in
+// the first place, so it is never even split. Only reached once the unsplit line has already failed its
+// own check, and only worth anything once splitting actually finds more than one beat -- a single beat
+// recurses into isInterjectionShaped and lands right back on the same (already failed) checks, so nothing
+// loops and nothing is gained by trying.
+function isChunkedInterjectionShaped(rawSource) {
+  const chunks = String(rawSource ?? '').split(CHUNK_BREAK_RE).filter(Boolean);
+  if (chunks.length < 2) return false;
+  return chunks.every(chunk => isInterjectionShaped(residueLetters(chunk), chunk));
+}
+
 // Every letter drawn from INTERJECTION_FILLER or INTERJECTION_MORA, with no cap at all on how many real
 // morae are among them — isShortExactEcho's own looser half of the shape isTrivialInterjectionSource
 // caps at one. A bare ん/ン still needs bareNIsFreeFiller's say-so, same as there — an unmarked, non-
 // repeating mora-plus-ん is a short name (アン, ケン…) whether it is sighted once or twice in a row — with
-// one further allowance only here, on a second sighting: isBareHiraganaMoan's own hiragana-only shapes.
+// two further allowances only here, on a second sighting: isBareHiraganaMoan's own hiragana-only shapes,
+// and (failing everything else) isChunkedInterjectionShaped's own beat-by-beat reading of the same line.
 function isInterjectionShaped(letters, rawSource) {
-  if (!letters.every(ch => INTERJECTION_FILLER.has(ch) || INTERJECTION_MORA.has(ch))) return false;
+  if (!letters.every(ch => INTERJECTION_FILLER.has(ch) || INTERJECTION_MORA.has(ch))) return isChunkedInterjectionShaped(rawSource);
   if (!letters.includes('ん') && !letters.includes('ン')) return true;
   const morae = letters.filter(ch => INTERJECTION_MORA.has(ch));
   if (!morae.length) return true;
-  return bareNIsFreeFiller(letters, rawSource) || isBareHiraganaMoan(letters, morae, rawSource);
+  return bareNIsFreeFiller(letters, rawSource) || isBareHiraganaMoan(letters, morae, rawSource) || isChunkedInterjectionShaped(rawSource);
 }
 
 /**
@@ -4552,6 +4593,13 @@ function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) 
         piece.moveElement !== undefined ? `data-jy-move-element="${escapeMoveAttribute(piece.moveElement)}"` : '',
         piece.moveName !== undefined ? `data-jy-move-name="${escapeMoveAttribute(piece.moveName)}"` : '',
         piece.moveTier !== undefined ? `data-jy-move-tier="${escapeMoveAttribute(piece.moveTier)}"` : '',
+        // 字号二选一 (design §2 item 4): this move was carved out of a piece that was itself a <big>/
+        // <small> carried fragment, so `carvedCss` already dropped its own font-size for this render
+        // (`piece.dropSurroundingCss` rides onto the move piece unchanged — moves carry no such field of
+        // their own to override it with). A later restyle (`recolorMoveSpans`) rebuilds this span's style
+        // from scratch against a new band, with only the span's own attributes to go on and no piece tree
+        // left to ask, so the same choice has to survive as a marker here or the size comes back.
+        piece.moveElement !== undefined && piece.dropSurroundingCss ? 'data-jy-move-nosize="1"' : '',
       ].filter(Boolean).join(' ');
       const inner = attributes
         ? `${wrap(`<span ${attributes}>`)}${piece.text}${wrap('</span>')}`
@@ -4592,12 +4640,16 @@ function dropSizeCss(css) {
 // run meeting a move piece: when the move's own name is *longer* than the hidden span inside it (a name
 // carrying a blacked-out prefix, say), the move is carved first (longest-first) and would otherwise
 // leave nothing behind for the hidden run to find — the redaction would vanish and its characters would
-// render in the move's colour, the exact leak this run exists to prevent. So a hidden run alone may
-// still carve out of a move-applied piece, and the piece it takes does not keep the move's own colour or
-// its data-jy-move-* identity: leaving either would let a later restyle's recolorMoveSpans (core.js,
-// which matches by that same data attribute and adds a `style` back onto a tag missing one) repaint or
-// re-tag exactly the characters this run hides. Whatever text of the move piece is left over keeps the
-// move's colour as it did before, since none of it is hidden.
+// render in the move's colour, the exact leak this run exists to prevent. That fallback is a last resort
+// only, tried in its own pass once every piece has had its chance at a standalone home for the run first
+// (below carveRuns' two main passes): a hidden run whose text also occurs outside the move's own name
+// must find *that* occurrence, or the standalone one stays legible while the in-move one gets redacted
+// for no reason. Only when nothing else claims it does it carve out of the move-applied piece instead,
+// and the piece it takes does not keep the move's own colour or its data-jy-move-* identity: leaving
+// either would let a later restyle's recolorMoveSpans (core.js, which matches by that same data
+// attribute and adds a `style` back onto a tag missing one) repaint or re-tag exactly the characters
+// this run hides. Whatever text of the move piece is left over keeps the move's colour as it did before,
+// since none of it is hidden.
 //
 // 字号二选一 (design §2 item 4): a run carved out of a piece that is itself a <big>/<small> carried
 // fragment (`piece.dropSurroundingCss`, set on that fragment's own run and carried forward on every piece
@@ -4620,8 +4672,11 @@ function carveRuns(pieces, ordered) {
     const next = [];
     for (const piece of result) {
       const text = piece?.text ?? '';
-      const unhidesMove = carried && Boolean(run.hidden) && Boolean(piece.moveApplied);
-      const blocked = carried ? Boolean(piece.runApplied || (piece.moveApplied && !unhidesMove)) : Boolean(piece.moveApplied || piece.hidden);
+      // moveApplied blocks a carried run exactly as it blocks another move -- a standalone occurrence
+      // elsewhere in the line always wins over one sitting inside a move's own name. A hidden run with no
+      // standalone occurrence anywhere still gets a piece to carve, just not here: see the last-resort
+      // pass below, tried only once this pass and the nesting one after it have both had their turn.
+      const blocked = carried ? Boolean(piece.runApplied || piece.moveApplied) : Boolean(piece.moveApplied || piece.hidden);
       const at = !claimed && !blocked ? text.indexOf(run.text) : -1;
       if (at < 0) {
         next.push(piece);
@@ -4629,7 +4684,7 @@ function carveRuns(pieces, ordered) {
       }
       claimed = true;
       if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
-      const carvedPiece = {
+      next.push({
         ...piece,
         ...run,
         css: carvedCss(run, piece),
@@ -4643,16 +4698,7 @@ function carveRuns(pieces, ordered) {
         // back to whatever the piece already had.
         hidden: run.hidden ?? piece.hidden,
         [flag]: true,
-      };
-      if (unhidesMove) {
-        carvedPiece.css = undefined;
-        carvedPiece.className = undefined;
-        carvedPiece.moveElement = undefined;
-        carvedPiece.moveName = undefined;
-        carvedPiece.moveTier = undefined;
-        carvedPiece.moveApplied = false;
-      }
-      next.push(carvedPiece);
+      });
       const rest = text.slice(at + run.text.length);
       if (rest) next.push({ ...piece, text: rest });
     }
@@ -4694,6 +4740,48 @@ function carveRuns(pieces, ordered) {
       const rest = text.slice(at + run.text.length);
       if (rest) next.push({ ...piece, text: rest });
     }
+    if (claimed) placed.add(run);
+    result = next;
+  }
+  // The last-resort pass promised above: a hidden carried run still unplaced after both a standalone
+  // occurrence (the main pass) and a nested one inside another carried run's span (just above) may now
+  // carve out of a piece a move already claimed, so its redaction is not lost entirely. Tried last, and
+  // only for a run that is both hidden and still unplaced, so a standalone occurrence anywhere else in
+  // the line is always preferred over reaching into a move's own name for the same text.
+  for (const run of ordered) {
+    if (placed.has(run) || !run.hidden || !(run.rawOpen || run.rawClose)) continue;
+    let claimed = false;
+    const next = [];
+    for (const piece of result) {
+      const text = piece?.text ?? '';
+      const at = !claimed && piece.moveApplied && !piece.runApplied ? text.indexOf(run.text) : -1;
+      if (at < 0) {
+        next.push(piece);
+        continue;
+      }
+      claimed = true;
+      if (at > 0) next.push({ ...piece, text: text.slice(0, at) });
+      // The redaction wins outright here: none of the move's own colour, class or data-jy-move-*
+      // identity survives onto this piece, or a later restyle's recolorMoveSpans (core.js, matches by
+      // that same data attribute) would repaint or re-tag exactly the characters this run hides.
+      next.push({
+        ...piece,
+        ...run,
+        css: undefined,
+        className: undefined,
+        rawOpen: run.rawOpen ?? piece.rawOpen,
+        rawClose: run.rawClose ?? piece.rawClose,
+        hidden: run.hidden ?? piece.hidden,
+        runApplied: true,
+        moveElement: undefined,
+        moveName: undefined,
+        moveTier: undefined,
+        moveApplied: false,
+      });
+      const rest = text.slice(at + run.text.length);
+      if (rest) next.push({ ...piece, text: rest });
+    }
+    if (claimed) placed.add(run);
     result = next;
   }
   return result;
@@ -4711,10 +4799,11 @@ function carveRuns(pieces, ordered) {
  * an already-carried half-sentence still get coloured without a short carried run inside an earlier,
  * longer move name stealing the move's own characters first. Ties (a carried run and a move of the same
  * length) carve the carried run first, since its whole point is to claim its span before anything else
- * can. A hidden carried run is the one exception to the ordering itself: even when a longer move name
- * carves first and leaves nothing behind for it, it still gets to carve out of the move's own piece
- * afterward (`carveRuns`'s `unhidesMove`) rather than lose its redaction to the move's colour. Only the
- * first remaining occurrence of each run's text is carved — a name mentioned twice in one segment is
+ * can. A hidden carried run is the one exception to the ordering itself, and only as a last resort: even
+ * when a longer move name carves first and leaves nothing behind for it anywhere in the line, it still
+ * gets to carve out of the move's own piece in `carveRuns`'s final pass, once every piece has had its
+ * chance to offer it a standalone home first, rather than lose its redaction to the move's colour. Only
+ * the first remaining occurrence of each run's text is carved — a name mentioned twice in one segment is
  * uncommon, and carving every occurrence would let one wrong `indexOf` match repaint the whole segment.
  */
 export function splitPiecesByRuns(pieces, runs) {
@@ -4913,6 +5002,13 @@ function readReplaceBodyByLineOnce(body, lineParts, ids, legacy) {
         }
         const end = line.trail ? rest.indexOf(line.trail) : (rest.indexOf('\n') < 0 ? rest.length : rest.indexOf('\n'));
         if (end < 0) return null;
+        // A trail-bearing line's own translation is always written on one line (replaceUnitBody), so a
+        // '\n' inside the slice found by line.trail means this pass has drifted -- most often the exact
+        // pass reading a legacy-joined body (an extra '\n' at a preceding '' boundary), where trail's own
+        // indexOf then reaches straight across that stray '\n' into what is really the *next* semantic
+        // line's own text. Rejecting it here sends the read to the legacy pass instead of accepting a
+        // wrong split.
+        if (line.trail && rest.slice(0, end).includes('\n')) return null;
         const translation = rest.slice(0, end).trim();
         rest = rest.slice(end + (line.trail ? line.trail.length : 0));
         if (translation) found.set(id, translation);
@@ -5121,9 +5217,14 @@ export function recolorMoveSpans(body, options) {
     const tier = unescapeMoveAttribute(tag.match(/\sdata-jy-move-tier="([^"]*)"/)?.[1]);
     const resolved = resolveMoveStyle({ element, name, tier, band: coloring.band, vividness: coloring.vividness });
     if (!resolved) return tag;
+    // 字号二选一 (design §2 item 4): `data-jy-move-nosize` (`styledBody`, above) says this move was
+    // carved out of a <big>/<small> carried fragment on first render, so its own font-size was dropped
+    // then for the same reason it must be dropped again here -- resolveMoveStyle knows nothing about the
+    // wrapper it is about to sit inside, only the marker left for it does.
+    const css = /\sdata-jy-move-nosize="/.test(tag) ? dropSizeCss(resolved.css) : resolved.css;
     return /\sstyle="[^"]*"/.test(tag)
-      ? tag.replace(/\sstyle="[^"]*"/, ` style="${resolved.css}"`)
-      : tag.replace(/>$/, ` style="${resolved.css}">`);
+      ? tag.replace(/\sstyle="[^"]*"/, ` style="${css}"`)
+      : tag.replace(/>$/, ` style="${css}">`);
   });
 }
 

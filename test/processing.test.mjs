@@ -900,6 +900,111 @@ test('applyScopedRegexCleanup saves back only the scopes that actually had somet
   }
 });
 
+test('applyScopedRegexCleanup skips its own reload when the caller already restyled -- 删除多余正则\'s profile-level dedupe also leaving a surplus native copy used to reload the chat twice in a row', async () => {
+  const previousHost = globalThis.SillyTavern;
+  const calls = [];
+  const engine = {
+    SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 },
+    async saveScriptsByType(scripts, type) { calls.push({ scripts, type }); },
+  };
+  let reloads = 0;
+  const context = { reloadCurrentChat: async () => { reloads += 1; } };
+  globalThis.SillyTavern = { getContext: () => context };
+  try {
+    // The exact shape buildRegexCleanupPlan hands back for a profile whose regexScripts held
+    // byte-identical copies under different ids: dedupeManagedRegexScripts collapsed the profile itself
+    // (which is what makes saveSettings's own regexScripts diff true, so its restyleCurrentChat already
+    // reloaded once by the time this runs), and the native list that was synced from the pre-dedupe
+    // profile carried a matching surplus copy of its own (plan.toRemove > 0).
+    const planGlobalOnly = { toRemove: 1, toInstall: 0, scopedPlan: null, presetPlan: null };
+    await __testing.applyScopedRegexCleanup(planGlobalOnly, engine, true);
+    assert.equal(reloads, 0, '这次的 reload 已经在 persistProcessing 的 saveSettings 里发生过了，这里不能再来一次');
+
+    // A scoped/preset write still has to happen regardless -- only the reload this function would
+    // otherwise add on top is skipped, never the write itself.
+    calls.length = 0; reloads = 0;
+    const planScoped = { toRemove: 0, toInstall: 0, scopedPlan: { kept: ['a'], toRemove: 1 }, presetPlan: null };
+    await __testing.applyScopedRegexCleanup(planScoped, engine, true);
+    assert.equal(calls.length, 1, '范围写回不受 alreadyRestyled 影响');
+    assert.equal(reloads, 1, '先前那次刷新发生在写回角色/预设范围之前，写回之后还得再刷新一次，面板才会读到新列表');
+
+    // Left out (or explicitly false), behaviour is exactly as before -- the existing reload-once test
+    // above already covers this in depth; one more check here for the default itself.
+    calls.length = 0; reloads = 0;
+    await __testing.applyScopedRegexCleanup(planGlobalOnly, engine);
+    assert.equal(reloads, 1, '不传这个参数时，还是照旧刷新一次');
+  } finally {
+    globalThis.SillyTavern = previousHost;
+  }
+});
+
+test('buildRegexCleanupPlan\'s own dedupe of active.regexScripts is exactly what the 删除多余正则 handler compares before/after to decide whether a restyle already reloaded the chat', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  settings.processingProfiles = [profile];
+  settings.selectedProcessingProfileId = profile.id;
+
+  // An export/reimport left the profile itself holding two differently-id'd copies of the same bound
+  // rule (dedupeManagedRegexScripts's own scenario) -- and since each one was synced to the native list
+  // under its own id, the global list picked up a matching surplus copy of its own too.
+  const original = profile.regexScripts[0];
+  profile.regexScripts = [original, { ...original, id: `${original.id}-dup` }];
+  const currentRegex = syncNativeRegex([], profile);
+
+  const regexScriptsBeforeDedupe = getActiveProcessingProfile(settings).regexScripts;
+  const plan = __testing.buildRegexCleanupPlan({ next: settings, currentRegex, engine: null });
+  assert.ok(plan, '全局也确实多了一条，不是只有 profile 内部的重复');
+  assert.equal(plan.toRemove, 1, '被去重的那条在原生列表里也留了一份多余的');
+  const profileDeduped = JSON.stringify(regexScriptsBeforeDedupe) !== JSON.stringify(plan.active.regexScripts);
+  assert.equal(profileDeduped, true, 'dedupeManagedRegexScripts 确实改动了 profile 自己的 regexScripts');
+
+  // A purely global surplus, with the profile itself never holding a duplicate to begin with, must not
+  // be mistaken for one -- persistProcessing's saveSettings sees no regexScripts change here, so no
+  // restyle (and no reload) happens on its own; applyScopedRegexCleanup's own reload must still run.
+  const cleanProfile = makeBuiltinReadingProfile(normalizeProcessingSettings(), 'cute');
+  const cleanSettings = normalizeProcessingSettings();
+  cleanSettings.processingProfiles = [cleanProfile];
+  cleanSettings.selectedProcessingProfileId = cleanProfile.id;
+  const cleanFull = syncNativeRegex([], cleanProfile);
+  const cleanRuleName = `镜译 · ${cleanProfile.name} · ${cleanProfile.regexScripts[0].scriptName}`;
+  const cleanPolluted = [...cleanFull, { ...cleanFull.find(rule => rule.scriptName === cleanRuleName) }];
+  const cleanBefore = getActiveProcessingProfile(cleanSettings).regexScripts;
+  const cleanPlan = __testing.buildRegexCleanupPlan({ next: cleanSettings, currentRegex: cleanPolluted, engine: null });
+  assert.ok(cleanPlan);
+  assert.equal(cleanPlan.toRemove, 1, '全局确实多了一条');
+  const cleanProfileDeduped = JSON.stringify(cleanBefore) !== JSON.stringify(cleanPlan.active.regexScripts);
+  assert.equal(cleanProfileDeduped, false, 'profile 自己从未重复过，这次的多余完全是全局原生列表自己的');
+});
+
+test('buildRegexCleanupPlan never says "删除 0 条" when there is nothing anywhere to remove and only the fixed rules are missing (install-only)', () => {
+  const settings = normalizeProcessingSettings();
+  const profile = makeBuiltinReadingProfile(settings, 'cute');
+  settings.processingProfiles = [profile];
+  settings.selectedProcessingProfileId = profile.id;
+  const full = syncNativeRegex([], profile);
+  // The reader deleted one fixed 镜译 rule directly in 酒馆's own panel; nothing else is surplus
+  // anywhere, so toRemove stays 0 throughout while toInstall alone is > 0.
+  const missingOneFixed = full.filter(rule => rule.id !== `${MODULE_ID}:prompt-affix`);
+  const plan = __testing.buildRegexCleanupPlan({ next: settings, currentRegex: missingOneFixed, engine: null });
+  assert.ok(plan);
+  assert.equal(plan.toRemove, 0);
+  assert.equal(plan.totalRemove, 0);
+  assert.equal(plan.toInstall, 1);
+  assert.doesNotMatch(plan.message, /删除 0 条/, '什么都不用删的时候，不该说"删除 0 条"');
+  assert.match(plan.message, /^补上 1 条缺失的固定正则/);
+});
+
+test('regexCleanupSummary states only the half that actually happened, never "删除 0 条" or "补上 0 条"', () => {
+  const removeOnly = __testing.regexCleanupSummary({ totalRemove: 3, toInstall: 0, expected: { length: 11 } });
+  assert.equal(removeOnly, '已整理镜译正则：删除 3 条，当前方案需要的 11 条都在。');
+
+  const installOnly = __testing.regexCleanupSummary({ totalRemove: 0, toInstall: 1, expected: { length: 11 } });
+  assert.equal(installOnly, '已整理镜译正则：补上 1 条，当前方案需要的 11 条都在。');
+
+  const both = __testing.regexCleanupSummary({ totalRemove: 2, toInstall: 1, expected: { length: 11 } });
+  assert.equal(both, '已整理镜译正则：删除 2 条，补上 1 条，当前方案需要的 11 条都在。');
+});
+
 test('buildRegexCleanupPlan leaves the scoped clause out of the message when no character is selected -- getScriptsByType(SCOPED) returns [] rather than throwing, so the scope is not "unavailable", just empty', () => {
   const settings = normalizeProcessingSettings();
   const profile = makeBuiltinReadingProfile(settings, 'cute');
@@ -926,4 +1031,29 @@ test('buildRegexCleanupPlan leaves the scoped clause out of the message when no 
   assert.equal(plan.presetRemove, 1);
   assert.doesNotMatch(plan.message, /角色绑定/, '角色范围没有可删的，干脆不提，不写成"角色绑定 0 条"');
   assert.match(plan.message, /预设绑定 1 条/);
+});
+
+test('applyScopedRegexCleanup skips its reload while a translation is in flight, even when a global-only cleanup would otherwise refresh the panel', async t => {
+  // Regression: reloadCurrentChat aborts every runtime.inflight entry the same way restyleCurrentChat's
+  // own reload does (same-chat CHAT_CHANGED handler). A purely global 删除多余正则 cleanup gets no
+  // up-front "main reply generating" refusal, so without this guard it would cancel a floor translation
+  // the reader never asked to stop, just because they happened to also clean up the regex list.
+  const previousHost = globalThis.SillyTavern;
+  const engine = { SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 }, async saveScriptsByType() {} };
+  let reloads = 0;
+  const context = { reloadCurrentChat: async () => { reloads += 1; } };
+  globalThis.SillyTavern = { getContext: () => context };
+  t.after(() => {
+    globalThis.SillyTavern = previousHost;
+    __testing.configureForTest({ inflight: new Map() });
+  });
+  __testing.configureForTest({
+    inflight: new Map([['fake-lock', {
+      promise: Promise.resolve(), controller: { abort: () => {} },
+      sourceHash: 'x', messageId: 0, message: null, since: Date.now(),
+    }]]),
+  });
+  const planGlobalOnly = { toRemove: 1, toInstall: 0, scopedPlan: null, presetPlan: null };
+  await __testing.applyScopedRegexCleanup(planGlobalOnly, engine);
+  assert.equal(reloads, 0, '有翻译在进行时，全局清理的面板刷新也要让路，不能把它取消掉');
 });

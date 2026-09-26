@@ -1604,6 +1604,43 @@ test('a marker beside one bare ん never forgives an unrelated name or word earl
   }
 });
 
+test('a moan marker separated from ん only by punctuation or an ellipsis still counts, on a second sighting', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // アッ、ン / ハァ……ン stammer the marker and the ん as two separate beats instead of writing them
+  // touching (アンッ, ハァん) — the marker still belongs to the same moan, not to something else.
+  for (const line of ['アッ……ン', 'アッ、ン', 'ハァ……ン', 'ハァ、ン', 'アァ……ン', 'ウゥ……ン', 'はぁっ、ん', 'あーっ、ん']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} still has its own marker beside ん, only punctuation sits between them`);
+  }
+  // アア……ン doubles the same vowel across the gap instead of a っ/ー/♡ marker -- isDrawnOutVowelPair's
+  // own shape, reached the same way once the walk skips the ellipsis.
+  assert.equal(isShortExactEcho('アア……ン', 'アア……ン'), true);
+  // The line from "a marker beside one bare ん never forgives..." above still must not be reached by
+  // walking past a real mora: ケン/アン's own consonant sits directly against the ん (across the comma or
+  // not), never a marker, so punctuation between an unrelated word and a name's own ん still forgives
+  // nothing.
+  for (const line of ['ええ、ケン', 'はぁ、ケン', 'あぁ、アン']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line}: the letter right beside ん is still a real mora, not a marker`);
+  }
+});
+
+test('several short moan beats running together with nothing but punctuation, an ellipsis or a heart between them are accepted as one moan, on a second sighting', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  // Each beat read on its own is filler-shaped (あっ, はぁ, くっ, ひゃっ…) or the bare-vowel-plus-ん moan
+  // shape (あん) -- flattened together without the punctuation, an earlier beat's own real mora would sit
+  // directly in front of the later ん and wrongly block it, the same as a real name's own mora would.
+  for (const line of [
+    'あっ、あん……', 'あっ……あん', 'ひゃっ……あん……', 'はぁ……あん', 'あ、あっ、あん！', 'くっ、あん……',
+    'ひっ、あん', 'あっ♡あん', 'あっ、あっ、あん', 'はぁ、はぁ、あん', 'ああっ、あん', 'あん、あっ',
+  ]) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is several moan beats, each filler- or moan-shaped on its own`);
+  }
+  // A short katakana name as one of the beats still fails on its own beat -- being katakana, never a
+  // hiragana moan -- so the line as a whole is still not accepted, comma or not.
+  for (const line of ['ええ、ケン', 'ケン、あん']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line}: ケン is still a name on its own beat, not a moan`);
+  }
+});
+
 test('a floor that fits one batch is spread evenly across parallel lanes', () => {
   const segments = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, text: 'あ'.repeat(100) }));
   assert.equal(planTranslationBatches(segments, { maxChars: 48000 }).length, 1);
@@ -2342,6 +2379,33 @@ test('a card row whose own physical line ends in <br> reads back correctly, one 
   const seenAgain = extractReplaceTranslations(rendered, options);
   assert.equal(seenAgain.get(segmented.segments[0].id), '译1');
   assert.equal(seenAgain.get(segmented.segments[1].id), '译2', '卡片自己的空行不会被错误吞掉的换行连累，叙述句译文照常读回');
+});
+
+test('a trailing excluded block on the last narration line does not make the exact-first pass misread a legacy-joined body\'s stray \\n', () => {
+  // Same card-then-narration shape as the two tests above, but the last narration line also carries a
+  // trailing excluded block (<image>...</image>). On a legacy ('\n'-joined) body, line.trail's own
+  // rest.indexOf used to reach straight across the stray '\n' left at the card row's own '' boundary and
+  // land inside what is really the *next* semantic line's text, so the exact-first pass wrongly
+  // "succeeded" with segment 2's translation missing and segment 3 holding both -- and the legacy pass,
+  // which reads this shape correctly, was never even tried.
+  const source = '彼は言った。\nNOW PLAYING<br>\n彼女は答えた。\n彼は笑った。<image>メモ</image>';
+  const options = { musicCardRules: true, excludedTags: ['image'] };
+  const segmented = segmentSource(source, options);
+  const translations = new Map(segmented.segments.map((segment, index) => [segment.id, `译${index + 1}`]));
+  const rendered = assembleReplace(segmented.layout, translations, options);
+  const restored = stripGeneratedTranslationLines(rendered);
+  assert.equal(restored, source, '原文一字不差地还原');
+  const seenAgain = extractReplaceTranslations(rendered, options);
+  assert.equal(seenAgain.get(segmented.segments[0].id), '译1');
+  assert.equal(seenAgain.get(segmented.segments[1].id), '译2');
+  assert.equal(seenAgain.get(segmented.segments[2].id), '译3', '带 <image> 尾巴的最后一句译文也能整段读回');
+
+  const oldStyleIndex = rendered.indexOf('NOW PLAYING<br>') + 'NOW PLAYING<br>'.length;
+  const oldStyle = `${rendered.slice(0, oldStyleIndex)}\n${rendered.slice(oldStyleIndex)}`;
+  const seenOldStyle = extractReplaceTranslations(oldStyle, options);
+  assert.equal(seenOldStyle.get(segmented.segments[0].id), '译1');
+  assert.equal(seenOldStyle.get(segmented.segments[1].id), '译2', '旧写法多出来的换行不会被排除标签尾巴带偏，第二句译文没有丢');
+  assert.equal(seenOldStyle.get(segmented.segments[2].id), '译3', '第三句也没有被第二句的译文挤成一段');
 });
 
 test('a card row whose own physical line ends in <br> reads back correctly, two narration lines after it', () => {

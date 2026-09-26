@@ -17,6 +17,7 @@ import {
   lineFormatting,
   normalizeColoring,
   readFloor,
+  recolorMoveSpans,
   recoverStructuredTranslations,
   renderReplacePair,
   renderSourceBlock,
@@ -294,6 +295,31 @@ test('a tier-3 move carved out of a carried <big>/<small> fragment drops its own
   assert.equal(move.rawOpen, '<big>', '招式片段仍在被搬运半句自己的包装里');
   assert.doesNotMatch(move.css ?? '', /font-size/, '外层 <big> 已经决定了字号，招式自己的字号不能再叠加一次');
   assert.match(move.css ?? '', /color:/, '颜色本身不受字号二选一影响，还在');
+});
+
+test('a tier-3 move carved out of a carried <big>/<small> fragment keeps its font-size dropped on a later restyle too, not only the first render', () => {
+  // Regression: recolorMoveSpans (取色/彩度/词缀 changes on an already-rendered floor) rebuilds a move
+  // span's style from scratch against the new band, working only off the span's own attributes -- it
+  // has no piece tree left to ask whether the span still sits inside a <big>/<small> wrapper that
+  // already decided the size. Without a marker surviving onto the span itself, the very next restyle
+  // put tier 3's own font-size:1.12em straight back on, stacking with the wrapper's <big>.
+  const oldBand = computeSafeBand(['#ffffff']);
+  const newBand = computeSafeBand(['#101010']);
+  const styleAt = band => {
+    const normalized = normalizeColoring({ speakers: true, effects: true, band, vividness: 0.7 });
+    return resolveMoveStyle({ element: '雷电', name: '究极奥义', tier: 3, band: normalized.band, vividness: normalized.vividness });
+  };
+  const oldStyle = styleAt(oldBand);
+  const newStyle = styleAt(newBand);
+  assert.match(newStyle.css, /font-size:1\.12em/, '前提：三级招式本身确实带字号');
+  // The span as a fresh render would have written it: carved out of a carried <big>, so `styledBody`
+  // already left `data-jy-move-nosize="1"` on it and dropped font-size from its own (old) style.
+  const moveOpen = `<span data-jy-move-element="雷电" data-jy-move-name="究极奥义" data-jy-move-tier="3" style="${oldStyle.css}" data-jy-move-nosize="1">`;
+  const body = `最后，他终于使出了<big>${moveOpen}究极奥义</span></big>。`;
+  const restyled = recolorMoveSpans(body, { coloring: { speakers: true, effects: true, band: newBand, vividness: 0.7 } });
+  assert.doesNotMatch(restyled, /font-size/, '标了 data-jy-move-nosize 的招式重新上色后不该把字号加回来');
+  const expectedCss = newStyle.css.split(';').map(part => part.trim()).filter(part => part && !/^font-size\s*:/i.test(part)).join(';');
+  assert.ok(restyled.includes(`style="${expectedCss}"`), '颜色仍按新背景色重新计算，只是不再带字号');
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -700,6 +726,29 @@ test('a hidden carried run inside a longer move name still stays hidden, instead
   const rest = out.find(piece => piece.text === '拳');
   assert.ok(rest, '招式名里没被涂黑的那个字还在');
   assert.match(rest.css ?? '', /#b55920/, '没被涂黑的字仍然按招式上色');
+});
+
+test('a hidden carried run takes a standalone occurrence of its text over one sitting inside an earlier move name', () => {
+  // Regression: the in-move fallback above (for when the hidden run's text exists nowhere else) used to
+  // run unconditionally in the very first pass, so it claimed the occurrence inside the move's own name
+  // before ever trying the real standalone occurrence later in the line. The move kept its colour, but
+  // the standalone word -- the one actually meant to be redacted -- stayed in plain, readable text.
+  const pieces = [{ text: '他使出了红莲拳，又低声喊了一句红莲。' }];
+  const runs = [
+    { text: '红莲', rawOpen: '<span style="background-color:currentColor">', rawClose: '</span>', hidden: true },
+    { text: '红莲拳', css: 'color:#b55920 !important;-webkit-text-fill-color:#b55920 !important', moveElement: '火焰', moveName: '红莲拳', moveTier: 1 },
+  ];
+  const out = splitPiecesByRuns(pieces, runs);
+  assert.equal(out.map(piece => piece.text).join(''), pieces[0].text, '重新拼接必须逐字还原');
+  const move = out.find(piece => piece.moveName === '红莲拳');
+  assert.ok(move, '招式名整段还在，没被涂黑片段抢字');
+  assert.equal(move.text, '红莲拳');
+  assert.match(move.css ?? '', /#b55920/, '招式名不该被抢字之后失去自己的颜色');
+  const blacked = out.filter(piece => piece.rawOpen);
+  assert.equal(blacked.length, 1, '涂黑片段只出现一次，就是后面单独那次');
+  assert.equal(blacked[0].text, '红莲', '涂黑的是单独出现的那次，不是招式名里的');
+  assert.equal(blacked[0].moveElement, undefined, '单独出现的那次不该带着招式身份');
+  assert.ok(out.some(piece => piece.text.endsWith('。')), '涂黑片段之后的句尾文字还在');
 });
 
 test('a carried fragment whose translated run sits only inside another carried run\'s span keeps its own wrapper, nested inside it', () => {

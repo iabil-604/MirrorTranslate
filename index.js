@@ -1184,8 +1184,15 @@ async function restyleCurrentChat(settings) {
     throw error;
   }
   if (context.chat !== chat || getCurrentChatId(context) !== chatId) return;
-  // A real chat reload also lets the native regex manager rebuild its list.
-  if (!runtime.mainGenerationActive && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+  // A real chat reload also lets the native regex manager rebuild its list -- but reloadCurrentChat
+  // replaces every message object and fires CHAT_CHANGED for the same chat id, and this module's own
+  // same-chat CHAT_CHANGED handler then aborts any runtime.inflight entry whose message is no longer
+  // chat[messageId] (every translation still running, since none of them is the message object this
+  // reload just replaced). A coloring-paint-only save never cancels what is in flight (saveSettings), so
+  // this restyle -- run right away for the visual change itself, or again later once that run settles --
+  // must not undo that by reloading out from under it. `updateMessageBlock` is the same fallback already
+  // used while a main reply is generating, and it draws these same changes just as well.
+  if (!runtime.mainGenerationActive && !runtime.inflight.size && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
   else for (const [id, message] of chat.entries()) context.updateMessageBlock?.(id, message);
 }
 
@@ -11827,13 +11834,29 @@ function buildRegexCleanupPlan({ next, currentRegex, engine }) {
   const scopeParts = [];
   if (scopedRemove > 0) scopeParts.push(`角色绑定 ${scopedRemove} 条`);
   if (presetRemove > 0) scopeParts.push(`预设绑定 ${presetRemove} 条`);
+  // Left empty (rather than "删除 0 条多余的镜译正则") when there is truly nothing to remove anywhere --
+  // the install-only case, where the fixed rules are simply missing and totalRemove is 0 throughout. The
+  // guard above already guarantees toInstall > 0 whenever that happens, so the message built below always
+  // has something to say.
   const removalClause = scopeParts.length
     ? `删除多余的镜译正则：${[...(toRemove > 0 ? [`全局 ${toRemove} 条`] : []), ...scopeParts].join('、')}`
-    : `删除 ${toRemove} 条多余的镜译正则`;
-  const message = toInstall
-    ? `${removalClause}，补上 ${toInstall} 条缺失的固定正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`
-    : `${removalClause}，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`;
+    : toRemove > 0 ? `删除 ${toRemove} 条多余的镜译正则` : '';
+  const message = removalClause
+    ? (toInstall
+      ? `${removalClause}，补上 ${toInstall} 条缺失的固定正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`
+      : `${removalClause}，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`)
+    : `补上 ${toInstall} 条缺失的固定正则，只留当前方案需要的 ${expected.length} 条？其他正则不受影响，认领依据是镜译自己的标记或 id 前缀。`;
   return { active, expected, toRemove, toInstall, scopedPlan, presetPlan, scopedRemove, presetRemove, totalRemove, message };
+}
+
+// The success toast for a finished "删除多余正则" run -- the same "say nothing about a 0" rule as
+// buildRegexCleanupPlan's own confirm message above, so an install-only or remove-only run never claims
+// the other half happened too.
+function regexCleanupSummary(plan) {
+  const parts = [];
+  if (plan.totalRemove) parts.push(`删除 ${plan.totalRemove} 条`);
+  if (plan.toInstall) parts.push(`补上 ${plan.toInstall} 条`);
+  return `已整理镜译正则：${parts.join('，')}，当前方案需要的 ${plan.expected.length} 条都在。`;
 }
 
 // The one part of "删除多余正则" that writes to the host's scoped/preset regex lists, called only
@@ -11842,7 +11865,12 @@ function buildRegexCleanupPlan({ next, currentRegex, engine }) {
 // already written by then -- persistProcessing (the caller, just before this) runs saveSettings, whose
 // own syncNativeRegex drops every surplus global copy -- so this never writes for that scope, only
 // decides whether the reload below needs to happen because of it.
-async function applyScopedRegexCleanup(plan, engine) {
+// `alreadyRestyled` tells this function that the profile's own regexScripts changed underneath it
+// (buildRegexCleanupPlan's own dedupeManagedRegexScripts, see its caller) -- true means the
+// persistProcessing call just before this already ran saveSettings with that changed regexScripts, whose
+// own restyleCurrentChat (visualChanged) already reloaded the chat, so this function's own reload below
+// would otherwise be a second, redundant one back to back.
+async function applyScopedRegexCleanup(plan, engine, alreadyRestyled = false) {
   let wrote = false;
   if (engine) {
     if (plan.scopedPlan?.toRemove) { await engine.saveScriptsByType(plan.scopedPlan.kept, engine.SCRIPT_TYPES.SCOPED); wrote = true; }
@@ -11856,13 +11884,21 @@ async function applyScopedRegexCleanup(plan, engine) {
   // click on one of those stale rows then wrote a stale copy of a 镜译 rule straight back into whatever
   // now sits in that slot.
   if (!wrote && !plan.toRemove && !plan.toInstall) return;
+  // A reload that already happened ran before any scoped or preset list was written here, so it only
+  // stands in for this one when nothing was written.
+  if (alreadyRestyled && !wrote) return;
   // 酒馆's own saveRegexScript/deleteRegexScript both reload the chat after writing a character- or
   // preset-scoped list, which is what makes the native regex panel rebuild and re-render the floors.
   // Do the same here -- skipped rather than queued for afterwards while a main reply is generating: the
   // caller already refuses the whole "删除多余正则" action up front in that case, so this only guards a
-  // generation that started in the gap while the confirm dialog was still open.
+  // generation that started in the gap while the confirm dialog was still open. A floor translation
+  // (runtime.inflight) gets no such up-front refusal, though, and reloadCurrentChat would abort it just
+  // the same as restyleCurrentChat's own reload does (this module's same-chat CHAT_CHANGED handler aborts
+  // any inflight entry whose message the reload just replaced) -- so this is skipped for that too, left
+  // for the regex panel's next real reload rather than paid for by a translation the reader never asked
+  // to cancel.
   const context = getContext();
-  if (!runtime.mainGenerationActive && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+  if (!runtime.mainGenerationActive && !runtime.inflight.size && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
 }
 
 function createControlCenter(rootDocument = document) {
@@ -12033,6 +12069,7 @@ function createControlCenter(rootDocument = document) {
         // applyScopedRegexCleanup) has no business running mid-reply, and nothing here is urgent enough
         // to be worth the reader coming back to a chat that just reshuffled itself underneath a reply.
         if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再删除多余正则。');
+        if (runtime.inflight.size) throw new Error('还有楼层在翻译，等它翻完再删除多余正则。');
         const engine = runtime.hostRegex || await loadHostRegex();
         // Read only for the confirm dialog's own wording (review finding index.js:11734): `next`/`plan`
         // are rebuilt below, after the confirm resolves, from whatever is current then — collectSettings
@@ -12042,11 +12079,18 @@ function createControlCenter(rootDocument = document) {
         if (!preview) throw new Error('没有发现多余的镜译正则。');
         if (!await confirmDestructive({ title: '删除多余正则', message: preview.message, confirmLabel: '删除多余正则' })) return;
         const next = collectSettings(root);
+        // buildRegexCleanupPlan dedupes active.regexScripts in place on `next` -- read it first so this
+        // can tell whether that dedupe itself changed anything. When it did, persistProcessing's own
+        // saveSettings sees regexScripts differ from what was there before and its own restyleCurrentChat
+        // already reloads the chat (visualChanged), so applyScopedRegexCleanup below must not reload it a
+        // second time on top of that.
+        const regexScriptsBeforeDedupe = getActiveProcessingProfile(next).regexScripts;
         const plan = buildRegexCleanupPlan({ next, currentRegex: getContext().extensionSettings.regex ?? [], engine });
         if (!plan) throw new Error('这些正则已经清理过了。');
+        const profileDeduped = JSON.stringify(regexScriptsBeforeDedupe) !== JSON.stringify(plan.active.regexScripts);
         await persistProcessing(root, next);
-        await applyScopedRegexCleanup(plan, engine);
-        toast('success', `已整理镜译正则：删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条，当前方案需要的 ${plan.expected.length} 条都在。`);
+        await applyScopedRegexCleanup(plan, engine, profileDeduped);
+        toast('success', regexCleanupSummary(plan));
       } else if (action === 'adopt-speakers') {
         // Every reported name the palette has not got yet, with no colour of its own. The hue each
         // one already has is name-derived, so nothing on screen moves until a real hair colour is
@@ -16968,6 +17012,7 @@ export const __testing = Object.freeze({
   initializeSettings,
   configureForTest,
   buildRegexCleanupPlan,
+  regexCleanupSummary,
   applyScopedRegexCleanup,
   startTranslation,
   translateMessageStreaming,
