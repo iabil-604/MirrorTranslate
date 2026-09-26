@@ -12,6 +12,7 @@ import {
   availableHelperFieldNames,
   buildFloorSnapshotLines,
   buildHelperContext,
+  buildRegexLines,
   buildRunLogLines,
   buildSettingsSummaryLines,
   describeHelperSuggestion,
@@ -24,7 +25,7 @@ import {
   validateHelperSuggestion,
   validateHelperSuggestions,
 } from '../helper.js';
-import { mergeSettings } from '../core.js';
+import { applyPreset, mergeSettings, pagesForMode, presetDrift } from '../core.js';
 
 function baseSettings(overrides = {}) {
   return mergeSettings({
@@ -65,6 +66,9 @@ test('urlHost keeps only the host, dropping path, query and any embedded credent
   assert.equal(urlHost(''), '');
   // Not a parseable URL: best effort, but never with its query string attached.
   assert.equal(urlHost('api.example.com/v1?token=abc'), 'api.example.com');
+  // No scheme, so URL() throws and the fallback path runs — that fallback used to keep whatever sat
+  // in front of the host as if it were part of it (review finding helper.js:98).
+  assert.equal(urlHost('user:secretpass@api.example.com/v1'), 'api.example.com', '没写协议头时，回退逻辑也不该把凭据留在 host 前面');
 });
 
 test('redactSecrets masks Bearer tokens, key-shaped query params, and provider key prefixes wherever they appear', () => {
@@ -103,6 +107,24 @@ test('buildSettingsSummaryLines: a secret planted in every field it could reach 
   }
   assert.match(lines, /Fish Audio API Key：已填/);
   assert.match(lines, /连接一/, '连接名字本身（去掉了里面的密钥形状文本）仍然要能看到');
+});
+
+test('buildSettingsSummaryLines uses the markup\'s own wording for the Fish rows, not an invented label (review finding helper.js:155)', () => {
+  const settings = baseSettings({ tts: { analysisChannelId: 'c1', fish: { key: 'k', model: 's2-pro', viaProxy: true } } });
+  const lines = buildSettingsSummaryLines(settings).join('\n');
+  assert.match(lines, /Fish Audio › 模型：s2-pro/, '控制中心里这项叫「Fish Audio › 模型」，不是「Fish Audio 模型」');
+  assert.match(lines, /经酒馆 CORS 代理发送：开/, '控制中心里这项叫「经酒馆 CORS 代理发送」，不是「Fish 走酒馆代理」');
+  assert.doesNotMatch(lines, /Fish 走酒馆代理/);
+});
+
+test('buildSettingsSummaryLines reports how far the settings have drifted from the remembered 套餐 (review finding helper.js:140)', () => {
+  const onPackage = applyPreset(baseSettings(), 'light');
+  assert.doesNotMatch(buildSettingsSummaryLines(onPackage).join('\n'), /改过/, '套餐原样时不提改动');
+
+  const drifted = { ...onPackage, coloring: { ...onPackage.coloring, speakers: true } };
+  const lines = buildSettingsSummaryLines(drifted).join('\n');
+  assert.match(lines, /套餐已改过 1 项，不是原样/);
+  assert.match(lines, /说话人着色/, '偏离的字段名字应该能在摘要里看到');
 });
 
 test('buildHelperContext redacts a secret planted in a field the summary legitimately displays (name/model), on top of the explicit key masking', () => {
@@ -227,6 +249,70 @@ test('buildHelperContext reports no truncation when everything comfortably fits'
   assert.deepEqual(ctx.truncated, { manual: false, knowledge: false, runLog: false });
 });
 
+test('buildHelperContext keeps the whole manual when the total comfortably fits the cap, instead of clipping it to a fixed share regardless of how much room is spare (review finding helper.js:335)', () => {
+  const tail = '七、出问题了怎么办\n这里是排查步骤，问题往往出在这里。';
+  // A realistic manual: tens of thousands of characters, with the troubleshooting section near the
+  // end — exactly what the old fixed-30%-of-remaining split cut off even though the whole context
+  // came nowhere near the cap (the reviewer's own probe: 24 146 characters against a 40 000 cap).
+  const manual = `一、开始之前\n${'这里是使用说明的一段介绍文字。'.repeat(1500)}\n${tail}`;
+  const runLog = Array.from({ length: 30 }, (_, i) => ({ time: `t${i}`, level: 'info', scope: 's', message: `第 ${i} 条运行记录` }));
+  const ctx = buildHelperContext({
+    settings: baseSettings(),
+    floor: null,
+    runLog,
+    regex: { expected: 1, surplus: 0 },
+    knowledgeMarkup: '<section class="jy-page" data-jy-page="main"><h1>翻译台</h1><p class="jy-muted">说明</p></section>',
+    manual,
+    cap: HELPER_CONTEXT_CAP,
+  });
+  assert.ok(ctx.text.length < HELPER_CONTEXT_CAP, `这个场景应该远低于上限（实际 ${ctx.text.length}）`);
+  assert.equal(ctx.truncated.manual, false, '手册整体没超预算时不该被裁掉');
+  assert.ok(ctx.text.includes(tail), '排查步骤那一段应该完整出现，而不是被固定比例的预算提前砍掉');
+});
+
+test('buildHelperContext trims the manual before ever touching the run log or the control center knowledge, once space genuinely runs out', () => {
+  const runLog = Array.from({ length: 10 }, (_, i) => ({ time: `t${i}`, level: 'info', scope: 's', message: `记录 ${i}` }));
+  const ctx = buildHelperContext({
+    settings: baseSettings(),
+    floor: null,
+    runLog,
+    regex: { expected: 0, surplus: 0 },
+    knowledgeMarkup: '<section class="jy-page" data-jy-page="main"><h1>翻译台</h1><p class="jy-muted">控制中心说明文字</p></section>',
+    manual: 'm'.repeat(300000),
+    cap: HELPER_CONTEXT_CAP,
+  });
+  assert.equal(ctx.truncated.manual, true);
+  assert.equal(ctx.truncated.knowledge, false, '手册被砍的同时，控制中心说明不该跟着被牺牲');
+  assert.equal(ctx.truncated.runLog, false, '手册被砍的同时，运行记录不该跟着被牺牲');
+  assert.ok(ctx.text.includes('记录 9'), '运行记录应该完整出现');
+  assert.ok(ctx.text.includes('控制中心说明文字'), '控制中心说明应该完整出现');
+});
+
+test('buildHelperContext\'s 可用建议 section gives the model the actual value domain for every field, and open-page\'s ids for the reader\'s current 界面模式 (review finding helper.js:322)', () => {
+  const advanced = mergeSettings({ uiMode: 'advanced', schemaVersion: 13 });
+  const ctx = buildHelperContext({ settings: advanced, floor: null, runLog: [], regex: null, knowledgeMarkup: '', manual: '' });
+  assert.match(ctx.text, /tts\.mode（分析模式，可填：off=不分析、simple=简单分析、deep=深度分析）/);
+  assert.match(ctx.text, /uiMode（界面模式，可填：normal=正常模式、advanced=高级模式）/);
+  assert.match(ctx.text, /retries（翻译失败后自动重试，可填：整数 0-5）/);
+  assert.match(ctx.text, /open-page（打开页面，value 填：[^；\n]*settings=模型连接/, '高级模式下 open-page 应该带上模型连接页的 id');
+  assert.doesNotMatch(ctx.text, /open-page（打开页面，value 填：[^；\n]*finetune=微调/, '高级模式下不该把只在正常模式存在的页面列进可用建议');
+
+  const normal = mergeSettings({ uiMode: 'normal', schemaVersion: 13 });
+  const ctxNormal = buildHelperContext({ settings: normal, floor: null, runLog: [], regex: null, knowledgeMarkup: '', manual: '' });
+  assert.match(ctxNormal.text, /open-page（打开页面，value 填：[^；\n]*finetune=微调/, '正常模式下 open-page 应该带上微调页的 id');
+  assert.doesNotMatch(ctxNormal.text, /open-page（打开页面，value 填：[^；\n]*settings=模型连接/, '正常模式下不该把只在高级模式存在的页面列进可用建议');
+});
+
+test('buildRegexLines mentions surplus across every scope and how many fixed rules are missing (review finding index.js:11806)', () => {
+  assert.deepEqual(buildRegexLines(null), ['正则：未知。']);
+  const lines = buildRegexLines({ expected: 12, surplus: 3, toInstall: 2, nativeRegexInstalled: true }).join('\n');
+  assert.match(lines, /12 条应有，多余 3 条/);
+  assert.match(lines, /缺 2 条固定正则未装/);
+  const linesNoInstall = buildRegexLines({ expected: 12, surplus: 0, toInstall: 0, nativeRegexInstalled: false }).join('\n');
+  assert.doesNotMatch(linesNoInstall, /缺 \d+ 条固定正则未装/);
+  assert.match(linesNoInstall, /没有接上/);
+});
+
 // --- reply parsing --------------------------------------------------------------------------------
 
 test('parseHelperReply strips a trailing jingyi-suggest block and reads its JSON array leniently', () => {
@@ -243,14 +329,28 @@ test('parseHelperReply returns the whole reply with no suggestions when there is
   assert.deepEqual(parsed.rawSuggestions, []);
 });
 
-test('parseHelperReply recovers from a malformed block (trailing comma, stray prose) rather than throwing', () => {
+test('parseHelperReply strips a trailing comma before parsing and actually recovers the suggestion, not just avoids throwing (review finding helper.js:533)', () => {
   const reply = '回答。\n```jingyi-suggest\n这里模型多写了几句话\n[{"type":"set","field":"autoSwipe","value":true,"why":"更方便"},]\n```';
   const parsed = parseHelperReply(reply);
-  // The trailing comma makes the literal array invalid JSON; parseJsonCandidates still finds the
-  // well-formed object inside it as its own fragment, so at minimum nothing throws and nothing bogus
-  // is returned as a top-level array match.
   assert.doesNotThrow(() => parseHelperReply(reply));
   assert.equal(parsed.text, '回答。');
+  assert.equal(parsed.rawSuggestions.length, 1, '带尾随逗号的数组不该被当成解析失败，应该恢复出这一条建议');
+  assert.equal(parsed.rawSuggestions[0].field, 'autoSwipe');
+});
+
+test('parseHelperReply wraps a lone suggestion object (not wrapped in an array) into one, rather than dropping it', () => {
+  const reply = '回答。\n```jingyi-suggest\n{"type":"set","field":"autoGeneration","value":false,"why":"单个对象，没包数组"}\n```';
+  const parsed = parseHelperReply(reply);
+  assert.equal(parsed.rawSuggestions.length, 1);
+  assert.equal(parsed.rawSuggestions[0].field, 'autoGeneration');
+});
+
+test('parseHelperReply matches a block truncated at the reply\'s own end (no closing fence, as a maxTokens cutoff leaves it), and never leaks its raw JSON into the display text', () => {
+  const reply = '第一步这样做。\n\n```jingyi-suggest\n[{"type":"set","field":"autoSwipe","value":true,"why":"更方便"}';
+  const parsed = parseHelperReply(reply);
+  assert.equal(parsed.text, '第一步这样做。', '截断的建议块不该整段原样出现在给读者看的正文里');
+  assert.equal(parsed.rawSuggestions.length, 1);
+  assert.equal(parsed.rawSuggestions[0].field, 'autoSwipe');
 });
 
 // --- suggestion whitelist / validation --------------------------------------------------------------
@@ -275,6 +375,21 @@ test('validateHelperSuggestion drops an invalid value for a field it does recogn
   assert.equal(validateHelperSuggestion({ type: 'set', field: 'autoGeneration', value: 'maybe' }, settings), null, '不是布尔值');
   assert.equal(validateHelperSuggestion({ type: 'set', field: 'excludedTags', value: '<>' }, settings), null, '标签名不合法');
   assert.equal(validateHelperSuggestion({ type: 'action', action: 'open-page', value: 'not-a-real-page' }, settings), null);
+});
+
+test('validateHelperSuggestion narrows open-page to whatever pages exist in the *current* 界面模式 (review finding index.js:12202)', () => {
+  const normal = mergeSettings({ uiMode: 'normal', schemaVersion: 13 });
+  const advanced = mergeSettings({ uiMode: 'advanced', schemaVersion: 13 });
+  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'helper', 'logs']);
+  // 'settings' (模型连接) only exists in 高级模式's rail — suggesting it while 正常模式 is showing would
+  // leave no tab looking selected once applied.
+  assert.equal(validateHelperSuggestion({ type: 'action', action: 'open-page', value: 'settings' }, normal), null);
+  const validInAdvanced = validateHelperSuggestion({ type: 'action', action: 'open-page', value: 'settings' }, advanced);
+  assert.ok(validInAdvanced, '同一个页面 id 在高级模式下是合法的');
+  assert.equal(validInAdvanced.value, 'settings');
+  // 'finetune' (微调) is the other way around: 正常模式 only.
+  assert.ok(validateHelperSuggestion({ type: 'action', action: 'open-page', value: 'finetune' }, normal));
+  assert.equal(validateHelperSuggestion({ type: 'action', action: 'open-page', value: 'finetune' }, advanced), null);
 });
 
 test('validateHelperSuggestion clamps an in-range-but-outside integer to its bounds', () => {
@@ -339,4 +454,22 @@ test('applyHelperSuggestion writes only the one field, immutably, and ignores an
 
   const actionSuggestion = validateHelperSuggestion({ type: 'action', action: 'inspect-floor' }, settings);
   assert.equal(applyHelperSuggestion(settings, actionSuggestion), settings, 'action 建议不改设置');
+});
+
+test('applyHelperSuggestion routes a real preset id through applyPreset — the whole package, not just the remembered id (review finding helper.js:517)', () => {
+  const settings = mergeSettings({ preset: '', coloring: { speakers: false, emotions: false } });
+  const suggestion = validateHelperSuggestion({ type: 'set', field: 'preset', value: 'comfort' }, settings);
+  assert.ok(suggestion);
+  const next = applyHelperSuggestion(settings, suggestion);
+  assert.equal(next.preset, 'comfort');
+  // 看得舒服 (comfort) actually turns speaker colouring on — a bare pathSet(['preset']) would leave
+  // this false and only rename the remembered id.
+  assert.equal(next.coloring.speakers, true, '套餐建议应该真的套用套餐内容，而不只是改记住的 id');
+  assert.deepEqual(presetDrift(next), [], '套用之后不该立刻又显示为偏离');
+});
+
+test('applyHelperSuggestion clearing preset back to \'\' is a plain field write (there is no package content to apply)', () => {
+  const settings = mergeSettings({ preset: 'light' });
+  const suggestion = validateHelperSuggestion({ type: 'set', field: 'preset', value: '' }, settings);
+  assert.equal(applyHelperSuggestion(settings, suggestion).preset, '');
 });

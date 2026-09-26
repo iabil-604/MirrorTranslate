@@ -25,11 +25,14 @@ import {
   PRESET_LABELS,
   TTS_MODES,
   UI_MODES,
+  applyPreset,
   connectionUseChoice,
+  pagesForMode,
   parseJsonCandidates,
   parseTagNamesWithErrors,
   pathGet,
   pathSet,
+  presetDrift,
 } from './core.js?v=0.38.0';
 
 // ---------------------------------------------------------------------------------------------
@@ -43,8 +46,8 @@ export const DEFAULT_HELPER_PROMPT = `你是镜译（MirrorTranslate）内置的
 2. 只依据给你的资料作答，资料里没有的就说不确定，不要编造。
 3. 提到界面位置时，照资料里给的原样说法，格式是「页 › 卡 › 控件」，不要换一种说法或翻译成别的名字。
 4. 不管什么理由都不要向使用者索要 API Key、密钥或其他凭据；资料里的密钥只会写「已填」或「没填」。
-5. 如果你想让使用者去改一项设置或做一个操作，在回答最后另起一段，用一个 \`\`\`jingyi-suggest\`\`\` 代码块给出建议，内容是一个 JSON 数组，数组每一项是 {"type":"set","field":"字段名","value":新值,"why":"一句话原因"} 或 {"type":"action","action":"动作名","why":"一句话原因"}；field 和 action 只能用资料里「可用建议」列出的名字，其他名字一律不会生效，没有建议就不要写这个代码块。
-6. 建议块之外的正文不要写"点击 xx 按钮"这类操作指令，操作交给建议块，正文只负责说明。`;
+5. 如果你想让使用者去改一项设置或做一个操作，在回答最后另起一段，用一个 \`\`\`jingyi-suggest\`\`\` 代码块给出建议，内容是一个 JSON 数组，数组每一项是 {"type":"set","field":"字段名","value":新值,"why":"一句话原因"} 或 {"type":"action","action":"动作名","value":"需要值的动作才填，比如打开哪个页面","why":"一句话原因"}；field、action 和 value 只能用资料里「可用建议」列出的名字和取值，其他一律不会生效，没有建议就不要写这个代码块。
+6. 正文里可以正常给出操作步骤，照资料里的原样说法写清楚「在哪个页 › 哪张卡 › 点哪个控件」，不必回避"点击""填入"这类字眼；只有「可用建议」里列出的那些字段和动作才能同时放进建议块，让使用者一键照改，其余操作只能在正文里说明，由使用者自己动手。`;
 
 export const HELPER_QUICK_QUESTIONS = Object.freeze([
   '我怎么没办法翻译？',
@@ -87,15 +90,28 @@ export function keyStatus(value) {
   return String(value ?? '').trim() ? '已填' : '没填';
 }
 
+/** Strips a scheme, query/fragment, path and (review finding helper.js:98) any userinfo sitting in
+ * front of the host — the best-effort fallback for a value URL() would not parse as-is, used both
+ * when it throws outright and when it parses but comes back with an empty `.host` (an address typed
+ * as "user:pass@host/…" with no scheme parses as a URL with that leading word read as its *scheme*
+ * and no host at all, so it never throws, and used to reach here with the credential still attached). */
+function bestEffortHost(raw) {
+  return raw
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .replace(/[?#].*$/, '')
+    .replace(/\/.*/, '')
+    .replace(/^[^@]*@/, '');
+}
+
 /** A URL's host only, best-effort; a value that will not parse is not trusted with anything besides
  * that best effort — never returned with its query string or path intact. */
 export function urlHost(value) {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
   try {
-    return new URL(raw).host || raw.replace(/[?#].*$/, '').replace(/\/.*/, '');
+    return new URL(raw).host || bestEffortHost(raw);
   } catch {
-    return raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/[?#].*$/, '').replace(/\/.*/, '');
+    return bestEffortHost(raw);
   }
 }
 
@@ -138,6 +154,8 @@ export function buildSettingsSummaryLines(settings = {}) {
   const lines = [];
   lines.push(`界面模式：${UI_MODE_LABELS[settings.uiMode] || settings.uiMode || '未知'}`);
   lines.push(`套餐：${settings.preset ? (PRESET_LABELS[settings.preset] || settings.preset) : '未选套餐（自己设置的）'}`);
+  const drift = presetDrift(settings);
+  if (drift.length) lines.push(`套餐已改过 ${drift.length} 项，不是原样：${drift.map(item => item.label).join('、')}`);
   for (const use of CONNECTION_USES) lines.push(connectionUseLine(settings, use));
   lines.push(`自动接续翻译：${boolLabel(settings.autoGeneration)}`);
   lines.push(`切换滑动页时补译：${boolLabel(settings.autoSwipe)}`);
@@ -152,9 +170,9 @@ export function buildSettingsSummaryLines(settings = {}) {
   lines.push(`特效字：${boolLabel(coloring.effects)}`);
   lines.push(`朗读功能：${boolLabel(tts.enabled)}`);
   lines.push(`分析模式：${TTS_MODE_LABELS[tts.mode] || tts.mode || '未知'}`);
-  lines.push(`Fish Audio 模型：${fish.model || '未知'}`);
+  lines.push(`Fish Audio › 模型：${fish.model || '未知'}`);
   lines.push(`Fish Audio API Key：${keyStatus(fish.key)}`);
-  lines.push(`Fish 走酒馆代理：${boolLabel(fish.viaProxy)}`);
+  lines.push(`经酒馆 CORS 代理发送：${boolLabel(fish.viaProxy)}`);
   lines.push(`新回复自动朗读：${boolLabel(tts.autoRead)}`);
   // keyStatus/urlHost above already keep an actual secret field out of these lines; this is the same
   // generic pass buildHelperContext applies to the whole assembled text, run here too so this function
@@ -206,7 +224,8 @@ export function buildRunLogLines(entries) {
 
 export function buildRegexLines(regex) {
   if (!regex) return ['正则：未知。'];
-  const lines = [`镜译自己的正则：${regex.expected ?? 0} 条应有，多余 ${regex.surplus ?? 0} 条`];
+  const installClause = regex.toInstall ? `，缺 ${regex.toInstall} 条固定正则未装` : '';
+  const lines = [`镜译自己的正则：${regex.expected ?? 0} 条应有，多余 ${regex.surplus ?? 0} 条（含全局、角色绑定与预设绑定）${installClause}`];
   if (regex.nativeRegexInstalled === false) lines.push('酒馆自身的正则引擎这次没有接上，「删除多余正则」看不到角色/预设绑定的那部分。');
   return lines;
 }
@@ -239,7 +258,20 @@ const KNOWLEDGE_LINE_CAP = 220;
 const KNOWLEDGE_LINES_PER_PAGE = 40;
 
 /** "页 › 区 › 文字" lines pulled straight from the control center's own markup, so this text is never
- * out of sync with what the reader actually sees on the page. */
+ * out of sync with what the reader actually sees on the page.
+ *
+ * Two heading levels name the "区" a line files under: <h2> (a card's own title) and <h3> (a card-row's
+ * own title, the level the real markup actually uses for most individual settings — 只留译文, 朗读（有
+ * 声小说）, and the whole finetune page's rows are all <h3>, not <h2>) — and a <summary>, heading or not,
+ * since a fold's own name (with or without a nested <h2>) is exactly the same kind of label (review
+ * finding helper.js:254: without <h3> and bare <summary>, several rows were being filed under whatever
+ * unrelated <h2> happened to come earlier in the page, and 微调/小助手 contributed nothing at all).
+ * Whichever of these was seen most recently wins, same as before.
+ *
+ * Description text is anything carrying a jy-muted or jy-label class — matched as a class the element
+ * *has*, not as the whole class attribute, since the real markup freely mixes them with other classes
+ * (class="jy-muted jy-dependent-reason", "jy-label" on a nested <span>, …) that an exact-match regex
+ * never saw. */
 export function extractControlCenterKnowledge(markup) {
   const text = String(markup ?? '');
   const lines = [];
@@ -251,14 +283,15 @@ export function extractControlCenterKnowledge(markup) {
     const body = pageMatch[2];
     let section = pageLabel;
     let countThisPage = 0;
-    const partRe = /<h2[^>]*>([\s\S]*?)<\/h2>|<p class="jy-muted"[^>]*>([\s\S]*?)<\/p>|title="([^"]+)"/g;
+    const partRe = /<h2[^>]*>([\s\S]*?)<\/h2>|<h3[^>]*>([\s\S]*?)<\/h3>|<summary[^>]*>([\s\S]*?)<\/summary>|<p\s+class="[^"]*\bjy-muted\b[^"]*"[^>]*>([\s\S]*?)<\/p>|<span\s+class="[^"]*\b(?:jy-muted|jy-label)\b[^"]*"[^>]*>([^<]*)|title="([^"]+)"/g;
     let part;
     while ((part = partRe.exec(body)) && countThisPage < KNOWLEDGE_LINES_PER_PAGE) {
-      if (part[1] !== undefined) {
-        section = stripTags(part[1]) || section;
+      if (part[1] !== undefined || part[2] !== undefined || part[3] !== undefined) {
+        const heading = stripTags(part[1] ?? part[2] ?? part[3]);
+        if (heading) section = heading;
         continue;
       }
-      const cleaned = stripTags(part[2] ?? part[3]);
+      const cleaned = stripTags(part[4] ?? part[5] ?? part[6]);
       if (!cleaned) continue;
       const line = `${pageLabel} › ${section} › ${cleaned}`;
       lines.push(line.length > KNOWLEDGE_LINE_CAP ? `${line.slice(0, KNOWLEDGE_LINE_CAP)}…` : line);
@@ -308,39 +341,37 @@ export function buildHelperContext({
   regex = null,
   knowledgeMarkup = '',
   manual = '',
-  availableFields = [],
-  availableActions = [],
   cap = HELPER_CONTEXT_CAP,
 } = {}) {
-  const versionsLine = `镜译 ${versions.appVersion || '未知版本'} · SillyTavern ${versions.hostVersion || '未知'} · 主 API：${versions.mainApi || '未知'} · 流式：${versions.streaming ? '开' : '关'}`;
+  const streamingLabel = versions.streaming === true ? '开' : versions.streaming === false ? '关' : '未知';
+  const versionsLine = `镜译 ${versions.appVersion || '未知版本'} · SillyTavern ${versions.hostVersion || '未知'} · 主 API：${versions.mainApi || '未知'} · 流式：${streamingLabel}`;
   const settingsText = section('设置摘要', buildSettingsSummaryLines(settings));
   const floorText = section('当前楼层', buildFloorSnapshotLines(floor));
   const regexText = section('正则', buildRegexLines(regex));
   const runLogLines = buildRunLogLines(runLog);
   const knowledgeLines = extractControlCenterKnowledge(knowledgeMarkup);
   const manualText = String(manual ?? '');
-  const availableText = section('可用建议', [
-    availableFields.length ? `可以 set 的字段：${availableFields.join('、')}` : '可以 set 的字段：（无）',
-    availableActions.length ? `可以 action 的动作：${availableActions.join('、')}` : '可以 action 的动作：（无）',
-  ]);
+  const availableText = section('可用建议', helperAvailabilityLines(settings.uiMode));
 
   const core = [versionsLine, settingsText, floorText, regexText, availableText];
   const coreText = core.join('\n\n');
   let remaining = Math.max(0, cap - coreText.length - 16 /* the extra '\n\n' joins added below */);
 
-  // Trimmed in this order: the manual excerpt and the control center's own knowledge lines first
-  // (both are static reference material, not this ask's own state), then the run log. Each gets a
-  // share of whatever is left rather than however much it asks for, so one long section never starves
-  // the others down to nothing.
-  const manualBudget = Math.max(0, Math.floor(remaining * 0.3));
-  const manualTrimmed = manualText.length > manualBudget;
-  const manualSlice = manualText.slice(0, manualBudget);
-  remaining = Math.max(0, remaining - manualSlice.length);
+  // Each part takes as much of what is left as it actually needs, in this priority order, and only
+  // the part that would push the total past `remaining` is the one that gets cut — never a fixed
+  // share of the budget regardless of how much room is actually spare (review finding helper.js:335:
+  // a manual far smaller than its old 30% "budget" still got clipped, because the split was taken off
+  // the top before anyone had checked whether the whole thing even needed trimming). Run log first
+  // (freshest, most likely to explain "it just broke"), then the control center's own knowledge, then
+  // the static user manual last — the one most likely to still have room to spare.
+  const runLogJoined = joinTruncated(runLogLines, remaining);
+  remaining = Math.max(0, remaining - runLogJoined.text.length);
 
-  const knowledgeJoined = joinTruncated(knowledgeLines, Math.max(0, Math.floor(remaining * 0.6)));
+  const knowledgeJoined = joinTruncated(knowledgeLines, remaining);
   remaining = Math.max(0, remaining - knowledgeJoined.text.length);
 
-  const runLogJoined = joinTruncated(runLogLines, remaining);
+  const manualTrimmed = manualText.length > remaining;
+  const manualSlice = manualText.slice(0, remaining);
 
   const parts = [
     versionsLine,
@@ -400,6 +431,40 @@ export const HELPER_WHITELIST_ACTIONS = Object.freeze([
 ]);
 
 const HELPER_ACTION_BY_KEY = new Map(HELPER_WHITELIST_ACTIONS.map(action => [action.action, action]));
+
+/** A whitelisted field's own value domain, in the model's own suggestion-writing terms — without this
+ * the model only ever sees the field's name, never what a legal `value` looks like (review finding
+ * helper.js:322: it would write "简单分析" instead of "simple", and the enum ids/整数范围/标签格式 were
+ * never given anywhere). */
+function helperFieldValueDomain(field) {
+  if (field.kind === 'boolean') return 'true / false';
+  if (field.kind === 'integer') return `整数 ${field.min}-${field.max}`;
+  if (field.kind === 'tags') return '标签名列表，用顿号或逗号分隔';
+  if (field.kind === 'enum') return field.options.map(option => `${option}=${field.valueLabels?.[option] ?? option}`).join('、');
+  return '';
+}
+
+/** An action's own `value` domain, same idea — open-page is the only one that needs one, and its own
+ * page ids are narrowed to whatever the reader's current 界面模式 actually shows in its rail, the same
+ * restriction validateHelperSuggestion applies, so nothing listed here could produce a suggestion the
+ * reader could not actually reach (review finding index.js:12202). */
+function helperActionValueDomain(action, uiMode) {
+  if (!action.needsValue) return '';
+  const options = action.action === 'open-page' ? pagesForMode(uiMode) : action.options;
+  return options.map(id => `${id}=${action.action === 'open-page' ? (KNOWLEDGE_PAGE_LABELS[id] || id) : id}`).join('、');
+}
+
+/** The whole "可用建议" section's lines: every whitelisted field and action, each with its own label
+ * and the values a suggestion for it may actually carry. */
+function helperAvailabilityLines(uiMode) {
+  const fieldLines = HELPER_WHITELIST_FIELDS
+    .map(field => `${field.field}（${field.label}，可填：${helperFieldValueDomain(field)}）`)
+    .join('；');
+  const actionLines = HELPER_WHITELIST_ACTIONS
+    .map(action => (action.needsValue ? `${action.action}（${action.label}，value 填：${helperActionValueDomain(action, uiMode)}）` : `${action.action}（${action.label}）`))
+    .join('；');
+  return [`可以 set 的字段：${fieldLines}`, `可以 action 的动作：${actionLines}`];
+}
 
 /** The names a prompt is allowed to mention, for the "可用建议" section of the context. */
 export function availableHelperFieldNames() {
@@ -489,7 +554,12 @@ export function validateHelperSuggestion(raw, settings) {
     let value;
     if (action.needsValue) {
       value = String(raw.value ?? '').trim();
-      if (!action.options.includes(value)) return null;
+      // open-page is narrowed to whatever page ids exist in the reader's *current* 界面模式 — the
+      // model was only ever told about these (helperActionValueDomain above), and a suggestion for a
+      // page hidden in this mode would leave no rail tab looking selected once applied (review finding
+      // index.js:12202, DESIGN §15.1).
+      const options = action.action === 'open-page' ? pagesForMode(settings?.uiMode) : action.options;
+      if (!options.includes(value)) return null;
     }
     const actionLabel = action.action === 'open-page'
       ? `打开「${KNOWLEDGE_PAGE_LABELS[value] || value}」页`
@@ -513,9 +583,14 @@ export function validateHelperSuggestions(list, settings) {
 
 /** A validated 'set' suggestion applied to settings — pure, for whoever writes it back (index.js)
  * and for testing the write without a DOM. 'action' suggestions are not a settings change and are
- * not handled here. */
+ * not handled here. `preset` is special: a real package id has to go through applyPreset so the whole
+ * package's own fields actually get written, the same as the 套餐 radio and 「恢复原样」 both do — writing
+ * only `preset` itself here would just rename the remembered id without touching what it applies
+ * (review finding helper.js:517). Clearing it back to '' has no package content to apply, so it stays
+ * a plain pathSet. */
 export function applyHelperSuggestion(settings, suggestion) {
   if (!suggestion || suggestion.type !== 'set') return settings;
+  if (suggestion.field === 'preset' && suggestion.value) return applyPreset(settings, suggestion.value);
   return pathSet(settings, suggestion.path, suggestion.value);
 }
 
@@ -524,18 +599,28 @@ export function applyHelperSuggestion(settings, suggestion) {
 // ---------------------------------------------------------------------------------------------
 
 const SUGGEST_BLOCK_RE = /```jingyi-suggest\s*([\s\S]*?)```/i;
+// A reply cut off at max tokens never gets its closing fence — without this fallback the whole
+// ```jingyi-suggest block, JSON and all, used to fall through untouched into the display text
+// (review finding helper.js:533).
+const SUGGEST_BLOCK_OPEN_RE = /```jingyi-suggest\s*([\s\S]*)$/i;
 
 /**
  * A reply's display text (the block removed, trimmed) and whatever the model put in its suggestion
  * block, parsed leniently — not yet validated against the whitelist, that is validateHelperSuggestions'
- * job once the current settings are in hand.
+ * job once the current settings are in hand. Leniency covers three real shapes a model actually
+ * produces: a trailing comma before `]`/`}` (stripped before parsing), a single suggestion object
+ * instead of a one-item array (wrapped into one), and a block truncated mid-JSON with no closing fence
+ * (matched up to the end of the reply instead of not at all).
  */
 export function parseHelperReply(raw) {
   const text = String(raw ?? '');
-  const match = text.match(SUGGEST_BLOCK_RE);
+  const match = text.match(SUGGEST_BLOCK_RE) || text.match(SUGGEST_BLOCK_OPEN_RE);
   if (!match) return { text: text.trim(), rawSuggestions: [] };
   const display = `${text.slice(0, match.index)}${text.slice(match.index + match[0].length)}`.trim();
-  const candidates = parseJsonCandidates(match[1]);
+  const cleaned = String(match[1] ?? '').replace(/,(\s*[\]}])/g, '$1');
+  const candidates = parseJsonCandidates(cleaned);
   const arrayCandidate = candidates.find(candidate => Array.isArray(candidate));
-  return { text: display, rawSuggestions: Array.isArray(arrayCandidate) ? arrayCandidate : [] };
+  const objectCandidate = !arrayCandidate && candidates.find(candidate => candidate && typeof candidate === 'object');
+  const rawSuggestions = arrayCandidate || (objectCandidate ? [objectCandidate] : []);
+  return { text: display, rawSuggestions };
 }

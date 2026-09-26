@@ -236,12 +236,11 @@ import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
   applyHelperSuggestion,
-  availableHelperActionNames,
-  availableHelperFieldNames,
   buildHelperContext,
   describeHelperSuggestion,
   parseHelperReply,
   resolveHelperPrompt,
+  validateHelperSuggestion,
   validateHelperSuggestions,
 } from './helper.js?v=0.38.0';
 
@@ -410,6 +409,9 @@ const runtime = {
     // Cached once fetched — 使用手册.md never changes while the page is open, and a reader can ask
     // several questions in a row.
     manualPromise: null,
+    // The in-flight ask's own AbortController, so closing the control center or hitting 清空 can
+    // actually cancel the request instead of just walking away from it (review finding index.js:11971).
+    controller: null,
   },
 };
 
@@ -11717,20 +11719,38 @@ async function fetchHostVersion() {
   }
 }
 
+// #stream_toggle is openai.js's own chat-completion checkbox (oai_settings.stream_openai) — it is
+// never rebound to any other backend. Text completion, Kobold and NovelAI each keep their own
+// checkbox instead, so the box to read depends on context.mainApi (review finding index.js:11726:
+// reading #stream_toggle unconditionally reported the wrong state, or an unrelated box's state, for
+// every main API besides chat completion).
+const STREAMING_CHECKBOX_BY_MAIN_API = Object.freeze({
+  openai: '#stream_toggle',
+  textgenerationwebui: '#streaming_textgenerationwebui',
+  kobold: '#streaming_kobold',
+  koboldhorde: '#streaming_kobold',
+  novel: '#streaming_novel',
+});
+
 async function helperVersionsSnapshot() {
   const context = getContext();
-  // 酒馆的主 API 面板把同一个 #stream_toggle 复选框换绑到不同后端的设置上，而不是每种后端各有一个 id
-  // 不同的开关，所以不管主 API 是什么，读它当下的勾选状态就是当下这条主连接的流式开关。
-  let streaming = false;
-  try {
-    streaming = document.querySelector('#stream_toggle')?.checked === true;
-  } catch {
-    streaming = false;
+  const mainApi = String(context.mainApi ?? '');
+  const selector = STREAMING_CHECKBOX_BY_MAIN_API[mainApi];
+  // null (not false) when the main API is not one of the above, or its checkbox is not on the page
+  // right now — buildHelperContext reports that as "未知" rather than a guessed "关".
+  let streaming = null;
+  if (selector) {
+    try {
+      const checkbox = document.querySelector(selector);
+      if (checkbox) streaming = checkbox.checked === true;
+    } catch {
+      streaming = null;
+    }
   }
   return {
     appVersion: APP_VERSION,
     hostVersion: await fetchHostVersion(),
-    mainApi: String(context.mainApi ?? '未知'),
+    mainApi: mainApi || '未知',
     streaming,
   };
 }
@@ -11799,21 +11819,43 @@ async function helperFloorSnapshot(settings) {
 }
 
 /**
- * How many 镜译 regex rules the current profile expects and how many are surplus — the same read
- * buildRegexCleanupPlan does for "删除多余正则"'s own confirmation, but on a clone: this is only ever
- * looking, and buildRegexCleanupPlan writes its dedupe straight onto the profile object it is handed.
+ * How many 镜译 regex rules the current profile expects, and how many are surplus across every scope
+ * 「删除多余正则」 itself acts on — global list, character-bound and preset-bound copies, plus how many
+ * fixed rules are still missing — the same counts buildRegexCleanupPlan computes for its own
+ * confirmation message, reused here on a clone (review finding index.js:11806: counting only the
+ * global list's surplus made the helper say "多余 0 条" while the button would still find orphaned
+ * character-bound copies to remove). This is only ever looking; buildRegexCleanupPlan/its pieces write
+ * their dedupe straight onto the profile object handed to them, never onto `settings` itself.
  */
-function helperRegexSnapshot(settings) {
+async function helperRegexSnapshot(settings) {
   try {
     const currentRegex = getContext().extensionSettings?.regex ?? [];
     const active = deepClone(getActiveProcessingProfile(settings));
     active.regexScripts = dedupeManagedRegexScripts(active.regexScripts);
-    const { expected, toRemove } = planRegexCleanup(currentRegex, active);
-    return { expected: expected.length, surplus: toRemove, nativeRegexInstalled: runtime.nativeRegexInstalled };
+    const { expected, toRemove, toInstall } = planRegexCleanup(currentRegex, active);
+    const engine = runtime.hostRegex || await loadHostRegex();
+    const scopedRemove = scopedJingyiRegexPlan(engine, engine?.SCRIPT_TYPES?.SCOPED)?.toRemove ?? 0;
+    const presetRemove = scopedJingyiRegexPlan(engine, engine?.SCRIPT_TYPES?.PRESET)?.toRemove ?? 0;
+    return {
+      expected: expected.length,
+      surplus: toRemove + scopedRemove + presetRemove,
+      toInstall,
+      nativeRegexInstalled: runtime.nativeRegexInstalled,
+    };
   } catch (error) {
     recordDiagnostic('warn', 'helper.regex-snapshot', `读取正则情况失败：${safeError(error)}`);
-    return { expected: 0, surplus: 0, nativeRegexInstalled: runtime.nativeRegexInstalled };
+    return { expected: 0, surplus: 0, toInstall: 0, nativeRegexInstalled: runtime.nativeRegexInstalled };
   }
+}
+
+/** The open control center's own root, when there still is one — used instead of whatever `root` an
+ * async 小助手 request closed over, since closing and reopening the panel builds a whole new
+ * createControlCenter root and leaves the old one detached; rendering the finished answer into that
+ * detached root left a reopened panel stuck on "正在想…" forever (review finding index.js:11971).
+ * Falls back to `fallback` for a synchronous call site (there is definitely still a live panel right
+ * then) or a test with no runtime.panel of its own. */
+function helperLiveRoot(fallback) {
+  return runtime.panel?.controller?.root || fallback;
 }
 
 /** DESIGN §16.2 对话卡片列表 — rebuilt whenever a turn is added, finishes, or one of its suggestions
@@ -11888,7 +11930,10 @@ function renderHelperConversation(root) {
     }
     return card;
   }));
-  container.scrollTop = container.scrollHeight;
+  // .jy-helper-conversation is not itself a scroll container (.jy-workspace is) — container.scrollTop
+  // used to be a no-op, leaving a reply that landed below the fold unseen (review finding
+  // index.js:11959). Scrolling the last card into view finds whichever ancestor actually scrolls.
+  container.lastElementChild?.scrollIntoView?.({ block: 'nearest' });
 }
 
 /** DESIGN §16.3: the page-level 小助手提示词 fold on 模型连接, the quick-question row and the muted
@@ -11947,20 +11992,25 @@ async function askHelper(root, question) {
   runtime.helper.busy = true;
   const textarea = root.querySelector('[data-jy-helper-input]');
   if (textarea) textarea.value = '';
-  renderHelperConversation(root);
+  renderHelperConversation(helperLiveRoot(root));
   const started = Date.now();
   const request = onChannel(settings, connectionUseChoice(settings, 'helper'));
+  // Kept on runtime.helper so closing the control center or hitting 清空 mid-ask can actually cancel
+  // it (review finding index.js:11971) — busy already keeps this the only ask in flight at a time.
+  const controller = new AbortController();
+  runtime.helper.controller = controller;
   let contextLength = 0;
   try {
-    const [manual, floor, versions] = await Promise.all([loadHelperManual(), helperFloorSnapshot(settings), helperVersionsSnapshot()]);
-    const regex = helperRegexSnapshot(settings);
-    // Only the last few turns go back as history (DESIGN §16 item 4); the full context is only ever
-    // built for the question actually being asked now.
-    const history = runtime.helper.turns.slice(0, -1).slice(-3);
+    const [manual, floor, versions, regex] = await Promise.all([
+      loadHelperManual(), helperFloorSnapshot(settings), helperVersionsSnapshot(), helperRegexSnapshot(settings),
+    ]);
+    // Only the last few turns go back as history (DESIGN §16 item 4), and only ones that actually
+    // answered — a turn that errored or never got an answer has nothing worth remembering, and used to
+    // go back as an empty assistant message on every ask after it (review finding index.js:11959).
+    const history = runtime.helper.turns.slice(0, -1).filter(item => !item.error && item.answer).slice(-3);
     const built = buildHelperContext({
       versions, settings, floor, runLog: readDiagnostics(), regex,
       knowledgeMarkup: CONTROL_CENTER_MARKUP, manual,
-      availableFields: availableHelperFieldNames(), availableActions: availableHelperActionNames(),
     });
     contextLength = built.length;
     const messages = [
@@ -11968,7 +12018,7 @@ async function askHelper(root, question) {
       ...history.flatMap(item => [{ role: 'user', content: item.question }, { role: 'assistant', content: item.answer || '' }]),
       { role: 'user', content: `${built.text}\n\n----\n问题：${trimmed}` },
     ];
-    const raw = await requestSubModelRaw(messages, request, undefined);
+    const raw = await requestSubModelRaw(messages, request, controller.signal);
     const parsed = parseHelperReply(raw);
     turn.answer = parsed.text || '（没有回答）';
     turn.suggestions = validateHelperSuggestions(parsed.rawSuggestions, runtime.settings);
@@ -11983,7 +12033,7 @@ async function askHelper(root, question) {
     turn.error = isAbortError(error)
       ? '请求已取消。'
       : `没问到：${safeError(error)}。可以检查下面「走连接」写的那条连接是不是能用，或者换一条连接再试。`;
-    recordDiagnostic('error', 'helper.ask-failed', `小助手请求失败：${safeError(error)}`, {
+    recordDiagnostic('error', 'helper.ask-failed', `小助手请求失败（用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒）：${safeError(error)}`, {
       endpoint: describeChannelEndpoint(request),
       apiMode: request.apiMode,
       contextLength,
@@ -11991,8 +12041,25 @@ async function askHelper(root, question) {
   } finally {
     turn.busy = false;
     runtime.helper.busy = false;
-    renderHelperConversation(root);
+    if (runtime.helper.controller === controller) runtime.helper.controller = null;
+    renderHelperConversation(helperLiveRoot(root));
   }
+}
+
+/**
+ * DESIGN §16 item 7's re-validate-then-apply step for a 'set' suggestion, factored out of the
+ * 'helper-apply' click branch so it can be exercised by a headless test without a real click or a
+ * DOM (__testing.applyHelperSetSuggestion) — review finding index.js:12226: the click branch threw a
+ * ReferenceError for every one of the 16 whitelisted fields (validateHelperSuggestion was never
+ * imported), and nothing in the test suite ever ran this path to catch it. Re-validates against
+ * `current` — something may have changed this very field since the reply came in — and reports
+ * 'noop' instead of writing nothing silently. The caller still owns anything DOM-shaped that has to
+ * follow a real change (applyUiMode for a 'uiMode' field, syncFields, the toast/render refresh).
+ */
+function applyHelperSetSuggestion(current, suggestion) {
+  const revalidated = validateHelperSuggestion({ type: 'set', field: suggestion.field, value: suggestion.value }, current);
+  if (!revalidated) return { outcome: 'noop' };
+  return { outcome: 'done', next: applyHelperSuggestion(current, revalidated), field: revalidated.field, value: revalidated.value };
 }
 
 function createControlCenter(rootDocument = document) {
@@ -12183,15 +12250,25 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'helper-clear') {
         if (!runtime.helper.turns.length) return;
         if (!await confirmDestructive({ title: '清空对话', message: '清空这次和小助手的对话？不会改动任何设置。', confirmLabel: '清空' })) return;
+        // A question still in flight gets cancelled along with the turns it belongs to, instead of
+        // finishing later into a conversation that has already moved on (review finding index.js:11971).
+        runtime.helper.controller?.abort();
         runtime.helper.turns = [];
-        renderHelperConversation(root);
+        renderHelperConversation(helperLiveRoot(root));
       } else if (action === 'helper-reset-prompt') {
         const next = collectSettings(root);
         next.helper = { ...next.helper, prompt: '' };
         saveSettings(next);
         syncFields(root, runtime.settings);
       } else if (action === 'helper-open-connection') {
-        selectTab(runtime.settings.uiMode === 'advanced' ? 'settings' : 'main');
+        if (runtime.settings.uiMode === 'advanced') {
+          selectTab('settings');
+        } else {
+          // 正常模式 has no separate 模型连接 page — 翻译台's own API Key 卡 is it, so the note under the
+          // input should land there, not just at the top of 翻译台 (spec §16 item 4).
+          selectTab('main');
+          root.querySelector('.jy-desk-connections')?.scrollIntoView?.({ block: 'start' });
+        }
       } else if (action === 'helper-apply') {
         const turnIndex = Number(button.dataset.jyTurn);
         const suggestionIndex = Number(button.dataset.jySuggestion);
@@ -12199,6 +12276,15 @@ function createControlCenter(rootDocument = document) {
         if (!suggestion || suggestion.applied) return;
         if (suggestion.type === 'action') {
           if (suggestion.action === 'open-page') {
+            // validateHelperSuggestion already narrows open-page's own options to pages that exist in
+            // the reader's *current* 界面模式 (review finding index.js:12202); this only covers the
+            // edge case of the reader switching mode by hand between the reply landing and this click,
+            // the same way goto-advanced switches mode before opening an advanced-only page.
+            if (!pageExistsInMode(suggestion.value, runtime.settings.uiMode)) {
+              const fallbackMode = pageExistsInMode(suggestion.value, 'advanced') ? 'advanced' : 'normal';
+              saveSettings({ ...mergeSettings(runtime.settings), uiMode: fallbackMode });
+              applyUiMode(fallbackMode);
+            }
             selectTab(suggestion.value);
             suggestion.applied = 'done';
           } else if (suggestion.action === 'inspect-floor') {
@@ -12216,25 +12302,29 @@ function createControlCenter(rootDocument = document) {
             if (!plan) suggestion.applied = 'cancelled';
             else { suggestion.resultNote = `删除 ${plan.totalRemove} 条，补上 ${plan.toInstall} 条`; suggestion.applied = 'done'; }
           }
-          renderHelperConversation(root);
+          renderHelperConversation(helperLiveRoot(root));
           return;
         }
-        // Re-validated against the settings as they stand right now — something may have changed this
-        // very field since the reply came in, and a suggestion that is now a no-op says so instead of
-        // silently doing nothing (DESIGN §16 item 7).
+        // Re-validated against the settings as they stand right now, and applied through the same
+        // whitelist-and-apply step __testing.applyHelperSetSuggestion exercises headlessly — something
+        // may have changed this very field since the reply came in, and a suggestion that is now a
+        // no-op says so instead of silently doing nothing (DESIGN §16 item 7).
         const current = collectSettings(root);
-        const revalidated = validateHelperSuggestion({ type: 'set', field: suggestion.field, value: suggestion.value }, current);
-        if (!revalidated) {
+        const result = applyHelperSetSuggestion(current, suggestion);
+        if (result.outcome === 'noop') {
           suggestion.applied = 'noop';
-          renderHelperConversation(root);
+          renderHelperConversation(helperLiveRoot(root));
           return;
         }
         // The same save path autosave uses, so the console, preset drift and everything else refresh
-        // right along with it (DESIGN §16 item 7).
-        saveSettings(applyHelperSuggestion(current, revalidated));
+        // right along with it (DESIGN §16 item 7). uiMode is special: saving the field is not enough,
+        // the rail/mode-switch/翻译台 bodies only actually flip through applyUiMode itself (review
+        // finding index.js:12234), the same closure the mode-switch buttons call.
+        saveSettings(result.next);
+        if (result.field === 'uiMode') applyUiMode(result.value);
         suggestion.applied = 'done';
         withFocusPreserved(root, () => syncFields(root, runtime.settings));
-        renderHelperConversation(root);
+        renderHelperConversation(helperLiveRoot(root));
       } else if (action === 'adopt-speakers') {
         // Every reported name the palette has not got yet, with no colour of its own. The hue each
         // one already has is name-derived, so nothing on screen moves until a real hair colour is
@@ -12842,8 +12932,11 @@ function createControlCenter(rootDocument = document) {
         const next = collectSettings(root);
         next.helper = { ...next.helper, prompt: event.target.value };
         saveSettings(next);
-        withFocusPreserved(root, () => syncFields(root, runtime.settings));
-      } catch (error) { toast('error', safeError(error)); }
+      } catch (error) { toast('error', safeError(error)); return; }
+      // Deferred, not immediate: syncFields rebuilds this page's own 用在 ticks and card toggles, the
+      // same click-swallowing pattern the 翻译规则 field above already defers around (review finding
+      // index.js:12840, same root cause as index.js:11889).
+      setTimeout(() => withFocusPreserved(root, () => syncFields(root, runtime.settings)), 0);
       return;
     }
     if (event.target.matches('[data-jy-finetune-profile-field]')) {
@@ -13204,6 +13297,9 @@ function createControlCenter(rootDocument = document) {
     cleanup() {
       unsubscribe();
       unsubscribeDiagnostics();
+      // A question still in flight when the panel closes gets cancelled along with it, instead of
+      // rendering its answer into this now-detached root later (review finding index.js:11971).
+      runtime.helper.controller?.abort();
       root.removeEventListener('click', onClick);
       root.removeEventListener('change', onChange);
       root.removeEventListener('input', onInput);
@@ -17155,4 +17251,8 @@ export const __testing = Object.freeze({
     runtime.tts.transport = null;
     runtime.tts.player = null;
   },
+  // DESIGN §16 小助手.
+  applyHelperSetSuggestion,
+  helperRegexSnapshot,
+  CONTROL_CENTER_MARKUP,
 });

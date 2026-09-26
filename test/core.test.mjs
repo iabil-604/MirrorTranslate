@@ -93,6 +93,9 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   DEFAULT_CONSOLE,
+  DEFAULT_HELPER,
+  normalizeHelper,
+  helperPromptFoldSummary,
 } from '../core.js';
 import {
   addDiagnostic,
@@ -2372,6 +2375,72 @@ test('reassignConnectionUsesOnDelete moves every use a deleted connection served
   const untouched = reassignConnectionUsesOnDelete(settings, 'not-a-real-id');
   assert.deepEqual(untouched.moved, []);
   assert.equal(untouched.settings, settings, 'nothing to move returns the very same settings object');
+});
+
+// review finding test/core.test.mjs:2325: settings.helper's own defaults/normalisation, the 'helper'
+// branch of setConnectionUse/reassignConnectionUsesOnDelete and helperPromptFoldSummary had no test of
+// their own — deleting any of them would still leave the whole suite green.
+
+test('settings.helper defaults to {channelId: \'follow\', prompt: \'\'} for a save that never had it, and normalises a bad one', () => {
+  assert.deepEqual(DEFAULT_HELPER, { channelId: 'follow', prompt: '' });
+  // An old save from before this feature existed has no `helper` key at all.
+  const fromOldSave = mergeSettings({ schemaVersion: 13, apiMode: 'follow' });
+  assert.deepEqual(fromOldSave.helper, { channelId: 'follow', prompt: '' });
+
+  // A stale channelId (the connection it pointed at was deleted without going through
+  // reassignConnectionUsesOnDelete, or the save is just old and outdated) is kept as-is by
+  // normalizeHelper itself — connectionUseChoice/resolveFeatureChannel is what falls back to
+  // 跟随酒馆-or-translation for a channel id that no longer exists, the same as 朗读分析.
+  assert.equal(normalizeHelper({ channelId: 'deleted-channel-id', prompt: '' }).channelId, 'deleted-channel-id');
+  const staleSettings = mergeSettings({
+    apiMode: 'independent',
+    channels: [{ id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' }],
+    selectedChannelId: 'c1',
+    helper: { channelId: 'deleted-channel-id', prompt: '' },
+  });
+  assert.equal(connectionUseChoice(staleSettings, 'helper'), 'c1', '失效的连接 id 应该退回到跟翻译一样的解析结果');
+
+  // A non-string prompt (a corrupted save, or a future field type nobody has written yet) drops to ''
+  // rather than surfacing as [object Object] or similar in the prompt sent to the model.
+  assert.equal(normalizeHelper({ channelId: 'follow', prompt: 42 }).prompt, '');
+  assert.equal(normalizeHelper({ channelId: 'follow', prompt: null }).prompt, '');
+  assert.equal(normalizeHelper(undefined).channelId, 'follow');
+  assert.equal(normalizeHelper(null).prompt, '');
+});
+
+test('a preset never touches settings.helper', () => {
+  const before = mergeSettings({ helper: { channelId: 'c1', prompt: '自定义提示词' } });
+  const after = applyPreset(before, 'audiobook');
+  assert.deepEqual(after.helper, before.helper);
+});
+
+test('the \'helper\' connection use: binding it to a real connection, then deleting that connection, moves it back to 跟随酒馆 (review finding test/core.test.mjs:2325)', () => {
+  const channels = [
+    { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+    { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+  ];
+  let settings = mergeSettings({ apiMode: 'independent', channels, selectedChannelId: 'c1' });
+  assert.equal(connectionUseChoice(settings, 'helper'), 'follow', '默认跟随酒馆，不跟着翻译走');
+
+  settings = setConnectionUse(settings, 'helper', 'c2');
+  assert.equal(settings.helper.channelId, 'c2');
+  assert.equal(connectionUseChoice(settings, 'helper'), 'c2');
+  assert.deepEqual(channelUsesPointingAt(settings, 'c2'), ['helper']);
+
+  const result = reassignConnectionUsesOnDelete(settings, 'c2');
+  assert.deepEqual(result.moved, ['helper']);
+  assert.equal(result.settings.helper.channelId, 'follow');
+  assert.equal(connectionUseChoice(result.settings, 'helper'), 'follow');
+
+  const backToFollow = setConnectionUse(settings, 'helper', 'follow');
+  assert.equal(backToFollow.helper.channelId, 'follow');
+});
+
+test('helperPromptFoldSummary reads "默认" for an empty/whitespace prompt and "已改 N 字" for a real one', () => {
+  assert.equal(helperPromptFoldSummary(), '默认');
+  assert.equal(helperPromptFoldSummary({ prompt: '' }), '默认');
+  assert.equal(helperPromptFoldSummary({ prompt: '   ' }), '默认');
+  assert.equal(helperPromptFoldSummary({ prompt: '自定义' }), '已改 3 字');
 });
 
 test('preset content covers exactly the nine managed fields named in DESIGN §15.2 and nothing else', () => {
