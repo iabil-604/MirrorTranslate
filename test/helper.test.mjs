@@ -147,6 +147,32 @@ test('buildHelperContext redacts a secret planted in a field the summary legitim
   assert.ok(!ctx.text.includes('fishkey'));
 });
 
+test('buildHelperContext\'s final redactSecrets pass reaches every input it accepts, not only the settings summary (extends the key-planting coverage past helper.js\'s own settings-only tests — review finding test/helper-apply.test.mjs:1)', () => {
+  const plantedInHostVersion = 'sk-hostversion-secret-planted-0012';
+  const plantedInFloorPreview = 'sk-floor-preview-secret-planted-0013';
+  const plantedInFloorError = 'sk-floor-error-secret-planted-0014';
+  const plantedInRunLog = 'sk-runlog-secret-planted-0015';
+  const plantedInKnowledge = 'sk-knowledge-secret-planted-0016';
+  const plantedInManual = 'sk-manual-secret-planted-0017';
+  const ctx = buildHelperContext({
+    versions: { appVersion: '0.38.0', hostVersion: `1.18.0 (${plantedInHostVersion})`, mainApi: 'openai', streaming: true },
+    settings: baseSettings(),
+    floor: {
+      messageId: 1, role: '角色', swipeLabel: '1/1', segmentCount: 1, translationState: '已译',
+      bodyTagsFound: [], replaceTagsFound: [], excludedTagsFound: [], translationOnly: false,
+      errors: [`请求失败：${plantedInFloorError}`],
+      preview: `正文开头写着 ${plantedInFloorPreview}`,
+    },
+    runLog: [{ time: 't', level: 'error', scope: 's', message: `失败：${plantedInRunLog}` }],
+    regex: { expected: 1, surplus: 0 },
+    knowledgeMarkup: `<section class="jy-page" data-jy-page="main"><h1>翻译台</h1><p class="jy-muted">说明 ${plantedInKnowledge}</p></section>`,
+    manual: `手册里写着 ${plantedInManual}`,
+  });
+  for (const planted of [plantedInHostVersion, plantedInFloorPreview, plantedInFloorError, plantedInRunLog, plantedInKnowledge, plantedInManual]) {
+    assert.ok(!ctx.text.includes(planted), `泄露了不该出现的值（来自 buildHelperContext 的某一路输入）：${planted}`);
+  }
+});
+
 // --- floor snapshot ------------------------------------------------------------------------------
 
 test('buildFloorSnapshotLines reports a missing floor plainly, and marks a long preview as truncated', () => {
@@ -288,6 +314,29 @@ test('buildHelperContext trims the manual before ever touching the run log or th
   assert.ok(ctx.text.includes('控制中心说明文字'), '控制中心说明应该完整出现');
 });
 
+test('buildHelperContext never loses 可用建议\'s own tail to the final cap slice, even when trimming genuinely has to happen (review finding helper.js:387)', () => {
+  // A manual so large it forces real trimming — the reviewer's own probe used a real 21 358-character
+  // manual and a real markup and still hit exactly 40000, ending mid-可用建议 because that section used
+  // to sit last; this is the same shape with synthetic data, deterministic and independent of the real
+  // 使用手册.md's exact length.
+  const runLog = Array.from({ length: 30 }, (_, i) => ({ time: `t${i}`, level: 'error', scope: 's', message: `第 ${i} 条错误记录，正好凑够长度`.repeat(3) }));
+  const ctx = buildHelperContext({
+    settings: baseSettings(),
+    floor: null,
+    runLog,
+    regex: { expected: 1, surplus: 0 },
+    knowledgeMarkup: '<section class="jy-page" data-jy-page="main"><h1>翻译台</h1><p class="jy-muted">说明</p></section>',
+    manual: 'm'.repeat(300000),
+    cap: HELPER_CONTEXT_CAP,
+  });
+  assert.equal(ctx.truncated.manual, true, '这个场景应该确实触发了裁切，不然这条测试什么也没验证到');
+  assert.ok(
+    ctx.text.includes('cleanup-regex（删除多余正则）'),
+    '可用建议列出的最后一个动作不该因为最后的 cap 裁切而丢失——模型会因此以为「删除多余正则」这个动作根本不存在',
+  );
+  assert.ok(ctx.text.length <= HELPER_CONTEXT_CAP);
+});
+
 test('buildHelperContext\'s 可用建议 section gives the model the actual value domain for every field, and open-page\'s ids for the reader\'s current 界面模式 (review finding helper.js:322)', () => {
   const advanced = mergeSettings({ uiMode: 'advanced', schemaVersion: 13 });
   const ctx = buildHelperContext({ settings: advanced, floor: null, runLog: [], regex: null, knowledgeMarkup: '', manual: '' });
@@ -353,6 +402,29 @@ test('parseHelperReply matches a block truncated at the reply\'s own end (no clo
   assert.equal(parsed.rawSuggestions[0].field, 'autoSwipe');
 });
 
+test('parseHelperReply unwraps the { content, reasoning } object an independent connection returns, the same way parseJsonCandidates/recoverStructuredTranslations already do (review finding helper.js:616, high)', () => {
+  const reply = '这样试试。\n\n```jingyi-suggest\n[{"type":"set","field":"autoGeneration","value":false,"why":"你不想自动翻"}]\n```';
+  const parsed = parseHelperReply({ content: reply, reasoning: '模型的思考过程，不该出现在回答里' });
+  assert.equal(parsed.text, '这样试试。', '不该是 "[object Object]"');
+  assert.equal(parsed.rawSuggestions.length, 1);
+  assert.equal(parsed.rawSuggestions[0].field, 'autoGeneration');
+});
+
+test('parseHelperReply falls back to .reasoning when .content is empty, matching unwrapResponseContent (core.js)', () => {
+  const parsed = parseHelperReply({ content: '', reasoning: '只想了这些，没有正文。' });
+  assert.equal(parsed.text, '只想了这些，没有正文。');
+});
+
+test('parseHelperReply strips a <think> block outside the suggestion fence, the same way core.js\'s own JSON-candidate extraction already does', () => {
+  const parsed = parseHelperReply('<think>这是模型的思考过程</think>这才是回答。');
+  assert.equal(parsed.text, '这才是回答。');
+});
+
+test('parseHelperReply still reads a plain string reply exactly as before (跟随酒馆\'s generateRaw returns a string, not an envelope)', () => {
+  const parsed = parseHelperReply('只是回答，没有建议。');
+  assert.equal(parsed.text, '只是回答，没有建议。');
+});
+
 // --- suggestion whitelist / validation --------------------------------------------------------------
 
 test('availableHelperFieldNames/availableHelperActionNames list exactly the whitelist', () => {
@@ -375,6 +447,23 @@ test('validateHelperSuggestion drops an invalid value for a field it does recogn
   assert.equal(validateHelperSuggestion({ type: 'set', field: 'autoGeneration', value: 'maybe' }, settings), null, '不是布尔值');
   assert.equal(validateHelperSuggestion({ type: 'set', field: 'excludedTags', value: '<>' }, settings), null, '标签名不合法');
   assert.equal(validateHelperSuggestion({ type: 'action', action: 'open-page', value: 'not-a-real-page' }, settings), null);
+});
+
+test('validateHelperSuggestion accepts tags separated by 、 (顿号) — the settings summary prints them this way and helperFieldValueDomain tells the model it may write them back the same way (review finding helper.js:442)', () => {
+  const settings = mergeSettings({ excludedTags: ['thinking'] });
+  const suggestion = validateHelperSuggestion({ type: 'set', field: 'excludedTags', value: 'status、mood' }, settings);
+  assert.ok(suggestion, '顿号分隔的标签不该被当成一个非法的整段词元丢掉');
+  assert.deepEqual(suggestion.value, ['status', 'mood']);
+});
+
+test('validateHelperSuggestion rejects an empty bodyTags value instead of promising "（空）" and then silently applying the default list (review finding helper.js:496)', () => {
+  const settings = mergeSettings({ bodyTags: ['content'] });
+  assert.equal(validateHelperSuggestion({ type: 'set', field: 'bodyTags', value: '' }, settings), null);
+  assert.equal(validateHelperSuggestion({ type: 'set', field: 'bodyTags', value: [] }, settings), null);
+  // excludedTags/replaceTags have no such refill in mergeSettings and may legitimately be cleared.
+  const clearedExcluded = validateHelperSuggestion({ type: 'set', field: 'excludedTags', value: '' }, mergeSettings({ excludedTags: ['thinking'] }));
+  assert.ok(clearedExcluded, '排除标签允许真的清空');
+  assert.deepEqual(clearedExcluded.value, []);
 });
 
 test('validateHelperSuggestion narrows open-page to whatever pages exist in the *current* 界面模式 (review finding index.js:12202)', () => {

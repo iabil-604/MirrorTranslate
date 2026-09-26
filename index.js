@@ -454,7 +454,7 @@ const CONTROL_CENTER_MARKUP = `
  <section class="jy-brief jy-desk-card jy-desk-connections">
   <h2 class="jy-card-title">API Key</h2>
   <div class="jy-desk-connection-list" data-jy-desk-connection-list></div>
-  <div class="jy-inline-actions"><button type="button" class="jy-button" data-jy-action="add-channel">＋ 添加连接</button><span class="jy-muted">翻译、朗读分析、深度分析各勾一条</span></div>
+  <div class="jy-inline-actions"><button type="button" class="jy-button" data-jy-action="add-channel">＋ 添加连接</button><span class="jy-muted">翻译、朗读分析、深度分析、小助手各勾一条</span></div>
  </section>
 </div>
 <footer class="jy-footer"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-text-button" data-jy-action="translate-missing">补译缺失段落</button></footer>
@@ -607,7 +607,7 @@ const CONTROL_CENTER_MARKUP = `
  <p id="jy-api-model-help" class="jy-muted" data-jy-model-help></p>
  <details class="jy-fold" data-jy-fold="channel-request"><summary><h2>请求参数</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-grid">
  <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
- </div></details><details class="jy-fold" data-jy-fold="channel-postscript"><summary><h2>这条连接的后置提示词（附在每次请求的最末尾）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存；一本都不开则节约模式下完全不带世界书。</p></details>
+ </div></details><details class="jy-fold" data-jy-fold="channel-postscript"><summary><h2>这条连接的后置提示词（附在每次请求的最末尾）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析、小助手——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存；一本都不开则节约模式下完全不带世界书。</p></details>
  <div class="jy-actions"><span class="jy-actions-spacer"></span><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="delete-channel">删除这条连接</button></div>
 </div>
 <section class="jy-card"><details class="jy-fold" data-jy-fold="helper-prompt"><summary><h2>小助手的提示词</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">小助手回答时用的提示词。留空就用镜译内置的（下面占位的文字就是它），资料本身——设置、当前楼层、运行记录——不受这里影响，一直都会给到小助手。</p><textarea data-jy-helper-prompt rows="6" spellcheck="false"></textarea><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="helper-reset-prompt">恢复默认</button></div></div></details></section>
@@ -755,7 +755,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-helper-conversation" data-jy-helper-conversation aria-live="polite"></div>
 <footer class="jy-footer jy-helper-footer">
  <textarea rows="3" data-jy-helper-input placeholder="问小助手…" aria-label="向小助手提问"></textarea>
- <div class="jy-helper-input-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="helper-ask">发送</button><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="helper-clear">清空</button></div>
+ <div class="jy-helper-input-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="helper-ask">发送</button><button type="button" class="jy-text-button" data-jy-action="helper-clear">清空</button></div>
  <p class="jy-muted jy-helper-note" data-jy-helper-note></p>
 </footer>
 </section>
@@ -11723,28 +11723,37 @@ async function fetchHostVersion() {
 // never rebound to any other backend. Text completion, Kobold and NovelAI each keep their own
 // checkbox instead, so the box to read depends on context.mainApi (review finding index.js:11726:
 // reading #stream_toggle unconditionally reported the wrong state, or an unrelated box's state, for
-// every main API besides chat completion).
+// every main API besides chat completion). koboldhorde is deliberately not in this map — see
+// helperVersionsSnapshot below.
 const STREAMING_CHECKBOX_BY_MAIN_API = Object.freeze({
   openai: '#stream_toggle',
   textgenerationwebui: '#streaming_textgenerationwebui',
   kobold: '#streaming_kobold',
-  koboldhorde: '#streaming_kobold',
   novel: '#streaming_novel',
 });
 
 async function helperVersionsSnapshot() {
   const context = getContext();
   const mainApi = String(context.mainApi ?? '');
-  const selector = STREAMING_CHECKBOX_BY_MAIN_API[mainApi];
   // null (not false) when the main API is not one of the above, or its checkbox is not on the page
   // right now — buildHelperContext reports that as "未知" rather than a guessed "关".
   let streaming = null;
-  if (selector) {
-    try {
-      const checkbox = document.querySelector(selector);
-      if (checkbox) streaming = checkbox.checked === true;
-    } catch {
-      streaming = null;
+  // koboldhorde shares Kobold's #streaming_kobold checkbox on the page, but SillyTavern's own
+  // isStreamingEnabled() (script.js) never streams for koboldhorde regardless of that box's state —
+  // reading the checkbox for it reported 开 whenever a reader had ticked it, even though nothing
+  // actually streams (review finding index.js:11731). Reported 关 directly, without ever touching
+  // the box mainApi does not really own.
+  if (mainApi === 'koboldhorde') {
+    streaming = false;
+  } else {
+    const selector = STREAMING_CHECKBOX_BY_MAIN_API[mainApi];
+    if (selector) {
+      try {
+        const checkbox = document.querySelector(selector);
+        if (checkbox) streaming = checkbox.checked === true;
+      } catch {
+        streaming = null;
+      }
     }
   }
   return {
@@ -11968,7 +11977,10 @@ function syncHelperFields(root, settings) {
   if (note) {
     const doc = note.ownerDocument;
     const choice = connectionUseChoice(settings, 'helper');
-    note.replaceChildren(doc.createTextNode('会发送：版本、设置摘要（密钥只写已填/没填）、当前楼层状态、最近运行记录、正则情况、控制中心自身说明。走连接：'));
+    // review finding index.js:11971: this used to leave out that the floor's own text (up to 1200
+    // 字) and the manual excerpt are sent too — a reader pointing 小助手 at a third-party connection
+    // had no way to know from this note alone that the story text goes out along with it.
+    note.replaceChildren(doc.createTextNode('会发送：版本、设置摘要（密钥只写已填/没填）、当前楼层状态（含正文前 1200 字）、最近运行记录、正则情况、控制中心自身说明、使用手册摘录。走连接：'));
     const link = doc.createElement('button');
     link.type = 'button';
     link.className = 'jy-text-button';
@@ -11977,6 +11989,16 @@ function syncHelperFields(root, settings) {
     note.appendChild(link);
     note.appendChild(doc.createTextNode('。'));
   }
+}
+
+/** Only the last few turns go back as history (DESIGN §16 item 4), and only ones that actually
+ * answered — a turn that errored or never got an answer has nothing worth remembering, and used to go
+ * back as an empty assistant message on every ask after it (review finding index.js:11959). Pure, and
+ * factored out of askHelper so the filter itself can be tested without a DOM or a real ask (review
+ * finding test/helper-apply.test.mjs:1: this line had no test of its own — deleting the filter would
+ * still have left every test green). `turns` is whatever came before the turn currently in flight. */
+function helperHistoryTurns(turns) {
+  return (Array.isArray(turns) ? turns : []).filter(item => !item.error && item.answer).slice(-3);
 }
 
 /** Asks 小助手 one question: gathers the context, sends it on the connection settings.helper points
@@ -12004,10 +12026,7 @@ async function askHelper(root, question) {
     const [manual, floor, versions, regex] = await Promise.all([
       loadHelperManual(), helperFloorSnapshot(settings), helperVersionsSnapshot(), helperRegexSnapshot(settings),
     ]);
-    // Only the last few turns go back as history (DESIGN §16 item 4), and only ones that actually
-    // answered — a turn that errored or never got an answer has nothing worth remembering, and used to
-    // go back as an empty assistant message on every ask after it (review finding index.js:11959).
-    const history = runtime.helper.turns.slice(0, -1).filter(item => !item.error && item.answer).slice(-3);
+    const history = helperHistoryTurns(runtime.helper.turns.slice(0, -1));
     const built = buildHelperContext({
       versions, settings, floor, runLog: readDiagnostics(), regex,
       knowledgeMarkup: CONTROL_CENTER_MARKUP, manual,
@@ -12030,20 +12049,31 @@ async function askHelper(root, question) {
       suggestions: turn.suggestions.length,
     });
   } catch (error) {
-    turn.error = isAbortError(error)
+    const aborted = isAbortError(error);
+    turn.error = aborted
       ? '请求已取消。'
       : `没问到：${safeError(error)}。可以检查下面「走连接」写的那条连接是不是能用，或者换一条连接再试。`;
-    recordDiagnostic('error', 'helper.ask-failed', `小助手请求失败（用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒）：${safeError(error)}`, {
-      endpoint: describeChannelEndpoint(request),
-      apiMode: request.apiMode,
-      contextLength,
-    });
+    // A reader-initiated cancel (closing the control center or hitting 清空 mid-ask) is not a failure —
+    // the translation and analysis request paths skip logging AbortError the same way. Logging it here
+    // used to count as an ERROR against this connection, and against runtime.activeFloor's error count
+    // when one was set, purely because the reader closed a panel (review finding index.js:12036).
+    if (!aborted) {
+      recordDiagnostic('error', 'helper.ask-failed', `小助手请求失败（用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒）：${safeError(error)}`, {
+        endpoint: describeChannelEndpoint(request),
+        apiMode: request.apiMode,
+        contextLength,
+      });
+    }
   } finally {
     turn.busy = false;
     runtime.helper.busy = false;
     if (runtime.helper.controller === controller) runtime.helper.controller = null;
     renderHelperConversation(helperLiveRoot(root));
   }
+  // No caller reads this — the click handler and 助手-quick both fire-and-forget — but it lets a
+  // headless test see this ask's own turn without reaching into module-private `runtime` (review
+  // finding test/helper-apply.test.mjs:1: askHelper itself had no test at all).
+  return turn;
 }
 
 /**
@@ -17131,14 +17161,25 @@ if (typeof document !== 'undefined') {
 // a headless run has none of, so tests place settings and the lore cache directly. `regexEngine`
 // stands in for the module loadHostRegex would otherwise dynamically import from the host -- a path
 // that does not resolve outside a real browser -- so a mocked SCRIPT_TYPES/getScriptsByType/
-// saveScriptsByType can be exercised without ever reaching the real import.
-function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine, editingChannelId: editingChannelIdOverride } = {}) {
+// saveScriptsByType can be exercised without ever reaching the real import. `panel` stands in for the
+// floating control center's own runtime.panel — helperLiveRoot reads runtime.panel?.controller?.root,
+// and a test simulating "the reader reopened the panel while an ask was in flight" needs a way to set
+// that without an actual floating panel to open. `resetHelper` clears runtime.helper.turns/busy/
+// controller — 小助手's own conversation state is session-only and module-level, so it otherwise
+// carries over from whichever askHelper test ran before it in the same file.
+function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine, editingChannelId: editingChannelIdOverride, panel, resetHelper } = {}) {
   if (settings) runtime.settings = { ...runtime.settings, ...settings };
   if (worldInfoEntries !== undefined) runtime.wiEntries = worldInfoEntries;
   if (initialized !== undefined) runtime.initialized = initialized === true;
   if (deskExpandedChannelId !== undefined) runtime.deskExpandedChannelId = deskExpandedChannelId;
   if (regexEngine !== undefined) runtime.hostRegex = regexEngine;
   if (editingChannelIdOverride !== undefined) runtime.editingChannelId = editingChannelIdOverride;
+  if (panel !== undefined) runtime.panel = panel;
+  if (resetHelper) {
+    runtime.helper.turns = [];
+    runtime.helper.busy = false;
+    runtime.helper.controller = null;
+  }
   return runtime.settings;
 }
 
@@ -17254,5 +17295,12 @@ export const __testing = Object.freeze({
   // DESIGN §16 小助手.
   applyHelperSetSuggestion,
   helperRegexSnapshot,
+  helperVersionsSnapshot,
+  helperHistoryTurns,
+  helperLiveRoot,
+  askHelper,
+  // Read-only: the in-flight ask's own AbortController, so a test can simulate closing the control
+  // center or hitting 清空 mid-ask (both just call .abort() on this) without a real DOM to click in.
+  helperController: () => runtime.helper.controller,
   CONTROL_CENTER_MARKUP,
 });

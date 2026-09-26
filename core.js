@@ -3788,7 +3788,12 @@ export function createTranslationSignature(regions) {
   })));
 }
 
-function unwrapResponseContent(raw) {
+// Exported so callers whose reply is not itself translation JSON (小助手's free-text answer, say)
+// can still unwrap the same { content, reasoning } / nested-content envelope parseJsonCandidates and
+// recoverStructuredTranslations already unwrap here, instead of re-deriving it (review finding
+// helper.js:616: askHelper handed an independent connection's raw { content, reasoning } object
+// straight to String(), which read as "[object Object]").
+export function unwrapResponseContent(raw) {
   let value = raw;
   for (let depth = 0; depth < 3; depth += 1) {
     if (!value || typeof value !== 'object') break;

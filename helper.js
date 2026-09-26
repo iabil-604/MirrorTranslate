@@ -33,6 +33,7 @@ import {
   pathGet,
   pathSet,
   presetDrift,
+  unwrapResponseContent,
 } from './core.js?v=0.38.0';
 
 // ---------------------------------------------------------------------------------------------
@@ -255,7 +256,12 @@ function stripTags(html) {
 }
 
 const KNOWLEDGE_LINE_CAP = 220;
-const KNOWLEDGE_LINES_PER_PAGE = 40;
+// A safety ceiling only, not the primary control any more — buildHelperContext's own overall budget
+// (joinTruncated against what is actually left of `cap`) is what trims the knowledge section for real.
+// This used to be the primary control at 40, which cut 朗读 off after 40 of its ~60 real lines —
+// dropping 深度分析 (含单次分析最长等待), 默认调音台 and 副模型提示词 — even when the overall budget had
+// room to spare (review finding helper.js:286).
+const KNOWLEDGE_LINES_PER_PAGE = 300;
 
 /** "页 › 区 › 文字" lines pulled straight from the control center's own markup, so this text is never
  * out of sync with what the reader actually sees on the page.
@@ -267,6 +273,14 @@ const KNOWLEDGE_LINES_PER_PAGE = 40;
  * finding helper.js:254: without <h3> and bare <summary>, several rows were being filed under whatever
  * unrelated <h2> happened to come earlier in the page, and 微调/小助手 contributed nothing at all).
  * Whichever of these was seen most recently wins, same as before.
+ *
+ * A <label class="jy-check"> immediately paired with its own <p class="…jy-muted…"> (流式写回, 特效字) is
+ * filed under the label's own text instead — but only for that one paired line, without overwriting
+ * `section` for anything after it. Most jy-check rows share one description across several checkboxes
+ * (「Fish 参数」's 数字与符号规范化/…/连续的！！！压成一个 all trail one shared paragraph), and none of
+ * those own that shared paragraph the way a real <h2>/<h3> heading owns everything under it (review
+ * finding helper.js:286: 流式写回's own reason line was being filed under the previous unrelated <h3>,
+ * 自动接续翻译, because nothing updated `section` in between).
  *
  * Description text is anything carrying a jy-muted or jy-label class — matched as a class the element
  * *has*, not as the whole class attribute, since the real markup freely mixes them with other classes
@@ -280,10 +294,25 @@ export function extractControlCenterKnowledge(markup) {
   while ((pageMatch = pageRe.exec(text))) {
     const pageId = pageMatch[1];
     const pageLabel = KNOWLEDGE_PAGE_LABELS[pageId] || pageId;
-    const body = pageMatch[2];
+    // The shared per-connection edit form (index.js's single reusable <div data-jy-channel-detail>,
+    // moved under whichever channel card is expanded) sits right under the built-in 跟随酒馆 card and
+    // has no heading of its own until its first fold ("请求参数"). Its own 连接名称/API 基础地址/API
+    // 密钥/当前模型 fields used to be filed under 跟随酒馆 — which needs none of them — because nothing
+    // updated `section` in between (review finding helper.js:286). Cut just that headerless prefix
+    // rather than invent a label that appears nowhere in the real markup (the same "don't invent"
+    // rule DEFAULT_HELPER_PROMPT itself follows); everything from 请求参数 on (its own real headings)
+    // is untouched.
+    const body = pageMatch[2].replace(
+      /<div\s+class="jy-connection-form"[^>]*data-jy-channel-detail[^>]*>[\s\S]*?(?=<details\s+class="jy-fold"\s+data-jy-fold="channel-request")/,
+      '',
+    );
     let section = pageLabel;
     let countThisPage = 0;
-    const partRe = /<h2[^>]*>([\s\S]*?)<\/h2>|<h3[^>]*>([\s\S]*?)<\/h3>|<summary[^>]*>([\s\S]*?)<\/summary>|<p\s+class="[^"]*\bjy-muted\b[^"]*"[^>]*>([\s\S]*?)<\/p>|<span\s+class="[^"]*\b(?:jy-muted|jy-label)\b[^"]*"[^>]*>([^<]*)|title="([^"]+)"/g;
+    // The label-check alternative's own text is captured as [^<]* (plain text only, past its one
+    // <input>), never [\s\S]*? — a lazy [\s\S]*? here would happily cross into the *next* sibling
+    // <label class="jy-check"> (切换滑动页时补译, right before 流式写回) looking for a </label><p…> pair,
+    // swallowing that unrelated label's own text into this one's "heading" once it found one.
+    const partRe = /<h2[^>]*>([\s\S]*?)<\/h2>|<h3[^>]*>([\s\S]*?)<\/h3>|<summary[^>]*>([\s\S]*?)<\/summary>|<label\s+class="[^"]*\bjy-check\b[^"]*"[^>]*>(?:<input\b[^>]*>)?([^<]*)<\/label>\s*<p\s+class="[^"]*\bjy-muted\b[^"]*"[^>]*>([\s\S]*?)<\/p>|<p\s+class="[^"]*\bjy-muted\b[^"]*"[^>]*>([\s\S]*?)<\/p>|<span\s+class="[^"]*\b(?:jy-muted|jy-label)\b[^"]*"[^>]*>([^<]*)|title="([^"]+)"/g;
     let part;
     while ((part = partRe.exec(body)) && countThisPage < KNOWLEDGE_LINES_PER_PAGE) {
       if (part[1] !== undefined || part[2] !== undefined || part[3] !== undefined) {
@@ -291,7 +320,17 @@ export function extractControlCenterKnowledge(markup) {
         if (heading) section = heading;
         continue;
       }
-      const cleaned = stripTags(part[4] ?? part[5] ?? part[6]);
+      if (part[4] !== undefined) {
+        const heading = stripTags(part[4]);
+        const cleaned = stripTags(part[5]);
+        if (heading && cleaned) {
+          const line = `${pageLabel} › ${heading} › ${cleaned}`;
+          lines.push(line.length > KNOWLEDGE_LINE_CAP ? `${line.slice(0, KNOWLEDGE_LINE_CAP)}…` : line);
+          countThisPage += 1;
+        }
+        continue;
+      }
+      const cleaned = stripTags(part[6] ?? part[7] ?? part[8]);
       if (!cleaned) continue;
       const line = `${pageLabel} › ${section} › ${cleaned}`;
       lines.push(line.length > KNOWLEDGE_LINE_CAP ? `${line.slice(0, KNOWLEDGE_LINE_CAP)}…` : line);
@@ -328,10 +367,15 @@ function joinTruncated(lines, budget) {
 /**
  * Everything sent as one ask's context, capped at `cap` characters with the user-manual excerpt and
  * the control center's own knowledge lines trimmed first, then the run log. The versions line, the
- * settings summary, the current floor and the regex line are kept in full — each is already small and
- * bounded on its own (the floor preview alone is capped at FLOOR_PREVIEW_LIMIT), and without them a
- * reply cannot say anything grounded at all. Whatever the budget math above does, the final slice
- * below is the one guarantee that matters: the result is never longer than `cap`.
+ * settings summary, the current floor, the regex line and the 可用建议 whitelist are kept in full —
+ * each is already small and bounded on its own (the floor preview alone is capped at
+ * FLOOR_PREVIEW_LIMIT), and without them a reply cannot say anything grounded, or propose anything at
+ * all. They are placed ahead of every trimmable section for the same reason (review finding
+ * helper.js:387): 可用建议 used to sit last, so whenever the total ran even slightly over `cap` — the
+ * old budget undercounted the runLog/knowledge/manual sections' own '【…】\n' headers, not just the
+ * '\n\n' joins between parts — the final slice cut into its own tail instead of into whichever
+ * trimmable section actually still had something to spare. Whatever the budget math below does, the
+ * final slice is still the one guarantee that matters: the result is never longer than `cap`.
  */
 export function buildHelperContext({
   versions = {},
@@ -353,9 +397,20 @@ export function buildHelperContext({
   const manualText = String(manual ?? '');
   const availableText = section('可用建议', helperAvailabilityLines(settings.uiMode));
 
-  const core = [versionsLine, settingsText, floorText, regexText, availableText];
-  const coreText = core.join('\n\n');
-  let remaining = Math.max(0, cap - coreText.length - 16 /* the extra '\n\n' joins added below */);
+  // Never trimmed, and — unlike the old `core`, which was only ever used to size the budget while the
+  // final assembly moved 可用建议 to the very end — these are exactly the parts the final `parts` list
+  // below leads with, so nothing here can be the thing a `cap` overrun eats into.
+  const fixedParts = [versionsLine, settingsText, floorText, regexText, availableText];
+  const fixedText = fixedParts.join('\n\n');
+  const JOIN = '\n\n';
+  const HEADER_RUNLOG = '【运行记录（最近）】\n';
+  const HEADER_KNOWLEDGE = '【控制中心说明】\n';
+  const HEADER_MANUAL = '【使用手册摘录】\n';
+
+  // What is left for the three trimmable sections, each accounted for by its own real header length
+  // and the join that attaches it — not the old flat "16" guess, which counted neither the headers nor
+  // the actual number of joins and was exactly what let a small overrun eat into 可用建议's own tail.
+  let remaining = Math.max(0, cap - fixedText.length - JOIN.length - HEADER_RUNLOG.length - JOIN.length - HEADER_KNOWLEDGE.length);
 
   // Each part takes as much of what is left as it actually needs, in this priority order, and only
   // the part that would push the total past `remaining` is the one that gets cut — never a fixed
@@ -370,18 +425,15 @@ export function buildHelperContext({
   const knowledgeJoined = joinTruncated(knowledgeLines, remaining);
   remaining = Math.max(0, remaining - knowledgeJoined.text.length);
 
-  const manualTrimmed = manualText.length > remaining;
-  const manualSlice = manualText.slice(0, remaining);
+  const manualBudget = Math.max(0, remaining - JOIN.length - HEADER_MANUAL.length);
+  const manualTrimmed = manualText.length > manualBudget;
+  const manualSlice = manualText.slice(0, manualBudget);
 
   const parts = [
-    versionsLine,
-    settingsText,
-    floorText,
-    regexText,
+    ...fixedParts,
     section('运行记录（最近）', runLogJoined.text || '（无）'),
     section('控制中心说明', knowledgeJoined.text || '（无）'),
     manualSlice ? section('使用手册摘录', manualSlice + (manualTrimmed ? '\n…（已截断）' : '')) : '',
-    availableText,
   ].filter(Boolean);
 
   const text = redactSecrets(parts.join('\n\n')).slice(0, cap);
@@ -403,7 +455,11 @@ export function buildHelperContext({
 const ALL_PAGE_IDS = Object.freeze([...new Set([...CONTROL_CENTER_PAGES.normal, ...CONTROL_CENTER_PAGES.advanced])]);
 
 export const HELPER_WHITELIST_FIELDS = Object.freeze([
-  { field: 'bodyTags', label: '提取标签', path: Object.freeze(['bodyTags']), kind: 'tags' },
+  // nonEmpty: mergeSettings (core.js) silently refills an empty bodyTags with DEFAULT_SETTINGS.bodyTags
+  // rather than keeping it empty — the same "标签名列表" only excludedTags/replaceTags actually allow
+  // (review finding helper.js:496: a suggestion clearing bodyTags used to validate and show 「把「提取
+  // 标签」改成「（空）」」/✓ 已改, while what actually got saved was the default list, not empty).
+  { field: 'bodyTags', label: '提取标签', path: Object.freeze(['bodyTags']), kind: 'tags', nonEmpty: true },
   { field: 'replaceTags', label: '替换标签', path: Object.freeze(['replaceTags']), kind: 'tags' },
   { field: 'excludedTags', label: '排除标签', path: Object.freeze(['excludedTags']), kind: 'tags' },
   { field: 'autoGeneration', label: '自动接续翻译', path: Object.freeze(['autoGeneration']), kind: 'boolean' },
@@ -493,9 +549,18 @@ function normalizeIntegerValue(field, value) {
   return Math.min(field.max, Math.max(field.min, number));
 }
 
-function normalizeTagsValue(value) {
-  const parsed = parseTagNamesWithErrors(value);
+function normalizeTagsValue(field, value) {
+  // The settings summary prints tags joined with 、 (顿号), and helperFieldValueDomain tells the model
+  // it may write them back the same way — but parseTagNamesWithErrors' own separator set (core.js)
+  // never included it, so a 、-separated suggestion silently validated to null (review finding
+  // helper.js:442). Only Array/string inputs reach here; a real array is left untouched.
+  const source = Array.isArray(value) ? value : String(value ?? '').replace(/、/g, ',');
+  const parsed = parseTagNamesWithErrors(source);
   if (parsed.invalid.length) return undefined;
+  // bodyTags never actually saves empty (see the field's own `nonEmpty`, above) — offering a
+  // suggestion that promises "（空）" and then silently applies the default list instead is worse than
+  // not offering it at all (review finding helper.js:496).
+  if (field.nonEmpty && !parsed.tags.length) return undefined;
   return parsed.tags;
 }
 
@@ -532,7 +597,7 @@ export function validateHelperSuggestion(raw, settings) {
     if (field.kind === 'boolean') value = normalizeBooleanValue(raw.value);
     else if (field.kind === 'enum') value = normalizeEnumValue(field, raw.value);
     else if (field.kind === 'integer') value = normalizeIntegerValue(field, raw.value);
-    else if (field.kind === 'tags') value = normalizeTagsValue(raw.value);
+    else if (field.kind === 'tags') value = normalizeTagsValue(field, raw.value);
     if (value === undefined) return null;
     const current = pathGet(settings, field.path);
     const isNoop = field.kind === 'tags' ? arraysEqualAsSets(current, value) : current === value;
@@ -604,6 +669,11 @@ const SUGGEST_BLOCK_RE = /```jingyi-suggest\s*([\s\S]*?)```/i;
 // (review finding helper.js:533).
 const SUGGEST_BLOCK_OPEN_RE = /```jingyi-suggest\s*([\s\S]*)$/i;
 
+// Same pattern core.js's own parseJsonCandidates strips before it ever looks for JSON — a reasoning
+// model's <think>/<thinking> block is never part of the answer, and outside a code fence there is
+// nothing else here to strip it out.
+const THINK_BLOCK_RE = /<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi;
+
 /**
  * A reply's display text (the block removed, trimmed) and whatever the model put in its suggestion
  * block, parsed leniently — not yet validated against the whitelist, that is validateHelperSuggestions'
@@ -611,9 +681,17 @@ const SUGGEST_BLOCK_OPEN_RE = /```jingyi-suggest\s*([\s\S]*)$/i;
  * produces: a trailing comma before `]`/`}` (stripped before parsing), a single suggestion object
  * instead of a one-item array (wrapped into one), and a block truncated mid-JSON with no closing fence
  * (matched up to the end of the reply instead of not at all).
+ *
+ * `raw` is whatever requestSubModelRaw hands back — a plain string when the ask followed the host's
+ * own connection (generateRaw), or an independent connection's own { content, reasoning, … } envelope
+ * (ChatCompletionService.processRequest). unwrapResponseContent is the same unwrap every other reader
+ * of a sub-model reply already goes through (parseJsonCandidates, recoverStructuredTranslations); without
+ * it here, an independent connection's reply read as the literal text "[object Object]" (review finding
+ * helper.js:616).
  */
 export function parseHelperReply(raw) {
-  const text = String(raw ?? '');
+  const unwrapped = unwrapResponseContent(raw);
+  const text = String(unwrapped ?? '').replace(THINK_BLOCK_RE, '').trim();
   const match = text.match(SUGGEST_BLOCK_RE) || text.match(SUGGEST_BLOCK_OPEN_RE);
   if (!match) return { text: text.trim(), rawSuggestions: [] };
   const display = `${text.slice(0, match.index)}${text.slice(match.index + match[0].length)}`.trim();

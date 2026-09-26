@@ -99,9 +99,9 @@
     {
       "id": "helper-stream-toggle",
       "owner": "sillytavern",
-      "symbol": "#stream_toggle",
+      "symbol": "#stream_toggle / #streaming_textgenerationwebui / #streaming_kobold / #streaming_novel (picked by SillyTavern.getContext().mainApi; koboldhorde is reported 关 directly and never reads a checkbox, since ST's own isStreamingEnabled() never streams for it)",
       "required": false,
-      "fallback": "report-streaming-as-off"
+      "fallback": "report-streaming-as-unknown"
     }
   ]
 }
