@@ -317,6 +317,8 @@ const DISPLAY_WORD_RE = /[\p{L}\p{N}]/u;
 const DISPLAY_MARGIN = 6;
 const HAN_RUN_RE = /^\p{Script=Han}+$/u;
 const HIRAGANA_RUN_RE = /^\p{Script=Hiragana}+$/u;
+// A stem segment: pure kanji (寝) or kanji the segmenter kept together with its own kana (行き).
+const STEM_START_RE = /^\p{Script=Han}/u;
 const OKURIGANA_MARGIN = 4;
 // Particles and conjunctions that close off a conjugated word instead of continuing it — encountering
 // one of these while absorbing hiragana segments to the right of a kanji stem stops the widening just
@@ -328,6 +330,10 @@ const OKURIGANA_STOP_WORDS = new Set([
 // The first segment right after a kanji stem is its okurigana far more often than not, even when it
 // looks like a particle (待|って, 話|し|て, 笑|わ|ない, 死|に|たい): only these, which never spell a
 // conjugation, stop that first step.
+// Auxiliary endings that only ever follow a conjugated stem (許さ|ない, 寝て|いる, 言わ|れる): a pause
+// seed spelled like one is widened back across the hiragana before it to that stem, even when the stem's
+// kanji is a segment or two away rather than right next to it.
+const AUXILIARY_SEEDS = new Set(['ない', 'なかった', 'たい', 'たかった', 'いる', 'いた', 'れる', 'られる', 'せる', 'させる', 'ます', 'ました']);
 const NEVER_OKURIGANA = new Set([
   'は', 'が', 'を', 'の', 'へ', 'や', 'も', 'から', 'けど', 'けれど', 'ので', 'のに', 'より', 'まで',
   'とか', 'だけ', 'など', 'しか', 'なんか',
@@ -396,7 +402,8 @@ function extendOkuriganaLeft(source, bounds) {
   if (!HIRAGANA_RUN_RE.test(seed)) return bounds.start;
   if (seed.length > 1) {
     const stem = wordBoundsAt(source, bounds.start - 1);
-    if (!stem || stem.end !== bounds.start || !HAN_RUN_RE.test(source.slice(stem.start, stem.end))) return bounds.start;
+    const hangsOffKanji = stem && stem.end === bounds.start && HAN_RUN_RE.test(source.slice(stem.start, stem.end));
+    if (!hangsOffKanji && !(AUXILIARY_SEEDS.has(seed) && reachesKanjiStem(source, bounds.start))) return bounds.start;
   }
   let start = bounds.start;
   for (let steps = 0; start > 0 && steps < OKURIGANA_MARGIN; steps += 1) {
@@ -404,10 +411,25 @@ function extendOkuriganaLeft(source, bounds) {
     if (!prev || prev.end !== start) break;
     const chunk = source.slice(prev.start, prev.end);
     if (HIRAGANA_RUN_RE.test(chunk)) { start = prev.start; continue; }
-    if (HAN_RUN_RE.test(chunk)) return prev.start;
+    if (STEM_START_RE.test(chunk)) return prev.start;
     break;
   }
   return start;
+}
+
+/** Whether an unbroken run of hiragana segments to the left of `start` ends at a kanji segment within
+ * OKURIGANA_MARGIN steps — the stem an auxiliary seed conjugates. */
+function reachesKanjiStem(source, start) {
+  let at = start;
+  for (let steps = 0; at > 0 && steps < OKURIGANA_MARGIN; steps += 1) {
+    const prev = wordBoundsAt(source, at - 1);
+    if (!prev || prev.end !== at) return false;
+    const chunk = source.slice(prev.start, prev.end);
+    if (STEM_START_RE.test(chunk)) return true;
+    if (!HIRAGANA_RUN_RE.test(chunk)) return false;
+    at = prev.start;
+  }
+  return false;
 }
 
 function widenAnchor(text, anchor, side) {

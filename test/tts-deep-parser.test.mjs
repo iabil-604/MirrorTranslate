@@ -374,3 +374,12 @@ test('a stress on a kanji stem takes its first okurigana segment even when that 
   assert.equal(stressDisplay('もう死にたい。', '死'), '死にたい', 'に right after the stem');
   assert.equal(stressDisplay('猫が好きだ。', '猫'), '猫', 'a case particle is never okurigana, so a noun stays itself');
 });
+
+test('a pause after an auxiliary ending shows the whole conjugated verb, not just the ending', () => {
+  assert.equal(pauseDisplay('許さないから。', 'ない'), '許さない');
+  assert.equal(pauseDisplay('まだ寝ているよ。', 'いる'), '寝ている');
+  assert.equal(pauseDisplay('彼に言われるなんて。', 'れる'), '言われる');
+  assert.equal(pauseDisplay('行きたい。', 'たい'), '行きたい', 'a stem the segmenter kept with its own kana still counts');
+  assert.equal(pauseDisplay('言ったこと', 'こと'), 'こと', 'a whole word after a verb is left as it is');
+  assert.equal(pauseDisplay('ここにいる。', 'いる'), 'いる', 'no kanji stem to reach, so nothing to widen into');
+});
