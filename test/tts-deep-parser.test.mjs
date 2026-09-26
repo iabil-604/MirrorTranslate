@@ -310,3 +310,25 @@ test('widening a pause/stress anchor for the panel follows the real word boundar
   const pauseText = '输入这个网址abcdefghij就能看到';
   assert.equal(pauseDisplay(pauseText, 'j'), 'abcdefghij', 'widens left across the whole word, well past the old six-character margin');
 });
+
+test('a Japanese kanji stem is widened through its own okurigana for the panel, past the boundary Intl.Segmenter cuts it at for lack of a dictionary', () => {
+  // Without a Japanese dictionary, Intl.Segmenter tells 聞こえた apart from its own conjugation
+  // (聞|こ|え|た) and 寂しく from its own kanji (寂|しく), so wordBoundsAt alone hands back just the
+  // stem's own single character. The panel must still show the whole word, not the cut-off stem.
+  const pauseText = '彼らが言ったことは全部聞こえたけど、無視したいだけ。';
+  assert.equal(pauseDisplay(pauseText, 'えた'), '聞こえた', 'widens left through the okurigana and the kanji stem it hangs off of');
+  const stressText = '別に、寂しくなんかないし。';
+  assert.equal(stressDisplay(stressText, '寂'), '寂しく', 'widens right through the okurigana attached to the kanji stem, and no further');
+});
+
+test('the okurigana widening never moves a word already found whole, and never fires on a lone kanji that is simply a whole Chinese word', () => {
+  // こと is already its own whole segment to Intl.Segmenter; nothing here should touch it, chain past
+  // it into 全部, or run at all when there is no hiragana anywhere for the extension to key off of.
+  const pauseText = '彼らが言ったことは全部聞こえたけど、無視したいだけ。';
+  assert.equal(pauseDisplay(pauseText, 'こと'), 'こと', 'a word already whole is left exactly as it is');
+  const stressText = '別に、寂しくなんかないし。';
+  assert.equal(stressDisplay(stressText, '寂しく'), '寂しく', 'widening never chains past the word it just found into the next one (なんか)');
+  // 近 is a whole Chinese word on its own (你别靠这么近...); a lone kanji seed by itself must not
+  // trigger the Japanese-only extension just because kanji also happens to be Han script in Chinese.
+  assert.equal(pauseDisplay('你别靠这么近会让人看见的。', '近'), '近', '近 is a complete Chinese word; nothing here may widen it as if it were an okurigana stem');
+});

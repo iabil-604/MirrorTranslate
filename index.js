@@ -4692,9 +4692,14 @@ async function dropTtsRecordings(prepared, items, { paragraph = true } = {}) {
   const floorKey = ttsLabelKey(prepared.floor);
   runtime.tts.recordings.set(floorKey, (runtime.tts.recordings.get(floorKey) ?? []).filter(record => !keys.has(record.key)));
   const transport = runtime.tts.transport;
-  if (transport?.messageId === prepared.floor.messageId) {
+  // 「译文 + 原文」都读时同一楼是两个独立的 floor（一个 side 一个），但 player 只有一份：重新生成译文
+  // 一侧绝不能打断正在放的原文。side 也对上，才是同一条正在播的录音被这次重新生成删掉了。
+  if (transport?.messageId === prepared.floor.messageId && transport.side === prepared.floor.side) {
     stopTtsPlayback();
     transport.current = null;
+    // 播放中的那条录音没了，交给下一次点开始键接着放；不收尾的话 state 会一直停在 playing/paused，
+    // 播放/暂停键的判断读到的还是这个旧状态，点下去只会对着已经不存在的录音操作。
+    if (['playing', 'paused'].includes(transport.state)) setTransport(transport, { state: 'idle', message: '' });
   }
   return keys.size;
 }
@@ -4706,7 +4711,10 @@ function dropPreparedFloors(messageId) {
 
 // The model's voices laid over the translation's. A sentence the model answered keeps the
 // translation's words wherever the model said nothing about them, except that a delivery the model
-// did set (volume, restraint, tension) retires a tone the translation had guessed.
+// did set (volume, restraint, tension) retires a tone the translation had guessed. This is a plain
+// per-key overlay, so pausesAnchored/stressAnchored (tts-deep.js) ride along with whichever side's
+// pauses or stress actually landed in the result: a field the model left untagged keeps the
+// translation's own, unanchored.
 function mergeVoiceMaps(base, over) {
   const merged = new Map(base instanceof Map ? base : []);
   for (const [id, voice] of over instanceof Map ? over : []) {
@@ -7116,23 +7124,26 @@ async function ttsPrepared(messageId, side = null, { fresh = false } = {}) {
   return prepared;
 }
 
-// voiceSummary shows a pause or stress by the same anchor the reading is held to. For the deep reading
-// that anchor is the shortest run that still finds its word (anchorForward/anchorBackward in
+// voiceSummary shows a pause or stress by the same anchor the reading is held to. For the deep reading's
+// own tags that anchor is the shortest run that still finds its word (anchorForward/anchorBackward in
 // tts-deep.js), often one character, and the panel alone gets more: the word or short phrase it sits
-// in, widened from the sentence's own text (tts-deep's pauseDisplay/stressDisplay). Every other reading
-// — simple, the translation's own marks, a correction — stores the word the model actually named, in
-// full, so widening it would only misstate which word is stressed or where the pause falls; this is
-// gated on depth === 'deep' for exactly that reason. A voice from before this existed, or an anchor a
-// later edit moved out from under, still shows exactly what it always did — widening only ever replaces
-// the anchor with something that contains it.
+// in, widened from the sentence's own text (tts-deep's pauseDisplay/stressDisplay). Every other voice —
+// simple, the translation's own marks, a correction, a legacy-format deep reply — stores the word the
+// model actually named, in full, so widening it would only misstate which word is stressed or where the
+// pause falls. classifyAndApply marks its own pauses/stress with pausesAnchored/stressAnchored for
+// exactly this reason; a merged voice (mergeVoiceMaps) keeps the flag only for whichever field the deep
+// line itself supplied, so a translation mark surviving under an unrelated deep tag is never widened
+// either. depth is still checked first: a voice from before either flag existed, or read back from
+// storage without it, shows exactly what it always did — widening only ever replaces the anchor with
+// something that contains it.
 function widenPauseStressSummary(summary, voice, text, depth) {
   if (depth !== 'deep') return summary;
-  if (!voice?.pauses?.length && !voice?.stress?.length) return summary;
+  if (!voice?.pausesAnchored && !voice?.stressAnchored) return summary;
   return summary.map(([term, value]) => {
-    if (term === '停顿' && voice.pauses?.length) {
+    if (term === '停顿' && voice.pauses?.length && voice.pausesAnchored) {
       return [term, voice.pauses.map(pause => `「${pauseDisplay(text, pause.after)}」后${pause.length === 'long' ? '长停' : '短停'}`).join('，')];
     }
-    if (term === '重音' && voice.stress?.length) {
+    if (term === '重音' && voice.stress?.length && voice.stressAnchored) {
       return [term, voice.stress.map(word => stressDisplay(text, word)).join('、')];
     }
     return [term, value];
