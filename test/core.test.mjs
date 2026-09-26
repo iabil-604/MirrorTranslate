@@ -1468,6 +1468,25 @@ test('a gasp built on ー, doubled っ or the は/か consonant rows is recognis
   }
 });
 
+test('a bare mora next to a bare ん needs translation unless the whole shape is a real interjection, a marked moan or a repeated unit', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // Letter-for-letter the same shape as うん — one real mora next to a bare ん — but these are short
+  // names, not gasps: a model echoing one back untranslated is a real miss, not nothing to say.
+  for (const line of ['アン', 'アン！', '「カン。」', 'ケン', 'ラン', 'リン']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a name, not a gasp — it needs translation`);
+  }
+  // The real interjections this exact shape is otherwise indistinguishable from still go through on a
+  // single sighting, ううん's own two real morae (う, う) included.
+  for (const line of ['「……うん。」', 'ううん', 'ウン', 'ふん']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a real interjection, not a name`);
+  }
+  // A moan carrying its own extra marker — a stammer, a heart, a drawn-out vowel — or built by
+  // repeating the same mora-plus-ん unit is still accepted, even with two real morae in it.
+  for (const line of ['あんっ', 'あーん', 'あんあん', 'アンッ♡']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a marked or repeated moan, not a name`);
+  }
+});
+
 test('isShortExactEcho tells a short unchanged answer apart from a long one', async () => {
   const { isShortExactEcho } = await import('../core.js');
   // A short katakana onomatopoeia, more than the two-letter interjection ceiling but still short
@@ -1497,6 +1516,44 @@ test('isShortExactEcho only forgives a second echo that is still plausibly untra
   // Some of what rule 1 already accepts on a single sighting is naturally also accepted here, on a
   // second one — the two rules were never meant to disagree about the same source.
   assert.equal(isShortExactEcho('はぁ……', 'はぁ……'), true);
+});
+
+test('isShortExactEcho draws the same name-versus-interjection line as isTrivialInterjectionSource for a bare mora next to a bare ん, even on a second sighting', async () => {
+  const { isShortExactEcho } = await import('../core.js');
+  for (const line of ['アン', 'ケン', 'カン']) {
+    assert.equal(isShortExactEcho(line, line), false, `${line} is a name, not an echo worth accepting`);
+  }
+  for (const line of ['ウン', 'ふん', 'あんあん', 'アンッ♡']) {
+    assert.equal(isShortExactEcho(line, line), true, `${line} is a real interjection or a marked/repeated moan`);
+  }
+});
+
+test('a two-mora word or name that happens to carry a bare ん still needs translation even when ー, っ or ～ appear elsewhere in it', async () => {
+  const { looksUntranslated } = await import('../core.js');
+  // Each of these has two real morae plus a bare ん — the same shape ううん and あんあん are forgiven
+  // for, but here nothing repeats and none of them is a fixed real interjection, so the moan-marker and
+  // reduplication checks must not wave them through just because ー or っ appears somewhere in the word.
+  for (const line of ['オーエン', 'オーエン！', 'ハーケン', 'ホーキン', 'コーエン', 'はっけん！', 'けっこん']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a two-mora ん word, not a gasp — it needs translation`);
+  }
+});
+
+test('real ん-interjections and moans not on the short allow-list are still accepted, including katakana フン, doubled vowels, and ♥/❤ as moan markers', async () => {
+  const { looksUntranslated, isShortExactEcho } = await import('../core.js');
+  // Accepted on the first sighting: a fixed real word (フン, ウウン, ふうん) or a moan carrying its own
+  // extra marker — a drawn-out vowel spelled with small kana instead of ー, or a heart.
+  for (const line of ['フン！', 'ウウン', 'ふうん', 'ふぅん', 'うぅん', 'あぁん……', 'はぁん', 'あん♥', 'あん❤']) {
+    assert.equal(looksUntranslated(line, line), false, `${line} is a real interjection or a marked moan, not a name`);
+  }
+  // ファン/フィン are yōon names built from the same consonant as フ but a different vowel (a/i, not u),
+  // so the drawn-out-vowel check must not mistake them for ふぅ-style gasps.
+  for (const line of ['ファン', 'フィン']) {
+    assert.equal(looksUntranslated(line, line), true, `${line} is a name, not a gasp — it needs translation`);
+  }
+  // ああん doubles a full-size vowel instead of marking it with ー or a small kana, so it is not caught
+  // on the first sighting the way あぁん is — but a model that repeats it verbatim is still believed.
+  assert.equal(looksUntranslated('ああん', 'ああん'), true);
+  assert.equal(isShortExactEcho('ああん', 'ああん'), true);
 });
 
 test('a floor that fits one batch is spread evenly across parallel lanes', () => {

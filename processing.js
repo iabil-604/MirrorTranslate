@@ -408,6 +408,20 @@ export function planRegexCleanup(existingRegex, profile) {
   return { expected, toRemove, toInstall };
 }
 
+// A character's own scoped regex and a preset's own regex are two more places a reader can move a
+// 镜译-owned rule with 酒馆's own "移到角色 / 预设" -- and syncNativeRegex only ever writes to the
+// global list, so the moved copy is never the one live copy of anything: 镜译 reinstalls a fresh
+// global copy on the very next sync regardless of where the reader dragged the old one away to, and
+// the moved copy just sits there, orphaned, forever afterwards. Unlike planRegexCleanup there is no
+// "expected" set to reconcile against here -- 镜译 never expects a rule of its own in either scope --
+// so every rule isJingyiRegex claims in the given list is surplus and is removed outright; anything
+// else, id or scriptName lookalikes included, is left exactly as it was.
+export function planScopedRegexCleanup(scripts) {
+  const list = Array.isArray(scripts) ? scripts : [];
+  const kept = list.filter(rule => !isJingyiRegex(rule));
+  return { kept, toRemove: list.length - kept.length };
+}
+
 // Every block container a card template plausibly uses — the same range the reading's own BREAK_RE
 // treats as line-level (tts-sanitizer.js). The source group below only matches when every one of them in
 // the block pairs up, tag for same-named tag, with nothing stray left over, so a block whose tags
