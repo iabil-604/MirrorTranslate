@@ -273,6 +273,14 @@ test('SOUND_END_RULE, shared by every prompt that uses it, no longer names an "e
   assert.ok(DEEP_PROMPT.includes(SOUND_END_RULE), 'the deep prompt still carries the rule itself, just not the bare English word');
 });
 
+test('SOUND_END_RULE scopes its condition to the line within its own paragraph, the same condition rule 6 states for using `end`, not to the paragraph being the floor\'s last one', () => {
+  // "这一句所在段落后面又没有别的正文" reads most naturally as "nothing after the paragraph this line is
+  // in" — i.e. this is the floor's last paragraph — which is not what groundVoice actually checks and
+  // not what rule 6 (同一段里这句后面还有正文时用 end) or the comment above this constant says. The
+  // wording must instead be scoped inside the line's own paragraph, matching rule 6's own phrasing.
+  assert.match(SOUND_END_RULE, /同一段里这句后面又没有别的正文/, `must read "nothing more after this line, within its own paragraph", matching rule 6's condition: "${SOUND_END_RULE}"`);
+});
+
 test('a pause anchor is widened toward its own start for the panel, by the real word it opens rather than a character class, keeping the edge the pause actually lands on untouched', () => {
   const text = '他们说的那些话我都听见了只是不想理。';
   // '听见了' is one word to real word segmentation (Intl.Segmenter); the old character-class/margin
