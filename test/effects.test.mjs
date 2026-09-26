@@ -879,3 +879,82 @@ test('a 彩度 slider drag still triggers a restyle on save, even though the sli
   assert.ok(message.mes.includes(newStyle.css), '彩度改变也要触发既有译文里招式的重新上色');
   assert.ok(!message.mes.includes(oldStyle.css));
 });
+
+test('a coloring paint-only save (band/vividness) does not cancel a translation already in flight, and repaints its floor once that settles', async t => {
+  const context = mockHost([]);
+  globalThis.document = { getElementById: () => null, createElement: () => ({ style: {} }), head: { appendChild: () => {} } };
+  t.after(() => {
+    delete globalThis.document;
+    __testing.configureForTest({ initialized: false, inflight: new Map() });
+  });
+  __testing.configureForTest({ initialized: true });
+  const oldBand = computeSafeBand(['#ffffff']);
+  const newBand = computeSafeBand(['#101010']);
+  const styleAt = band => {
+    const normalized = normalizeColoring({ speakers: true, effects: true, band, vividness: 0.7 });
+    return resolveMoveStyle({ element: '火焰', name: '红莲拳', tier: 1, band: normalized.band, vividness: normalized.vividness });
+  };
+  const oldStyle = styleAt(oldBand);
+  const newStyle = styleAt(newBand);
+  const moveOpen = `<span data-jy-move-element="火焰" data-jy-move-name="红莲拳" data-jy-move-tier="1" style="${oldStyle.css}">`;
+  const body = `他打出了${AFFIX_START}${moveOpen}${AFFIX_END}红莲拳${AFFIX_START}</span>${AFFIX_END}，震碎了地面。`;
+  const floor = `${renderSourceBlock('原文。')}\n${renderTranslationBlock(body, { translationPrefix: '{', translationSuffix: '}' })}`;
+  const message = { mes: floor, is_user: false, extra: { [MESSAGE_META_KEY]: { schema_version: 4, translation_prefix: '{', translation_suffix: '}' } } };
+  context.chat.push(message);
+  const base = __testing.configureForTest({
+    settings: {
+      translationPrefix: '{', translationSuffix: '}', showFloatingButton: false,
+      coloring: { speakers: true, effects: true, band: oldBand, vividness: 0.7 },
+    },
+  });
+  context.extensionSettings[MODULE_ID] = base;
+
+  // A translation for some other floor is still running when the reader only touches 取色/彩度.
+  let aborted = false;
+  let settleInflight;
+  const inflightPromise = new Promise(resolve => { settleInflight = resolve; });
+  __testing.configureForTest({
+    inflight: new Map([['fake-lock', {
+      promise: inflightPromise, controller: { abort: () => { aborted = true; } },
+      sourceHash: 'x', messageId: 0, message: null, since: Date.now(),
+    }]]),
+  });
+
+  __testing.saveSettings({ ...base, coloring: { ...base.coloring, band: newBand } });
+  assert.equal(aborted, false, '仅改背景色/彩度不该取消正在进行的翻译');
+
+  // Once that run settles, the floor it (hypothetically) wrote under the old band still gets repainted.
+  settleInflight();
+  await __testing.pendingRepaint();
+  assert.ok(message.mes.includes(newStyle.css), '正在进行的翻译写完之后，它涉及的楼层也要按新背景补上色');
+  assert.ok(!message.mes.includes(oldStyle.css));
+});
+
+test('turning 说话人着色/特效字 on or off still cancels a translation in flight, since that changes the request itself', async t => {
+  const context = mockHost([]);
+  globalThis.document = { getElementById: () => null, createElement: () => ({ style: {} }), head: { appendChild: () => {} } };
+  t.after(() => {
+    delete globalThis.document;
+    __testing.configureForTest({ initialized: false, inflight: new Map() });
+  });
+  __testing.configureForTest({ initialized: true });
+  const band = computeSafeBand(['#ffffff']);
+  const base = __testing.configureForTest({
+    settings: {
+      translationPrefix: '{', translationSuffix: '}', showFloatingButton: false,
+      coloring: { speakers: true, effects: true, band, vividness: 0.7 },
+    },
+  });
+  context.extensionSettings[MODULE_ID] = base;
+
+  let aborted = false;
+  __testing.configureForTest({
+    inflight: new Map([['fake-lock', {
+      promise: new Promise(() => {}), controller: { abort: () => { aborted = true; } },
+      sourceHash: 'x', messageId: 0, message: null, since: Date.now(),
+    }]]),
+  });
+
+  __testing.saveSettings({ ...base, coloring: { ...base.coloring, effects: false } });
+  assert.equal(aborted, true, '特效字这类改变翻译请求本身的开关，仍然要取消正在进行的翻译');
+});

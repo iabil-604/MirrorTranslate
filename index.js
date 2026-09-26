@@ -249,6 +249,11 @@ const runtime = {
   epoch: 0,
   settings: normalizeProcessingSettings(),
   processingRefresh: Promise.resolve(),
+  // A band/vividness-only save's own catch-up restyle (saveSettings, once every translation in flight at
+  // save time settles) chains onto this instead of `processingRefresh`: persistProcessing awaits that one
+  // to update the panel right after a save, and a translation still running can take tens of seconds, far
+  // longer than a save should ever make the panel wait.
+  pendingRepaint: Promise.resolve(),
   processingRevision: 0,
   nativeRegexInstalled: false,
   mainGenerationActive: false,
@@ -1008,15 +1013,34 @@ function saveSettings(next) {
   // coloring change is measured against instead.
   const coloringBefore = normalizeColoring(context.extensionSettings[MODULE_ID]?.coloring);
   const coloringAfter = normalizeColoring(runtime.settings.coloring);
-  const coloringChanged = coloringBefore.speakers !== coloringAfter.speakers
-    || coloringBefore.effects !== coloringAfter.effects
-    || coloringBefore.vividness !== coloringAfter.vividness
+  // Only speakers/effects change what the translation *request* itself asks for (prompts.js
+  // annotationRequest fires only while both are on) — a band or vividness change is purely how a floor
+  // already written gets repainted, and a reply already sent under the old band is still exactly the
+  // reply that was asked for.
+  const coloringRequestChanged = coloringBefore.speakers !== coloringAfter.speakers || coloringBefore.effects !== coloringAfter.effects;
+  const coloringPaintChanged = coloringBefore.vividness !== coloringAfter.vividness
     || JSON.stringify(coloringBefore.band) !== JSON.stringify(coloringAfter.band);
-  const visualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
-    || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts)
-    || coloringChanged;
-  // A change of look re-renders translations already written; the reply being generated is still owed one.
-  if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || visualChanged) cancelPendingWork({ gate: false });
+  const coloringChanged = coloringRequestChanged || coloringPaintChanged;
+  const nonColoringVisualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
+    || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
+  const visualChanged = nonColoringVisualChanged || coloringChanged;
+  // A change of look re-renders translations already written; the reply being generated is still owed
+  // one — except a pure repaint (band/vividness only), which never touched the request and must not
+  // abort it: cancelling here used to turn a 特效字/说话人着色 colour switch, or 取色 itself, into a
+  // cancelled, paid-for translation ("翻译已取消") the reader has to ask for all over again.
+  if (previous.selectedProcessingProfileId !== runtime.settings.selectedProcessingProfileId || nonColoringVisualChanged || coloringRequestChanged) {
+    cancelPendingWork({ gate: false });
+  } else if (coloringPaintChanged && runtime.inflight.size) {
+    // Left running, that reply still finishes and writes itself styled with the coloring translateMessage
+    // captured when it started, not this save's — once every run in flight at this moment settles, the
+    // floor(s) it wrote are repainted too, or they would sit there in the old band until something else
+    // happened to trigger another restyle.
+    const settling = Promise.allSettled([...runtime.inflight.values()].map(entry => entry.promise));
+    runtime.pendingRepaint = runtime.pendingRepaint.catch(() => {}).then(() => settling).then(() => {
+      if (runtime.initialized) return restyleCurrentChat(runtime.settings);
+    });
+    runtime.pendingRepaint.catch(error => toast('error', `设置已保存，刷新已有译文失败：${safeError(error)}`));
+  }
   context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, active);
   context.extensionSettings[MODULE_ID] = runtime.settings;
   context.saveSettingsDebounced?.();
@@ -16611,13 +16635,17 @@ if (typeof document !== 'undefined') {
 // stands in for the module loadHostRegex would otherwise dynamically import from the host -- a path
 // that does not resolve outside a real browser -- so a mocked SCRIPT_TYPES/getScriptsByType/
 // saveScriptsByType can be exercised without ever reaching the real import.
-function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine, editingChannelId: editingChannelIdOverride } = {}) {
+function configureForTest({ settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine, editingChannelId: editingChannelIdOverride, inflight } = {}) {
   if (settings) runtime.settings = { ...runtime.settings, ...settings };
   if (worldInfoEntries !== undefined) runtime.wiEntries = worldInfoEntries;
   if (initialized !== undefined) runtime.initialized = initialized === true;
   if (deskExpandedChannelId !== undefined) runtime.deskExpandedChannelId = deskExpandedChannelId;
   if (regexEngine !== undefined) runtime.hostRegex = regexEngine;
   if (editingChannelIdOverride !== undefined) runtime.editingChannelId = editingChannelIdOverride;
+  // A translation "in flight" for saveSettings's own cancel/catch-up decision (see there): a plain
+  // Map of the same shape `runtime.inflight` already keeps ({ promise, controller, ... }), placed
+  // directly since a headless run never actually starts a real translation request.
+  if (inflight !== undefined) runtime.inflight = inflight;
   return runtime.settings;
 }
 
@@ -16672,6 +16700,10 @@ export const __testing = Object.freeze({
   // The restyle a coloring/affix/regex change schedules (saveSettings's own `visualChanged`) chains onto
   // this promise rather than running inline, so a test that needs to see its effect awaits it here.
   processingRefresh: () => runtime.processingRefresh,
+  // A coloring-paint-only save's catch-up restyle, scheduled once whatever was in flight at save time
+  // settles (saveSettings) — kept apart from `processingRefresh` above precisely so a real save is never
+  // stuck waiting on it; a test that needs to see the catch-up restyle land awaits this one instead.
+  pendingRepaint: () => runtime.pendingRepaint,
   syncTtsTransport,
   runTtsTransport,
   playTtsUtterance,
