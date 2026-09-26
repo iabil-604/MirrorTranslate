@@ -1,4 +1,4 @@
-import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.38.0';
+import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.40.0';
 import {
   EDGE_PUNCTUATION_RE,
   FISH_EMOTIONS,
@@ -15,8 +15,8 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.38.0';
-import { normalizeEmotion } from './palette.js?v=0.38.0';
+} from './tts.js?v=0.40.0';
+import { normalizeEmotion } from './palette.js?v=0.40.0';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
