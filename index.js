@@ -115,8 +115,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.40.0';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.40.0';
+} from './core.js?v=0.40.1';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.40.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -174,10 +174,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.40.0';
-import { createTtsStore } from './tts-store.js?v=0.40.0';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.40.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.40.0';
+} from './tts.js?v=0.40.1';
+import { createTtsStore } from './tts-store.js?v=0.40.1';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.40.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.40.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -187,7 +187,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.40.0';
+} from './processing.js?v=0.40.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -204,9 +204,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.40.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.40.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.40.0';
+} from './prompts.js?v=0.40.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.40.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.40.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -222,8 +222,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.40.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.40.0';
+} from './palette.js?v=0.40.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.40.1';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -231,7 +231,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.40.0';
+} from './diagnostics.js?v=0.40.1';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -242,7 +242,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.40.0';
+} from './helper.js?v=0.40.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -833,7 +833,8 @@ function recordDiagnostic(level, scope, message, details = {}, fullResponse, ext
     scope,
     message,
     details,
-    ...(arguments.length >= 5 ? { fullResponse } : {}),
+    // undefined is no response at all: passed only to reach `extra`, it adds no empty 「查看完整返回」.
+    ...(arguments.length >= 5 && fullResponse !== undefined ? { fullResponse } : {}),
     ...(Number.isInteger(runtime.activeFloor) ? { floor: runtime.activeFloor } : {}),
     ...extra,
   });
@@ -8098,16 +8099,51 @@ function ttsBarLabel(state, side = null) {
  * quoted run against the original line it came from lets either be found wherever it actually sits.
  */
 function locateDialogueSourceAnchors(nodeTexts, floor, utterances) {
+  // One list for both passes, or each side's own (textsForSides).
+  const texts = Array.isArray(nodeTexts) ? { source: nodeTexts, translation: nodeTexts } : nodeTexts;
   const found = new Map();
   const narrationAnchors = utterances.filter(item => item.kind !== 'quoted').map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor }));
-  for (const [id, hit] of locateAnchors(nodeTexts, floor.lines, narrationAnchors)) found.set(id, hit);
+  for (const [id, hit] of locateAnchors(texts.translation, floor.lines, narrationAnchors)) found.set(id, hit);
   const quotedUtterances = utterances.filter(item => item.kind === 'quoted');
   if (quotedUtterances.length) {
     const sourceLines = [...(floor.sources ?? [])].map(([lineId, text]) => ({ lineId, text }));
     const quotedAnchors = quotedUtterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor }));
-    for (const [id, hit] of locateAnchors(nodeTexts, sourceLines, quotedAnchors)) found.set(id, hit);
+    for (const [id, hit] of locateAnchors(texts.source, sourceLines, quotedAnchors)) found.set(id, hit);
   }
   return found;
+}
+
+// The built-in beautify (processing.js builtinReadingReplaceString) keeps every paragraph's original in
+// .jy-reading-source — inside .jy-reading-original when it folds — and its translation in
+// .jy-reading-translation; the host adds its "custom-" prefix to both when it draws the floor.
+const READING_SIDE_SELECTORS = Object.freeze({
+  translation: '.jy-reading-translation, .custom-jy-reading-translation',
+  source: '.jy-reading-source, .custom-jy-reading-source, .jy-reading-original, .custom-jy-reading-original',
+});
+
+/** Which beautify block a rendered text node sits in: 'source', 'translation', or '' outside both. */
+function readingBlockSide(node) {
+  const parent = node?.parentElement;
+  if (typeof parent?.closest !== 'function') return '';
+  if (parent.closest(READING_SIDE_SELECTORS.translation)) return 'translation';
+  if (parent.closest(READING_SIDE_SELECTORS.source)) return 'source';
+  return '';
+}
+
+/**
+ * The rendered text each side is looked for in, as `sides` (readingBlockSide per node) splits it. On a
+ * floor that wears a built-in beautify, every paragraph's original and translation sit in blocks of
+ * their own, and each side searches only its own blocks plus whatever sits outside both (a card, a
+ * picture's caption): otherwise a paragraph as short as 「律」 matches the same character at the end of
+ * the other language's block just before it — Chinese and Japanese write it alike — and its buttons hang
+ * off the paragraph above. The other side's text is blanked rather than dropped, so node numbers still
+ * point at the same nodes. A floor without both kinds of block is searched whole.
+ */
+function textsForSides(sides, nodeTexts) {
+  const list = Array.isArray(sides) ? sides : [];
+  if (!list.includes('source') || !list.includes('translation')) return { source: nodeTexts, translation: nodeTexts };
+  const keep = side => nodeTexts.map((text, index) => (list[index] && list[index] !== side ? '' : text));
+  return { source: keep('source'), translation: keep('translation') };
 }
 
 /**
@@ -8181,6 +8217,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
   const nodeTexts = nodes.map(node => node.data);
+  const sideTexts = textsForSides(nodes.map(readingBlockSide), nodeTexts);
   // Ranges are made before anything is inserted; they are live, so the insertions below move them along.
   const ranges = new Map();
   const buttons = [];
@@ -8197,8 +8234,8 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     // Nothing of it is on the page to hang a button on; the reading is started from the bar.
     if (floor.offPage) return;
     const found = floor.side === 'dialogue_source'
-      ? locateDialogueSourceAnchors(nodeTexts, floor, utterances)
-      : locateAnchors(nodeTexts, floor.lines, utterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
+      ? locateDialogueSourceAnchors(sideTexts, floor, utterances)
+      : locateAnchors(floor.side === 'source' ? sideTexts.source : sideTexts.translation, floor.lines, utterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
     for (const utterance of utterances) {
       const hit = found.get(utterance.id);
       if (!hit) continue;
@@ -16506,9 +16543,10 @@ async function resolveSegmentAtPoint(messageId, root, point) {
   const pointIndex = nodes.indexOf(point.node);
   if (pointIndex < 0) return null;
   const nodeTexts = nodes.map(node => node.data);
+  const sideTexts = textsForSides(nodes.map(readingBlockSide), nodeTexts);
   const anchors = segmentAnchors(snapshot);
-  const translationHits = locateAnchors(nodeTexts, [], anchors.translation);
-  const sourceHits = locateAnchors(nodeTexts, [], anchors.source);
+  const translationHits = locateAnchors(sideTexts.translation, [], anchors.translation);
+  const sourceHits = locateAnchors(sideTexts.source, [], anchors.source);
   return segmentAtPosition({ node: pointIndex, offset: point.offset }, translationHits, sourceHits);
 }
 
@@ -16620,9 +16658,10 @@ function noteUntranslatedRender(messageId, type, pending, { stale = false } = {}
       : pending
         ? `酒馆报的生成类型对不上（开始时是 ${pending.type}，渲染时是 ${type ?? '空'}），没有自动翻译`
         : '没有看到这次回复的生成开始（可能是别的扩展或脚本写进来的），没有自动翻译';
+  // Filed under the floor it is about, not whichever floor was last being worked on.
   recordDiagnostic('info', 'translation.auto-skip', `第 ${messageId} 楼渲染完成，${why}。`, {
     floor: messageId, renderType: type ?? null, startedType: pending?.type ?? null, stopped: Boolean(stopped),
-  });
+  }, undefined, { floor: messageId });
 }
 
 // What a skipped automatic translation says in the log, by the reason the run gave.
@@ -16650,7 +16689,7 @@ function autoTranslateSuppressed(messageId) {
   const hash = runtime.clearedFloors.get(key);
   if (!hash) return false;
   if (hashTextSync(String(message.mes ?? '')) === hash) {
-    recordDiagnostic('info', 'translation.auto-skip', `第 ${messageId} 楼刚清除过译文，没有自动翻译（要翻的时候点「翻译本楼」或「翻译当前回复」）。`, { floor: messageId });
+    recordDiagnostic('info', 'translation.auto-skip', `第 ${messageId} 楼刚清除过译文，没有自动翻译（要翻的时候点「翻译本楼」或「翻译当前回复」）。`, { floor: messageId }, undefined, { floor: messageId });
     return true;
   }
   runtime.clearedFloors.delete(key);
@@ -16936,7 +16975,7 @@ function registerRuntimeEvents() {
       runtime.generationGate.clear();
       runtime.generationEnded = false;
       runtime.mainGenerationActive = false;
-      recordDiagnostic('info', 'translation.auto-skip', `第 ${id} 楼的生成出错了，楼里没有回复，没有自动翻译。`, { floor: id, renderType: type ?? null });
+      recordDiagnostic('info', 'translation.auto-skip', `第 ${id} 楼的生成出错了，楼里没有回复，没有自动翻译。`, { floor: id, renderType: type ?? null }, undefined, { floor: id });
       return;
     }
     const newest = renderIsNewReply(id, context);
@@ -17666,6 +17705,8 @@ export const __testing = Object.freeze({
   stripHiddenRuns,
   ttsUtterances,
   locateDialogueSourceAnchors,
+  readingBlockSide,
+  textsForSides,
   chatInDeleteMode,
   handleSegmentJumpClick,
   segmentJumpHighlightPlan,

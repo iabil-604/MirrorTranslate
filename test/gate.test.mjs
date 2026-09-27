@@ -210,6 +210,20 @@ test('a regenerate without streaming, with a floor above deleted while it was wr
   chat.splice(2, 0, ...removed);
 });
 
+test('a floor a script draws with no generation behind it is logged under that floor, not the one last translated', async () => {
+  await regenerate();
+  assert.equal(started(6), 1, 'floor 6 was the last one translated');
+  clearDiagnostics();
+  chat.push({ name: '樱井', is_user: false, is_system: false, mes: '脚本写进来的一楼', swipe_id: 0, swipes: ['脚本写进来的一楼'], extra: {} });
+  await eventSource.emit(T.CHARACTER_MESSAGE_RENDERED, 7);
+  await wait(30);
+  const skipped = readDiagnostics().find(entry => entry.scope === 'translation.auto-skip' && entry.message.startsWith('第 7 楼渲染完成'));
+  assert.ok(skipped, 'the render is written down');
+  assert.equal(skipped.floor, 7);
+  assert.equal(Object.hasOwn(skipped, 'fullResponse'), false, 'no empty 「查看完整返回」 beside it');
+  chat.pop();
+});
+
 test('a reply whose body tag is missing says so on screen, once for the chat', async () => {
   // A chat of its own: the replies above were told about already.
   context.chatId = 'gate-chat-2';

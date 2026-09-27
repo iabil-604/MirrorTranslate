@@ -364,6 +364,54 @@ test('locateDialogueSourceAnchors finds a quoted run in the original block that 
   assert.equal(found.get(4).start.node, 5);
 });
 
+test('under a built-in beautify, a one-character paragraph is found in its own block, not at the end of the other language above it', () => {
+  // 原文折叠 as the host draws it: each paragraph's chip and original, then its translation. The second
+  // paragraph is only 「律」, and the translation just above it happens to end on the same character.
+  const nodeTexts = [
+    '原文', 'それを見届けてから、アクアは冷たい瞳で律を射抜いた。', // 0,1: source block, paragraph 1
+    '确认完这一切，阿库亚用冷淡的眼睛钉住了律。', // 2: translation block, paragraph 1
+    '原文', '「律」', // 3,4: source block, paragraph 2
+    '「律」', // 5: translation block, paragraph 2
+  ];
+  const sides = ['source', 'source', 'translation', 'source', 'source', 'translation'];
+  const sourceLines = [{ lineId: 1, text: 'それを見届けてから、アクアは冷たい瞳で律を射抜いた。' }, { lineId: 2, text: '「律」' }];
+  const translationLines = [{ lineId: 1, text: '确认完这一切，阿库亚用冷淡的眼睛钉住了律。' }, { lineId: 2, text: '「律」' }];
+  const anchorsOf = lines => splitUtterances(lines).map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor }));
+  assert.deepEqual(splitUtterances(sourceLines).map(item => item.lineId), [1, 2]);
+
+  // Searched whole, the original 「律」 lands on the last character of the translation above it, and
+  // the translated 「律」 on the original block below that.
+  assert.equal(locateAnchors(nodeTexts, sourceLines, anchorsOf(sourceLines)).get(2).start.node, 2);
+  assert.equal(locateAnchors(nodeTexts, translationLines, anchorsOf(translationLines)).get(2).start.node, 4);
+
+  const texts = __testing.textsForSides(sides, nodeTexts);
+  const source = locateAnchors(texts.source, sourceLines, anchorsOf(sourceLines));
+  assert.equal(source.get(1).start.node, 1);
+  assert.equal(source.get(2).start.node, 4, 'the original 「律」 is found in its own block');
+  const translation = locateAnchors(texts.translation, translationLines, anchorsOf(translationLines));
+  assert.equal(translation.get(1).start.node, 2);
+  assert.equal(translation.get(2).start.node, 5, 'the translated 「律」 is found in its own block');
+
+  // 对白读原文: narration on the translation's side, each quoted run on the original's.
+  const floor = { lines: translationLines, sources: new Map(sourceLines.map(line => [line.lineId, line.text])) };
+  const mixed = __testing.locateDialogueSourceAnchors(texts, floor, splitUtterances(floor.lines));
+  assert.equal(mixed.get(1).start.node, 2);
+  assert.equal(mixed.get(2).start.node, 4);
+
+  // Without both kinds of block (no beautify, or only the translation left on the page) nothing is blanked.
+  assert.equal(__testing.textsForSides(['', '', '', '', '', ''], nodeTexts).source, nodeTexts);
+  assert.equal(__testing.textsForSides(['translation', 'translation', '', '', '', ''], nodeTexts).translation, nodeTexts);
+});
+
+test('readingBlockSide tells the built-in beautify blocks apart, with or without the host prefix', () => {
+  const inside = selector => ({ parentElement: { closest: query => (query.split(', ').includes(selector) ? {} : null) } });
+  assert.equal(__testing.readingBlockSide(inside('.custom-jy-reading-translation')), 'translation');
+  assert.equal(__testing.readingBlockSide(inside('.jy-reading-source')), 'source');
+  assert.equal(__testing.readingBlockSide(inside('.custom-jy-reading-original')), 'source', 'the fold chip belongs to the original');
+  assert.equal(__testing.readingBlockSide(inside('.mes_text')), '');
+  assert.equal(__testing.readingBlockSide({ parentElement: null }), '');
+});
+
 test('locateDialogueSourceAnchors still finds narration when a floor has no quoted runs at all', () => {
   const nodeTexts = ['外面下着雨。', '外面下着雨。'];
   const floor = { lines: [{ lineId: 1, text: '外面下着雨。' }], sources: new Map([[1, '外は雨が降っている。']]) };

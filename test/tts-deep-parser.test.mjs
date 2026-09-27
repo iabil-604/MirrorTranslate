@@ -258,6 +258,25 @@ test('a bracketed run the sentence itself was written with (a status line, a sys
   assert.deepEqual(voices.get(quote.id).pauses, [{ after: '，', length: 'short' }]);
 });
 
+test('only a sentence that carries a tag is copied out as a line; the rest answer in fields, so a long floor is not written out twice', () => {
+  const example = JSON.parse(DEEP_PROMPT.split('\n')[1].match(/\{"voices".*\]\}/)[0]).voices;
+  const bare = example.find(item => item.type !== 'narration' && !Object.hasOwn(item, 'line'));
+  assert.ok(bare, 'the worked example shows a spoken sentence with no line');
+  assert.ok(bare.emotion && bare.speaker);
+  assert.match(DEEP_PROMPT, /line 只给要加标签的句子写/);
+  assert.match(DEEP_PROMPT, /大多数句子一个标签都不用加，也就不写 line/);
+  // The copy is checked by the program; the model is not asked to check it again in its head.
+  assert.doesNotMatch(DEEP_PROMPT, /line 去掉标签、去掉首尾引号后和正文这句逐字一样；/);
+  assert.match(DEEP_PROMPT, /由程序逐字核对/);
+
+  const { utterances, quote } = quoteOf('你怎么才来');
+  const { labels, voices, mismatches } = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id, speaker: '林浅', emotion: 'worried' }] }), utterances);
+  assert.deepEqual(mismatches, [], 'no line is not a line that failed to match');
+  assert.equal(labels.get(quote.id).speaker, '林浅');
+  assert.equal(voices.get(quote.id).emotion, 'worried');
+  assert.equal(fishOf(utterances, labels, voices, quote.id), '[worried] 你怎么才来');
+});
+
 test('the prompt\'s own worked example does not place a pause where its own rule 8 says punctuation already stops', () => {
   const match = DEEP_PROMPT.match(/"line":"((?:[^"\\]|\\.)*)"/);
   assert.ok(match, 'the worked example carries a line field');

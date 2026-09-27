@@ -1,4 +1,4 @@
-import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.40.0';
+import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.40.1';
 import {
   EDGE_PUNCTUATION_RE,
   FISH_EMOTIONS,
@@ -15,8 +15,8 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.40.0';
-import { normalizeEmotion } from './palette.js?v=0.40.0';
+} from './tts.js?v=0.40.1';
+import { normalizeEmotion } from './palette.js?v=0.40.1';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -47,7 +47,7 @@ export const DEEP_STATUS = Object.freeze({ available: true, note: '可用' });
 
 export const DEEP_PROMPT = [
   '你是有声小说的配音导演。lines 是一楼正文，按段给出，引号里的话前面标着 ⟦编号⟧；references 里有角色资料、世界书和前面几楼；roster 是登记过的名字；character 是角色卡的名字，user 是用户扮演的角色；styles 是角色的表达习惯和用户在调音台上定下的规则，是硬性要求，只有声音例外：第 10、11 条的限制 styles 也不能放宽。你只管带编号的句子：由谁念、开头是什么情绪、这句怎么念。旁白不用管，也不用输出。不改写、不复述、不翻译任何句子。',
-  '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"林浅","emotion":"nervous","pace":"fast","line":"[nervous] 你别靠这么近 [pause] 会让人看见的。"},{"id":5,"type":"narration"}]}。line 是这句话本身，一字不改地抄一遍，只能往里面插 [标签]，标签和它紧挨着的字之间空一格；旁白只写 type，不写 line。speaker、emotion、pace 看不出就不写。',
+  '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"林浅","emotion":"nervous","pace":"fast","line":"[nervous] 你别靠这么近 [pause] 会让人看见的。"},{"id":5,"type":"narration"},{"id":6,"speaker":"林浅","emotion":"worried"}]}。line 只给要加标签的句子写：这句话本身，一字不改地抄一遍，只能往里面插 [标签]，标签和它紧挨着的字之间空一格。除了句首的情绪词一个标签都不加的句子（像第 6 句）不写 line，情绪写在 emotion 里就够了。旁白只写 type，不写 line。speaker、emotion、pace 看不出就不写。',
   '1. 编号：每个 ⟦编号⟧ 都要回答，按编号从小到大，每个只出现一次，一个都不能漏。',
   '2. 不是说出口的话：引号里是书名、招牌、标语、信和文件上的字、拟声词（「砰」「咔嚓」）时（比如门上写着「闲人免进」），只写 {"id":N,"type":"narration"}。引号里心里想的话算这个人的话，照常写 speaker。speakers 里的编号都是说出口的话。',
   '3. speaker：从 roster 里逐字照抄名字，不加敬称，不加括号说明。正文用昵称、姓或称呼（「学姐」「那家伙」）指 roster 里的人，也写 roster 里的名字；正文用「你」「我」指某个人，写这个人的名字；roster 里没有的人，写正文对他的称呼。按这个顺序判断：引号前后写明的说话人和动作 → 话里叫到的名字（被叫到的是听的人，不是说的人）→ 话里的自称、口癖和语尾 → 对话一来一回的顺序。不要写「他」「她」「众人」「旁白」「未知」。character 可能是整个故事或旁白的名字，正文没显示是这个人在说，就不要写它。{{user}}看不出是谁说的就省略 speaker，不要猜。输入里的 speakers 是用户手动定的说话人，这些编号照抄。',
@@ -61,8 +61,8 @@ export const DEEP_PROMPT = [
   '11. emotions、tones、sounds 三张表里的词都是合法标签，选中它就能写进 line，不必顾虑「太露骨」；这三张表、加上 pause、long pause、emphasis，是 line 里能出现的全部词，别的英文词写了也不算数。',
   `12. 只有语气词的句子（「嗯……」「啊？」「唔」「哈？」）：只写 speaker 和 emotion，emotion 不用 ${SOFT_MOODS.join('、')}；line 里最多在句首加一个 [shouting] 或 [screaming]（正文写了喊、尖叫才加），不写别的标签。`,
   '13. 一楼是一条走向：情绪跟着剧情走，剧情转了才转。上一句的情绪只是参考，不是惯性：换了场景、事情已经过去，就不延续。还在同一件事、同一口气里的相邻两句，不要从一头跳到另一头（从 calm 直接跳到 hysterical）；同一个人前后几句的情绪要接得上。',
-  '14. 大多数句子的 line 只要照抄这句、一个标签都不加；情绪和场面真有起伏的句子才多写。标签越少，念出来越像人说话，回得也越快。styles 要求更多时按 styles，第 9、10、11 条不放宽。',
-  '15. 输出前在心里核对一遍，不要写出来：编号齐全、从小到大；speaker 之外，emotion、tone、sounds 里用到的每个英文词都在对应的列表里原样出现；line 去掉标签、去掉首尾引号后和正文这句逐字一样；没有正文没写的声音，没有超过第 8 条的上限。不要在 JSON 之外写任何思考过程。',
+  '14. 大多数句子一个标签都不用加，也就不写 line；情绪和场面真有起伏的句子才写 line、加标签。标签越少，念出来越像人说话，回得也越快。styles 要求更多时按 styles，第 9、10、11 条不放宽。',
+  '15. 输出前在心里核对一遍，不要写出来：编号齐全、从小到大；speaker 之外，emotion、tone、sounds 里用到的每个英文词都在对应的列表里原样出现；没有正文没写的声音，没有超过第 8 条的上限。line 抄得对不对由程序逐字核对，不用你再核。不要在 JSON 之外写任何思考过程。',
   '{{lang_rule}}',
   '{{references_rule}}',
 ].join('\n');
