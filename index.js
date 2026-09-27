@@ -115,8 +115,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.40.1';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.40.1';
+} from './core.js?v=0.40.2';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.40.2';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -174,10 +174,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.40.1';
-import { createTtsStore } from './tts-store.js?v=0.40.1';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.40.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.40.1';
+} from './tts.js?v=0.40.2';
+import { createTtsStore } from './tts-store.js?v=0.40.2';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.40.2';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.40.2';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -187,7 +187,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.40.1';
+} from './processing.js?v=0.40.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -204,9 +204,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.40.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.40.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.40.1';
+} from './prompts.js?v=0.40.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.40.2';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.40.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -222,8 +222,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.40.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.40.1';
+} from './palette.js?v=0.40.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.40.2';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -231,7 +231,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.40.1';
+} from './diagnostics.js?v=0.40.2';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -242,7 +242,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.40.1';
+} from './helper.js?v=0.40.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -2581,16 +2581,24 @@ function consumeRetry(retryBudget, reason, details = {}) {
 const MAX_TRANSLATION_REQUESTS = 16;
 
 // Repeating an identical request that already truncated truncates again, so a batch that comes back
-// with nothing new is halved instead of being resent as-is.
+// with nothing new is halved instead of being resent as-is. Both halves go out, one after the other:
+// the part set aside waits in `queue` until the part in front of it is done. A part given up on for
+// want of retries only leaves its own paragraphs missing; the parts behind it are still asked once.
 async function translateOneBatch(batch, settings, signal, packet, translations, budget, state, annotations = new Map()) {
-  let pending = batch.filter(segment => !translations.has(segment.id));
+  const queue = [batch];
+  const missingOf = parts => parts.flat().filter(segment => !translations.has(segment.id));
   let lastError = null;
   let attempts = 0;
-  while (pending.length) {
+  while (queue.length) {
+    let pending = queue[0].filter(segment => !translations.has(segment.id));
+    if (!pending.length) {
+      queue.shift();
+      continue;
+    }
     if (state.requests >= MAX_TRANSLATION_REQUESTS) {
       recordDiagnostic('warn', 'translation.request-cap', '本次翻译已达到请求次数上限，停止继续补译。', {
         requests: state.requests,
-        missingIds: pending.map(item => item.id),
+        missingIds: missingOf(queue).map(item => item.id),
       });
       return lastError;
     }
@@ -2640,11 +2648,15 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
       }
       const progressed = translations.size > before;
       pending = pending.filter(segment => !translations.has(segment.id));
-      recordDiagnostic(pending.length ? 'warn' : 'info', 'translation.response', pending.length ? '本批返回不完整，准备补译。' : '本批译文返回完整。', {
+      const waiting = missingOf(queue.slice(1));
+      recordDiagnostic(pending.length ? 'warn' : 'info', 'translation.response', pending.length
+        ? '本批返回不完整，准备补译。'
+        : waiting.length ? `这部分译完了，接着译剩下的 ${waiting.length} 段。` : '本批译文返回完整。', {
         request: state.requests,
         batchSize: batch.length,
         recovered: translations.size,
         missingIds: pending.map(item => item.id),
+        ...(waiting.length ? { waitingIds: waiting.map(item => item.id) } : {}),
         parserWarnings: recovered.warnings,
         response: recovered.response,
       });
@@ -2658,12 +2670,16 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
           roster: (state.roster ?? []).map(entry => entry.name),
         });
       }
-      if (!pending.length) return null;
+      if (!pending.length) {
+        queue.shift();
+        continue;
+      }
       lastError = new Error(`仍缺少第 ${pending.map(item => item.id).join('、')} 段译文。`);
       if (!progressed && pending.length > 1) {
         // Shrinking changes the request, so it is not charged to the retry budget.
-        pending = pending.slice(0, Math.ceil(pending.length / 2));
-        recordDiagnostic('warn', 'translation.shrink', '本批没有新增译文，改用更小的批次重试。', { nextBatch: pending.length });
+        const half = Math.ceil(pending.length / 2);
+        queue.splice(0, 1, pending.slice(0, half), pending.slice(half));
+        recordDiagnostic('warn', 'translation.shrink', '本批没有新增译文，改用更小的批次重试。', { nextBatch: half, after: pending.length - half });
         continue;
       }
       if (pending.every(item => state.echoSeen.has(item.id))) {
@@ -2676,14 +2692,16 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
         });
         continue;
       }
-      if (!consumeRetry(budget, 'missing-translations', { missingIds: pending.map(item => item.id) })) return lastError;
+      // Out of retries: this part stays missing, the parts behind it still get their own request.
+      if (!consumeRetry(budget, 'missing-translations', { missingIds: pending.map(item => item.id) })) queue.shift();
     } catch (error) {
       if (signal?.aborted) throw error;
       lastError = error;
+      // A request that failed outright says nothing about the part: the next one would fail the same way.
       if (!consumeRetry(budget, 'request-error', { error: safeError(error) })) return lastError;
     }
   }
-  return null;
+  return missingOf([batch]).length ? lastError : null;
 }
 
 function channelConcurrency(channel) {

@@ -1711,6 +1711,77 @@ test('a short katakana onomatopoeia echoed unchanged twice in a row is accepted,
   assert.equal(snapshot.existingTranslations.get(1), 'ドキドキ');
 });
 
+// ---------------------------------------------------------------------------------------------
+// A batch whose reply carries nothing usable is halved and asked again. Both halves have to go out:
+// the half set aside used to be dropped the moment the first half came back complete, and the floor
+// was written back with its second half missing and left for yet another 补译.
+// ---------------------------------------------------------------------------------------------
+
+function requestedIds(prompt) {
+  const bodies = (Array.isArray(prompt) ? prompt : []).filter(item => item.role === 'user')
+    .map(item => { try { return JSON.parse(item.content); } catch { return null; } })
+    .filter(Boolean);
+  return (bodies.at(-1)?.segments ?? []).map(item => item.id);
+}
+
+test('a reply with nothing usable in it halves the batch, and both halves are translated', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const ids = requestedIds(prompt);
+      asked.push(ids);
+      // The first reply comes back at once with nothing that parses as a translation.
+      if (asked.length === 1) return Promise.resolve('抱歉，这段内容暂时无法处理。');
+      return Promise.resolve(JSON.stringify(ids.map(id => ({ id, text: `第${id}段译文。` }))));
+    },
+  });
+  clearDiagnostics();
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  const lines = ['雨が降っている。', '風が強い。', '窓が鳴った。', '誰かが来る。'];
+  const source = lines.join('\n\n');
+  const segments = segmentSource(source, settings).segments;
+  assert.equal(segments.length, 4);
+  context.chat.push({ mes: `<story_scene>\n${source}\n</story_scene>`, swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.deepEqual(asked, [[1, 2, 3, 4], [1, 2], [3, 4]], 'the useless reply, then each half once');
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'the floor is written back complete');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+  for (const segment of segments) assert.equal(snapshot.existingTranslations.get(segment.id), `第${segment.id}段译文。`);
+  const log = readDiagnostics();
+  assert.ok(log.some(entry => entry.scope === 'translation.shrink'));
+  assert.ok(log.some(entry => entry.message === '这部分译完了，接着译剩下的 2 段。'));
+  assert.equal(log.some(entry => entry.scope === 'translation.partial'), false, 'nothing is left for 补译');
+});
+
+test('a half that stays empty after its retry is left missing, and the half behind it is still asked', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const ids = requestedIds(prompt);
+      asked.push(ids);
+      // Paragraph 1 is refused every time, whatever it is sent with; everything else translates.
+      if (ids.includes(1)) return Promise.resolve('无法处理。');
+      return Promise.resolve(JSON.stringify(ids.map(id => ({ id, text: `第${id}段译文。` }))));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  const source = ['雨が降っている。', '風が強い。', '窓が鳴った。', '誰かが来る。'].join('\n\n');
+  context.chat.push({ mes: `<story_scene>\n${source}\n</story_scene>`, swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  // Whole batch (empty) → halves [1,2] (empty) → quarters [1] (empty, one retry) and [2], then [3,4].
+  assert.deepEqual(asked, [[1, 2, 3, 4], [1, 2], [1], [1], [2], [3, 4]]);
+  assert.equal(result.skipped, false);
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.existingTranslations.has(1), false, 'the refused paragraph stays missing');
+  for (const id of [2, 3, 4]) assert.equal(snapshot.existingTranslations.get(id), `第${id}段译文。`);
+});
+
 test('a long segment echoed unchanged twice in a row stays missing, never silently accepted', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });
