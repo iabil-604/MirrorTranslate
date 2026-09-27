@@ -26,7 +26,7 @@ globalThis.document = {
 };
 
 const {
-  configureForTest, collectSettings, saveSettings, applyDeskUseChange,
+  configureForTest, collectSettings, saveSettings, applyConnectionUseChange,
   deleteChannel, deleteProcessingProfile, fetchChannelModels, syncFields,
 } = __testing;
 
@@ -114,12 +114,11 @@ test('sanity: syncFields runs to completion against the stub root without throwi
   assert.doesNotThrow(() => syncFields(makeStubRoot(), collectSettings(readerRoot)));
 });
 
-// --- applyDeskUseChange (review finding index.js:12386) --------------------------------------------
+// --- applyConnectionUseChange (DESIGN §17.1; same reasoning as review finding index.js:12386) --------
 // collectSettings(root) reads every page at once, so an invalid field left elsewhere (排除标签/提取标签,
-// say) can fail this save even though the checkbox just clicked is perfectly fine. The fix puts back only
-// that one checkbox on failure, and never calls syncFields on that path at all — a full resync would reset
-// whatever the reader is still mid-editing on the other page, exactly the thing the 模型连接/翻译规则
-// autosaves already avoid (index.js:12617/12524).
+// say) can fail this save even though the choice just made is perfectly fine. Only that one picker is put
+// back on failure, and syncFields never runs on that path — a full resync would reset whatever the reader
+// is still mid-editing on the other page, exactly the thing the 模型连接/翻译规则 autosaves already avoid.
 
 function rootWithBrokenBodyTags() {
   // Empty 提取标签 fails collectSettings with '至少填写一个有效的正文提取标签名称。' (core.js's
@@ -127,25 +126,40 @@ function rootWithBrokenBodyTags() {
   return { dataset: {}, querySelector: selector => (selector === '[data-jy-field="bodyTags"]' ? { value: '' } : null), querySelectorAll: () => [] };
 }
 
-test('applyDeskUseChange puts back only the clicked checkbox when collectSettings fails on an unrelated field, and never touches the setting', () => {
-  configureForTest({ settings: { channels: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], tts: { analysisChannelId: 'follow' } } });
-  const before = collectSettings(readerRoot).tts.analysisChannelId;
+// A <select> stand-in fillChannelPicker can refill: options by value, and the chosen value.
+function makePicker(use, value) {
+  const doc = {
+    createElement: () => ({ value: '', textContent: '' }),
+  };
+  const select = {
+    ownerDocument: doc,
+    dataset: { jyUsePicker: use },
+    value,
+    options: [],
+    replaceChildren(...options) { this.options = options; },
+  };
+  return select;
+}
 
-  const root = rootWithBrokenBodyTags();
-  const input = { dataset: { jyDeskUse: 'analysis', jyDeskUseChannel: 'b' }, checked: true };
-  applyDeskUseChange(root, input);
+test('applyConnectionUseChange puts back only the picker just changed when collectSettings fails on an unrelated field, and never touches the setting', () => {
+  configureForTest({ settings: { channels: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], tts: { deepChannelId: 'follow' } } });
+  const before = collectSettings(readerRoot).tts.deepChannelId;
 
-  assert.equal(input.checked, false, '保存失败时把刚点的这个框恢复原状（未勾选）');
-  assert.equal(collectSettings(readerRoot).tts.analysisChannelId, before, '设置本身完全没变——没有被 setConnectionUse 写入 b');
+  const picker = makePicker('deep', 'b');
+  applyConnectionUseChange(rootWithBrokenBodyTags(), picker);
+
+  assert.equal(picker.value, 'follow', '保存失败时把刚改的这个下拉框放回原来的选择');
+  assert.equal(collectSettings(readerRoot).tts.deepChannelId, before, '设置本身完全没变——没有被 setConnectionUse 写入 b');
 });
 
-test('applyDeskUseChange saves normally and does not touch the checkbox when nothing else on the page is broken', () => {
-  configureForTest({ settings: { channels: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], tts: { analysisChannelId: 'follow' } } });
-  const root = makeStubRoot();
-  const input = { dataset: { jyDeskUse: 'analysis', jyDeskUseChannel: 'b' }, checked: true };
-  assert.doesNotThrow(() => applyDeskUseChange(root, input));
-  assert.equal(input.checked, true, '成功时不去动这个框——它已经是对的状态了');
-  assert.equal(collectSettings(readerRoot).tts.analysisChannelId, 'b');
+test('applyConnectionUseChange saves the use just picked, and only that use', () => {
+  configureForTest({ settings: { apiMode: 'independent', selectedChannelId: 'a', channels: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], tts: { deepChannelId: 'follow' } } });
+  const picker = makePicker('deep', 'b');
+  assert.doesNotThrow(() => applyConnectionUseChange(makeStubRoot(), picker));
+  const saved = collectSettings(readerRoot);
+  assert.equal(saved.tts.deepChannelId, 'b');
+  assert.equal(saved.apiMode, 'independent', '翻译用的连接不跟着动');
+  assert.equal(saved.selectedChannelId, 'a');
 });
 
 // --- deleteChannel (review finding index.js:11734) --------------------------------------------------

@@ -8,19 +8,19 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.40.2';
+} from './prompts.js?v=0.41.0';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.40.2';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.41.0';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.40.2';
+import { resolveMoveStyle } from './palette.js?v=0.41.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.40.2';
+export const APP_VERSION = '0.41.0';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -734,10 +734,12 @@ export const DEFAULT_COLORING = Object.freeze({
 // 'floor' sends the whole floor as one recording after a deep reading of it; 'stream' sends one
 // paragraph at a time and starts playing as soon as the first one is back. The old 'sentence' mode is
 // folded into 'stream': a single sentence is found inside whichever recording already holds it.
-// The two readings: the simple one gives every sentence its feeling, the deep one asks a model why
-// and how to play it, on top of the simple one.
-export const TTS_MODES = Object.freeze(['off', 'simple', 'deep']);
-// What a play does on a floor the simple reading has not seen: ask, analyse without asking, or read the plain text.
+// The reading is plain ('off' — the text itself, the translation's own marks and the story's <say>
+// marks, no model asked) or analysed ('deep', shown as 分析模式: a model reads the floor and says how
+// each line is played). The simple reading that used to sit between them is gone since v0.41.0: a
+// translated floor already carries its marks, and the plain reading names speakers by itself.
+export const TTS_MODES = Object.freeze(['off', 'deep']);
+// What a play does on a plain floor nobody has analysed: ask, analyse it without asking, or read the plain text.
 export const TTS_ASK_MODES = Object.freeze(['ask', 'analyze', 'plain']);
 // Punctuation the reader pairs with a tag: the Chinese word shown, Fish's own tag sent, and where the tag
 // lands by default (inline: in place of the punctuation; head: at the start of the clause it closes).
@@ -933,7 +935,7 @@ export const DEFAULT_TTS = Object.freeze({
   // listening in the background and no audio store opened.
   enabled: false,
   side: 'translation',
-  mode: 'simple',
+  mode: 'off',
   range: 'all',
   emotionCues: true,
   // The copy sent to the voice loses the markup a preset or the colouring wrapped around the words.
@@ -955,14 +957,12 @@ export const DEFAULT_TTS = Object.freeze({
   playAfterGenerate: true,
   // Runs of ！！！ become one mark; the cue carries the strength instead of the voice shrieking.
   tamePunctuation: true,
-  // The reader's own system prompts for the two readings; empty means the built-in ones.
-  prompts: Object.freeze({ simple: '', deep: '' }),
-  // The connection the reading's analysis goes to: 'follow' for the host's own connection, or a saved
-  // connection's id. Empty only ever comes from an older setting, and is pinned to the translation's
-  // choice when the settings are read, so the reading never follows the translation silently.
-  analysisChannelId: '',
-  // The connection the deep reading goes to: empty is the same one as the analysis above, 'follow' the
-  // host's own, else a saved connection's id.
+  // The reader's own system prompt for the analysed reading; empty means the built-in one.
+  prompts: Object.freeze({ deep: '' }),
+  // The connection the analysed reading goes to — and 「分析这一楼」, 按意见改 and 从角色卡和世界书识别角色
+  // with it: 'follow' for the host's own connection, or a saved connection's id. Empty only ever comes
+  // from an older setting, and is pinned when the settings are read (mergeSettings), so the reading never
+  // follows the translation silently.
   deepChannelId: '',
   // The longest one analysis may take, counted from the request going out, whether or not the model
   // is still writing. The connection's own timeout only counts silence, so a model that thinks out
@@ -970,7 +970,7 @@ export const DEFAULT_TTS = Object.freeze({
   analysisLimitSec: 150,
   // Sentences per analysis batch; 0 sends the whole floor in one request.
   batchSize: 0,
-  // A play on a floor the simple reading has not seen: ask first, always analyse, or read the plain text.
+  // A play on a plain floor nobody has analysed: ask first, always analyse, or read the plain text.
   askAnalysis: 'ask',
   // The deep reading is shelved while it is reworked; this hatch keeps it reachable for tests.
   deepUnlocked: false,
@@ -1015,6 +1015,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   preset: '',
   coloring: DEFAULT_COLORING,
   speakerPalette: {},
+  // DESIGN §17.5 招式表: moves set by hand, per character card like the speaker palette.
+  moveOverrides: {},
   tts: DEFAULT_TTS,
   helper: DEFAULT_HELPER,
   ttsVoices: {},
@@ -1356,47 +1358,39 @@ export function getActiveChannel(settings) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Connection uses: the three places a saved connection (or the host's own) can be put to work,
-// named the way the control center names them rather than by the settings fields underneath —
-// 'translation' is apiMode + selectedChannelId, 'analysis' is tts.analysisChannelId, 'deep' is
-// tts.deepChannelId. Each use holds exactly one choice at a time; the pages that used to have three
-// separate pickers for this (翻译用哪条连接 / 朗读分析用的连接 / 深度分析用的连接) become one checkbox
-// per connection per use, and these helpers are what that checkbox reads and writes.
+// Connection uses: the fixed places a saved connection (or the host's own) is put to work, named the
+// way the control center names them rather than by the settings fields underneath — 'translation' is
+// apiMode + selectedChannelId, 'deep' (分析模式) is tts.deepChannelId, 'helper' is helper.channelId.
+// Each use holds exactly one choice at a time; 「各功能用哪条连接」 (DESIGN §17.1) shows one picker per
+// use, and these helpers are what those pickers read and write.
 // ---------------------------------------------------------------------------------------------
 
-export const CONNECTION_USES = Object.freeze(['translation', 'analysis', 'deep', 'helper']);
+export const CONNECTION_USES = Object.freeze(['translation', 'deep', 'helper']);
 
 /**
  * What a use points at right now, resolved to something real: 'follow' for the host's own connection,
- * or a saved connection's id. 深度分析's own empty value — 「和朗读分析用同一条」 — resolves through to
- * whatever 朗读分析 resolves to, so all three uses are always directly comparable to a connection id.
+ * or a saved connection's id, so every use is always directly comparable to a connection id.
  */
 export function connectionUseChoice(settings, use) {
   if (use === 'translation') return translationChannelChoice(settings);
-  if (use === 'analysis') return resolveFeatureChannel(settings?.tts?.analysisChannelId, settings);
-  if (use === 'deep') {
-    const own = String(settings?.tts?.deepChannelId ?? '').trim();
-    return own ? resolveFeatureChannel(own, settings) : connectionUseChoice(settings, 'analysis');
-  }
+  if (use === 'deep') return resolveFeatureChannel(settings?.tts?.deepChannelId, settings);
   if (use === 'helper') return resolveFeatureChannel(settings?.helper?.channelId, settings);
   throw new Error(`未知用途：${use}`);
 }
 
 /**
- * Points a use at a connection — 'follow' for the host's own, a saved connection's id, or (深度分析
- * only) '' for 「和朗读分析用同一条」. A use holds exactly one choice, so pointing it here is what moves
- * it away from wherever it pointed before; nothing else needs writing.
+ * Points a use at a connection — 'follow' for the host's own, else a saved connection's id. A use holds
+ * exactly one choice, so pointing it here is what moves it away from wherever it pointed before.
  */
 export function setConnectionUse(settings, use, choice) {
-  const value = String(choice ?? '').trim();
+  const value = String(choice ?? '').trim() || 'follow';
   if (use === 'translation') {
-    return value && value !== 'follow'
+    return value !== 'follow'
       ? { ...settings, apiMode: 'independent', selectedChannelId: value }
       : { ...settings, apiMode: 'follow' };
   }
-  if (use === 'analysis') return { ...settings, tts: { ...settings.tts, analysisChannelId: value || 'follow' } };
   if (use === 'deep') return { ...settings, tts: { ...settings.tts, deepChannelId: value } };
-  if (use === 'helper') return { ...settings, helper: { ...settings.helper, channelId: value || 'follow' } };
+  if (use === 'helper') return { ...settings, helper: { ...settings.helper, channelId: value } };
   throw new Error(`未知用途：${use}`);
 }
 
@@ -1407,34 +1401,13 @@ export function channelUsesPointingAt(settings, channelId) {
 
 /**
  * Deleting a connection cannot leave a use pointing at nothing still in the list, so every use it
- * served moves to 跟随酒馆 first. 深度分析 is left to defer (its field stays '') when it was only
- * following 朗读分析 to this connection — moving 朗读分析 already carries it along, and leaving the
- * field empty means it keeps deferring afterwards instead of being pinned to today's fallback.
- * Returns the adjusted settings and which uses moved, for whoever deletes the connection to say so.
+ * served moves to 跟随酒馆 first. Returns the adjusted settings and which uses moved, for whoever
+ * deletes the connection to say so.
  */
 export function reassignConnectionUsesOnDelete(settings, channelId) {
-  const moved = [];
+  const moved = channelUsesPointingAt(settings, channelId);
   let next = settings;
-  if (connectionUseChoice(next, 'translation') === channelId) {
-    next = setConnectionUse(next, 'translation', 'follow');
-    moved.push('translation');
-  }
-  const deepOwnChoice = String(next?.tts?.deepChannelId ?? '').trim();
-  const analysisPointedHere = connectionUseChoice(next, 'analysis') === channelId;
-  if (analysisPointedHere) {
-    next = setConnectionUse(next, 'analysis', 'follow');
-    moved.push('analysis');
-  }
-  if (deepOwnChoice && deepOwnChoice === channelId) {
-    next = setConnectionUse(next, 'deep', 'follow');
-    moved.push('deep');
-  } else if (!deepOwnChoice && analysisPointedHere) {
-    moved.push('deep');
-  }
-  if (connectionUseChoice(next, 'helper') === channelId) {
-    next = setConnectionUse(next, 'helper', 'follow');
-    moved.push('helper');
-  }
+  for (const use of moved) next = setConnectionUse(next, use, 'follow');
   return { settings: next, moved };
 }
 
@@ -1443,10 +1416,9 @@ export function reassignConnectionUsesOnDelete(settings, channelId) {
 // Each sets exactly the nine fields below and nothing else — 只留译文、流式写回、全部连接与密钥、提取标
 // 签、翻译规则文字、音色、主题 are never touched by a package, per the same section.
 //
-// The four packages' actual field values are a proposal — 镜译 has never shipped a package system
-// before this branch — chosen to read as a cost ladder (translation only → + display → + simple
-// reading → + deep reading, the priciest pass). They are pending 常夜灯's sign-off before a page ships
-// them; presetContent is the one place to change once that lands.
+// The four packages read as a cost ladder (translation only → + display → + reading aloud on the
+// translation's own marks → + 分析模式, the priciest pass), confirmed by 常夜灯 2026-09-26 and moved to
+// the two-way 分析模式 on 2026-09-27; presetContent is the one place to change them.
 // ---------------------------------------------------------------------------------------------
 
 export const PRESET_MANAGED_FIELDS = Object.freeze([
@@ -1485,7 +1457,7 @@ const CONSOLE_PRESET_CONTENT = Object.freeze({
   audiobook: Object.freeze({
     autoGeneration: true, autoSwipe: true,
     coloringSpeakers: true, coloringEmotions: true, coloringEffects: false,
-    ttsEnabled: true, ttsMode: 'simple', ttsAutoRead: true, ttsPlayAfterGenerate: true,
+    ttsEnabled: true, ttsMode: 'off', ttsAutoRead: true, ttsPlayAfterGenerate: true,
   }),
   everything: Object.freeze({
     autoGeneration: true, autoSwipe: true,
@@ -1651,6 +1623,34 @@ export function normalizeColoring(value) {
 
 // One entry per character whose speech gets its own colour. `source` is the declared hair or eye
 // colour; the displayed colour is derived from it and the current band, never stored.
+// DESIGN §17.5 招式表: what the reader set by hand for one move name. A field left out is automatic —
+// the element the chat fixed first, the tier the translator reported, the colour the element gives —
+// and `off` keeps the name in place without a colour or weight of its own.
+export function normalizeMoveOverride(value) {
+  if (!value || typeof value !== 'object') return null;
+  const name = String(value.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 24);
+  if (!name) return null;
+  const override = { name };
+  const element = String(value.element ?? '').replace(/\s+/g, ' ').trim().slice(0, 12);
+  if (element) override.element = element;
+  const tier = Math.round(Number(value.tier));
+  if (tier >= 1 && tier <= 3) override.tier = tier;
+  const color = String(value.color ?? '').trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(color)) override.color = color;
+  if (value.off === true) override.off = true;
+  return Object.keys(override).length > 1 ? override : null;
+}
+
+/** One card's hand settings, one entry per move name (the last one given wins), nothing automatic kept. */
+export function normalizeMoveOverrides(list) {
+  const byName = new Map();
+  for (const item of Array.isArray(list) ? list : []) {
+    const override = normalizeMoveOverride(item);
+    if (override) byName.set(override.name, override);
+  }
+  return [...byName.values()].slice(0, 300);
+}
+
 export function normalizeSpeakerList(value) {
   const seen = new Set();
   return (Array.isArray(value) ? value : [])
@@ -1863,11 +1863,12 @@ export function normalizeTts(value) {
   // Older settings named how the audio was made (whole floor, stream, sentence) and how deeply the
   // floor was read (auto, deep, light, annotations). Only the depth survives as the mode: the whole
   // floor read deeply, the stream read simply, and a depth named outright wins over either.
-  const legacyMode = source.mode === 'floor' ? 'deep' : ['stream', 'sentence'].includes(source.mode) ? 'simple' : source.mode;
-  const wanted = TTS_MODES.includes(source.mode)
+  // The simple reading of v0.40 and earlier reads plain now (a translated floor keeps its marks either
+  // way), and so do the light and stream readings before it; only a depth named deep stays analysed.
+  const legacyMode = source.mode === 'floor' ? 'deep' : ['stream', 'sentence', 'simple'].includes(source.mode) ? 'off' : source.mode;
+  const mode = TTS_MODES.includes(source.mode)
     ? source.mode
-    : source.analysis === 'deep' ? 'deep' : ['light', 'annotations'].includes(source.analysis) ? 'simple' : legacyMode;
-  const mode = wanted;
+    : source.analysis === 'deep' ? 'deep' : ['light', 'annotations'].includes(source.analysis) ? 'off' : legacyMode;
   return {
     enabled: source.enabled === true,
     side: TTS_SIDES.includes(source.side) ? source.side : DEFAULT_TTS.side,
@@ -1884,14 +1885,11 @@ export function normalizeTts(value) {
     playAfterGenerate: source.playAfterGenerate === undefined ? DEFAULT_TTS.playAfterGenerate : source.playAfterGenerate !== false,
     tamePunctuation: source.tamePunctuation === undefined ? DEFAULT_TTS.tamePunctuation : source.tamePunctuation !== false,
     prompts: {
-      // The light reading's prompt of earlier versions is the simple reading's now.
-      simple: typeof source.prompts?.simple === 'string' ? normalizeNewlines(source.prompts.simple).slice(0, 12000)
-        : typeof source.prompts?.light === 'string' ? normalizeNewlines(source.prompts.light).slice(0, 12000) : '',
       deep: typeof source.prompts?.deep === 'string' ? normalizeNewlines(source.prompts.deep).slice(0, 12000) : '',
     },
-    // The connection chosen for analysis in earlier versions is the deep reading's now. The reading's
-    // own choice is made explicit in mergeSettings, which knows the translation's.
-    analysisChannelId: String(source.analysisChannelId ?? '').trim().slice(0, 80),
+    // The oldest settings named this connection `channelId`. The one the simple reading used
+    // (`analysisChannelId`, gone since v0.41.0) stands in for an empty choice in mergeSettings, which
+    // also pins it, knowing the translation's.
     deepChannelId: String(source.deepChannelId ?? source.channelId ?? '').trim().slice(0, 80),
     analysisLimitSec: clampInteger(source.analysisLimitSec, 20, 900, DEFAULT_TTS.analysisLimitSec),
     batchSize: normalizeBatchSize(source.batchSize),
@@ -2049,6 +2047,13 @@ export function mergeSettings(value = {}) {
     merged.worldInfoBooks[characterKey] = [...new Set(list.map(name => String(name ?? '')).filter(Boolean))];
   }
   merged.coloring = normalizeColoring(source.coloring);
+  // 招式表's hand settings follow the character card too (DESIGN §17.5).
+  merged.moveOverrides = {};
+  const rawMoveOverrides = source.moveOverrides && typeof source.moveOverrides === 'object' ? source.moveOverrides : {};
+  for (const [characterKey, list] of Object.entries(rawMoveOverrides)) {
+    const overrides = normalizeMoveOverrides(list);
+    if (overrides.length) merged.moveOverrides[characterKey] = overrides;
+  }
   // The speaker palette follows the character card, like the worldbook whitelist above.
   merged.speakerPalette = {};
   const rawPalette = source.speakerPalette && typeof source.speakerPalette === 'object' ? source.speakerPalette : {};
@@ -2061,12 +2066,14 @@ export function mergeSettings(value = {}) {
   // another feature's choice behind the reader's back. A reading that used to follow the translation
   // is pinned, once, to whatever the translation used at the time, so nothing changes on the day this
   // is read and nothing changes silently after it. A choice that points at a deleted connection is
-  // treated the same way.
-  merged.tts.analysisChannelId = resolveFeatureChannel(merged.tts.analysisChannelId, merged);
-  if (merged.tts.deepChannelId && merged.tts.deepChannelId !== 'follow' && !merged.channels.some(channel => channel.id === merged.tts.deepChannelId)) {
-    merged.tts.deepChannelId = '';
-  }
-  // 小助手 is a shelf entry too (DESIGN §16.3): its own choice, resolved the same way 朗读分析's is —
+  // treated the same way. An analysed reading that deferred to the simple reading's connection
+  // (「和朗读分析用同一条」, before v0.41.0) takes that connection as its own.
+  const legacyAnalysisChannel = String(source.tts?.analysisChannelId ?? '').trim();
+  const ownDeepChannel = merged.tts.deepChannelId === 'follow' || merged.channels.some(channel => channel.id === merged.tts.deepChannelId)
+    ? merged.tts.deepChannelId
+    : '';
+  merged.tts.deepChannelId = resolveFeatureChannel(ownDeepChannel || legacyAnalysisChannel, merged);
+  // 小助手 is a shelf entry too (DESIGN §16.3): its own choice, resolved the same way 分析模式's is —
   // 'follow' stays 'follow', a deleted or never-set connection falls back to whatever the translation
   // uses right now.
   merged.helper = normalizeHelper(source.helper);
@@ -4633,7 +4640,9 @@ function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) 
   pieces = liftSplitQuotes(pieces);
   // Nothing to carry means nothing to wrap: a line split into runs that all came back bare is the
   // line itself, and wrapping it would only add markers for a reader to strip later.
-  if (!pieces.some(piece => piece?.css || piece?.className || piece?.rawOpen || piece?.rawClose)) return translation;
+  // A move drawn without colour (招式表's 不上色) still keeps its span, so turning its colour back on
+  // later has the span to recolour.
+  if (!pieces.some(piece => piece?.css || piece?.className || piece?.rawOpen || piece?.rawClose || piece?.moveName !== undefined)) return translation;
   return pieces
     .map(piece => {
       const attributes = [
@@ -4651,6 +4660,9 @@ function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) 
         // from scratch against a new band, with only the span's own attributes to go on and no piece tree
         // left to ask, so the same choice has to survive as a marker here or the size comes back.
         piece.moveElement !== undefined && piece.dropSurroundingCss ? 'data-jy-move-nosize="1"' : '',
+        // What the words around it wear (`carveRuns`), for a restyle that takes the move's own colour
+        // away (招式表's 不上色) to put back.
+        piece.moveName !== undefined && piece.moveBaseCss ? `data-jy-move-base="${escapeMoveAttribute(piece.moveBaseCss)}"` : '',
       ].filter(Boolean).join(' ');
       const inner = attributes
         ? `${wrap(`<span ${attributes}>`)}${piece.text}${wrap('</span>')}`
@@ -4748,6 +4760,9 @@ function carveRuns(pieces, ordered) {
         // a move carved out of it later still sees it; a move run carries none of its own, so it falls
         // back to whatever the piece already had.
         hidden: run.hidden ?? piece.hidden,
+        // What the words around a move wear (a speaker's colour, a rhythm step), so 招式表's 不上色 can
+        // put the move back in it later (`styledBody` writes it down, `recolorMoveSpans` reads it).
+        ...(carried ? {} : { moveBaseCss: piece.css || '' }),
         [flag]: true,
       });
       const rest = text.slice(at + run.text.length);
@@ -4827,6 +4842,7 @@ function carveRuns(pieces, ordered) {
         moveElement: undefined,
         moveName: undefined,
         moveTier: undefined,
+        moveBaseCss: undefined,
         moveApplied: false,
       });
       const rest = text.slice(at + run.text.length);
@@ -5262,11 +5278,25 @@ export function recolorMoveSpans(body, options) {
   if (typeof body !== 'string' || !body.includes('data-jy-move-element="')) return body;
   const coloring = normalizeColoring(options?.coloring);
   if (!coloring.speakers || !coloring.effects || !coloring.band) return body;
+  // 招式表's hand settings for this chat's card (DESIGN §17.5), laid over the automatic element and tier
+  // the span itself carries — which is why the span keeps those and never the hand-set ones.
+  const overrides = new Map(normalizeMoveOverrides(options?.moveOverrideList).map(item => [item.name, item]));
   return body.replace(MOVE_SPAN_OPEN_RE, tag => {
     const element = unescapeMoveAttribute(tag.match(/\sdata-jy-move-element="([^"]*)"/)?.[1]);
     const name = unescapeMoveAttribute(tag.match(/\sdata-jy-move-name="([^"]*)"/)?.[1]);
     const tier = unescapeMoveAttribute(tag.match(/\sdata-jy-move-tier="([^"]*)"/)?.[1]);
-    const resolved = resolveMoveStyle({ element, name, tier, band: coloring.band, vividness: coloring.vividness });
+    const override = overrides.get(name);
+    if (override?.off) {
+      // 不上色: the move reads like the words around it — whatever they wore when it was cut out of them
+      // (`data-jy-move-base`), or nothing of its own when they wore nothing.
+      // Still attribute-escaped as written, which is what a style attribute needs anyway.
+      const base = tag.match(/\sdata-jy-move-base="([^"]*)"/)?.[1] ?? '';
+      if (/\sstyle="[^"]*"/.test(tag)) return tag.replace(/\sstyle="[^"]*"/, base ? ` style="${base}"` : '');
+      return base ? tag.replace(/>$/, ` style="${base}">`) : tag;
+    }
+    const resolved = resolveMoveStyle({
+      element: override?.element || element, name, tier: override?.tier || tier, band: coloring.band, vividness: coloring.vividness, color: override?.color || '',
+    });
     if (!resolved) return tag;
     // 字号二选一 (design §2 item 4): `data-jy-move-nosize` (`styledBody`, above) says this move was
     // carved out of a <big>/<small> carried fragment on first render, so its own font-size was dropped

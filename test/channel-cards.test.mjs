@@ -104,7 +104,7 @@ function testSettings() {
   return {
     apiMode: 'independent',
     selectedChannelId: 'a',
-    tts: { analysisChannelId: 'follow', deepChannelId: '' },
+    tts: { deepChannelId: 'follow' },
     channels: [
       { id: 'a', name: 'Chan A', url: 'https://a.example/v1', model: 'model-a', models: [] },
       { id: 'b', name: 'Chan B', url: '', model: '', models: [] },

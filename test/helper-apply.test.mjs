@@ -49,13 +49,15 @@ function fakeHelperRoot() {
   };
   const conversation = fakeElement();
   conversation.ownerDocument = doc;
+  const input = fakeElement();
   const root = {
     querySelector(selector) {
       if (selector === '[data-jy-helper-conversation]') return conversation;
+      if (selector === '[data-jy-helper-input]') return input;
       return null;
     },
   };
-  return { root, conversation };
+  return { root, conversation, input };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -233,11 +235,11 @@ test('extractControlCenterKnowledge does not file the shared per-connection edit
   );
 });
 
-test('extractControlCenterKnowledge no longer truncates 朗读 at a flat 40-line-per-page ceiling — 深度分析/单次分析最长等待/默认调音台/副模型提示词 all still get through, against the real control center markup (review finding helper.js:286, v2)', () => {
+test('extractControlCenterKnowledge no longer truncates 朗读 at a flat 40-line-per-page ceiling — 分析模式/单次分析最长等待/默认调音台/副模型提示词 all still get through, against the real control center markup (review finding helper.js:286, v2)', () => {
   const lines = extractControlCenterKnowledge(CONTROL_CENTER_MARKUP);
   const ttsLines = lines.filter(line => line.startsWith('朗读 › '));
   assert.ok(ttsLines.length > 40, `朗读页应该贡献超过旧上限（40）的行数，实际 ${ttsLines.length}`);
-  assert.ok(ttsLines.some(line => line.includes('深度分析') || line.startsWith('朗读 › 深度分析')), '深度分析的说明不该被砍掉');
+  assert.ok(ttsLines.some(line => line.startsWith('朗读 › 分析模式 › ')), '分析模式的说明不该被砍掉');
   assert.ok(ttsLines.some(line => line.includes('单次分析最长等待')), '单次分析最长等待不该被砍掉');
   assert.ok(ttsLines.some(line => line.startsWith('朗读 › 默认调音台') || line.includes('默认调音台')), '默认调音台不该被砍掉');
   assert.ok(ttsLines.some(line => line.startsWith('朗读 › 副模型提示词')), '副模型提示词不该被砍掉');
@@ -371,7 +373,7 @@ test('askHelper unwraps the { content, reasoning } object an independent (saved)
   }
 });
 
-test('askHelper honours abort (closing the control center / 清空 mid-ask) — the pending request is cancelled, the turn reads 请求已取消, and a reader cancel is never logged as an ERROR (review findings index.js:11971 abort wiring, index.js:12036)', async () => {
+test('askHelper honours abort (清空 mid-ask) — the pending request is cancelled, the turn reads 请求已取消, the question goes back to the input, and a reader cancel is never logged as an ERROR (review findings index.js:11971 abort wiring, index.js:12036)', async () => {
   clearDiagnostics();
   configureForTest({ settings: helperTestSettings(), panel: null, resetHelper: true });
   const beforeSillyTavern = globalThis.SillyTavern;
@@ -390,25 +392,70 @@ test('askHelper honours abort (closing the control center / 清空 mid-ask) — 
     }),
   };
   try {
-    const { root } = fakeHelperRoot();
+    const { root, input } = fakeHelperRoot();
     const before = readDiagnostics().length;
     const askPromise = askHelper(root, '问题');
     // askHelper runs synchronously up to its first `await` (Promise.all for manual/floor/versions/
     // regex), which is where runtime.helper.controller gets set — so it already exists the instant
     // askHelper(...) hands back a pending promise, in this same synchronous tick. Aborting here is
-    // exactly what closing the control center or clicking 清空 mid-ask does.
+    // exactly what clicking 清空 mid-ask does.
     const controller = __testing.helperController();
     assert.ok(controller, 'askHelper 应该已经同步建立好 AbortController');
     controller.abort();
     const turn = await askPromise;
-    assert.equal(turn.error, '请求已取消。');
+    assert.match(turn.error, /^请求已取消。/);
     assert.equal(turn.answer, '');
+    assert.equal(input.value, '问题', '取消的问题放回输入框');
+    assert.equal(__testing.helperDraft(), '问题');
     assert.equal(
       readDiagnostics().length,
       before,
       '读者自己取消不该记一条新的运行记录，更不该是 ERROR（会被下一次提问当成这条连接真的出过错）',
     );
     assert.equal(__testing.helperController(), null, '结束后控制器应该清空');
+  } finally {
+    globalThis.SillyTavern = beforeSillyTavern;
+  }
+});
+
+test('a question that was not answered goes back into the input box, unless the reader has typed something else since (DESIGN §17.3)', async () => {
+  clearDiagnostics();
+  configureForTest({ settings: helperTestSettings(), panel: null, resetHelper: true });
+  const beforeSillyTavern = globalThis.SillyTavern;
+  let fail;
+  globalThis.SillyTavern = {
+    getContext: () => ({
+      mainApi: 'openai',
+      extensionSettings: { regex: [] },
+      ChatCompletionService: { processRequest: () => new Promise((resolve, reject) => { fail = reject; }) },
+    }),
+  };
+  try {
+    const { root, input } = fakeHelperRoot();
+    input.value = '为什么不翻译？';
+    configureForTest({ helperDraft: '为什么不翻译？' });
+    let asking = askHelper(root, input.value);
+    assert.equal(input.value, '', '发出去时输入框清空');
+    assert.equal(__testing.helperDraft(), '', '草稿也清空');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    fail(new Error('连接断了'));
+    let turn = await asking;
+    assert.match(turn.error, /^没问到：连接断了/);
+    assert.match(turn.error, /问题放回输入框了/);
+    assert.equal(input.value, '为什么不翻译？', '没问到的问题回到输入框，可以改了再发');
+    assert.equal(__testing.helperDraft(), '为什么不翻译？');
+
+    // The reader starts typing another question while the next one is still out: that is not overwritten.
+    input.value = '';
+    configureForTest({ helperDraft: '' });
+    asking = askHelper(root, '朗读怎么打开？');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    input.value = '另一个问题';
+    configureForTest({ helperDraft: '另一个问题' });
+    fail(new Error('又断了'));
+    turn = await asking;
+    assert.equal(input.value, '另一个问题');
+    assert.equal(__testing.helperDraft(), '另一个问题');
   } finally {
     globalThis.SillyTavern = beforeSillyTavern;
   }

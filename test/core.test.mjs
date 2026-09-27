@@ -44,6 +44,8 @@ import {
   withoutCarriedColor,
   lineFormatting,
   mergeSettings,
+  normalizeTts,
+  TTS_MODES,
   getActiveChannel,
   getActivePromptProfile,
   normalizeOpenAiBaseUrl,
@@ -2463,7 +2465,7 @@ test('pagesForMode lists the rail per DESIGN §15.1/§16.1, and resolvePageForMo
   assert.deepEqual(Object.keys(CONTROL_CENTER_PAGES).sort(), [...UI_MODES].sort());
 });
 
-test('connection uses: translation and analysis resolve directly, deep defers to analysis until it has its own choice', () => {
+test('connection uses: three fixed ones, each holding exactly one choice (DESIGN §17.1)', () => {
   const settings = mergeSettings({
     apiMode: 'independent',
     channels: [
@@ -2471,46 +2473,76 @@ test('connection uses: translation and analysis resolve directly, deep defers to
       { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
     ],
     selectedChannelId: 'c1',
-    tts: { analysisChannelId: 'c2', deepChannelId: '' },
+    tts: { deepChannelId: 'c2' },
   });
+  assert.deepEqual(CONNECTION_USES, ['translation', 'deep', 'helper']);
   assert.equal(connectionUseChoice(settings, 'translation'), 'c1');
-  assert.equal(connectionUseChoice(settings, 'analysis'), 'c2');
-  assert.equal(connectionUseChoice(settings, 'deep'), 'c2', 'empty deepChannelId defers to analysis');
+  assert.equal(connectionUseChoice(settings, 'deep'), 'c2');
+  assert.equal(connectionUseChoice(settings, 'helper'), 'follow');
 
   const pinned = setConnectionUse(settings, 'deep', 'c1');
   assert.equal(pinned.tts.deepChannelId, 'c1');
   assert.equal(connectionUseChoice(pinned, 'deep'), 'c1');
-
-  const followingAgain = setConnectionUse(pinned, 'deep', '');
-  assert.equal(followingAgain.tts.deepChannelId, '', "setting deep back to '' returns it to following analysis");
-  assert.equal(connectionUseChoice(followingAgain, 'deep'), 'c2');
+  // A use never points at nothing: an empty choice is the host's own connection.
+  assert.equal(setConnectionUse(pinned, 'deep', '').tts.deepChannelId, 'follow');
+  assert.equal(setConnectionUse(pinned, 'helper', '').helper.channelId, 'follow');
 
   const movedTranslation = setConnectionUse(settings, 'translation', 'follow');
   assert.equal(movedTranslation.apiMode, 'follow');
   assert.equal(connectionUseChoice(movedTranslation, 'translation'), 'follow');
+  assert.equal(connectionUseChoice(movedTranslation, 'deep'), 'c2', 'moving the translation moves nothing else');
 
-  const movedAnalysis = setConnectionUse(settings, 'analysis', 'c1');
-  assert.equal(movedAnalysis.tts.analysisChannelId, 'c1');
-
-  assert.deepEqual(CONNECTION_USES, ['translation', 'analysis', 'deep', 'helper']);
+  assert.throws(() => connectionUseChoice(settings, 'analysis'), 'the simple reading\'s own use is gone');
   assert.throws(() => connectionUseChoice(settings, 'bogus'));
   assert.throws(() => setConnectionUse(settings, 'bogus', 'c1'));
 });
 
-test('channelUsesPointingAt lists every use resolving to a connection, deep included when it only defers there', () => {
+test('an old setting whose analysed reading deferred to the simple reading\'s connection keeps going there', () => {
+  const channels = [
+    { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+    { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+  ];
+  // 「和朗读分析用同一条」: an empty deep choice meant whatever 朗读分析 used.
+  const deferred = mergeSettings({ schemaVersion: 13, apiMode: 'independent', channels, selectedChannelId: 'c1', tts: { mode: 'deep', analysisChannelId: 'c2', deepChannelId: '' } });
+  assert.equal(deferred.tts.deepChannelId, 'c2');
+  assert.equal(Object.hasOwn(deferred.tts, 'analysisChannelId'), false, 'the old field is not carried on');
+  // Its own choice wins over the old one.
+  const own = mergeSettings({ schemaVersion: 13, apiMode: 'independent', channels, selectedChannelId: 'c1', tts: { analysisChannelId: 'c2', deepChannelId: 'c1' } });
+  assert.equal(own.tts.deepChannelId, 'c1');
+  // Nothing chosen anywhere: pinned to what the translation uses today, never left empty.
+  const fresh = mergeSettings({ schemaVersion: 13, apiMode: 'independent', channels, selectedChannelId: 'c2', tts: {} });
+  assert.equal(fresh.tts.deepChannelId, 'c2');
+  // A deleted connection falls back the same way.
+  const gone = mergeSettings({ schemaVersion: 13, apiMode: 'follow', channels, selectedChannelId: 'c1', tts: { deepChannelId: 'deleted' } });
+  assert.equal(gone.tts.deepChannelId, 'follow');
+});
+
+test('the simple reading of older versions reads plain now; only an analysed reading stays analysed', () => {
+  assert.deepEqual(TTS_MODES, ['off', 'deep']);
+  assert.equal(normalizeTts({ mode: 'simple' }).mode, 'off');
+  assert.equal(normalizeTts({ mode: 'deep' }).mode, 'deep');
+  assert.equal(normalizeTts({ mode: 'off' }).mode, 'off');
+  assert.equal(normalizeTts({}).mode, 'off', 'a fresh reading is plain');
+  assert.equal(normalizeTts({ mode: 'floor' }).mode, 'deep');
+  assert.equal(normalizeTts({ mode: 'stream' }).mode, 'off');
+  assert.equal(normalizeTts({ analysis: 'light' }).mode, 'off');
+  assert.equal(normalizeTts({ analysis: 'deep' }).mode, 'deep');
+  assert.deepEqual(normalizeTts({ prompts: { simple: '旧的', deep: '我的' } }).prompts, { deep: '我的' });
+});
+
+test('channelUsesPointingAt lists every use resolving to a connection', () => {
   const settings = mergeSettings({
     apiMode: 'independent',
     channels: [{ id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' }],
     selectedChannelId: 'c1',
-    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+    tts: { deepChannelId: 'c1' },
   });
-  assert.deepEqual(channelUsesPointingAt(settings, 'c1'), ['translation', 'analysis', 'deep']);
-  // 小助手 was never pointed at c1 above, so it still resolves to 跟随酒馆 (its own default) rather
-  // than following the translation the way 深度分析 does.
+  assert.deepEqual(channelUsesPointingAt(settings, 'c1'), ['translation', 'deep']);
+  // 小助手 was never pointed at c1 above, so it still resolves to 跟随酒馆, its own default.
   assert.deepEqual(channelUsesPointingAt(settings, 'follow'), ['helper']);
 });
 
-test('reassignConnectionUsesOnDelete moves every use a deleted connection served to 跟随酒馆, leaving a deferring deep still deferring', () => {
+test('reassignConnectionUsesOnDelete moves every use a deleted connection served to 跟随酒馆', () => {
   const twoChannels = [
     { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
     { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
@@ -2519,25 +2551,19 @@ test('reassignConnectionUsesOnDelete moves every use a deleted connection served
     apiMode: 'independent',
     channels: twoChannels,
     selectedChannelId: 'c1',
-    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+    tts: { deepChannelId: 'c1' },
+    helper: { channelId: 'c1' },
   });
   const result = reassignConnectionUsesOnDelete(settings, 'c1');
-  assert.deepEqual(result.moved, ['translation', 'analysis', 'deep']);
+  assert.deepEqual(result.moved, ['translation', 'deep', 'helper']);
   assert.equal(result.settings.apiMode, 'follow');
-  assert.equal(result.settings.tts.analysisChannelId, 'follow');
-  assert.equal(result.settings.tts.deepChannelId, '', 'deep never had its own choice, so its field is left untouched');
-  assert.equal(connectionUseChoice(result.settings, 'deep'), 'follow');
+  assert.equal(result.settings.tts.deepChannelId, 'follow');
+  assert.equal(result.settings.helper.channelId, 'follow');
 
-  const pinnedSettings = mergeSettings({
-    apiMode: 'independent',
-    channels: twoChannels,
-    selectedChannelId: 'c2',
-    tts: { analysisChannelId: 'c2', deepChannelId: 'c1' },
-  });
-  const pinnedResult = reassignConnectionUsesOnDelete(pinnedSettings, 'c1');
-  assert.deepEqual(pinnedResult.moved, ['deep']);
-  assert.equal(pinnedResult.settings.tts.deepChannelId, 'follow');
-  assert.equal(pinnedResult.settings.apiMode, 'independent', 'translation used c2, untouched by deleting c1');
+  const partial = mergeSettings({ apiMode: 'independent', channels: twoChannels, selectedChannelId: 'c2', tts: { deepChannelId: 'c1' } });
+  const partialResult = reassignConnectionUsesOnDelete(partial, 'c1');
+  assert.deepEqual(partialResult.moved, ['deep']);
+  assert.equal(partialResult.settings.apiMode, 'independent', 'translation used c2, untouched by deleting c1');
 
   const untouched = reassignConnectionUsesOnDelete(settings, 'not-a-real-id');
   assert.deepEqual(untouched.moved, []);
@@ -2629,7 +2655,8 @@ test('applyPreset writes only the managed fields and remembers the package id; p
   const audiobook = applyPreset(base, 'audiobook');
   assert.equal(audiobook.preset, 'audiobook');
   assert.equal(audiobook.tts.enabled, true);
-  assert.equal(audiobook.tts.mode, 'simple');
+  assert.equal(audiobook.tts.mode, 'off', '有声小说 reads with the translation\'s marks; 分析模式 comes with 全都要');
+  assert.equal(applyPreset(base, 'everything').tts.mode, 'deep');
   assert.equal(audiobook.tts.autoRead, true);
   assert.equal(audiobook.coloring.speakers, true);
   assert.equal(audiobook.coloring.effects, false, '特效字 only comes with 全都要');

@@ -47,10 +47,10 @@ function makeElement(tag, doc) {
       el.append(...nodes);
     },
     querySelector(selector) {
-      const tag = String(selector).toUpperCase();
+      const match = matcherFor(selector);
       const search = node => {
-        for (const child of node.children) {
-          if (child.tagName === tag) return child;
+        for (const child of node.children || []) {
+          if (match(child)) return child;
           const found = search(child);
           if (found) return found;
         }
@@ -62,6 +62,18 @@ function makeElement(tag, doc) {
   return el;
 }
 
+// A tag name, or one `[data-…]` / `[data-…="value"]` attribute selector read off the dataset — the only two
+// shapes the functions under test look nodes up by.
+function matcherFor(selector) {
+  const attr = /^\[data-([a-z-]+)(?:="([^"]*)")?\]$/.exec(String(selector));
+  if (attr) {
+    const key = attr[1].replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+    return node => Boolean(node.dataset) && key in node.dataset && (attr[2] === undefined || node.dataset[key] === attr[2]);
+  }
+  const tag = String(selector).toUpperCase();
+  return node => node.tagName === tag;
+}
+
 function makeDoc() {
   const doc = {};
   doc.createElement = tag => makeElement(tag, doc);
@@ -69,8 +81,7 @@ function makeDoc() {
   return doc;
 }
 
-// Depth-first search for every descendant carrying a given dataset key (any value) — used only to find
-// [data-jy-channel-use] checkboxes without needing a real attribute-selector engine.
+// Depth-first search for every descendant carrying a given dataset key (any value).
 function collectByDatasetKey(node, key, results = []) {
   for (const child of node.children || []) {
     if (child.dataset && key in child.dataset) results.push(child);
@@ -92,7 +103,7 @@ function findByDataset(node, matches) {
 
 function makeConsoleRoot() {
   const doc = makeDoc();
-  const followRow = makeElement('div', doc);
+  const usesBox = makeElement('div', doc); // [data-jy-connection-uses]
   const host = makeElement('div', doc); // [data-jy-channel-cards]
   const detail = makeElement('div', doc);
   const holder = makeElement('div', doc);
@@ -102,13 +113,11 @@ function makeConsoleRoot() {
   const presetDriftList = makeElement('ul', doc); // [data-jy-preset-drift-list]
   const deskList = makeElement('div', doc); // [data-jy-desk-connection-list]
   const channelSummary = makeElement('p', doc); // [data-jy-channel-summary]
-  const analysisSelects = [makeElement('select', doc)];
   const deepSelects = [makeElement('select', doc)];
 
   const root = {
     dataset: {},
     querySelector(selector) {
-      if (selector === '[data-jy-channel-use-row="follow"]') return followRow;
       if (selector === '[data-jy-channel-cards]') return host;
       if (selector === '[data-jy-channel-detail]') return detail;
       if (selector === '[data-jy-channel-detail-holder]') return holder;
@@ -122,13 +131,12 @@ function makeConsoleRoot() {
     },
     querySelectorAll(selector) {
       if (selector === '[data-jy-channel-card]') return host.children;
-      if (selector === '[data-jy-channel-use]') return [...collectByDatasetKey(host, 'jyChannelUse'), ...collectByDatasetKey(followRow, 'jyChannelUse')];
-      if (selector === '[data-jy-tts-field="analysisChannelId"]') return analysisSelects;
+      if (selector === '[data-jy-connection-uses]') return [usesBox];
       if (selector === '[data-jy-tts-field="deepChannelId"]') return deepSelects;
       return [];
     },
   };
-  return { root, host, detail, holder, deskList, channelSummary, analysisSelects, deepSelects };
+  return { root, host, detail, holder, deskList, channelSummary, deepSelects, usesBox };
 }
 
 function testSettings() {
@@ -141,35 +149,36 @@ function testSettings() {
       { id: 'a', name: 'Chan A', url: 'https://a.example/v1', model: 'model-a', models: [], key: '' },
       { id: 'b', name: 'Chan B', url: '', model: '', models: [], key: '' },
     ],
-    tts: { ...base.tts, analysisChannelId: 'follow', deepChannelId: '' },
+    tts: { ...base.tts, deepChannelId: 'follow' },
   };
 }
 
-// --- syncChannelFields({ rebuildCards: false }) also refreshes the 用在 aria-labels --------------
-// Review finding index.js:12626: the channel-field fast path (index.js:12376's own fix) only ever
-// updated the open card's <h2>; a screen reader kept hearing the connection's old name on its own 用在
-// checkboxes ("Chan A · 翻译") after a rename, since nothing besides a full renderChannelCards ever
-// touched their aria-label.
+// --- syncChannelFields({ rebuildCards: false }) keeps 「各功能用哪条连接」 in step ------------------------
+// Review finding index.js:12626: the channel-field fast path only ever updated the open card's <h2>; a
+// rename has to reach the pickers that name the connection too (DESIGN §17.1), without rebuilding the
+// cards or the pickers' own rows.
 
-test('syncChannelFields({ rebuildCards: false }) updates the open card\'s 用在 checkbox aria-labels on a rename, without touching any other card\'s', () => {
-  const { root, host } = makeConsoleRoot();
+test('syncChannelFields({ rebuildCards: false }) renames the open card and the pickers naming it, keeping every picker row in place', () => {
+  const { root, host, usesBox } = makeConsoleRoot();
   const settings = testSettings();
   renderChannelCards(root, settings, 'a');
   configureForTest({ editingChannelId: 'a' });
+  syncChannelFields(root, settings);
 
-  const before = collectByDatasetKey(host, 'jyChannelUse').filter(el => el.dataset.jyChannelUseChoice === 'a');
-  assert.ok(before.length > 0, 'sanity: card a has 用在 checkboxes');
-  assert.ok(before.every(el => el.getAttribute('aria-label').startsWith('Chan A ·')));
+  const rows = [...usesBox.children];
+  assert.deepEqual(rows.map(row => row.dataset.jyUseRow), ['translation', 'deep', 'helper'], '三行：翻译、分析模式、小助手');
+  const pickers = rows.map(row => usesBox.querySelector(`[data-jy-use-row="${row.dataset.jyUseRow}"]`).querySelector('[data-jy-use-picker]'));
+  assert.deepEqual(pickers.map(picker => picker.value), ['a', 'follow', 'follow'], '各自选中现在用的那一条');
+  assert.equal(collectByDatasetKey(host, 'jyChannelUse').length, 0, '连接卡上不再有用途勾选');
 
   const renamed = { ...settings, channels: settings.channels.map(c => (c.id === 'a' ? { ...c, name: 'Renamed Chan' } : c)) };
   syncChannelFields(root, renamed, { rebuildCards: false });
 
-  const afterA = collectByDatasetKey(host, 'jyChannelUse').filter(el => el.dataset.jyChannelUseChoice === 'a');
-  const afterB = collectByDatasetKey(host, 'jyChannelUse').filter(el => el.dataset.jyChannelUseChoice === 'b');
-  assert.ok(afterA.length > 0);
-  for (const box of afterA) assert.ok(box.getAttribute('aria-label').startsWith('Renamed Chan ·'), `expected renamed label, got ${box.getAttribute('aria-label')}`);
-  // The other card's own checkboxes are a different connection entirely and must not be touched.
-  for (const box of afterB) assert.ok(box.getAttribute('aria-label').startsWith('Chan B ·'));
+  assert.deepEqual([...usesBox.children], rows, '行还是原来那几行，没有被换掉');
+  const option = pickers[0].children.find(o => o.value === 'a');
+  assert.match(option.textContent, /^Renamed Chan/);
+  const heading = findByDataset(host, d => d.jyChannelCard === 'a').querySelector('h2');
+  assert.equal(heading.textContent, 'Renamed Chan');
 });
 
 // --- updateSummary / fillTtsChannelPickers on the channel-field fast path ------------------------
@@ -191,19 +200,25 @@ test('updateSummary reflects a channel\'s current model/url once it is re-run, n
   assert.match(channelSummary.textContent, /https:\/\/moved\.example\/v2/);
 });
 
-test('fillTtsChannelPickers refills the 朗读分析/深度分析 selects for the connection\'s current name/model', () => {
-  const { root, analysisSelects, deepSelects } = makeConsoleRoot();
-  const settings = { ...testSettings(), tts: { ...testSettings().tts, analysisChannelId: 'a', deepChannelId: 'a' } };
+test('fillTtsChannelPickers refills 分析模式\'s selects and 「各功能用哪条连接」 for the connection\'s current name/model', () => {
+  const { root, deepSelects, usesBox } = makeConsoleRoot();
+  const settings = { ...testSettings(), tts: { ...testSettings().tts, enabled: true, mode: 'deep', deepChannelId: 'a' } };
   fillTtsChannelPickers(root, settings);
-  const analysisOption = analysisSelects[0].children.find(o => o.value === 'a');
-  const deepOption = deepSelects[0].children.find(o => o.value === 'a');
-  assert.match(analysisOption.textContent, /model-a\b/);
-  assert.match(deepOption.textContent, /model-a\b/);
+  assert.match(deepSelects[0].children.find(o => o.value === 'a').textContent, /model-a\b/);
+  assert.equal(deepSelects[0].value, 'a');
+  assert.equal(deepSelects[0].children.some(o => o.value === ''), false, '没有「和朗读分析用同一条」这一项了');
+  const deepRow = usesBox.querySelector('[data-jy-use-row="deep"]');
+  assert.equal(deepRow.querySelector('[data-jy-use-picker]').value, 'a');
+  assert.equal(deepRow.querySelector('[data-jy-use-note]').hidden, true, '开着分析模式时不写「用不到」');
 
   const renamed = { ...settings, channels: settings.channels.map(c => (c.id === 'a' ? { ...c, name: 'Renamed', model: 'model-a2' } : c)) };
   fillTtsChannelPickers(root, renamed);
-  const analysisOption2 = analysisSelects[0].children.find(o => o.value === 'a');
-  assert.match(analysisOption2.textContent, /Renamed · model-a2/);
+  assert.match(deepSelects[0].children.find(o => o.value === 'a').textContent, /Renamed · model-a2/);
+
+  fillTtsChannelPickers(root, { ...renamed, tts: { ...renamed.tts, mode: 'off' } });
+  assert.equal(deepRow.querySelector('[data-jy-use-note]').textContent, '分析模式没开，眼下用不到');
+  fillTtsChannelPickers(root, { ...renamed, tts: { ...renamed.tts, enabled: false } });
+  assert.equal(deepRow.querySelector('[data-jy-use-note]').textContent, '朗读没开，眼下用不到');
 });
 
 // --- syncDeskFields({ rebuildList: false }) --------------------------------------------------------

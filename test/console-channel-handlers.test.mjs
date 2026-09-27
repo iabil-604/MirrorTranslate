@@ -108,7 +108,6 @@ function makeTrackedRoot({ deskFields = [], channelFields = [], editingChannelId
   const root = doc.createElement();
   root.dataset.jyEditingChannelId = editingChannelId;
   const channelSummary = doc.createElement();
-  const analysisSelect = doc.createElement();
   const deepSelect = doc.createElement();
   const genericQuerySelector = root.querySelector;
   root.querySelector = selector => {
@@ -118,11 +117,10 @@ function makeTrackedRoot({ deskFields = [], channelFields = [], editingChannelId
   root.querySelectorAll = selector => {
     if (selector === '[data-jy-desk-channel-field]') return deskFields;
     if (selector === '[data-jy-channel-field]') return channelFields;
-    if (selector === '[data-jy-tts-field="analysisChannelId"]') return [analysisSelect];
     if (selector === '[data-jy-tts-field="deepChannelId"]') return [deepSelect];
     return [];
   };
-  return { root, channelSummary, analysisSelect, deepSelect };
+  return { root, channelSummary, deepSelect };
 }
 
 function testSettings(overrides = {}) {
@@ -150,7 +148,7 @@ test('applyDeskChannelFieldChange saves the desk card\'s address/key onto the co
   // first created, exactly the "new user, default single connection" scenario the review reproduced.
   const urlField = channelField('url', '');
   const keyField = channelField('key', '');
-  const { root, channelSummary, analysisSelect, deepSelect } = makeTrackedRoot({
+  const { root, channelSummary, deepSelect } = makeTrackedRoot({
     deskFields: [deskField('url', 'https://new.example/v1'), deskField('key', 'sk-NEW')],
     channelFields: [urlField, keyField],
     editingChannelId: 'a',
@@ -162,8 +160,7 @@ test('applyDeskChannelFieldChange saves the desk card\'s address/key onto the co
   assert.equal(urlField.value, 'https://new.example/v1', '模型连接页的地址栏跟着桌面卡刚存的值更新，不再是旧的空值');
   assert.equal(keyField.value, 'sk-NEW', '模型连接页的密钥栏同理');
   assert.match(channelSummary.textContent, /https:\/\/new\.example\/v1/, '翻译台自己的摘要行也跟着刷新');
-  assert.ok(analysisSelect.children.some(o => o.value === 'a'), '朗读分析的连接选择器也刷新了这条连接');
-  assert.ok(deepSelect.children.some(o => o.value === 'a'));
+  assert.ok(deepSelect.children.some(o => o.value === 'a'), '分析模式的连接选择器也刷新了这条连接');
 });
 
 test('applyDeskChannelFieldChange leaves everything alone and reports failure when collectSettings fails on an unrelated field', () => {
@@ -188,16 +185,16 @@ test('applyDeskChannelFieldChange leaves everything alone and reports failure wh
 
 // --- applyChannelFieldChange (index.js:13014, the reverse direction) -------------------------------
 // The 模型连接 page's own fast path: a field settling there must not leave the desk card, the advanced
-// 翻译台摘要 or the 朗读/深度分析 pickers showing the connection's old name/model either.
+// 翻译台摘要 or 分析模式's pickers showing the connection's old name/model either.
 
 test('applyChannelFieldChange saves the 模型连接 page\'s own field and refreshes the desk card\'s summary and the tts pickers', () => {
   configureForTest({ settings: testSettings(), deskExpandedChannelId: 'a', editingChannelId: 'a' });
   const urlField = channelField('url', 'https://renamed.example/v1');
-  const { root, channelSummary, analysisSelect } = makeTrackedRoot({ channelFields: [urlField], editingChannelId: 'a' });
+  const { root, channelSummary, deepSelect } = makeTrackedRoot({ channelFields: [urlField], editingChannelId: 'a' });
 
   const ok = applyChannelFieldChange(root);
 
   assert.equal(ok, true);
   assert.match(channelSummary.textContent, /https:\/\/renamed\.example\/v1/, '翻译台摘要跟着模型连接页刚存的地址更新');
-  assert.ok(analysisSelect.children.some(o => o.value === 'a'));
+  assert.ok(deepSelect.children.some(o => o.value === 'a'));
 });

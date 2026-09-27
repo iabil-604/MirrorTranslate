@@ -706,7 +706,7 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
     voiceLibrary: [{ name: '少年', voiceId: 'lib-1', lang: 'zh' }],
   });
   assert.equal(settings.tts.enabled, true);
-  assert.equal(settings.tts.mode, 'simple', 'the old sentence and stream modes are the simple reading now');
+  assert.equal(settings.tts.mode, 'off', 'the old sentence and stream modes read plain now, as the simple reading does');
   assert.equal('analysis' in settings.tts, false, 'the depth is the mode');
   assert.equal(mergeSettings({ tts: { mode: 'floor' } }).tts.mode, 'deep', 'the whole-floor mode of old is the deep reading, open again');
   assert.equal(mergeSettings({ tts: { mode: 'stream', analysis: 'deep' } }).tts.mode, 'deep', 'a depth named outright is kept');
@@ -714,7 +714,7 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.equal(mergeSettings({ tts: { mode: 'off' } }).tts.mode, 'off', 'the plain reading is a mode of its own');
   assert.equal(mergeSettings({ tts: { askAnalysis: 'plain' } }).tts.askAnalysis, 'plain');
   assert.equal(mergeSettings({ tts: { askAnalysis: 'sometimes' } }).tts.askAnalysis, 'ask');
-  assert.equal(mergeSettings({ tts: { prompts: { light: '旧的' } } }).tts.prompts.simple, '旧的', 'the light prompt is the simple prompt');
+  assert.deepEqual(mergeSettings({ tts: { prompts: { light: '旧的', simple: '旧的' } } }).tts.prompts, { deep: '' }, 'only 分析模式 has a prompt of the reader\'s own now');
   assert.equal(settings.tts.sanitizeHtml, true);
   assert.deepEqual(settings.tts.console, { pause: 50, breath: 50, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '', marks: [] });
   assert.deepEqual(mergeSettings({ tts: { console: { pause: 150, breath: -3, rules: ' a \n\n b ' } } }).tts.console, { pause: 100, breath: 0, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: 'a\nb', marks: [] });
@@ -737,7 +737,7 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.deepEqual(normalizeVoiceList([{ name: '樱井', console: { breath: 80, rules: '害羞时别太娇' } }])[0].console, { pause: 50, breath: 80, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '害羞时别太娇', marks: [] });
   assert.equal(normalizeVoiceList([{ name: '樱井', console: { breath: 50 } }])[0].console, null, 'a console left in the middle is no console');
   assert.deepEqual(settings.voiceLibrary, [{ id: 'voice-1', name: '少年', voiceId: 'lib-1', lang: 'zh', title: '' }]);
-  assert.deepEqual(mergeSettings({}).tts, { ...normalizeTts(undefined), analysisChannelId: 'follow' }, 'a fresh install reads through the host connection, as its translation does');
+  assert.deepEqual(mergeSettings({}).tts, { ...normalizeTts(undefined), deepChannelId: 'follow' }, 'a fresh install analyses through the host connection, as its translation does');
   assert.deepEqual(mergeSettings({}).tts.sourceTags, ['jy-translation']);
   assert.deepEqual(mergeSettings({}).tts.quotePairs, ['「」', '『』', '“”', '""']);
   assert.equal(mergeSettings({ tts: { quotePairs: '' } }).tts.quotePairs.length, 0, 'an emptied field means no quote pairs');

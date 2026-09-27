@@ -21,6 +21,8 @@ import {
   DEFAULT_COLORING,
   normalizeColoring,
   normalizeSpeakerList,
+  normalizeMoveOverride,
+  normalizeMoveOverrides,
   SPEAKER_CLASS,
   isPlaceholderSpeaker,
   placeQuoteMarks,
@@ -115,8 +117,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.40.2';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.40.2';
+} from './core.js?v=0.41.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -174,10 +176,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.40.2';
-import { createTtsStore } from './tts-store.js?v=0.40.2';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.40.2';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.40.2';
+} from './tts.js?v=0.41.0';
+import { createTtsStore } from './tts-store.js?v=0.41.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -187,7 +189,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.40.2';
+} from './processing.js?v=0.41.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -204,9 +206,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.40.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.40.2';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.40.2';
+} from './prompts.js?v=0.41.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -219,11 +221,13 @@ import {
   parseCssColor,
   resolveSegmentStyle,
   resolveMoveStyle,
+  MOVE_ELEMENT_CHOICES,
+  normalizeMoveTier,
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.40.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.40.2';
+} from './palette.js?v=0.41.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.41.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -231,7 +235,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.40.2';
+} from './diagnostics.js?v=0.41.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -242,7 +246,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.40.2';
+} from './helper.js?v=0.41.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -404,18 +408,20 @@ const runtime = {
     clickCleanup: null,
     preview: null,
   },
-  // DESIGN §16 小助手: session-only, never persisted — closing the control center or reloading the
-  // page starts a fresh conversation. `turns` is oldest-first; each is
+  // DESIGN §16/§17.3 小助手: session-only, never persisted — reloading the page starts a fresh
+  // conversation, closing the control center does not. `turns` is oldest-first; each is
   // { question, answer, suggestions, busy, error }, `suggestions` filled in once the reply is parsed
   // and validated against the settings at that moment.
   helper: {
     turns: [],
     busy: false,
+    // What sits in the input box, unsent: kept across closing and reopening the control center.
+    draft: '',
     // Cached once fetched — 使用手册.md never changes while the page is open, and a reader can ask
     // several questions in a row.
     manualPromise: null,
-    // The in-flight ask's own AbortController, so closing the control center or hitting 清空 can
-    // actually cancel the request instead of just walking away from it (review finding index.js:11971).
+    // The in-flight ask's own AbortController, so 清空 can actually cancel the request instead of just
+    // walking away from it (review finding index.js:11971). Closing the control center leaves it be.
     controller: null,
   },
 };
@@ -452,14 +458,15 @@ const CONTROL_CENTER_MARKUP = `
     <select data-jy-tts-fish="model" aria-label="模型"><option value="s2-pro">s2-pro</option><option value="s2.1-pro">s2.1-pro</option><option value="s2.1-pro-free">s2.1-pro-free（免费开发者档）</option><option value="drama-3-preview">drama-3-preview（预览版）</option><option value="s1">s1（旧版，不能一次用多个音色）</option></select>
     <button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button>
    </div>
-   <label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="simple">简单分析</option><option value="off">不分析</option><option value="deep">深度分析</option></select></label>
+   <label class="jy-summary-row jy-summary-select"><span class="jy-label">分析模式</span><span class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></span></label>
    <p class="jy-muted" data-jy-desk-mode-help></p>
   </section>
  </div>
  <section class="jy-brief jy-desk-card jy-desk-connections">
   <h2 class="jy-card-title">API Key</h2>
+  <div class="jy-connection-uses" data-jy-connection-uses><h3>各功能用哪条连接</h3></div>
   <div class="jy-desk-connection-list" data-jy-desk-connection-list></div>
-  <div class="jy-inline-actions"><button type="button" class="jy-button" data-jy-action="add-channel">＋ 添加连接</button><span class="jy-muted">翻译、朗读分析、深度分析、小助手各勾一条</span></div>
+  <div class="jy-inline-actions"><button type="button" class="jy-button" data-jy-action="add-channel">＋ 添加连接</button></div>
  </section>
 </div>
 <footer class="jy-footer"><button type="button" class="jy-button jy-button-primary" data-jy-action="translate">翻译当前回复</button><button type="button" class="jy-text-button" data-jy-action="translate-missing">补译缺失段落</button></footer>
@@ -495,7 +502,7 @@ const CONTROL_CENTER_MARKUP = `
   <h2>用什么翻</h2>
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>翻译方案</h3><p class="jy-muted" data-jy-active-profile>待读取</p></div><button type="button" class="jy-text-button" data-jy-action="open-prompt">编辑规则 →</button></div>
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>翻译用哪条连接</h3><p class="jy-muted" data-jy-channel-summary></p></div><label class="jy-sr-only" for="jy-desk-channel">翻译用哪条连接</label><select id="jy-desk-channel" data-jy-translation-channel></select></div>
-  <div class="jy-card-row"><p class="jy-muted">连接的地址、密钥、模型在「模型连接」页管理；朗读分析、深度分析用哪条各自在「朗读」页选，互不牵连。</p><button type="button" class="jy-text-button" data-jy-action="open-settings">管理连接（地址、密钥、模型）→</button></div>
+  <div class="jy-card-row"><p class="jy-muted">连接的地址、密钥、模型在「模型连接」页管理；翻译、分析模式、小助手各用哪条，在那一页最上面的「各功能用哪条连接」里选，互不牵连。</p><button type="button" class="jy-text-button" data-jy-action="open-settings">管理连接（地址、密钥、模型）→</button></div>
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>参考资料</h3><p class="jy-muted" data-jy-context-summary></p></div><button type="button" class="jy-text-button" data-jy-action="open-prompt">改 →</button></div>
  </section>
 </div>
@@ -527,7 +534,7 @@ const CONTROL_CENTER_MARKUP = `
   <section class="jy-brief jy-desk-card">
    <h2 class="jy-card-title">显示</h2>
    <div class="jy-summary-row"><div class="jy-summary-copy"><h3>说话人着色</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringSpeakers" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringSpeakers" aria-label="说话人着色"><span></span></label></div>
-   <div class="jy-summary-row jy-summary-row-sub" data-jy-dependent="coloringEffects"><div class="jy-summary-copy"><h3>特效字</h3><p class="jy-muted jy-dependent-reason">先打开上面的「说话人着色」，这一项才会生效。</p></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringEffects" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringEffects" aria-label="特效字"><span></span></label></div>
+   <div class="jy-summary-row jy-summary-row-sub" data-jy-dependent="coloringEffects"><div class="jy-summary-copy"><h3>特效字</h3><p><button type="button" class="jy-text-button" data-jy-action="goto-advanced" data-jy-goto-page="processing" data-jy-open-fold="processing-moves">招式表 →</button></p><p class="jy-muted jy-dependent-reason">先打开上面的「说话人着色」，这一项才会生效。</p></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringEffects" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringEffects" aria-label="特效字"><span></span></label></div>
    <div class="jy-summary-row"><div class="jy-summary-copy"><h3>情绪排版</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringEmotions" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringEmotions" aria-label="情绪排版"><span></span></label></div>
    <label class="jy-summary-row jy-summary-select"><span class="jy-label">内置美化</span><select data-jy-finetune-reading-style aria-label="内置美化"><option value="">（当前方案不是内置美化）</option><option value="cute">可爱风</option><option value="minimal">极简风</option><option value="fold">原文折叠</option></select></label>
   </section>
@@ -535,9 +542,8 @@ const CONTROL_CENTER_MARKUP = `
    <h2 class="jy-card-title">朗读</h2>
    <div class="jy-summary-row"><div class="jy-summary-copy"><h3>朗读功能</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="ttsEnabled" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
    <div data-jy-finetune-tts-sub>
-    <label class="jy-summary-row jy-summary-select jy-summary-row-sub"><span class="jy-label">分析模式</span><span class="jy-mini-pill" data-jy-finetune-drift="ttsMode" hidden>改过</span><select data-jy-tts-field="mode"><option value="deep">深度分析</option><option value="simple">简单分析</option><option value="off">不分析</option></select></label>
-    <label class="jy-summary-row jy-summary-select jy-summary-row-sub"><span class="jy-label">朗读分析用的连接</span><select data-jy-tts-field="analysisChannelId"></select></label>
-    <label class="jy-summary-row jy-summary-select jy-summary-row-sub" data-jy-finetune-deep-channel hidden><span class="jy-label">深度分析用的连接</span><select data-jy-tts-field="deepChannelId"></select></label>
+    <div class="jy-summary-row jy-summary-row-sub"><div class="jy-summary-copy"><h3>分析模式</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="ttsMode" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></label></div>
+    <label class="jy-summary-row jy-summary-select jy-summary-row-sub" data-jy-finetune-deep-channel hidden><span class="jy-label">分析模式用的连接</span><select data-jy-tts-field="deepChannelId"></select></label>
     <label class="jy-summary-row jy-summary-select jy-summary-row-sub"><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文</option></select></label>
     <div class="jy-summary-row jy-summary-row-sub"><div class="jy-summary-copy"><h3>新回复自动朗读</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="ttsAutoRead" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-tts-field="autoRead" aria-label="新回复自动朗读"><span></span></label></div>
    </div>
@@ -590,12 +596,12 @@ const CONTROL_CENTER_MARKUP = `
 </section>
 
 <section class="jy-page" data-jy-page="settings" role="tabpanel" hidden>
-<header class="jy-page-heading"><div><h1>模型连接</h1><span class="jy-page-context">每条连接一张卡，勾选它用在哪里</span></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span><button type="button" class="jy-button" data-jy-action="add-channel">＋ 新建连接</button></header>
+<header class="jy-page-heading"><div><h1>模型连接</h1><span class="jy-page-context">最上面选各功能用哪条，下面每条连接一张卡</span></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span><button type="button" class="jy-button" data-jy-action="add-channel">＋ 新建连接</button></header>
+<section class="jy-card jy-connection-uses-card"><div class="jy-connection-uses" data-jy-connection-uses><h2>各功能用哪条连接</h2></div></section>
 <section class="jy-card jy-channel-card">
  <div class="jy-channel-card-head">
   <span class="jy-card-row-text"><h2>跟随酒馆</h2><p class="jy-muted">用酒馆当前的 API 和模型，不用填。</p></span>
   <span class="jy-badge">内置</span>
-  <div class="jy-channel-card-uses" data-jy-channel-use-row="follow"></div>
  </div>
 </section>
 <div data-jy-channel-cards></div>
@@ -612,7 +618,7 @@ const CONTROL_CENTER_MARKUP = `
  <p id="jy-api-model-help" class="jy-muted" data-jy-model-help></p>
  <details class="jy-fold" data-jy-fold="channel-request"><summary><h2>请求参数</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-grid">
  <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
- </div></details><details class="jy-fold" data-jy-fold="channel-postscript"><summary><h2>这条连接的后置提示词（附在每次请求的最末尾）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">翻译、朗读分析、深度分析、小助手——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存；一本都不开则节约模式下完全不带世界书。</p></details>
+ </div></details><details class="jy-fold" data-jy-fold="channel-postscript"><summary><h2>这条连接的后置提示词（附在每次请求的最末尾）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">翻译、分析模式、小助手——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存；一本都不开则节约模式下完全不带世界书。</p></details>
  <div class="jy-actions"><span class="jy-actions-spacer"></span><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="delete-channel">删除这条连接</button></div>
 </div>
 <section class="jy-card"><details class="jy-fold" data-jy-fold="helper-prompt"><summary><h2>小助手的提示词</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">小助手回答时用的提示词。留空就用镜译内置的（下面占位的文字就是它），资料本身——设置、当前楼层、运行记录——不受这里影响，一直都会给到小助手。</p><textarea data-jy-helper-prompt rows="6" spellcheck="false"></textarea><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="helper-reset-prompt">恢复默认</button></div></div></details></section>
@@ -630,7 +636,8 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-text-scope"><h2>提取范围</h2><label><span class="jy-label">提取标签</span><textarea rows="3" data-jy-field="bodyTags" placeholder="story_scene" spellcheck="false"></textarea></label><div class="jy-actions"><button type="button" class="jy-button" data-jy-action="inspect-tags">检查当前楼层</button></div><pre class="jy-inspection" data-jy-tag-inspection hidden></pre><p class="jy-muted">每行一个标签名，只取每种标签的最后一组完整内容。</p><label><span class="jy-label">替换标签（译文直接替换原文）</span><textarea rows="2" data-jy-field="replaceTags" placeholder="replace_scene" spellcheck="false"></textarea></label><p class="jy-muted">该标签内的内容照常翻译，但写回时译文直接顶替原文：显示与主模型都只看到译文，原文隐藏保留在楼层里，点小铅笔可见，重新翻译时自动还原。</p><label><span class="jy-label">排除标签</span><textarea rows="2" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位，不翻译，也不朗读（比如生图插件的 &lt;image&gt;）。镜译自己的 <code>&lt;say&gt;</code> 说话人标记不用加在这里：翻译时自动去掉，显示时自动隐藏，朗读时自动读取。</p></div>
 <div class="jy-text-scope" data-jy-coloring><h2>说话人着色</h2>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label></div>
-<div class="jy-dependent" data-jy-dependent="coloringEffects"><label class="jy-check"><input type="checkbox" data-jy-field="coloringEffects">特效字（招式上色、搬运原文排版）</label><p class="jy-muted jy-dependent-reason">先打开上面的「说话人着色」，这一项才会生效。</p></div>
+<div class="jy-dependent" data-jy-dependent="coloringEffects"><label class="jy-check"><input type="checkbox" data-jy-field="coloringEffects">特效字（招式上色、搬运原文排版）</label><p class="jy-muted jy-dependent-reason">先打开上面的「说话人着色」，这一项才会生效。</p>
+<details class="jy-fold jy-move-fold" data-jy-fold="processing-moves"><summary><h2>招式表</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><div class="jy-move-list" data-jy-move-list></div><p class="jy-muted">改了就存，已写好的楼层马上重画。跟着角色卡存，这张卡的其他聊天里同名招式一样生效。自选的颜色太浅或太暗时会被拉到能看清。</p></div></details></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label></div>
 <label><span class="jy-label">内置美化</span><div class="jy-actions"><select aria-label="内置美化" data-jy-reading-style><option value="cute">可爱风</option><option value="minimal">极简风</option><option value="fold">原文折叠</option></select><button type="button" class="jy-button" data-jy-action="builtin-processing">使用</button></div></label>
 <p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。「特效字」只有说话人着色也开着时才会生效，也才会向翻译多问招式名和原文自带的排版：原文里整行、整句、半句的加粗变色会尽量搬到译文，招式、技能、法宝的名字会按属性单独上色（同招同色，随主题重新计算），『』标出的名号既不套说话人色也不当台词念。</p>
@@ -685,7 +692,7 @@ const CONTROL_CENTER_MARKUP = `
      list it empties, ahead of every other button in its group (review finding index.js:11542). -->
 <div class="jy-processing-toolbar jy-processing-toolbar-end"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="tts-clear-voices">清空角色表</button></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="speechMarks">让主模型给台词标上说话人和情绪</label></div>
-<p class="jy-muted">打开后，主模型每写一次回复，请求的最末尾（深度 0，系统消息）都会带上一段格式要求，让它把每句台词写成 <code>&lt;say who="名字" mood="情绪"&gt;「……」&lt;/say&gt;</code>。不分析模式靠这个分角色、带情绪读，不请求任何副模型；简单分析碰到整楼都标好的楼也不再请求。标记在楼层里自动隐藏，翻译时自动去掉；台词的引号没配对（比如「……"）时，显示和朗读都会补成一对。名单用下面角色表里的名字，引号用这个故事最近在用的那种，每次生成时现取。只在朗读功能打开时发送，总结、代写这类旁路生成不带；关掉就不再发送。以前点按钮写进世界书的「镜译 · 说话人与情绪标记」条目请自己删掉或关掉——它还在的话，关掉这里主模型也会照样写标记。</p>
+<p class="jy-muted">打开后，主模型每写一次回复，请求的最末尾（深度 0，系统消息）都会带上一段格式要求，让它把每句台词写成 <code>&lt;say who="名字" mood="情绪"&gt;「……」&lt;/say&gt;</code>。不分析模式靠这个分角色、带情绪读，不请求任何副模型。标记在楼层里自动隐藏，翻译时自动去掉；台词的引号没配对（比如「……"）时，显示和朗读都会补成一对。名单用下面角色表里的名字，引号用这个故事最近在用的那种，每次生成时现取。只在朗读功能打开时发送，总结、代写这类旁路生成不带；关掉就不再发送。以前点按钮写进世界书的「镜译 · 说话人与情绪标记」条目请自己删掉或关掉——它还在的话，关掉这里主模型也会照样写标记。</p>
 <p class="jy-muted">角色表跟着当前角色卡保存。「从角色卡和世界书识别角色」让副模型读一遍角色卡和世界书条目（连同最近几楼正文，好按故事里的写法给名字），把人物名单列出来，你勾选后再导进来（需要副模型能连上，模型没回应就什么都不加）；世界书里没有、只是模型编的名字，群体和身份称呼，还有你自己扮演的角色，都会被程序挡掉，关掉的世界书条目也不读；导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「＋ 多国语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色。</p>
 <details class="jy-fold" data-jy-fold="tts-library"><summary><h2>音色库</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-add-library">添加音色</button></div>
@@ -694,13 +701,12 @@ const CONTROL_CENTER_MARKUP = `
 </div></details>
 </div>
 <div class="jy-text-scope"><h2>读法</h2>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式</span><select data-jy-tts-field="mode"><option value="off">不分析：直接读正文，只加你配的标点标签</option><option value="simple">简单分析：谁在说、什么情绪、什么语气</option><option value="deep">深度分析：在骨架上再看一遍，定情绪起伏和表演</option></select></label><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
-<p class="jy-muted" data-jy-tts-mode-help></p>
-<div class="jy-form-grid jy-form-grid-tight"><label title="简单分析、「分析这一楼」、按意见改、从角色卡和世界书识别角色，都走这条。和翻译用哪条互不相干。"><span class="jy-label">朗读分析用的连接</span><select data-jy-tts-field="analysisChannelId"><option value="follow">跟随酒馆（酒馆当前的连接和模型）</option></select></label></div>
-<p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译在「翻译台」选，朗读在这里选，深度分析还能在「更多」里的「深度分析」再单挑一条。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）存在「模型连接」页——那一页只是个架子，在那里点开哪条都不改变这里的选择。</p>
+<div class="jy-card-row"><div class="jy-card-row-text"><h3>分析模式</h3><p class="jy-muted" data-jy-tts-mode-help></p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
+<p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译、分析模式、小助手各用哪条，在「模型连接」页最上面的「各功能用哪条连接」里选，分析模式用的连接在这一页「更多 → 分析模式」里也能改。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）也存在「模型连接」页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文（旁白读译文，台词按角色写的语言读原文）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoRead">新回复自动朗读（只读最新一楼，写完才读；正在读别的楼时只提醒、不打断）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">点播放后，做完直接播（关掉就只生成，再点一次才播）</label></div>
-<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不再请求副模型；没翻译的楼只在你按播放、点单句或「朗读」时才请求，整楼一次，走上面选的朗读分析连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
+<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不分析时直接用这些标注，不再请求副模型；打开分析模式，正文一闭合就把这一楼发给副模型分析一次，走分析模式用的连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label><label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label></div>
 <p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>对白读原文：旁白读译文，每一句台词按正文里写的语言读原文——同一楼里日本人的台词读日语、英国人的台词读英语，说话人和情绪仍然取自译文的标注，句内的停顿重读带不过去。不用另外选语言配的音色：Fish 的 S2 系列按每句自己的语言发音，「音色」给角色配的「多国语言」音色也是按这句话自己的语言选的，没配就还是这个角色的默认音色。<br>以上几种模式都给每句写一句中文配音指令：谁在说、基础情绪、情绪怎么变、语气、语速、停顿重读、要不要笑声叹气喘息。S2 系列模型直接读方括号里的中文指令，句内还会插 [重读]、[停顿]、[长停顿] 和声音词，语速音量走 Fish 的参数；S1 读不懂自由文本，退回它认得的英文固定标签。台词本身不经过模型，一个字不改。分析按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮或悬浮窗的改句面板能看到分析结果和最终发给 Fish 的内容，可以改。</p>
 </div>
@@ -726,12 +732,11 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-fish="normalize">数字与符号规范化（中英文读数更稳）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
 <p class="jy-muted">改任何一项声音参数，已经缓存的音频都会按新参数重新生成。超时、重试和并发不算声音参数，改了不会让音频重做，它们在这一栏最上面。</p>
 </div></details>
-<details class="jy-fold" data-jy-fold="tts-deep"><summary><h2>深度分析</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<p class="jy-muted">在简单分析的骨架上，带着角色卡、世界书、前几楼再看一遍，判断每句情绪的因果和浓度，定下情绪、强度、语气、语速、音量、停顿、句内转折和非语言声音，全是 Fish 官方认得的标签；调音台上你推到头的滑杆是它必须守的规则，留在中间的交给它判断。开着翻译时一楼两次调用（翻译一次、深度一次），不开翻译一次做完。这一栏里的东西只属于深度分析，改它不碰别的。</p>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">深度分析用的连接</span><select data-jy-tts-field="deepChannelId"><option value="">和朗读分析用同一条</option></select></label><label title="从请求发出去算起，不管模型还在不在写。连接自己的「超时」只管「多久没动静」，思考型模型边想边写就永远不会超时。"><span class="jy-label">单次分析最长等待 / 秒</span><input type="number" data-jy-tts-field="analysisLimitSec" min="20" max="900" step="10"></label></div>
+<details class="jy-fold" data-jy-fold="tts-deep"><summary><h2>分析模式</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
+<p class="jy-muted">带着角色卡、世界书、前几楼把这一楼看一遍，判断每句情绪的因果和浓度，定下情绪、语气、语速、停顿、重读、句内转折和非语言声音，全是 Fish 官方认得的标签；调音台上你推到头的滑杆是它必须守的规则，留在中间的交给它判断。开着翻译时一楼两次调用（翻译一次、分析一次），不开翻译一次做完。这一栏里的东西只属于分析模式，改它不碰别的。</p>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式用的连接</span><select data-jy-tts-field="deepChannelId"></select></label><label title="从请求发出去算起，不管模型还在不在写。连接自己的「超时」只管「多久没动静」，思考型模型边想边写就永远不会超时。"><span class="jy-label">单次分析最长等待 / 秒</span><input type="number" data-jy-tts-field="analysisLimitSec" min="20" max="900" step="10"></label></div>
 <p class="jy-muted">「单次分析最长等待」是硬上限：到点就停，这一楼先按现有标注读，不会一直等下去。思考型模型嫌慢的话，把那条连接的「推理强度」调低比调大这个数更有用。</p>
-<p class="jy-muted">简单分析用的连接在「读法」里选；这里只管深度分析，可以换一个更会读人的模型，不选就和简单分析同一条。</p>
-<div class="jy-behaviors"><span class="jy-label">深度分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
+<div class="jy-behaviors"><span class="jy-label">分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-console"><summary><h2>默认调音台</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <p class="jy-muted">每一项五档，停在哪一档就把哪一句话交给副模型。中间那档是「AI 判断」——这一项不写任何规则，由分析模型按剧情自己定，也是默认值。往两边走才会变成硬性要求，比如「呼吸感明显」「声音克制」。数字本身不发给任何模型。每个角色还能在音色那栏单独调；最下面的自定义规则永远原样交给副模型，那才是最细的一层。</p>
@@ -739,9 +744,8 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-tts-console" data-jy-tts-console="default"><div class="jy-tts-console-presets" data-jy-console-preset-host></div><label class="jy-tts-console-field"><span>停顿感</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="pause"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>气息感</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="breath"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>口语颗粒度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="grain"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>情感强度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="intensity"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>情绪表现幅度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="range"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>语速倾向</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="speed"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>声音表现倾向</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="expression"><output>AI 判断</output></label><label class="jy-tts-console-rules"><span class="jy-label">自定义配音规则（一行一条，直接交给副模型）</span><textarea rows="3" data-jy-console-rules spellcheck="false" placeholder="比如：害羞时不要过度娇柔；生气时保持克制；不要每句话都加呼吸"></textarea></label></div>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-prompts"><summary><h2>副模型提示词（高级）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<p class="jy-muted">留空用内置的。可用占位符：<code>{{user}}</code> 用户扮演的角色，<code>{{sounds}}</code> 声音词表，<code>{{references_rule}}</code> 读原文时关于译文的那条规则。JSON 的输出格式和字段名要照旧，不然解析不出来；深度模式里 skeleton 的省力原则建议留着，那是省时间的关键。</p>
-<label><span class="jy-label">深度分析</span><textarea data-jy-tts-prompt="deep" rows="10" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="deep">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="deep">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="deep">恢复默认</button></div>
-<label><span class="jy-label">简单分析（没翻译标注的楼才用）</span><textarea data-jy-tts-prompt="simple" rows="8" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="simple">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="simple">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="simple">恢复默认</button></div>
+<p class="jy-muted">留空用内置的。可用占位符：<code>{{user}}</code> 用户扮演的角色，<code>{{sounds}}</code> 声音词表，<code>{{references_rule}}</code> 读原文时关于译文的那条规则。JSON 的输出格式和字段名要照旧，不然解析不出来。</p>
+<label><span class="jy-label">分析模式</span><textarea data-jy-tts-prompt="deep" rows="10" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="deep">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="deep">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="deep">恢复默认</button></div>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-cache"><summary><h2>缓存</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-row-between"><p class="jy-muted" data-jy-tts-usage>正在读取…</p><div class="jy-processing-toolbar"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="tts-clear-chat">清空本聊天的朗读缓存</button><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="tts-clear-all">清空全部</button></div></div>
@@ -1061,8 +1065,11 @@ function saveSettings(next) {
   // already written gets repainted, and a reply already sent under the old band is still exactly the
   // reply that was asked for.
   const coloringRequestChanged = coloringBefore.speakers !== coloringAfter.speakers || coloringBefore.effects !== coloringAfter.effects;
-  const coloringPaintChanged = coloringBefore.vividness !== coloringAfter.vividness
+  const bandChanged = coloringBefore.vividness !== coloringAfter.vividness
     || JSON.stringify(coloringBefore.band) !== JSON.stringify(coloringAfter.band);
+  // 招式表 (DESIGN §17.5) changes only how a move already written is drawn, never what is asked for.
+  const movesChanged = JSON.stringify(previous.moveOverrides ?? {}) !== JSON.stringify(runtime.settings.moveOverrides ?? {});
+  const coloringPaintChanged = bandChanged || movesChanged;
   const coloringChanged = coloringRequestChanged || coloringPaintChanged;
   const nonColoringVisualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
     || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
@@ -1121,16 +1128,20 @@ function saveSettings(next) {
     const revision = ++runtime.processingRevision;
     const settings = runtime.settings;
     const paintOnly = !nonColoringVisualChanged;
+    const reload = nonColoringVisualChanged || coloringRequestChanged || bandChanged;
     runtime.processingRefresh = runtime.processingRefresh.catch(() => {}).then(() => {
       if (revision !== runtime.processingRevision || !runtime.initialized) return;
-      return restyleCurrentChat(settings, { paintOnly });
+      return restyleCurrentChat(settings, { paintOnly, reload });
     });
     runtime.processingRefresh.catch(error => toast('error', `设置已保存，刷新已有译文失败：${safeError(error)}`));
   }
   return runtime.settings;
 }
 
-async function restyleCurrentChat(settings, { paintOnly = false } = {}) {
+async function restyleCurrentChat(savedSettings, { paintOnly = false, reload = true } = {}) {
+  // 招式表's hand settings for this chat's card travel with the settings every restyle below reads
+  // (core.js `recolorMoveSpans`).
+  const settings = { ...savedSettings, moveOverrideList: moveOverridesFor(savedSettings) };
   const context = getContext();
   const chat = context.chat;
   const chatId = getCurrentChatId(context);
@@ -1236,11 +1247,14 @@ async function restyleCurrentChat(settings, { paintOnly = false } = {}) {
   // this restyle -- run right away for the visual change itself, or again later once that run settles --
   // must not undo that by reloading out from under it. `updateMessageBlock` is the same fallback already
   // used while a main reply is generating, and it draws these same changes just as well.
-  if (!runtime.mainGenerationActive && !runtime.inflight.size && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+  // A 招式表 change repaints only the floors it changed and needs no reload: the list is edited one field
+  // at a time, and a reload per field would send a long chat back to its end every time.
+  const redrawOnly = !reload && typeof context.updateMessageBlock === 'function';
+  if (!redrawOnly && !runtime.mainGenerationActive && !runtime.inflight.size && typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
   // A pure repaint only rewrote the floors in `changes`, and a long chat has far more that it did not
   // touch. A regex or affix change can alter how every floor renders without changing its text, so
   // that one still draws them all.
-  else if (paintOnly) {
+  else if (paintOnly || redrawOnly) {
     for (const { message } of changes) {
       const id = chat.indexOf(message);
       if (id >= 0) context.updateMessageBlock?.(id, message);
@@ -1450,7 +1464,7 @@ async function withAbortTimeout(externalSignal, timeout, task) {
   try {
     return await task(controller.signal, renew);
   } catch (error) {
-    if (hitLimit) throw new Error(`这次分析写了 ${ceiling} 秒还没写完，已经停下，这一楼先按现有标注读。可以在「朗读 → 更多 → 深度分析」里调大「单次分析最长等待」，或者把那条连接的推理强度调低。`);
+    if (hitLimit) throw new Error(`这次分析写了 ${ceiling} 秒还没写完，已经停下，这一楼先按现有标注读。可以在「朗读 → 更多 → 分析模式」里调大「单次分析最长等待」，或者把那条连接的推理强度调低。`);
     if (timedOut) throw new Error(describeTimeout(timeoutSec, renewed, typeof timeout === 'object' && timeout?.who ? timeout.who : undefined));
     throw error;
   } finally {
@@ -1934,7 +1948,22 @@ function buildChatMoveIndex(chat = getContext().chat) {
  * reuse), most recently mentioned first and capped, so a very long chat's earliest moves — least likely
  * to come up again — do not crowd out ones from the floors right before this one.
  */
-function knownMovesForRequest(chat = getContext().chat) {
+// A 招式表 element set by hand is the one the translator is reminded of, so what it reports next time
+// already agrees with what the reader chose.
+function knownMovesForRequest(chat = getContext().chat, settings = runtime.settings) {
+  const overrides = moveOverrideMap(settings);
+  return chatMoveTable(chat)
+    .map(move => ({ name: move.name, element: overrides.get(move.name)?.element || move.element }))
+    .filter(move => move.element)
+    .slice(0, KNOWN_MOVES_REQUEST_CAP);
+}
+
+/**
+ * Every move this chat has named (DESIGN §17.5 招式表), the most recently mentioned first: its name, the
+ * element the chat fixed for it (buildChatMoveIndex's first-named-element rule) and the floor it last
+ * turned up on.
+ */
+function chatMoveTable(chat = getContext().chat) {
   const elements = buildChatMoveIndex(chat);
   if (!elements.size || !Array.isArray(chat)) return [];
   const lastSeenAt = new Map();
@@ -1950,10 +1979,17 @@ function knownMovesForRequest(chat = getContext().chat) {
     }
   });
   return [...elements]
-    .filter(([, value]) => value?.element)
-    .sort((left, right) => (lastSeenAt.get(right[0]) ?? -1) - (lastSeenAt.get(left[0]) ?? -1))
-    .slice(0, KNOWN_MOVES_REQUEST_CAP)
-    .map(([name, value]) => ({ name, element: value.element }));
+    .map(([name, value]) => ({ name, element: value?.element || '', lastSeen: lastSeenAt.get(name) ?? -1 }))
+    .sort((left, right) => right.lastSeen - left.lastSeen);
+}
+
+// What the reader set by hand in 招式表 for the card this chat belongs to (DESIGN §17.5).
+function moveOverridesFor(settings = runtime.settings, characterKey = worldInfoCharacterKey()) {
+  return normalizeMoveOverrides(settings?.moveOverrides?.[characterKey]);
+}
+
+function moveOverrideMap(settings = runtime.settings) {
+  return new Map(moveOverridesFor(settings).map(item => [item.name, item]));
 }
 
 function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new Map(), translationsById = null) {
@@ -1976,14 +2012,23 @@ function buildSegmentStyler(settings, reportedAnnotations, chatMoveIndex = new M
   // (a test, chiefly) gets the old, unfiltered count.
   const textFor = translationsById instanceof Map ? id => String(translationsById.get(id) ?? '') : null;
   const moveTiers = effectsOn ? capMoveTiersForFloor(annotations, textFor) : new Map();
+  const moveOverrides = effectsOn ? moveOverrideMap(settings) : new Map();
   const moveStyleFor = (move, id, position) => {
     const element = moveElements.get(move.name)?.element || move.element;
-    const tier = moveTiers.get(`${id}:${position}`) ?? move.tier;
-    const resolved = resolveMoveStyle({ element, name: move.name, tier, band, vividness: coloring.vividness });
+    const tier = normalizeMoveTier(moveTiers.get(`${id}:${position}`) ?? move.tier);
     // element/name/tier ride on the piece as data attributes (core.js `styledBody`) so a later restyle
     // (theme or background change) can recompute this exact move's colour against the new band without
-    // the chat's annotations — see core.js `restyleBilingual`'s `recolorMoveSpans`.
-    return resolved ? { text: move.name, css: resolved.css, moveElement: element || '', moveName: move.name, moveTier: resolved.tier } : null;
+    // the chat's annotations — see core.js `restyleBilingual`'s `recolorMoveSpans`. They stay the
+    // automatic ones even when 招式表 set others by hand: the restyle lays those over them, and taking
+    // them away again has to find the automatic ones still there.
+    const identity = { text: move.name, moveElement: element || '', moveName: move.name, moveTier: tier };
+    const override = moveOverrides.get(move.name);
+    // 不上色: no colour of its own, so the piece keeps what the words around it wear.
+    if (override?.off) return identity;
+    const resolved = resolveMoveStyle({
+      element: override?.element || element, name: move.name, tier: override?.tier || tier, band, vividness: coloring.vividness, color: override?.color || '',
+    });
+    return resolved ? { ...identity, css: resolved.css } : null;
   };
   // Layer 3's carried fragments (design §2 item 3): the translator's own words for the numbered
   // fragment, re-wrapped in that fragment's original tag. Colour still yields to a speaker's — the
@@ -2664,7 +2709,7 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
       // That silence is wrong when every label is missing at once, which means the model ignored the
       // annotation request entirely. Without this the reader sees plain text and no reason for it.
       if ((coloringEnabled(settings) || ttsSettings(settings).enabled) && !annotations.size) {
-        recordDiagnostic('warn', 'translation.no-annotations', '副模型没有返回任何说话人或情绪标注，这一批按普通样式显示；朗读这一楼时简单分析会另外问一次。', {
+        recordDiagnostic('warn', 'translation.no-annotations', '副模型没有返回任何说话人或情绪标注，这一批按普通样式显示；不开分析模式时，朗读这一楼由程序按上下文认人。', {
           request: state.requests,
           returned: translations.size,
           roster: (state.roster ?? []).map(entry => entry.name),
@@ -3863,7 +3908,7 @@ const TTS_ICON_PAUSE = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="f
 const TTS_ICON_REDO = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M13 8a5 5 0 1 1-1.6-3.7" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/><path d="M12.9 2.6v2.9h-2.9z"/></svg>';
 const TTS_ICON_EDIT = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 4.6h10M3 8h10M3 11.4h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/><circle cx="6.2" cy="4.6" r="1.5"/><circle cx="10.4" cy="8" r="1.5"/><circle cx="7.6" cy="11.4" r="1.5"/></svg>';
 const TTS_RANGE_LABELS = Object.freeze({ all: '旁白 + 对白', dialogue: '只读对白', narration: '只读旁白' });
-const TTS_MODE_LABELS = Object.freeze({ off: '不分析', simple: '简单', deep: '深度' });
+const TTS_MODE_LABELS = Object.freeze({ off: '不分析', deep: '分析模式' });
 const TTS_INLINE_WRAPPERS = new Set(['Q', 'EM', 'STRONG', 'I', 'B', 'U', 'S', 'SPAN', 'FONT', 'SMALL', 'MARK', 'DEL', 'INS', 'SUB', 'SUP', 'CITE']);
 
 function ttsSettings(settings = runtime.settings) {
@@ -4219,10 +4264,10 @@ function abortTtsJobs(messageId = null) {
   }
 }
 
-// How deeply a floor is read: the whole-floor mode reads deeply unless told otherwise, the stream
-// lightly, and 'annotations' asks the model nothing at all.
+// How deeply a floor is read: 分析模式 asks a model about it ('deep'); the plain reading asks nobody.
+// 'annotations' (the translation's own marks) is where a plain floor's labels come from when it has them.
 function ttsAnalysisDepth(tts) {
-  return tts.mode === 'deep' ? 'deep' : tts.mode === 'off' ? 'off' : 'simple';
+  return tts.mode === 'deep' ? 'deep' : 'off';
 }
 
 /**
@@ -4275,7 +4320,7 @@ async function ttsContextPacket(floor, settings) {
     const snapshot = await readMessageSnapshot(floor.messageId, settings, { quiet: true });
     // On the deep reading's own connection, so that connection's token saving is the one that applies.
     const scoped = {
-      ...ttsRequestSettings(settings, 'deep'),
+      ...ttsRequestSettings(settings),
       includeCharacterCard: wants.character,
       includeWorldbook: wants.worldbook,
       includeRecentContext: wants.recent && wants.floors > 0,
@@ -4288,7 +4333,7 @@ async function ttsContextPacket(floor, settings) {
     };
     return { character: cap(packet.character, TTS_CONTEXT_CAPS.character), worldbook: cap(packet.worldbook, TTS_CONTEXT_CAPS.worldbook), recent: cap(packet.recent, TTS_CONTEXT_CAPS.recent) };
   } catch (error) {
-    recordDiagnostic('warn', 'tts.context', `读取朗读分析的背景资料失败，这一楼只按正文分析：${safeError(error)}`, { floor: floor.floorId });
+    recordDiagnostic('warn', 'tts.context', `读取分析模式的背景资料失败，这一楼只按正文分析：${safeError(error)}`, { floor: floor.floorId });
     return { character: '', worldbook: '', recent: '' };
   }
 }
@@ -4322,12 +4367,14 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     // moment of asking rather than of answering: paragraphs heard while the answer still streams in
     // were made from this reading, and are its audio.
     const askedAt = ttsClock();
-    const request = ttsRequestSettings(settings, depth);
+    const request = ttsRequestSettings(settings);
     const packet = depth === 'deep' ? await ttsContextPacket(floor, settings) : null;
     const context = getContext();
     const options = {
       roster, characterName: context.name2 ?? '', userName: context.name1 ?? '', translations: floor.references,
-      packet, speakers, styles: ttsStyles(settings), systemPrompt: depth === 'deep' ? tts.prompts.deep : tts.prompts.simple,
+      // The quick one-call labelling (`apiSpeak`'s analyze) keeps its built-in prompt; only 分析模式's
+      // own prompt is the reader's to change.
+      packet, speakers, styles: ttsStyles(settings), systemPrompt: depth === 'deep' ? tts.prompts.deep : '',
     };
     // One request for the whole floor: the paragraphs with their dialogue numbered, the dialogue alone
     // answered. The reply is read as it arrives, and every paragraph whose dialogue is all labelled is
@@ -4381,7 +4428,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       }
     } catch (error) {
       if (!isAbortError(error)) {
-        recordDiagnostic('error', 'tts.analysis-failed', `朗读分析请求失败：${safeError(error)}`, {
+        recordDiagnostic('error', 'tts.analysis-failed', `分析请求失败：${safeError(error)}`, {
           floor: floor.floorId,
           depth,
           utterances: utterances.length,
@@ -4395,7 +4442,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     parsed.labels = stampLabels(parsed.labels, askedAt);
     const seconds = Number(((Date.now() - started) / 1000).toFixed(1));
     recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.analysis', parsed.labels.size
-      ? `${depth === 'deep' ? '深度分析' : '简单分析'}给 ${parsed.labels.size} 句对白标了说话人或情绪${parsed.voices.size ? `，${parsed.voices.size} 句带表演` : ''}，用时 ${seconds} 秒。`
+      ? `${depth === 'deep' ? '分析模式' : '快速标注'}给 ${parsed.labels.size} 句对白标了说话人或情绪${parsed.voices.size ? `，${parsed.voices.size} 句带表演` : ''}，用时 ${seconds} 秒。`
       : `副模型没有返回可用的朗读标注，这一楼按引号区分旁白与对白。`, {
       floor: floor.floorId,
       depth,
@@ -4412,7 +4459,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     // its opening tags (parseDeepAnalysis), and that is worth a diagnostic naming which sentence and
     // where it first stopped matching.
     if (depth === 'deep' && parsed.mismatches?.length) {
-      recordDiagnostic('warn', 'tts.analysis-deep-line', `深度分析有 ${parsed.mismatches.length} 句 line 跟正文对不上，只保留了句首的标签：${parsed.mismatches.slice(0, 3)
+      recordDiagnostic('warn', 'tts.analysis-deep-line', `分析模式有 ${parsed.mismatches.length} 句 line 跟正文对不上，只保留了句首的标签：${parsed.mismatches.slice(0, 3)
         .map(item => `第 ${item.id} 句「${item.sentence.slice(0, 16)}${item.sentence.length > 16 ? '…' : ''}」从第 ${item.at + 1} 个字起不一样`).join('；')}${parsed.mismatches.length > 3 ? '…' : ''}`, {
         floor: floor.floorId, depth, mismatches: parsed.mismatches,
       }, '', { floor: floor.messageId });
@@ -4427,13 +4474,12 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
 
 /**
  * The settings one analysis request goes out under: the same settings with the connection swapped
- * for the one the reading chose on its own page — the host's connection or a saved one — and, for
- * the deep reading, the one chosen in its own section when there is one. The translation's choice
- * never decides where the reading goes.
+ * for the one 分析模式 uses (「各功能用哪条连接」) — the host's connection or a saved one. Every request
+ * the reading makes goes there: the analysis itself, 「分析这一楼」, 按意见改 and 从角色卡和世界书识别角色.
+ * The translation's choice never decides where the reading goes.
  */
-function ttsRequestSettings(settings = runtime.settings, depth = 'simple') {
-  const base = onChannel(settings, ttsSettings(settings).analysisChannelId);
-  return depth === 'deep' ? deepRequestSettings(base) : base;
+function ttsRequestSettings(settings = runtime.settings) {
+  return deepRequestSettings(settings);
 }
 
 /**
@@ -4540,13 +4586,11 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   for (const [id, label] of tagLabels) reading.labels.set(id, { ...(reading.labels.get(id) ?? {}), ...label });
   for (const [id, voice] of tagged.voices) reading.voices.set(id, { ...(reading.voices.get(id) ?? {}), ...voice });
   const tagSpeakers = speakerHints(tagLabels);
-  // Every line of dialogue marked: nobody needs to be asked who speaks it, or how.
-  const fullyTagged = tagged.labels.size > 0 && utterances.every(item => item.kind !== 'quoted' || tagged.labels.has(item.id));
   const marksFrom = annotated && tagged.labels.size ? '翻译时的标注和正文里的说话人标记' : annotated ? '翻译时的标注' : '正文里的说话人标记';
   let labels = reading.labels;
   let voices = reading.voices.size ? reading.voices : null;
-  // `analyze` asks for one reading regardless of the mode: the plain reading's own request for a
-  // simple analysis of this floor.
+  // `analyze` asks for one reading regardless of the mode: the plain reading's own request for an
+  // analysis of this floor (「分析这一楼」).
   let depth = analyze ?? ttsAnalysisDepth(tts);
   // The reader's word on who speaks holds in every reading. The text's own reading of it belongs to
   // the plain reading alone; the analysed readings name their speakers themselves.
@@ -4586,7 +4630,9 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   const plainKept = runtime.tts.plainFloors.has(floorKey);
   let asked = depth === 'off' && !plainKept ? runtime.tts.analysis.get(floorKey) : null;
   const primary = await ttsPrimaryFloor(floor, settings);
-  if (!primary && depth === 'off' && !plainKept && !asked) asked = await stored('simple', { thisFloor: true });
+  // Asked for on this very floor: 「分析这一楼」 (分析模式's reading), or a correction 按意见改 made to the
+  // translation's marks, kept under the older name.
+  if (!primary && depth === 'off' && !plainKept && !asked) asked = (await stored('deep', { thisFloor: true })) ?? (await stored('simple', { thisFloor: true }));
   if (primary) {
     const key = ttsLabelKey(floor);
     // A correction asked for on this very floor (refineTtsAnalysis, 改句面板「再问一次」) writes straight
@@ -4610,16 +4656,15 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   } else if (asked?.labels?.size) {
     labels = asked.labels;
     voices = asked.voices ?? null;
-    depth = asked.depth ?? 'simple';
+    depth = asked.depth ?? 'deep';
     fallback = depth === 'annotations' ? 'hint' : 'model';
-    onStep?.('analysis', { state: 'done', label: '简单分析', detail: depth === 'annotations' ? '用翻译时的标注' : '这一楼按你的要求分析过' });
+    onStep?.('analysis', { state: 'done', label: depth === 'annotations' ? '不分析' : '分析模式', detail: depth === 'annotations' ? '用翻译时的标注' : '这一楼按你的要求分析过' });
   } else if (depth === 'off' && annotated) {
-    // Translated with the reading on: the translation marked who speaks and how. That one request
-    // was the simple reading already, so the plain reading uses it whole rather than reading the
-    // text again on its own.
+    // Translated with the reading on: the translation marked who speaks and how, for nothing, and the
+    // plain reading uses those marks whole rather than reading the text again on its own.
     depth = 'annotations';
     runtime.tts.analysis.set(floorKey, { labels, voices, depth });
-    onStep?.('analysis', { state: 'done', label: '简单分析', detail: `用${marksFrom}，${labels.size} 句` });
+    onStep?.('analysis', { state: 'done', label: '不分析', detail: `用${marksFrom}，${labels.size} 句` });
   } else if (depth === 'off' || plainKept) {
     // The plain reading: the text as written, no request. Who speaks is read off the text itself — the
     // reader's word first, then the story's own marks, then what the text says outright, then the
@@ -4635,34 +4680,17 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   } else if (depth !== 'annotations' && utterances.length) {
     const key = floorKey;
     let known = force ? null : runtime.tts.analysis.get(key);
-    // The store is looked in wherever the rest of this branch would not look: a look at the floor,
-    // and a translated floor whose marks would otherwise speak for it — the reader may have asked for
-    // a reading of it by hand, and that reading is the one they want to hear.
-    if (!known && (passive || (depth === 'simple' && labels.size))) known = await stored(depth, { thisFloor: depth === 'simple' && labels.size > 0 });
-    if (known && (known.depth === depth || (depth === 'simple' && ['deep', 'annotations'].includes(known.depth)))) {
+    // The store is looked in wherever the rest of this branch would not look: a look at the floor.
+    if (!known && passive) known = await stored(depth);
+    if (known && known.depth === depth) {
       labels = known.labels;
       voices = known.voices;
       depth = known.depth;
-      fallback = depth === 'annotations' ? 'hint' : 'model';
-      onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '深度分析' : '简单分析', detail: depth === 'annotations' ? '用翻译时的标注' : '已有结果' });
+      fallback = 'model';
+      onStep?.('analysis', { state: 'done', label: '分析模式', detail: '已有结果' });
     } else if (passive) {
       // Only looking, not reading: the floor shows what the translation already said and asks nothing.
       depth = labels.size ? 'annotations' : 'pending';
-    } else if (depth === 'simple' && (annotated || fullyTagged) && !force) {
-      // The translation labelled this floor as it was written, or the story marked every line of its
-      // dialogue itself. The simple reading would only ask the same question again, so the floor reads
-      // at once and the model hears nothing. A floor marked only here and there is still asked, with
-      // the marked speakers handed over as settled.
-      depth = 'annotations';
-      runtime.tts.analysis.set(key, { labels, voices, depth });
-      onStep?.('analysis', { state: 'done', label: '简单分析', detail: `用${marksFrom}，${labels.size} 句` });
-      const noteKey = `${key}|annotations`;
-      if (!runtime.tts.anchorWarned.has(noteKey)) {
-        runtime.tts.anchorWarned.add(noteKey);
-        recordDiagnostic('info', 'tts.analysis', `这一楼用${marksFrom}朗读，没有请求副模型：${labels.size} 句带说话人或情绪，${reading.voices.size} 句带 Fish 的情绪词或语气。`, {
-          floor: floor.floorId, depth, utterances: utterances.length, labeled: labels.size, voiced: reading.voices.size, tagged: tagged.labels.size,
-        }, '', { floor: floor.messageId });
-      }
     } else {
       let requested = false;
       try {
@@ -4676,13 +4704,13 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
             const undecided = [];
             const segments = buildSegments(utterances, pinSpeakers(partialLabels, resolved, { fallback: 'model' }), { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: mergeVoiceMaps(reading.voices, partial.voices), evidence: ttsEvidence(floor), ready: partial.readyIds, undecided });
             const { readyIds, ready } = settledPrefix(utterances, partial, undecided);
-            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `深度分析（${utterances.length} 句）` : `简单分析（${utterances.length} 句）`, detail: `已回 ${ready}/${partial.total} 段，先读这些` });
+            onStep?.('analysis', { state: 'active', label: `分析模式（${utterances.length} 句）`, detail: `已回 ${ready}/${partial.total} 段，先读这些` });
             onPartial({ segments, readyIds, ready, total: partial.total });
           } : null,
           onRequest: () => {
             requested = true;
-            onStatus?.(depth === 'deep' ? '正在深度分析…' : '正在简单分析…');
-            onStep?.('analysis', { state: 'active', label: depth === 'deep' ? `深度分析（${utterances.length} 句）` : `简单分析（${utterances.length} 句）` });
+            onStatus?.('正在分析…');
+            onStep?.('analysis', { state: 'active', label: `分析模式（${utterances.length} 句）` });
           },
         });
         if (analyzed.labels.size) {
@@ -4694,7 +4722,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           runtime.tts.analysis.set(key, { ...analyzed, ...adopted, depth });
           if (runtime.tts.analysis.size > 200) runtime.tts.analysis.delete(runtime.tts.analysis.keys().next().value);
           dropPreparedFloors(floor.messageId);
-          onStep?.('analysis', { state: 'done', label: depth === 'deep' ? '深度分析' : '简单分析', detail: analyzed.cached ? '已有结果' : `${labels.size} 句` });
+          onStep?.('analysis', { state: 'done', label: '分析模式', detail: analyzed.cached ? '已有结果' : `${labels.size} 句` });
           // Types may have moved: a quoted title is narration, an unquoted order is dialogue.
           scheduleTtsDecorate(floor.messageId, { force: true });
         } else {
@@ -4706,7 +4734,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           throw error;
         }
         onStep?.('analysis', { state: 'error', label: '分析', detail: safeError(error) });
-        toast('warning', `朗读分析失败，这一楼先按翻译时的标注读：${safeError(error)}`);
+        toast('warning', `分析失败，这一楼先按翻译时的标注读：${safeError(error)}`);
       }
       // However it went — answered, failed or never asked — the floor is no longer being analysed.
       onStatus?.('');
@@ -5978,7 +6006,7 @@ async function askTtsChoice(floor) {
     const card = document.createElement('div');
     card.innerHTML = `<div class="jy-ask" role="dialog" aria-modal="true" aria-label="要不要先分析">
   <h3>第 ${floor.messageId} 楼没有翻译标注，也没分析过</h3>
-  <p>让副模型看一遍这一楼（谁在说、什么情绪）再读，只做这一楼，模式不变，之后这一楼都用它；或者直接读，谁在说由程序按上下文认，只加你配的标点标签。</p>
+  <p>让副模型按分析模式看一遍这一楼（谁在说、什么情绪、怎么念）再读，只做这一楼，模式不变，之后这一楼都用它；或者直接读，谁在说由程序按上下文认，只加你配的标点标签。</p>
   <label><input type="checkbox" data-jy-ask-remember>以后都这样，不再问（朗读页里能改回来）</label>
   <div class="jy-ask-actions"><button type="button" class="is-primary" data-jy-ask="analyze">分析一次再读</button><button type="button" data-jy-ask="plain">直接读</button><button type="button" data-jy-ask="cancel">取消</button></div>
 </div>`;
@@ -7001,7 +7029,7 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
     if (autoRead) void autoReadTtsFloor(id, primary);
     try {
       // The side read aloud is analysed by the reading itself, as it prepares.
-      if (readable && !(autoRead && side === primary) && (current.mode === 'deep' || (current.mode === 'simple' && !translating))) await analyseTtsFloorNow(id, side, current.mode);
+      if (readable && !(autoRead && side === primary) && current.mode === 'deep') await analyseTtsFloorNow(id, side, current.mode);
       if (current.autoGenerate) {
         let made = 0;
         for (const each of reads) {
@@ -7607,8 +7635,8 @@ async function reanalyzeTtsFloor(messageId, side = null) {
   try {
     await prepareTtsSegments(floor, settings, {
       force: true,
-      // The plain reading has nothing to redo; asked by hand, it gets the simple reading for this floor.
-      analyze: ttsSettings(settings).mode === 'off' ? 'simple' : null,
+      // The plain reading has nothing to redo; asked by hand, it gets 分析模式's reading for this floor.
+      analyze: ttsSettings(settings).mode === 'off' ? 'deep' : null,
       onStatus: text => setTtsStatus(messageId, text, text ? 'busy' : 'idle'),
       onStep: (id, patch) => ttsStep(floor, id, patch),
     });
@@ -7659,10 +7687,11 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
   if (!scope.length) throw new Error('这一句不在当前的朗读范围里。');
   const key = ttsLabelKey(floor);
   const known = runtime.tts.analysis.get(key);
-  // The floor keeps the depth it was read at; a correction is not a shallower reading, and it goes to
-  // the connection that reading goes to.
+  // The floor keeps the depth it was read at: a correction to 分析模式's reading stays one, and a
+  // correction to the translation's marks is kept under the older name the plain reading looks for.
+  // Either way it goes to 分析模式's connection.
   const depth = known?.depth === 'deep' || (!known && prepared.depth === 'deep') ? 'deep' : 'simple';
-  const request = ttsRequestSettings(settings, depth);
+  const request = ttsRequestSettings(settings);
   const context = getContext();
   const messages = buildRefineAnalysisMessages(scope, {
     roster: ttsKnownNames(settings),
@@ -8079,7 +8108,7 @@ function makeTtsBar(messageId, tts, count, readingStyle = '', sides = [tts.side]
   // other paragraph, stop and saving live in the floating window.
   const plays = sides.map(side => {
     const button = control('play-floor', 'jy-tts-bar-play', ttsBarLabel('idle', both ? side : null), false, side);
-    button.title = `${side === 'source' ? '读原文' : side === 'dialogue_source' ? '对白读原文' : '读译文'} · ${TTS_MODE_LABELS[tts.mode]}模式 · ${TTS_RANGE_LABELS[tts.range]} · ${count} 句`;
+    button.title = `${side === 'source' ? '读原文' : side === 'dialogue_source' ? '对白读原文' : '读译文'} · ${TTS_MODE_LABELS[tts.mode]} · ${TTS_RANGE_LABELS[tts.range]} · ${count} 句`;
     return button;
   });
   // Choosing happens here rather than in the floating window: reading the original, the window's list
@@ -9204,20 +9233,77 @@ function applyTranslationChoice(settings, choice) {
 
 // core.js CONNECTION_USES ids, named the way the page already names them — kept here rather than in
 // core.js because it is display text, not settings logic.
-const CONNECTION_USE_LABELS = Object.freeze({ translation: '翻译', analysis: '朗读分析', deep: '深度分析', helper: '小助手' });
+const CONNECTION_USE_LABELS = Object.freeze({ translation: '翻译', deep: '分析模式', helper: '小助手' });
 
-/** Which connection each feature uses right now, and where that is chosen. Nothing in the DESIGN
- * §15.4 markup renders this list any more (模型连接 页's own 用在 checkboxes cover the same ground
- * visually) — kept for `__testing` and the settings-logic coverage in tts-runtime.test.mjs, not dead
- * weight (review finding index.js:11385: the `action:'open-main'` this used to feed had no button
- * left to receive it, and has been removed from the click handler). */
-function channelUsers(settings = runtime.settings) {
+/** Why a use's connection goes unused right now, or '' — the grey line under its row (DESIGN §17.1). */
+function connectionUseNote(settings, use) {
+  if (use !== 'deep') return '';
   const tts = ttsSettings(settings);
-  return [
-    { feature: CONNECTION_USE_LABELS.translation, choice: connectionUseChoice(settings, 'translation'), action: 'open-main', where: '翻译台' },
-    { feature: CONNECTION_USE_LABELS.analysis, choice: connectionUseChoice(settings, 'analysis'), action: 'open-tts', where: '朗读页', note: tts.enabled ? '' : '朗读没开，眼下不会用到' },
-    { feature: CONNECTION_USE_LABELS.deep, choice: connectionUseChoice(settings, 'deep'), action: 'open-tts', where: '朗读页', note: tts.deepChannelId ? '' : '和朗读分析同一条' },
-  ];
+  if (!tts.enabled) return '朗读没开，眼下用不到';
+  return tts.mode === 'deep' ? '' : '分析模式没开，眼下用不到';
+}
+
+/** Which connection each feature uses right now, and whether it is in use at all — for `__testing` and
+ * the settings-logic coverage in tts-runtime.test.mjs; the page itself shows the same thing as
+ * 「各功能用哪条连接」 (renderConnectionUses). */
+function channelUsers(settings = runtime.settings) {
+  return CONNECTION_USES.map(use => ({ use, feature: CONNECTION_USE_LABELS[use], choice: connectionUseChoice(settings, use), note: connectionUseNote(settings, use) }));
+}
+
+/**
+ * DESIGN §17.1 「各功能用哪条连接」: one row per use, the use's name on the left (with why it goes
+ * unused, when it does) and a picker of 跟随酒馆 plus every saved connection on the right. The same
+ * rows sit at the top of 模型连接 and of the normal-mode API Key 卡. Built once and then updated in
+ * place, so a picker the reader is on is never swapped out from under them by a resync.
+ */
+function renderConnectionUses(root, settings) {
+  for (const box of root.querySelectorAll('[data-jy-connection-uses]')) {
+    const doc = box.ownerDocument;
+    for (const use of CONNECTION_USES) {
+      let row = box.querySelector(`[data-jy-use-row="${use}"]`);
+      if (!row) {
+        row = doc.createElement('div');
+        row.className = 'jy-summary-row jy-summary-select jy-connection-use';
+        row.dataset.jyUseRow = use;
+        const copy = doc.createElement('div');
+        copy.className = 'jy-summary-copy';
+        const name = doc.createElement('h3');
+        name.textContent = CONNECTION_USE_LABELS[use];
+        const note = doc.createElement('p');
+        note.dataset.jyUseNote = '';
+        copy.append(name, note);
+        const select = doc.createElement('select');
+        select.dataset.jyUsePicker = use;
+        select.setAttribute('aria-label', `${CONNECTION_USE_LABELS[use]}用哪条连接`);
+        row.append(copy, select);
+        box.appendChild(row);
+      }
+      const note = row.querySelector('[data-jy-use-note]');
+      const text = connectionUseNote(settings, use);
+      if (note) {
+        note.textContent = text;
+        note.hidden = !text;
+      }
+      const select = row.querySelector('[data-jy-use-picker]');
+      if (select) fillChannelPicker(select, settings, connectionUseChoice(settings, use));
+    }
+  }
+}
+
+/** DESIGN §17.1: a use's picker settling. collectSettings(root) reads every page at once, so an invalid
+ * field left elsewhere (排除标签 filled with '<<<', say) can fail this save even though the choice just
+ * made is fine; only this one picker is put back then, leaving whatever the reader is still editing on
+ * that other page exactly as it was. */
+function applyConnectionUseChange(root, select) {
+  const use = select.dataset.jyUsePicker;
+  try {
+    saveSettings(setConnectionUse(collectSettings(root), use, select.value));
+  } catch (error) {
+    fillChannelPicker(select, runtime.settings, connectionUseChoice(runtime.settings, use));
+    toast('error', safeError(error));
+    return;
+  }
+  withFocusPreserved(root, () => syncFields(root, runtime.settings));
 }
 
 /** The connection the page is editing: the one last opened, else the translation's, else the first.
@@ -9232,38 +9318,14 @@ function editingChannelId(settings = runtime.settings) {
   return channels.some(channel => channel.id === translation) ? translation : (channels[0]?.id ?? '');
 }
 
-/** One 用在 checkbox — checked when `use` currently resolves to `choice` ('follow' or a channel id). */
-// `name` says which connection this box belongs to (「跟随酒馆」 for the shared row, or the
-// connection's own name for a card) — without it a screen reader hears several identical "checkbox
-// 翻译" entries with nothing to tell them apart (review finding style.css:270).
-function makeChannelUseCheckbox(doc, settings, use, choice, name) {
-  const label = doc.createElement('label');
-  label.className = 'jy-check';
-  const input = doc.createElement('input');
-  input.type = 'checkbox';
-  input.dataset.jyChannelUse = use;
-  input.dataset.jyChannelUseChoice = choice;
-  input.checked = connectionUseChoice(settings, use) === choice;
-  if (name) input.setAttribute('aria-label', `${name} · ${CONNECTION_USE_LABELS[use]}`);
-  label.append(input, doc.createTextNode(CONNECTION_USE_LABELS[use]));
-  return label;
-}
-
-function fillChannelUseRow(row, settings, choice, name) {
-  if (!row) return;
-  const doc = row.ownerDocument;
-  row.replaceChildren(...CONNECTION_USES.map(use => makeChannelUseCheckbox(doc, settings, use, choice, name)));
-}
-
 /**
- * DESIGN §15.4 模型连接: one card per saved connection, its head carrying the 用在 checkboxes
- * (`core.js` `CONNECTION_USES`/`connectionUseChoice`) that used to be three separate dropdowns spread
- * across 翻译台 and 朗读. Only the connection being edited (`editingChannelId`) expands — the same single
- * detail block the page always had, physically moved into that card's slot, exactly how the prompt
- * page's shared editor stage already relocates whichever prompt item is open.
+ * DESIGN §15.4 模型连接: one card per saved connection — which feature uses which is chosen above them,
+ * in 「各功能用哪条连接」 (§17.1), so a card only stores. Only the connection being edited
+ * (`editingChannelId`) expands — the same single detail block the page always had, physically moved into
+ * that card's slot, exactly how the prompt page's shared editor stage already relocates whichever prompt
+ * item is open.
  */
 function renderChannelCards(root, settings, editing) {
-  fillChannelUseRow(root.querySelector('[data-jy-channel-use-row="follow"]'), settings, 'follow', '跟随酒馆');
   const host = root.querySelector('[data-jy-channel-cards]');
   const detail = root.querySelector('[data-jy-channel-detail]');
   const detailHolder = root.querySelector('[data-jy-channel-detail-holder]');
@@ -9298,10 +9360,6 @@ function renderChannelCards(root, settings, editing) {
     }
     toggle.appendChild(text);
     head.appendChild(toggle);
-    const uses = doc.createElement('div');
-    uses.className = 'jy-channel-card-uses';
-    uses.append(...CONNECTION_USES.map(use => makeChannelUseCheckbox(doc, settings, use, channel.id, channel.name || DEFAULT_CHANNEL.name)));
-    head.appendChild(uses);
     const chevron = doc.createElement('button');
     chevron.type = 'button';
     chevron.className = 'jy-channel-card-chevron';
@@ -9348,15 +9406,14 @@ const PRESET_DESCRIPTIONS = Object.freeze({
   light: '自动接续翻译，别的都不开。',
   comfort: '翻译 + 说话人着色 + 情绪排版。',
   audiobook: '再加：朗读功能、新回复自动朗读。',
-  everything: '再加：深度分析、特效字。',
+  everything: '再加：分析模式、特效字。',
 });
 
-// The one-line note under 翻译台/微调的「分析模式」— shorter than 朗读页 data-jy-tts-mode-help's own
-// paragraph, which stays exactly as it was for the advanced page.
+// The one-line note under 翻译台的「分析模式」 switch — shorter than 朗读页 data-jy-tts-mode-help's own
+// paragraph (updateTtsModeHelp).
 const DESK_TTS_MODE_HELP = Object.freeze({
-  off: '不分析：直接读正文，只加自己配的标点标签。',
-  simple: '简单分析：谁在说、什么情绪、什么语气。',
-  deep: '深度分析：在骨架上再看一遍，定情绪起伏和表演。',
+  off: '关着：不额外请求副模型，翻译过的楼用翻译时标好的说话人和情绪，其余由程序认人。',
+  deep: '开着：每楼写完让副模型分析一遍，定情绪起伏和表演。',
 });
 
 /** DESIGN §15.2 套餐：2×2 的 .jy-connection-choice 可点卡片，一个套餐一张。 */
@@ -9392,7 +9449,7 @@ function renderPresetCards(root, settings) {
   }));
 }
 
-/** DESIGN §15.2 API Key 卡的一行：「跟随酒馆」或一条保存的连接，带用在勾选，展开态带编辑表单。 */
+/** DESIGN §15.2 API Key 卡的一行：「跟随酒馆」或一条保存的连接，展开态带编辑表单；用哪条在卡顶上选（§17.1）。 */
 function buildDeskConnectionForm(doc, channel) {
   const form = doc.createElement('div');
   form.className = 'jy-desk-connection-form';
@@ -9455,22 +9512,6 @@ function buildDeskConnectionRow(doc, settings, id, name, channel, expandedId) {
   small.textContent = channel ? (channel.model || '未设置模型') : '用酒馆当前的 API，不用填';
   open.append(strong, small);
   summary.appendChild(open);
-  const uses = doc.createElement('div');
-  uses.className = 'jy-desk-connection-uses';
-  for (const use of CONNECTION_USES) {
-    const useLabel = doc.createElement('label');
-    const input = doc.createElement('input');
-    input.type = 'checkbox';
-    input.dataset.jyDeskUse = use;
-    input.dataset.jyDeskUseChannel = id;
-    input.checked = connectionUseChoice(settings, use) === id;
-    // Same reasoning as makeChannelUseCheckbox's `name` (review finding style.css:270): several
-    // identical "checkbox 翻译" entries otherwise, with no connection named.
-    input.setAttribute('aria-label', `${name} · ${CONNECTION_USE_LABELS[use]}`);
-    useLabel.append(input, doc.createTextNode(CONNECTION_USE_LABELS[use]));
-    uses.appendChild(useLabel);
-  }
-  summary.appendChild(uses);
   row.appendChild(summary);
   if (expanded) row.appendChild(buildDeskConnectionForm(doc, channel));
   return row;
@@ -9488,7 +9529,7 @@ function renderDeskConnections(root, settings) {
 
 // A desk-channel-field settling (API 基础地址/密钥/当前模型 inside the expanded API Key 卡 row) can only
 // have changed that row's own model name — the row's summary <small> next to its name (buildDeskConnectionRow);
-// nothing else the row shows (name, checkboxes) is one of its fields. Called instead of renderDeskConnections
+// nothing else the row shows (its name) is one of its fields. Called instead of renderDeskConnections
 // so the field's own row, its toggle and its 「测试这条连接」/「删除」 buttons are never replaced (review
 // finding index.js:12396 — the same swallowed-click/lost-Tab bug renderChannelCards had at index.js:12376).
 function syncDeskConnectionSummary(root, settings) {
@@ -9597,28 +9638,6 @@ function syncFinetuneFields(root, settings) {
   if (styleSelect) styleSelect.value = detectBuiltinReadingStyle(getActiveProcessingProfile(settings)) ?? '';
 }
 
-/** DESIGN §15.2 正常模式 API Key 卡的「用在」勾选框 (review finding index.js:12386): collectSettings(root)
- * reads every page at once, so an invalid field left elsewhere (排除标签 filled with '<<<', say) can fail
- * this save even though the box the reader just clicked is perfectly fine. Resyncing on that failure the
- * way the success path does would reset whatever the reader is still mid-editing on that other page — the
- * same reasoning 模型连接/翻译规则's own autosaves already follow (index.js:12617, 12524) — so only the one
- * checkbox actually touched is put back, leaving everything else exactly as it was. */
-function applyDeskUseChange(root, input) {
-  const use = input.dataset.jyDeskUse;
-  const channelId = input.dataset.jyDeskUseChannel;
-  try {
-    saveSettings(setConnectionUse(collectSettings(root), use, input.checked ? channelId : 'follow'));
-  } catch (error) {
-    input.checked = !input.checked;
-    toast('error', safeError(error));
-    return;
-  }
-  // renderDeskConnections (inside syncFields) replaces every row, including the very checkbox a
-  // keyboard user just pressed Space on; withFocusPreserved keeps Tab/Space working on it afterward
-  // instead of dropping to <body> (review finding index.js:12541).
-  withFocusPreserved(root, () => syncFields(root, runtime.settings));
-}
-
 /** DESIGN §15.2 API Key 卡的桌面版地址/密钥/当前模型字段结算 ([data-jy-desk-channel-field], index.js:9246).
  * syncFields() would run renderDeskConnections and replace every row — its toggle, its 用在 checkboxes,
  * and 「测试这条连接」/「删除」 — so a blur-time change mid-mousedown/mid-Tab swallows whatever the pointer
@@ -9632,7 +9651,7 @@ function applyDeskUseChange(root, input) {
  * next save made while 模型连接 sits hidden (switching to 高级模式 and touching any field there at all) write
  * it straight back over whatever was just typed on this card (review finding index.js:12561). rebuildCards:
  * false for the same reason as syncDeskFields above: this card is hidden in 正常模式, so nothing under a
- * pointer gets replaced. The advanced 翻译台's own summary line and the 朗读/深度分析 pickers/fold also still
+ * pointer gets replaced. The advanced 翻译台's own summary line and the 分析模式 pickers/fold also still
  * showed the old name/model until refreshed here, the same way the 模型连接 fast path already does
  * (index.js:12626). */
 function applyDeskChannelFieldChange(root) {
@@ -9658,7 +9677,7 @@ function applyDeskChannelFieldChange(root) {
  * actually adds, deletes, switches or collapses one runs. This also left several other things showing a
  * renamed/re-modeled connection's old name (review finding index.js:12626): the advanced 翻译台's own
  * summary line ([data-jy-channel-summary], only ever set by updateSummary) and the 朗读/微调 connection
- * pickers plus 深度分析's fold summary (only ever set by syncTtsFields, which is not called on this fast
+ * pickers plus 分析模式's fold summary (only ever set by syncTtsFields, which is not called on this fast
  * path since most of it belongs to the 朗读 page and would touch fields the reader might be mid-editing
  * there — this pulls out just the two pickers and the fold, both on pages that are hidden right now). */
 function applyChannelFieldChange(root) {
@@ -9747,8 +9766,8 @@ function syncChannelFoldSummaries(root, channel) {
 // changes — add, delete, switch or collapse — and rebuilding every card's head for it replaces the
 // very button a click is still in flight on (mousedown already fired, mouseup has not yet), which
 // swallows that click (review finding index.js:12376). The open card's heading is the only piece of
-// the cards a field edit can actually change; its collapsed summary line and 用在 checkboxes' aria
-// labels pick up a renamed connection the next time something really does rebuild the cards.
+// the cards a field edit can actually change; its collapsed summary line picks up a renamed connection
+// the next time something really does rebuild the cards.
 function syncChannelFields(root, settings, { rebuildCards = true } = {}) {
   const editing = editingChannelId(settings);
   runtime.editingChannelId = editing;
@@ -9760,16 +9779,10 @@ function syncChannelFields(root, settings, { rebuildCards = true } = {}) {
   } else {
     const openCard = [...root.querySelectorAll('[data-jy-channel-card]')].find(card => card.dataset.jyChannelCard === editing);
     const heading = openCard?.querySelector('h2');
-    const label = channel.name || DEFAULT_CHANNEL.name;
-    if (heading) heading.textContent = label;
-    // Read out to a screen reader as "<name> · 翻译" (review finding style.css:270); it must follow a
-    // rename here too, not wait for something that actually rebuilds the cards (review finding
-    // index.js:12626). Matched by which connection each checkbox belongs to rather than walked from
-    // openCard's own children, since only the open card ever holds one for this id.
-    for (const use of root.querySelectorAll('[data-jy-channel-use]')) {
-      if (use.dataset.jyChannelUseChoice === editing) use.setAttribute('aria-label', `${label} · ${CONNECTION_USE_LABELS[use.dataset.jyChannelUse]}`);
-    }
+    if (heading) heading.textContent = channel.name || DEFAULT_CHANNEL.name;
   }
+  // A rename shows in 「各功能用哪条连接」's pickers at once (review finding index.js:12626).
+  renderConnectionUses(root, settings);
   root.dataset.jyEditingChannelId = channel.id;
   syncChannelFoldSummaries(root, channel);
   for (const element of root.querySelectorAll('[data-jy-channel-field]')) {
@@ -10166,8 +10179,187 @@ function syncColoringFields(root, settings = runtime.settings, { renderList = tr
   for (const effectsField of root.querySelectorAll('[data-jy-dependent="coloringEffects"]')) effectsField.dataset.jyDependentOff = String(!coloring.speakers);
   renderBandReport(root, settings);
   renderSpeakerReport(root, settings, true);
-  if (renderList) renderSpeakerList(root, settings);
-  else refreshSpeakerPreviews(root, settings);
+  if (renderList) {
+    renderSpeakerList(root, settings);
+    renderMoveTable(root, settings);
+  } else {
+    refreshSpeakerPreviews(root, settings);
+    refreshMoveSwatches(root, settings);
+  }
+}
+
+// DESIGN §17.5 招式表: every move this chat has named, the most recently seen first, each row showing what
+// the reader set by hand over what the chat fixed on its own.
+function renderMoveTable(root, settings = runtime.settings) {
+  const list = root.querySelector('[data-jy-move-list]');
+  if (!list) return;
+  const doc = list.ownerDocument;
+  const moves = chatMoveTable();
+  const overrides = moveOverrideMap(settings);
+  list.replaceChildren();
+  if (!moves.length) {
+    const note = doc.createElement('p');
+    note.className = 'jy-muted';
+    note.textContent = '这个聊天还没有招式。开着特效字翻译过的楼层里出现招式后，这里会列出来。';
+    list.appendChild(note);
+  }
+  for (const move of moves) list.appendChild(moveRowElement(doc, move, overrides.get(move.name)));
+  refreshMoveSwatches(root, settings);
+  setText(root, '[data-jy-fold="processing-moves"] [data-jy-fold-summary]', moveTableSummary(moves.length));
+}
+
+function moveTableSummary(count) {
+  return count ? `${count} 个招式` : '空';
+}
+
+function moveRowElement(doc, move, override = null) {
+  const row = doc.createElement('div');
+  row.className = 'jy-move-row';
+  row.dataset.jyMoveRow = move.name;
+  row.dataset.jyMoveElement = move.element || '';
+  const head = doc.createElement('div');
+  head.className = 'jy-move-head';
+  const swatch = doc.createElement('span');
+  swatch.className = 'jy-move-swatch';
+  swatch.dataset.jyMoveSwatch = '';
+  swatch.setAttribute('aria-hidden', 'true');
+  const name = doc.createElement('span');
+  name.className = 'jy-move-name';
+  name.textContent = move.name;
+  name.title = move.name;
+  const reset = doc.createElement('button');
+  reset.type = 'button';
+  reset.className = 'jy-text-button';
+  reset.dataset.jyAction = 'move-reset';
+  reset.textContent = '恢复自动';
+  reset.hidden = !override;
+  head.append(swatch, name, reset);
+
+  const field = (label, control) => {
+    const wrapper = doc.createElement('label');
+    wrapper.className = 'jy-move-field';
+    const text = doc.createElement('span');
+    text.className = 'jy-label';
+    text.textContent = label;
+    wrapper.append(text, ...[control].flat());
+    return wrapper;
+  };
+  const select = (key, options, value) => {
+    const element = doc.createElement('select');
+    element.dataset.jyMoveField = key;
+    element.setAttribute('aria-label', `${move.name} ${{ element: '属性', tier: '等级', colorMode: '颜色' }[key]}`);
+    for (const [optionValue, optionLabel] of options) {
+      const option = doc.createElement('option');
+      option.value = optionValue;
+      option.textContent = optionLabel;
+      element.appendChild(option);
+    }
+    element.value = value;
+    return element;
+  };
+  const elementChoices = [...MOVE_ELEMENT_CHOICES];
+  // An element set before, or one this list no longer offers, still shows as what it is.
+  if (override?.element && !elementChoices.includes(override.element)) elementChoices.unshift(override.element);
+  const elementSelect = select('element', [
+    ['', move.element ? `自动（${move.element}）` : '自动'],
+    ...elementChoices.map(choice => [choice, choice]),
+  ], override?.element ?? '');
+  const tierSelect = select('tier', [['', '自动'], ['1', '1'], ['2', '2'], ['3', '3']], override?.tier ? String(override.tier) : '');
+  const colorMode = select('colorMode', [['', '自动'], ['custom', '自选']], override?.color ? 'custom' : '');
+  const color = doc.createElement('input');
+  color.type = 'color';
+  color.dataset.jyMoveField = 'color';
+  color.setAttribute('aria-label', `${move.name} 自选颜色`);
+  color.value = override?.color || '#808080';
+  color.hidden = !override?.color;
+  const off = doc.createElement('label');
+  off.className = 'jy-check';
+  const offBox = doc.createElement('input');
+  offBox.type = 'checkbox';
+  offBox.dataset.jyMoveField = 'off';
+  offBox.checked = override?.off === true;
+  off.append(offBox, '不上色');
+  const fields = doc.createElement('div');
+  fields.className = 'jy-move-fields';
+  fields.append(field('属性', elementSelect), field('等级', tierSelect), field('颜色', [colorMode, color]), off);
+  row.append(head, fields);
+  return row;
+}
+
+// What one 招式表 row says, as a saved override (null when every field is automatic again).
+function moveRowOverride(row) {
+  const field = key => row.querySelector(`[data-jy-move-field="${key}"]`);
+  return normalizeMoveOverride({
+    name: row.dataset.jyMoveRow,
+    element: field('element')?.value ?? '',
+    tier: field('tier')?.value ?? '',
+    color: field('colorMode')?.value === 'custom' ? field('color')?.value ?? '' : '',
+    off: field('off')?.checked === true,
+  });
+}
+
+// Each swatch is the colour the chat actually gets for that move on the current theme — the same
+// resolveMoveStyle the floors are painted with, the row's hand settings included.
+function refreshMoveSwatches(root, settings = runtime.settings) {
+  const coloring = activeColoring(settings);
+  const band = runtime.probedBand ?? coloring.band;
+  for (const row of root.querySelectorAll('[data-jy-move-row]')) {
+    const swatch = row.querySelector('[data-jy-move-swatch]');
+    if (!swatch) continue;
+    const override = moveRowOverride(row);
+    const resolved = band && !override?.off ? resolveMoveStyle({
+      element: override?.element || row.dataset.jyMoveElement || '', name: row.dataset.jyMoveRow, band, vividness: coloring.vividness, color: override?.color || '',
+    }) : null;
+    row.dataset.jyMoveHex = resolved?.hex ?? '';
+    swatch.style.background = resolved?.hex ?? '';
+    swatch.dataset.state = override?.off ? 'off' : resolved ? 'on' : 'none';
+    swatch.title = override?.off ? '不上色' : resolved?.hex ?? '先读取主题';
+  }
+}
+
+// One move's hand settings saved under this chat's card; `override` null takes the move back to automatic.
+function saveMoveOverride(name, override) {
+  const characterKey = worldInfoCharacterKey();
+  const list = moveOverridesFor(runtime.settings, characterKey).filter(item => item.name !== name);
+  if (override) list.push(override);
+  const moveOverrides = { ...(runtime.settings.moveOverrides || {}) };
+  if (list.length) moveOverrides[characterKey] = list;
+  else delete moveOverrides[characterKey];
+  saveSettings({ ...mergeSettings(runtime.settings), moveOverrides });
+}
+
+function applyMoveFieldChange(root, field) {
+  const row = field.closest('[data-jy-move-row]');
+  if (!row) return;
+  const color = row.querySelector('[data-jy-move-field="color"]');
+  if (field.dataset.jyMoveField === 'colorMode' && color) {
+    color.hidden = field.value !== 'custom';
+    // 自选 starts from the colour the move wears now.
+    if (field.value === 'custom' && row.dataset.jyMoveHex) color.value = row.dataset.jyMoveHex;
+  }
+  const override = moveRowOverride(row);
+  try {
+    saveMoveOverride(row.dataset.jyMoveRow, override);
+  } catch (error) {
+    toast('error', safeError(error));
+    return;
+  }
+  const reset = row.querySelector('[data-jy-action="move-reset"]');
+  if (reset) reset.hidden = !override;
+  refreshMoveSwatches(root, runtime.settings);
+}
+
+function resetMoveRow(root, row) {
+  if (!row) return;
+  try {
+    saveMoveOverride(row.dataset.jyMoveRow, null);
+  } catch (error) {
+    toast('error', safeError(error));
+    return;
+  }
+  const fresh = moveRowElement(row.ownerDocument, { name: row.dataset.jyMoveRow, element: row.dataset.jyMoveElement || '' }, null);
+  row.replaceWith(fresh);
+  refreshMoveSwatches(root, runtime.settings);
 }
 
 const FLOATING_STYLE_SHORT_LABELS = Object.freeze({ auto: '自动', ring: '始终圆环', pill: '始终胶囊', edge: '始终贴边' });
@@ -10183,6 +10375,7 @@ function syncProcessingFoldSummaries(root, settings = runtime.settings) {
     'processing-lyrics': preserveLineRuleCountLabel(settings.lyricLineRules),
     'processing-affix': segmentAffixSummary(settings),
     'processing-color': coloringDetailFoldSummary(activeColoring(settings)),
+    'processing-moves': moveTableSummary(chatMoveTable().length),
     // Fixed text here used to claim every toggle was on no matter what was actually saved (review
     // finding index.js:9291) — 悬浮入口's own on/off and chosen 形态, 朗读按钮's chosen mode, and
     // 左手模式 only when it is actually on.
@@ -10508,7 +10701,7 @@ function marksFoldElement(doc, marks) {
   fold.appendChild(summary);
   const hint = doc.createElement('p');
   hint.className = 'jy-muted';
-  hint.textContent = '正文里出现左边的标点时，发给 Fish 的文本里加上右边的标签。「原位替换」把标点换成标签，适合停顿、叹气这类声音；「放在句首」把标签放到这个标点结尾的那句话前面，适合情绪、音量。发出去的是 Fish 官方认得的英文标签。不分析和简单分析两种模式都生效。';
+  hint.textContent = '正文里出现左边的标点时，发给 Fish 的文本里加上右边的标签。「原位替换」把标点换成标签，适合停顿、叹气这类声音；「放在句首」把标签放到这个标点结尾的那句话前面，适合情绪、音量。发出去的是 Fish 官方认得的英文标签。不开分析模式时生效。';
   fold.appendChild(hint);
   const list = doc.createElement('div');
   list.className = 'jy-tts-marks';
@@ -10852,7 +11045,7 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
     'tts-library': voiceLibraryFoldSummary(settings?.voiceLibrary),
     'tts-quotes': quoteSymbolFoldSummary(tts),
     'tts-fish': fishParamsFoldSummary(tts.fish),
-    'tts-deep': DEEP_STATUS.available ? (tts.deepChannelId ? `走 ${channelLabel(settings, tts.deepChannelId, { short: true })}` : '和朗读分析同一条连接') : DEEP_STATUS.note,
+    'tts-deep': DEEP_STATUS.available ? `走 ${channelLabel(settings, connectionUseChoice(settings, 'deep'), { short: true })}` : DEEP_STATUS.note,
     'tts-console': consoleFoldSummary(tts.console),
     // These two had no summary at all before (review finding style.css:822).
     'tts-prompts': Object.values(tts.prompts ?? {}).some(value => String(value ?? '').trim()) ? '已改' : '内置',
@@ -10866,13 +11059,43 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
     : '这张卡的所有聊天共用这张表。同一张卡开了几个周目、各有各的人物，就改成「每个聊天单独一份」。音色库不受这个影响，永远全局共用。');
 }
 
-function ttsLibraryRowElement(doc, voice) {
-  const row = doc.createElement('div');
+// What a folded 音色库 row says: the voice by its fetched title, else the head of its id, and the language.
+function ttsLibraryRowMeta(voice) {
+  const id = String(voice.voiceId ?? '');
+  const heard = voice.title || (id ? `${id.slice(0, 8)}…` : '没填 Voice ID');
+  return voice.lang ? `${heard} · ${languageLabel(voice.lang)}` : heard;
+}
+
+/**
+ * DESIGN §17.4: one 音色库 entry, folded to a line (its name and its voice) until opened, the same
+ * way a 角色表 row is — opening one folds the rest, so a long library never turns into a mile of
+ * inputs to scroll past.
+ */
+function ttsLibraryRowElement(doc, voice, { open = false } = {}) {
+  const row = doc.createElement('details');
   row.className = 'jy-tts-library-row';
   row.dataset.jyTtsLibraryRow = '';
   row.dataset.id = voice.id ?? '';
   row.dataset.voiceId = voice.voiceId ?? '';
   row.dataset.title = voice.title ?? '';
+  row.open = open;
+  row.addEventListener('toggle', () => {
+    if (!row.open) return;
+    for (const other of row.parentElement?.querySelectorAll('[data-jy-tts-library-row][open]') ?? []) {
+      if (other !== row) other.open = false;
+    }
+    row.scrollIntoView?.({ block: 'nearest' });
+  });
+  const summary = doc.createElement('summary');
+  summary.className = 'jy-tts-voice-summary';
+  const summaryName = doc.createElement('span');
+  summaryName.className = 'jy-tts-voice-summary-name';
+  summaryName.dataset.jyTtsLibrarySummaryName = '';
+  summaryName.textContent = voice.name || '（未命名）';
+  const summaryMeta = doc.createElement('span');
+  summaryMeta.className = 'jy-tts-voice-summary-meta';
+  summaryMeta.textContent = ttsLibraryRowMeta(voice);
+  summary.append(summaryName, summaryMeta);
   const name = doc.createElement('input');
   name.type = 'text';
   name.maxLength = 60;
@@ -10896,7 +11119,10 @@ function ttsLibraryRowElement(doc, voice) {
   remove.className = 'jy-text-button';
   remove.dataset.jyAction = 'tts-remove-library';
   remove.textContent = '移除';
-  row.append(name, id, lang, title, remove);
+  const body = doc.createElement('div');
+  body.className = 'jy-tts-library-body';
+  body.append(name, id, lang, title, remove);
+  row.append(summary, body);
   return row;
 }
 
@@ -10905,6 +11131,8 @@ function renderTtsLibrary(root, settings = runtime.settings) {
   if (!list) return;
   const doc = list.ownerDocument;
   const library = normalizeVoiceLibrary(settings?.voiceLibrary);
+  // An entry being edited stays open across a redraw.
+  const open = new Set([...list.querySelectorAll('[data-jy-tts-library-row][open]')].map(row => row.dataset.id).filter(Boolean));
   list.replaceChildren();
   if (!library.length) {
     const note = doc.createElement('p');
@@ -10913,7 +11141,7 @@ function renderTtsLibrary(root, settings = runtime.settings) {
     list.appendChild(note);
     return;
   }
-  for (const voice of library) list.appendChild(ttsLibraryRowElement(doc, voice));
+  for (const voice of library) list.appendChild(ttsLibraryRowElement(doc, voice, { open: open.has(voice.id) }));
 }
 
 function renderNarratorLanguages(root, settings = runtime.settings) {
@@ -10975,19 +11203,13 @@ async function renderTtsUsage(root) {
 // a library voice or a narrator language and then committing any other field on the page — including
 // that same row's own next field — used to drop the unfinished row, and Tab off a 音色 name used to
 // land on <body> because the row it came from was gone).
-// 朗读分析/深度分析's own connection pickers — every instance, main and 微调's own mirrored copy (DESIGN
-// §15.3) — pulled out of syncTtsFields so a connection's name/model settling on 模型连接 (review finding
-// index.js:12626) can refresh just these two selects and the fold summary below without running the rest
-// of syncTtsFields against the 朗读 page while the reader is looking at an entirely different one.
+// 分析模式's own connection picker — every instance, 朗读页 and 微调's mirrored copy (DESIGN §15.3) — and
+// 「各功能用哪条连接」, pulled out of syncTtsFields so a connection's name/model settling on 模型连接 (review
+// finding index.js:12626) can refresh just these and the fold summary below without running the rest of
+// syncTtsFields against the 朗读 page while the reader is looking at an entirely different one.
 function fillTtsChannelPickers(root, settings) {
-  const tts = ttsSettings(settings);
-  // The reading's own choice of connection, and the deep reading's: the host's own or a saved one.
-  // Nothing here follows the translation; an old 「follow the translation」 was pinned when read.
-  const analysisChoice = resolveFeatureChannel(tts.analysisChannelId, settings);
-  // Two instances of each select exist once 微调 (DESIGN §15.3) mirrors them: every one on screen or
-  // off gets filled, not just whichever happens to come first in the document.
-  for (const analysisSelect of root.querySelectorAll('[data-jy-tts-field="analysisChannelId"]')) fillChannelPicker(analysisSelect, settings, analysisChoice);
-  for (const deepSelect of root.querySelectorAll('[data-jy-tts-field="deepChannelId"]')) fillChannelPicker(deepSelect, settings, tts.deepChannelId || '', { lead: { value: '', text: `和朗读分析用同一条：${channelLabel(settings, analysisChoice, { short: true })}` } });
+  for (const deepSelect of root.querySelectorAll('[data-jy-tts-field="deepChannelId"]')) fillChannelPicker(deepSelect, settings, connectionUseChoice(settings, 'deep'));
+  renderConnectionUses(root, settings);
 }
 
 function syncTtsFields(root, settings = runtime.settings, { renderLists = true } = {}) {
@@ -10995,6 +11217,11 @@ function syncTtsFields(root, settings = runtime.settings, { renderLists = true }
   const tts = ttsSettings(settings);
   for (const element of root.querySelectorAll('[data-jy-tts-field]')) {
     const key = element.dataset.jyTtsField;
+    // 分析模式 is one switch (DESIGN §17.2): on is the analysed reading, off the plain one.
+    if (key === 'mode' && element.type === 'checkbox') {
+      element.checked = tts.mode === 'deep';
+      continue;
+    }
     const value = key === 'sourceTags' ? tts.sourceTags.join(', ')
       : key === 'quotePairs' || key === 'skipPairs' ? formatPairList(tts[key])
         : tts[key];
@@ -11064,26 +11291,19 @@ function updateTtsUnitHelp(root, settings = runtime.settings) {
     : '每段一次：一段一个请求，几段同时做（上面「同时生成几段」），第一段做好就开始播。一段里有几个人说话，本来就在同一个请求里各用各的音色；想让整楼所有人在一个请求里连着读，选「整楼一次」。';
 }
 
-// The line under the mode choice says what the analysis setting comes to in this mode.
+// The line under the 分析模式 switch says what either position comes to.
 function updateTtsModeHelp(root) {
   const help = root.querySelector('[data-jy-tts-mode-help]');
   if (!help) return;
-  const mode = root.querySelector('[data-jy-tts-field="mode"]')?.value ?? 'simple';
-  // What to do with a floor nobody translated or analysed is the plain reading's question alone: the
-  // others analyse such a floor as a matter of course.
+  const toggle = root.querySelector('[data-jy-tts-field="mode"]');
+  const analysed = toggle ? toggle.checked === true : ttsSettings().mode === 'deep';
+  // What to do with a floor nobody translated or analysed is the plain reading's question alone:
+  // 分析模式 analyses such a floor as a matter of course.
   const askField = root.querySelector('[data-jy-tts-ask-field]');
-  if (askField) askField.hidden = mode !== 'off';
-  if (mode === 'off') {
-    help.textContent = '不分析：不额外请求副模型。翻译过的楼直接用翻译时标好的说话人和情绪——翻译那一次请求本身带了分析；正文里带 <say> 说话人标记的楼，按标记分角色、带情绪读（「音色」卡里打开「让主模型给台词标上说话人和情绪」，主模型写的台词就会带标记）；其余的楼由程序按上下文认谁在说，认不出的用对白默认音色。想让副模型认一次，点朗读页的「分析这一楼」，或者在右边选按播放时怎么办。';
-    return;
-  }
-  if (mode === 'simple') {
-    help.textContent = '简单分析：开着翻译时，说话人和情绪随翻译一起标好，零次额外调用；不开翻译时，正文一闭合就把原文发给副模型标一次，只回对白的说话人和情绪，快。走「读法」卡里选的朗读分析连接。';
-    return;
-  }
-  help.textContent = mode === 'deep'
-    ? '深度分析：正文一闭合就把原文发给副模型，不等翻译、也不用翻译的标注，一次请求：对白由谁念、什么情绪、一句里情绪在哪里变、哪里停顿重读、哪里有叹气笑声这类声音，全是 Fish 官方认得的标签，旁白不管。带角色资料、世界书和前一楼（在「更多 → 深度分析」栏里勾）。读译文时把结果对到译文上。走「更多 → 深度分析」栏里选的连接。'
-    : '简单模式：开着翻译时零次额外调用，翻译时顺手标好的骨架直接转成 Fish 能读的中文指令；不开翻译或没骨架的楼问一次副模型。一段一次 Fish 请求，几段一起发，先到先播。';
+  if (askField) askField.hidden = analysed;
+  help.textContent = analysed
+    ? '开着：正文一闭合就把原文发给副模型，不等翻译、也不用翻译的标注，一次请求：对白由谁念、什么情绪、一句里情绪在哪里变、哪里停顿重读、哪里有叹气笑声这类声音，全是 Fish 官方认得的标签，旁白不管。带角色资料、世界书和前几楼（在「更多 → 分析模式」里勾）。读译文时把结果对到译文上。走分析模式用的连接。'
+    : '关着：不额外请求副模型。翻译过的楼直接用翻译时标好的说话人和情绪——翻译那一次请求本身带了分析；正文里带 <say> 说话人标记的楼，按标记分角色、带情绪读（「音色」卡里打开「让主模型给台词标上说话人和情绪」，主模型写的台词就会带标记）；其余的楼由程序按上下文认谁在说，认不出的用对白默认音色。想让副模型分析一次，点悬浮窗朗读页的「分析这一楼」，或者在下面选按播放时怎么办。';
 }
 
 /**
@@ -11113,7 +11333,9 @@ function collectTtsFields(root, current) {
   const next = { ...previous, fish: { ...previous.fish } };
   for (const element of root.querySelectorAll('[data-jy-tts-field]')) {
     const key = element.dataset.jyTtsField;
-    if (element.type === 'radio') {
+    if (key === 'mode' && element.type === 'checkbox') {
+      next.mode = element.checked ? 'deep' : 'off';
+    } else if (element.type === 'radio') {
       if (element.checked) next[key] = element.value;
     } else if (element.type === 'checkbox') {
       next[key] = element.checked;
@@ -11315,7 +11537,7 @@ async function importCastFromWorldbook(settings = runtime.settings, { signal } =
     recordDiagnostic('error', 'tts.cast-import', `副模型识别角色失败：${safeError(error)}`, {
       entries: digest.length, cards: cards.length, apiMode: request.apiMode, endpoint: describeChannelEndpoint(request),
     }, describeRequestFailure(error), { fullRequest: messages });
-    throw new Error(`识别角色需要副模型，这次没有回应：${safeError(error)} 识别走的是朗读分析用的连接「${channelLabel(settings, resolveFeatureChannel(ttsSettings(settings).analysisChannelId, settings), { short: true })}」，可以在朗读页「读法」卡里换一条，或者去「模型连接」页检查它。`);
+    throw new Error(`识别角色需要副模型，这次没有回应：${safeError(error)} 识别走的是分析模式用的连接「${channelLabel(settings, connectionUseChoice(settings, 'deep'), { short: true })}」，可以在「模型连接」页最上面的「各功能用哪条连接」里换一条，或者检查这条连接本身。`);
   }
   const answered = [];
   for (const candidate of parseJsonCandidates(raw)) {
@@ -11538,7 +11760,7 @@ function renderTtsPreview(root) {
   const inRange = new Set(audibleSegments(preview.segments, tts.range, ttsVoiceConfig(settings)).map(segment => segment.id));
   const head = doc.createElement('p');
   head.className = 'jy-muted';
-  head.textContent = `第 ${preview.messageId} 楼 · ${preview.segments.length} 句 · ${preview.source === 'translation' ? '读的是镜译译文' : preview.source === 'source' ? '读的是原文' : preview.source === 'dialogue_source' ? '读的是对白原文（旁白是译文）' : '读的是来源标签里的文字'} · 标注来自${preview.analyzed === 'deep' ? '副模型深度分析' : preview.analyzed === 'simple' ? '副模型简单分析' : preview.analyzed === 'pending' ? '还没分析' : '翻译时的骨架与引号'}`;
+  head.textContent = `第 ${preview.messageId} 楼 · ${preview.segments.length} 句 · ${preview.source === 'translation' ? '读的是镜译译文' : preview.source === 'source' ? '读的是原文' : preview.source === 'dialogue_source' ? '读的是对白原文（旁白是译文）' : '读的是来源标签里的文字'} · 标注来自${preview.analyzed === 'deep' ? '副模型分析（分析模式）' : preview.analyzed === 'simple' ? '副模型分析过' : preview.analyzed === 'pending' ? '还没分析' : '翻译时的骨架与引号'}`;
   target.appendChild(head);
   const table = doc.createElement('div');
   table.className = 'jy-tts-preview-table';
@@ -12383,43 +12605,50 @@ function helperLiveRoot(fallback) {
   return runtime.panel?.controller?.root || fallback;
 }
 
-/** DESIGN §16.2 对话卡片列表 — rebuilt whenever a turn is added, finishes, or one of its suggestions
- * changes state. Session-only state (runtime.helper.turns), never settings. */
-function renderHelperConversation(root) {
+/** DESIGN §17.3 聊天框 — one question bubble and one answer bubble per turn, rebuilt whenever a turn
+ * is added, finishes, or one of its suggestions changes state. Session-only state (runtime.helper.turns),
+ * never settings. The box scrolls on its own: `follow` takes it to the newest turn (a question just
+ * sent, the page just opened); otherwise it only follows an answer when the reader was already at the
+ * bottom, and a reader scrolled up to read an older turn is left where they are. */
+function renderHelperConversation(root, { follow = false } = {}) {
   const container = root.querySelector('[data-jy-helper-conversation]');
   if (!container) return;
   const doc = container.ownerDocument;
+  const top = Number(container.scrollTop) || 0;
+  const atBottom = (Number(container.scrollHeight) || 0) - top - (Number(container.clientHeight) || 0) <= 80;
   container.replaceChildren(...runtime.helper.turns.map((turn, turnIndex) => {
-    const card = doc.createElement('section');
-    card.className = 'jy-brief jy-desk-card jy-helper-turn';
+    const card = doc.createElement('div');
+    card.className = 'jy-helper-turn';
     const question = doc.createElement('p');
-    question.className = 'jy-helper-question';
+    question.className = 'jy-helper-bubble jy-helper-question';
     question.textContent = turn.question;
-    const answer = doc.createElement('p');
-    answer.className = 'jy-helper-answer';
+    const answer = doc.createElement('div');
+    answer.className = 'jy-helper-bubble jy-helper-answer';
+    const text = doc.createElement('p');
+    text.className = 'jy-helper-answer-text';
     if (turn.busy) {
       const mark = doc.createElement('span');
       mark.className = 'jy-state-mark';
       mark.dataset.state = 'busy';
       mark.setAttribute('aria-hidden', 'true');
       mark.textContent = '◌';
-      answer.append(mark, doc.createTextNode(' 正在想…'));
+      text.append(mark, doc.createTextNode(' 正在想…'));
     } else if (turn.error) {
-      answer.classList.add('is-error');
-      answer.textContent = turn.error;
+      text.classList.add('is-error');
+      text.textContent = turn.error;
     } else {
-      answer.textContent = turn.answer || '（没有回答）';
+      text.textContent = turn.answer || '（没有回答）';
     }
-    card.append(question, answer);
+    answer.appendChild(text);
     if (turn.suggestions?.length) {
       const list = doc.createElement('div');
       list.className = 'jy-helper-suggestions';
       list.append(...turn.suggestions.map((suggestion, suggestionIndex) => {
         const row = doc.createElement('div');
         row.className = 'jy-helper-suggestion';
-        const text = doc.createElement('span');
-        text.textContent = describeHelperSuggestion(suggestion);
-        row.appendChild(text);
+        const label = doc.createElement('span');
+        label.textContent = describeHelperSuggestion(suggestion);
+        row.appendChild(label);
         const tail = doc.createElement('span');
         if (suggestion.applied === 'done') {
           const done = doc.createElement('span');
@@ -12451,14 +12680,15 @@ function renderHelperConversation(root) {
         row.appendChild(tail);
         return row;
       }));
-      card.appendChild(list);
+      answer.appendChild(list);
     }
+    card.append(question, answer);
     return card;
   }));
-  // .jy-helper-conversation is not itself a scroll container (.jy-workspace is) — container.scrollTop
-  // used to be a no-op, leaving a reply that landed below the fold unseen (review finding
-  // index.js:11959). Scrolling the last card into view finds whichever ancestor actually scrolls.
-  container.lastElementChild?.scrollIntoView?.({ block: 'nearest' });
+  container.scrollTop = follow || atBottom ? (Number(container.scrollHeight) || 0) : top;
+  // One question at a time: 发送 waits for the answer in flight.
+  const send = root.querySelector('[data-jy-action="helper-ask"]');
+  if (send) send.disabled = runtime.helper.busy;
 }
 
 /** DESIGN §16.3: the page-level 小助手提示词 fold on 模型连接, the quick-question row and the muted
@@ -12518,7 +12748,7 @@ function helperHistoryTurns(turns) {
 }
 
 /** Asks 小助手 one question: gathers the context, sends it on the connection settings.helper points
- * at (the same request path 朗读分析 uses — onChannel + requestSubModelRaw, follow/independent,
+ * at (the same request path 分析模式 uses — onChannel + requestSubModelRaw, follow/independent,
  * timeouts and abort all included), parses the reply, and validates whatever suggestions it proposed
  * against the settings as they stand right now. */
 async function askHelper(root, question) {
@@ -12530,7 +12760,8 @@ async function askHelper(root, question) {
   runtime.helper.busy = true;
   const textarea = root.querySelector('[data-jy-helper-input]');
   if (textarea) textarea.value = '';
-  renderHelperConversation(helperLiveRoot(root));
+  runtime.helper.draft = '';
+  renderHelperConversation(helperLiveRoot(root), { follow: true });
   const started = Date.now();
   const request = onChannel(settings, connectionUseChoice(settings, 'helper'));
   // Kept on runtime.helper so closing the control center or hitting 清空 mid-ask can actually cancel
@@ -12568,8 +12799,14 @@ async function askHelper(root, question) {
   } catch (error) {
     const aborted = isAbortError(error);
     turn.error = aborted
-      ? '请求已取消。'
-      : `没问到：${safeError(error)}。可以检查下面「走连接」写的那条连接是不是能用，或者换一条连接再试。`;
+      ? '请求已取消。问题放回输入框了，改一改可以再发。'
+      : `没问到：${safeError(error)}。可以检查下面「走连接」写的那条连接是不是能用，或者换一条连接再试。问题放回输入框了。`;
+    // Given back to be sent again — unless the reader has started typing something else meanwhile.
+    if (!runtime.helper.draft) {
+      runtime.helper.draft = trimmed;
+      const input = helperLiveRoot(root)?.querySelector?.('[data-jy-helper-input]');
+      if (input && !input.value) input.value = trimmed;
+    }
     // A reader-initiated cancel (closing the control center or hitting 清空 mid-ask) is not a failure —
     // the translation and analysis request paths skip logging AbortError the same way. Logging it here
     // used to count as an ERROR against this connection, and against runtime.activeFloor's error count
@@ -12616,8 +12853,11 @@ function createControlCenter(rootDocument = document) {
   syncFields(root, runtime.settings);
   refreshCurrentCard(root);
   // Session-only conversation state (runtime.helper.turns), not part of settings: reopening the
-  // control center within the same page load picks up where it left off, syncFields above does not.
-  renderHelperConversation(root);
+  // control center within the same page load picks up where it left off, syncFields above does not —
+  // the question half-typed into the box included.
+  renderHelperConversation(root, { follow: true });
+  const helperInput = root.querySelector('[data-jy-helper-input]');
+  if (helperInput) helperInput.value = runtime.helper.draft;
 
   const unsubscribe = subscribeTask(task => {
     updateTaskUi(root, task);
@@ -12643,6 +12883,9 @@ function createControlCenter(rootDocument = document) {
     }
     root.querySelector('.jy-workspace').scrollTop = 0;
     if (target === 'logs') renderDiagnosticLog(root);
+    if (target === 'helper') renderHelperConversation(root, { follow: true });
+    // 招式表 lists what the chat has named so far, floors translated since the page was drawn included.
+    if (target === 'processing') renderMoveTable(root);
     syncTtsFeatureVisibility(root);
     if (target === 'tts' && ttsSettings().enabled) void renderTtsUsage(root);
   };
@@ -13054,6 +13297,14 @@ function createControlCenter(rootDocument = document) {
           applyUiMode('advanced');
         }
         selectTab(targetPage);
+        // 微调's 「招式表 →」 lands on the fold itself, open (DESIGN §17.5).
+        const fold = button.dataset.jyOpenFold ? root.querySelector(`[data-jy-page="${targetPage}"] details[data-jy-fold="${button.dataset.jyOpenFold}"]`) : null;
+        if (fold) {
+          fold.open = true;
+          fold.scrollIntoView?.({ block: 'nearest' });
+        }
+      } else if (action === 'move-reset') {
+        resetMoveRow(root, button.closest('[data-jy-move-row]'));
       } else if (action === 'preset-restore') {
         const next = collectSettings(root);
         if (!next.preset) { toast('info', '还没有套用过套餐，没有「原样」可以恢复。'); return; }
@@ -13103,11 +13354,16 @@ function createControlCenter(rootDocument = document) {
         const summary = fold?.querySelector('[data-jy-marks-summary]');
         if (summary && list) summary.textContent = marksSummary(marksFromRows(list));
       } else if (action === 'tts-add-voice') {
+        // DESIGN §17.4: the new row appears right under the button that made it, open, with the list
+        // back at its top — never at the far end of a long list the reader then has to go looking for.
         const list = root.querySelector('[data-jy-tts-voice-list]');
         if (list) {
           if (list.querySelector(':scope > .jy-muted')) list.replaceChildren();
-          list.appendChild(ttsVoiceRowElement(list.ownerDocument, { name: '', aliases: [], voiceId: '', voices: {}, title: '' }, runtime.settings, { open: true }));
-          list.querySelector('[data-jy-tts-voice-row]:last-child [data-jy-tts-voice-name]')?.focus();
+          for (const other of list.querySelectorAll('[data-jy-tts-voice-row][open]')) other.open = false;
+          const row = ttsVoiceRowElement(list.ownerDocument, { name: '', aliases: [], voiceId: '', voices: {}, title: '' }, runtime.settings, { open: true });
+          list.prepend(row);
+          list.scrollTop = 0;
+          row.querySelector('[data-jy-tts-voice-name]')?.focus({ preventScroll: true });
         }
       } else if (action === 'tts-remove-voice') {
         button.closest('[data-jy-tts-voice-row]')?.remove();
@@ -13185,11 +13441,15 @@ function createControlCenter(rootDocument = document) {
         saveSettings(collectSettings(root));
         syncTtsFields(root, runtime.settings);
       } else if (action === 'tts-add-library') {
+        // Same as 添加角色 above (DESIGN §17.4): right under the button, open, the list back at its top.
         const list = root.querySelector('[data-jy-tts-library]');
         if (list) {
           if (list.querySelector(':scope > .jy-muted')) list.replaceChildren();
-          list.appendChild(ttsLibraryRowElement(list.ownerDocument, { id: '', name: '', voiceId: '', lang: 'zh', title: '' }));
-          list.querySelector('[data-jy-tts-library-row]:last-child [data-jy-tts-library-name]')?.focus();
+          for (const other of list.querySelectorAll('[data-jy-tts-library-row][open]')) other.open = false;
+          const row = ttsLibraryRowElement(list.ownerDocument, { id: '', name: '', voiceId: '', lang: 'zh', title: '' }, { open: true });
+          list.prepend(row);
+          list.scrollTop = 0;
+          row.querySelector('[data-jy-tts-library-name]')?.focus({ preventScroll: true });
         }
       } else if (action === 'tts-remove-library') {
         button.closest('[data-jy-tts-library-row]')?.remove();
@@ -13470,8 +13730,8 @@ function createControlCenter(rootDocument = document) {
       } catch (error) { toast('error', safeError(error)); }
       return;
     }
-    if (event.target.matches('[data-jy-desk-use]')) {
-      applyDeskUseChange(root, event.target);
+    if (event.target.matches('[data-jy-use-picker]')) {
+      applyConnectionUseChange(root, event.target);
       return;
     }
     if (event.target.matches('[data-jy-desk-channel-field]')) {
@@ -13633,28 +13893,10 @@ function createControlCenter(rootDocument = document) {
       scheduleFieldResync(root, () => withFocusPreserved(root, () => syncFields(root, runtime.settings)));
       return;
     }
-    if (event.target.matches('[data-jy-channel-use]')) {
-      // DESIGN §15.4 模型连接 卡头勾选用在: each use holds exactly one choice, so only a box being
-      // checked acts — unchecking the one active box would leave the use pointing at nothing, and the
-      // resync below always re-checks exactly one box per use anyway.
-      if (event.target.checked) {
-        try {
-          saveSettings(setConnectionUse(collectSettings(root), event.target.dataset.jyChannelUse, event.target.dataset.jyChannelUseChoice));
-        } catch (error) {
-          toast('error', safeError(error));
-        }
-      }
-      // renderChannelCards (inside syncFields) replaces every card's head, including the very checkbox
-      // a keyboard user just pressed Space on; withFocusPreserved's fixed guard (review finding
-      // index.js:12541) is what actually catches that and puts focus back, instead of leaving it on
-      // <body> once the render moves on.
-      withFocusPreserved(root, () => syncFields(root, runtime.settings));
-      return;
-    }
     if (event.target.matches('[data-jy-translation-channel]')) {
       saveSettings(collectSettings(root));
       syncFields(root, runtime.settings);
-      toast('success', `翻译改用：${channelLabel(runtime.settings, translationChannelChoice(runtime.settings))}。朗读用的连接不受影响。`);
+      toast('success', `翻译改用：${channelLabel(runtime.settings, translationChannelChoice(runtime.settings))}。分析模式和小助手用的连接不受影响。`);
       return;
     }
     // 翻译台 has no save button (DESIGN §15.4 改了就存): 重试次数 saves itself once the field loses focus
@@ -13745,19 +13987,25 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
       // twinField() above already carried the new value onto every other copy of this same field
-      // (analysisChannelId/deepChannelId/mode/enabled all live on 微调 or 翻译台 too, DESIGN §15.2/§15.3).
+      // (deepChannelId/mode/enabled all live on 微调 or 翻译台 too, DESIGN §15.2/§15.3).
       try {
         saveSettings(collectSettings(root));
         syncTtsFields(root, runtime.settings, { renderLists: false });
         syncDeskFields(root, runtime.settings);
         syncFinetuneFields(root, runtime.settings);
-        // The connection page says who uses what; a choice made here shows there at once.
-        if (event.target.matches('[data-jy-tts-field="analysisChannelId"], [data-jy-tts-field="deepChannelId"]')) syncChannelFields(root, runtime.settings);
+        // 「各功能用哪条连接」 says who uses what, and whether 分析模式's connection is in use at all: a
+        // connection, the switch or the reading itself changed here shows there at once.
+        renderConnectionUses(root, runtime.settings);
       } catch (error) {
         toast('error', safeError(error));
       }
+      return;
+    }
+    // 招式表 saves one row at a time and redraws only that row (DESIGN §17.5).
+    if (event.target.matches('[data-jy-move-field]')) {
+      applyMoveFieldChange(root, event.target);
       return;
     }
     // Picking a colour must not rebuild the list: a row the user has not named yet would be dropped
@@ -13792,6 +14040,11 @@ function createControlCenter(rootDocument = document) {
   };
 
   const onInput = event => {
+    // What the reader has typed for 小助手 survives the control center closing (DESIGN §17.3).
+    if (event.target.matches('[data-jy-helper-input]')) {
+      runtime.helper.draft = event.target.value;
+      return;
+    }
     // A console slider shows its number beside it as it moves.
     if (event.target.matches('[data-jy-console-key]')) {
       const output = event.target.nextElementSibling;
@@ -13801,6 +14054,18 @@ function createControlCenter(rootDocument = document) {
     if (event.target.matches('[data-jy-tts-voice-name]')) {
       const label = event.target.closest('[data-jy-tts-voice-row]')?.querySelector('[data-jy-tts-voice-summary-name]');
       if (label) label.textContent = event.target.value.trim() || '（未命名）';
+    }
+    // So does a folded 音色库 entry, its voice and language included.
+    if (event.target.matches('[data-jy-tts-library-name]')) {
+      const label = event.target.closest('[data-jy-tts-library-row]')?.querySelector('[data-jy-tts-library-summary-name]');
+      if (label) label.textContent = event.target.value.trim() || '（未命名）';
+    }
+    if (event.target.matches('[data-jy-tts-library-id], [data-jy-tts-library-lang]')) {
+      const row = event.target.closest('[data-jy-tts-library-row]');
+      const meta = row?.querySelector('.jy-tts-voice-summary-meta');
+      const voiceId = row?.querySelector('[data-jy-tts-library-id]')?.value.trim() ?? '';
+      // The fetched title belongs to the id it was fetched for.
+      if (meta) meta.textContent = ttsLibraryRowMeta({ voiceId, title: voiceId === row.dataset.voiceId ? row.dataset.title : '', lang: row.querySelector('[data-jy-tts-library-lang]')?.value ?? '' });
     }
     if (event.target.matches('[data-jy-field="coloringVividness"]')) {
       const percent = Number(event.target.value);
@@ -13843,9 +14108,9 @@ function createControlCenter(rootDocument = document) {
     cleanup() {
       unsubscribe();
       unsubscribeDiagnostics();
-      // A question still in flight when the panel closes gets cancelled along with it, instead of
-      // rendering its answer into this now-detached root later (review finding index.js:11971).
-      runtime.helper.controller?.abort();
+      // A question still in flight when the panel closes is left to finish (DESIGN §17.3): the reader
+      // may have gone to do something else, and the answer is waiting in runtime.helper.turns when the
+      // control center opens again. askHelper renders into whichever panel is open by then (helperLiveRoot).
       root.removeEventListener('click', onClick);
       root.removeEventListener('change', onChange);
       root.removeEventListener('input', onInput);
@@ -14483,7 +14748,7 @@ async function openMiniWindow() {
   <div class="jy-mini-more" data-jy-mini-more hidden>
     <div class="jy-mini-more-head"><strong>更多</strong><button type="button" class="jy-mini-inspect-close" data-jy-action="mini-more-close" aria-label="收起" title="收起">×</button></div>
     <div class="jy-mini-quick">
-      <label title="只管翻译走哪条连接，和控制中心「翻译台」里那个是同一个选择。朗读分析在「朗读 → 读法」里另选，互不影响。"><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
+      <label title="只管翻译走哪条连接，和控制中心「翻译台」里那个是同一个选择。分析模式、小助手用哪条在「模型连接」页最上面另选，互不影响。"><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
       <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
       <button type="button" class="jy-text-button" data-jy-action="mini-translate-all" data-jy-mini-untranslated hidden></button>
       <button type="button" class="jy-text-button" data-jy-action="mini-clear-floor" hidden title="清除这一楼的译文，正文恢复成原文">清除这一楼的译文</button>
@@ -15165,7 +15430,7 @@ async function openMiniWindow() {
     const { segment } = data;
     const voiceName = data.voiceId ? (normalizeVoiceLibrary(runtime.settings.voiceLibrary).find(entry => entry.voiceId === data.voiceId)?.name ?? `${data.voiceId.slice(0, 6)}…`) : '';
     setText(win, '[data-jy-tts-who]', `${segment.type === 'narration' ? '旁白' : (segment.speaker || '未知说话人')}${segment.lang && segment.lang !== 'zh' ? ` · ${languageLabel(segment.lang)}` : ''}`);
-    setText(win, '[data-jy-tts-depth]', `第 ${messageId} 楼${which === 'source' ? '（原文）' : ''} · 第 ${utteranceId} 句 · ${data.depth === 'deep' ? '深度' : data.depth === 'simple' ? '简单分析' : data.depth === 'pending' ? '还没分析' : data.depth === 'off' ? '不分析' : ttsSettings().mode === 'deep' ? '翻译骨架（还没细读）' : '翻译骨架'}${data.derived ? '（由译文推出）' : ''}${voiceName ? ` · 音色 ${voiceName}` : ' · Fish 默认音色'}${data.recorded ? ' · 已有音频' : ''}`);
+    setText(win, '[data-jy-tts-depth]', `第 ${messageId} 楼${which === 'source' ? '（原文）' : ''} · 第 ${utteranceId} 句 · ${data.depth === 'deep' ? '分析模式' : data.depth === 'simple' ? '分析过' : data.depth === 'pending' ? '还没分析' : data.depth === 'off' ? '不分析' : ttsSettings().mode === 'deep' ? '翻译骨架（还没分析）' : '翻译骨架'}${data.derived ? '（由译文推出）' : ''}${voiceName ? ` · 音色 ${voiceName}` : ' · Fish 默认音色'}${data.recorded ? ' · 已有音频' : ''}`);
     // Who says it, and how that was decided; the reader can name someone else from the list.
     if (speakerSelect) {
       const dialogue = segment.type === 'dialogue';
@@ -15411,7 +15676,7 @@ async function openMiniWindow() {
       note.textContent = !listed.length ? '这一楼在当前范围里没有可读的句子。'
         : !prepared.items.length ? '这一楼的对白全部被屏蔽了，没有会朗读的句子。'
         : prepared.depth === 'pending' ? '这一楼还没分析。按播放或「朗读」时才请求副模型，不会自己开始。'
-          : unread ? '这一楼还没深度分析，列表里是翻译时的骨架。按播放或「朗读」时才请求副模型，不会自己开始。' : '';
+          : unread ? '这一楼还没分析，列表里是翻译时的骨架。按播放或「朗读」时才请求副模型，不会自己开始。' : '';
     }
     markCurrentSentence();
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
@@ -15487,8 +15752,8 @@ async function openMiniWindow() {
         const failed = parts.some(step => step.state === 'error');
         pill(`${failed ? '! ' : active ? '◌ ' : done === parts.length ? '✓ ' : ''}生成 ${done}/${parts.length}${active?.detail ? ` · ${active.detail}` : ''}`, failed ? 'error' : active ? 'active' : done === parts.length ? 'done' : 'pending');
       }
-      // Named for the reading in force: a deep floor shows the deep connection, not the translation's.
-      const request = ttsRequestSettings(runtime.settings, ttsAnalysisDepth(ttsSettings()));
+      // Named for the reading in force: 分析模式's connection, not the translation's.
+      const request = ttsRequestSettings(runtime.settings);
       if (request.apiMode === 'independent') pill(getActiveChannel(request).name, 'plain');
     }
     // This runs on every notice of the reading; the same pills as last time are left where they are.
@@ -16300,7 +16565,7 @@ async function openMiniWindow() {
           const done = await reanalyzeTtsFloor(messageId, side);
           const audio = `，${describeTtsRemake(done.remake)}`;
           toast(done.remake?.failed ? 'warning' : 'success', ttsSettings().mode === 'off'
-            ? `第 ${messageId} 楼简单分析完了，这一楼以后按分析结果读${audio}。`
+            ? `第 ${messageId} 楼分析完了，这一楼以后按分析结果读${audio}。`
             : `第 ${messageId} 楼重新分析完了${audio}。`);
         }
         if (inspecting?.messageId === messageId) await renderInspector(messageId, inspecting.utteranceId, { pinned: true, side: inspecting.side });
@@ -17144,6 +17409,8 @@ function registerRuntimeEvents() {
       refreshCurrentCard(runtime.panel.controller.root);
       // The voice table may be per chat; the page shows the one that belongs to the chat just opened.
       syncTtsFields(runtime.panel.controller.root, runtime.settings);
+      // 招式表 is this chat's moves under this chat's card.
+      if (!sameChat) renderMoveTable(runtime.panel.controller.root);
     }
     // The page was redrawn: the buttons go back on the new floors; a reading goes on while its floor still
     // reads the same where it was.
@@ -17422,7 +17689,8 @@ async function apiSpeak({ text, speaker = '', lang = '', analyze = false, play =
   let labels = apiLabels(utterances, { speaker, lang });
   let voices = null;
   if (analyze) {
-    // The simple reading only: who is speaking, in what mood, in Fish's own words. One sub-model call.
+    // The quick labelling only: who is speaking, in what mood, in Fish's own words. One sub-model call,
+    // on 分析模式's connection.
     const analysed = await analyzeTtsFloor(floor, utterances, settings, 'simple', {});
     for (const [id, label] of analysed.labels) labels.set(id, { ...labels.get(id), ...label });
     voices = analysed.voices;
@@ -17687,7 +17955,7 @@ if (typeof document !== 'undefined') {
 // carries over from whichever askHelper test ran before it in the same file.
 function configureForTest({
   settings, worldInfoEntries, initialized, deskExpandedChannelId, regexEngine,
-  editingChannelId: editingChannelIdOverride, inflight, mainGenerationActive, panel, resetHelper,
+  editingChannelId: editingChannelIdOverride, inflight, mainGenerationActive, panel, resetHelper, helperDraft,
 } = {}) {
   if (settings) runtime.settings = { ...runtime.settings, ...settings };
   if (worldInfoEntries !== undefined) runtime.wiEntries = worldInfoEntries;
@@ -17707,7 +17975,9 @@ function configureForTest({
     runtime.helper.turns = [];
     runtime.helper.busy = false;
     runtime.helper.controller = null;
+    runtime.helper.draft = '';
   }
+  if (helperDraft !== undefined) runtime.helper.draft = String(helperDraft);
   return runtime.settings;
 }
 
@@ -17718,6 +17988,10 @@ export const __testing = Object.freeze({
   buildSegmentStyler,
   buildChatMoveIndex,
   knownMovesForRequest,
+  chatMoveTable,
+  renderMoveTable,
+  applyMoveFieldChange,
+  resetMoveRow,
   capMoveTiersForFloor,
   resolveMoveElementIndex,
   stripHiddenRuns,
@@ -17818,7 +18092,8 @@ export const __testing = Object.freeze({
   collectDeskChannelFields,
   syncDeskFields,
   syncDeskConnectionSummary,
-  applyDeskUseChange,
+  applyConnectionUseChange,
+  renderConnectionUses,
   applyDeskChannelFieldChange,
   applyChannelFieldChange,
   fillTtsChannelPickers,
@@ -17854,5 +18129,6 @@ export const __testing = Object.freeze({
   // Read-only: the in-flight ask's own AbortController, so a test can simulate closing the control
   // center or hitting 清空 mid-ask (both just call .abort() on this) without a real DOM to click in.
   helperController: () => runtime.helper.controller,
+  helperDraft: () => runtime.helper.draft,
   CONTROL_CENTER_MARKUP,
 });
