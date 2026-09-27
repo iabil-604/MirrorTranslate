@@ -588,3 +588,13 @@ test('parseHelperReply strips only a leading reasoning block and keeps tags the 
   assert.equal(parseHelperReply(fenced).text, fenced);
   assert.equal(parseHelperReply({ content: '', reasoning: '' }).text, '', '空的回复信封就是空回答');
 });
+
+test('the helper sees 点正文跳到悬浮窗 and may offer to switch it off', () => {
+  assert.ok(buildSettingsSummaryLines(baseSettings()).includes('点正文跳到悬浮窗：开'));
+  assert.ok(buildSettingsSummaryLines(baseSettings({ segmentJump: false })).includes('点正文跳到悬浮窗：关'));
+  const settings = baseSettings();
+  const suggestion = validateHelperSuggestion({ type: 'set', field: 'segmentJump', value: false }, settings);
+  assert.ok(suggestion, '「照这样改」能关掉它');
+  assert.equal(applyHelperSuggestion(settings, suggestion).segmentJump, false);
+  assert.equal(validateHelperSuggestion({ type: 'set', field: 'segmentJump', value: true }, settings), null, '已经开着时不给没用的建议');
+});

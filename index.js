@@ -117,8 +117,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.41.1';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.1';
+} from './core.js?v=0.41.2';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.2';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -176,10 +176,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.41.1';
-import { createTtsStore } from './tts-store.js?v=0.41.1';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.1';
+} from './tts.js?v=0.41.2';
+import { createTtsStore } from './tts-store.js?v=0.41.2';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.2';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.2';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -189,7 +189,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.41.1';
+} from './processing.js?v=0.41.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -206,9 +206,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.41.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.1';
+} from './prompts.js?v=0.41.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.2';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -226,8 +226,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.41.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.41.1';
+} from './palette.js?v=0.41.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.41.2';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -235,7 +235,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.41.1';
+} from './diagnostics.js?v=0.41.2';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -246,7 +246,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.41.1';
+} from './helper.js?v=0.41.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -537,6 +537,7 @@ const CONTROL_CENTER_MARKUP = `
    <div class="jy-summary-row jy-summary-row-sub" data-jy-dependent="coloringEffects"><div class="jy-summary-copy"><h3>特效字</h3><p><button type="button" class="jy-text-button" data-jy-action="goto-advanced" data-jy-goto-page="processing" data-jy-open-fold="processing-moves">招式表 →</button></p><p class="jy-muted jy-dependent-reason">先打开上面的「说话人着色」，这一项才会生效。</p></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringEffects" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringEffects" aria-label="特效字"><span></span></label></div>
    <div class="jy-summary-row"><div class="jy-summary-copy"><h3>情绪排版</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringEmotions" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringEmotions" aria-label="情绪排版"><span></span></label></div>
    <label class="jy-summary-row jy-summary-select"><span class="jy-label">内置美化</span><select data-jy-finetune-reading-style aria-label="内置美化"><option value="">（当前方案不是内置美化）</option><option value="cute">可爱风</option><option value="minimal">极简风</option><option value="fold">原文折叠</option></select></label>
+   <div class="jy-summary-row"><div class="jy-summary-copy"><h3>点正文跳到悬浮窗</h3></div><label class="jy-switch"><input type="checkbox" data-jy-field="segmentJump" aria-label="点正文跳到悬浮窗"><span></span></label></div>
   </section>
   <section class="jy-brief jy-desk-card">
    <h2 class="jy-card-title">朗读</h2>
@@ -663,7 +664,7 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 </div>
 <details class="jy-fold" data-jy-fold="processing-interface"><summary><h2>界面与正则</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层里的朗读按钮</span><select data-jy-field="floorButtons"><option value="line">每段一个（默认，手机也有）</option><option value="sentence">每段一个，再加每句一个</option><option value="off">不显示，只在悬浮窗里点</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层里的朗读按钮</span><select data-jy-field="floorButtons"><option value="line">每段一个（默认，手机也有）</option><option value="sentence">每段一个，再加每句一个</option><option value="off">不显示，只在悬浮窗里点</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="segmentJump">点正文跳到悬浮窗</label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
 <div class="jy-form-section"><span class="jy-label">绑定正则 <span data-jy-processing-regex-count></span></span><div><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p><div class="jy-processing-toolbar"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="dedupe-processing-regex">删除多余正则</button></div></div></div>
 </div></details>
 </section>
@@ -9897,6 +9898,7 @@ function collectSettings(root) {
     'translationOnly',
     'showFloatingButton',
     'leftHanded',
+    'segmentJump',
     'paragraphPerLine',
     'carryFormatting',
     'includeWorldbook',
@@ -10383,6 +10385,7 @@ function syncProcessingFoldSummaries(root, settings = runtime.settings) {
       settings.showFloatingButton === false ? '悬浮入口已关闭' : `悬浮入口 · ${FLOATING_STYLE_SHORT_LABELS[settings.floatingStyle] ?? '自动'}`,
       `朗读按钮 · ${FLOOR_BUTTONS_SHORT_LABELS[settings.floorButtons] ?? '每段一个'}`,
       settings.leftHanded ? '左手模式' : '',
+      settings.segmentJump === false ? '点正文跳到悬浮窗 · 关' : '',
       `绑定正则 ${active.regexScripts.length} 条`,
     ].filter(Boolean).join(' · '),
   };
@@ -13921,6 +13924,13 @@ function createControlCenter(rootDocument = document) {
       syncFloatingEntry();
       return;
     }
+    // 「点正文跳到悬浮窗」 lives on 正文处理 and on 微调 (DESIGN §17.7); twinField() above already moved the
+    // other copy, and the next click on the chat reads the saved value.
+    if (event.target.matches('[data-jy-field="segmentJump"]')) {
+      saveSettings(collectSettings(root));
+      syncProcessingFoldSummaries(root, runtime.settings);
+      return;
+    }
     if (event.target.matches('[data-jy-field="floorButtons"], [data-jy-field="leftHanded"]')) {
       saveSettings(collectSettings(root));
       scheduleTtsDecorateAll({ force: true });
@@ -16859,6 +16869,8 @@ function chatInDeleteMode() {
  */
 async function handleSegmentJumpClick(event) {
   if (typeof document === 'undefined' || event.button !== 0) return;
+  // 「点正文跳到悬浮窗」 switched off (DESIGN §17.7): the click is the host's alone.
+  if (runtime.settings?.segmentJump === false) return;
   const token = {};
   runtime.segmentJumpPending = token;
   if (event.detail > 1) return;

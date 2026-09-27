@@ -2860,3 +2860,9 @@ test('a one-beat hiragana moan drawn through a glide into another vowel before �
     assert.equal(isShortExactEcho(line, line), false, `${line} is a name or a word, never accepted as an echo`);
   }
 });
+
+test('点正文跳到悬浮窗 starts on, and only an explicit false turns it off', () => {
+  assert.equal(mergeSettings({}).segmentJump, true);
+  assert.equal(mergeSettings({ segmentJump: false }).segmentJump, false);
+  assert.equal(mergeSettings({ segmentJump: 'no' }).segmentJump, true);
+});
