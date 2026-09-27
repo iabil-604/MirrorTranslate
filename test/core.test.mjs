@@ -1125,6 +1125,36 @@ test('the tag inspector reports replace tags and catches a nesting the run would
   assert.equal(flat.translationUnits, 2);
 });
 
+test('a body tag written inside another is translated as part of the outer block; only crossing tags are refused', () => {
+  const tags = ['story_scene', 'parallel_line'];
+  const inside = '<story_scene>\n一。\n<parallel_line>\n二。\n</parallel_line>\n三。\n</story_scene>';
+  const nested = extractTaggedRegions(inside, tags);
+  assert.deepEqual(nested.regions.map(region => region.tagName), ['story_scene'], '外层整块翻译');
+  assert.match(nested.regions[0].inner, /<parallel_line>\n二。\n<\/parallel_line>/, '里面的标签留在外层正文里');
+  assert.deepEqual(nested.nested, [{ tagName: 'parallel_line', outerTagName: 'story_scene' }]);
+
+  const outside = '<story_scene>\n一。\n</story_scene>\n<parallel_line>\n二。\n</parallel_line>';
+  assert.deepEqual(extractTaggedRegions(outside, tags).regions.map(region => region.tagName), ['story_scene', 'parallel_line'], '写在外面时照旧各译各的');
+
+  const reversed = '<parallel_line>\n一。\n<story_scene>\n二。\n</story_scene>\n</parallel_line>';
+  assert.deepEqual(extractTaggedRegions(reversed, tags).regions.map(region => region.tagName), ['parallel_line'], '反过来套也一样以外层为准');
+
+  const unclosed = '<story_scene>\n一。\n<parallel_line>\n二。\n</story_scene>';
+  assert.deepEqual(extractTaggedRegions(unclosed, tags).regions.map(region => region.tagName), ['story_scene'], '里面那个没闭合也算在外层里');
+
+  const crossing = '<story_scene>\n一。\n<parallel_line>\n二。\n</story_scene>\n三。\n</parallel_line>';
+  assert.throws(() => extractTaggedRegions(crossing, tags), /互相交叉/, '互相跨过结束标签的分不出外层，照旧报错');
+});
+
+test('the tag inspector says a nested body tag goes with its outer block, and raises nothing', () => {
+  const floor = '<story_scene>\n叙事一行。\n\n<parallel_line>\n平行线一行。\n</parallel_line>\n</story_scene>';
+  const report = inspectTagConfiguration(floor, ['story_scene', 'parallel_line'], [], {});
+  assert.deepEqual(report.errors, []);
+  assert.deepEqual(report.nestedTags, [{ tag: 'parallel_line', outer: 'story_scene' }]);
+  assert.equal(report.translationUnits, 2);
+  assert.deepEqual(inspectTagConfiguration(floor, ['story_scene'], [], {}).nestedTags, []);
+});
+
 test('speaker and emotion labels ride alongside the translation without touching it', () => {
   const raw = JSON.stringify({ translations: [
     { id: 1, text: '「你到底在想什么！」', speaker: '英梨梨', emotion: 'angry', intensity: 2 },

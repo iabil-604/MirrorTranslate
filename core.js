@@ -8,19 +8,19 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.41.0';
+} from './prompts.js?v=0.41.1';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.41.0';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.41.1';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.41.0';
+import { resolveMoveStyle } from './palette.js?v=0.41.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.41.0';
+export const APP_VERSION = '0.41.1';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -2662,14 +2662,29 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags,
     throw new Error(`当前 AI 回复中没有找到正文标签：${tags.map(tag => `<${tag}>`).join('、')}。`);
   }
   regions.sort((left, right) => left.openStart - right.openStart);
-  regions.unbalanced = unbalanced;
-  regions.assumedCloses = assumedCloses;
-  for (let index = 1; index < regions.length; index += 1) {
-    if (regions[index].openStart < regions[index - 1].closeEnd) {
-      throw new Error(`正文提取标签发生嵌套：<${regions[index - 1].tagName}> 与 <${regions[index].tagName}>。请只保留外层正文标签。`);
+  // A main model does not always put a block in the same place: <parallel_line> after <story_scene> one
+  // floor, inside it the next. A block that sits inside another one is already part of it, so the outer
+  // block is translated whole, the inner tag lines kept where they are. One left open inside another
+  // (running to the end of the floor only because it never closed) counts as inside it too. Only blocks
+  // that genuinely cross each other's end have no outer block to go by.
+  const kept = [];
+  const nested = [];
+  for (const region of regions) {
+    const outer = kept.find(item => region.openStart >= item.contentStart
+      && (region.closeEnd <= item.closeStart || (region.assumedClose && region.openStart < item.closeStart)));
+    if (outer) {
+      nested.push({ tagName: region.tagName, outerTagName: outer.tagName });
+      continue;
     }
+    const crossed = kept.find(item => region.openStart < item.closeEnd);
+    if (crossed) {
+      throw new Error(`正文提取标签互相交叉：<${crossed.tagName}> 与 <${region.tagName}> 都跨过了对方的结束标签，分不出哪个在外层。请检查这一楼的标签。`);
+    }
+    kept.push(region);
   }
-  return { source, regions, missingTags, unbalanced, assumedCloses };
+  kept.unbalanced = unbalanced;
+  kept.assumedCloses = assumedCloses;
+  return { source, regions: kept, missingTags, unbalanced, assumedCloses, nested };
 }
 
 // Body and replace regions live in one floor and are rebuilt in a single pass, so they may sit side
@@ -2680,7 +2695,7 @@ export function mergeExtractedRegions(body, replace) {
     .sort((left, right) => left.openStart - right.openStart);
   for (let index = 1; index < regions.length; index += 1) {
     if (regions[index].openStart < regions[index - 1].closeEnd) {
-      throw new Error(`<${regions[index - 1].tagName}> 与 <${regions[index].tagName}> 的区域交叉重叠，请检查提取标签与替换标签的嵌套。镜译不支持标签嵌套。`);
+      throw new Error(`<${regions[index - 1].tagName}> 与 <${regions[index].tagName}> 的区域交叉重叠：替换标签不能和提取标签套在一起，请检查这一楼的标签或这两处设置。`);
     }
   }
   return {
@@ -2753,10 +2768,15 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   let cardPreservedLines = 0;
   let lyricLines = 0;
   const structuralTags = new Set();
+  let nested = [];
   if (!errors.length && bodyResults.some(result => result.count)) {
     try {
+      const bodyExtraction = extractTaggedRegions(source, body);
+      // A body block written inside another one is translated with it (extractTaggedRegions); the report
+      // says so, so 「采用第 N 组」 is not read as that block being translated on its own.
+      nested = bodyExtraction.nested ?? [];
       const extraction = mergeExtractedRegions(
-        extractTaggedRegions(source, body),
+        bodyExtraction,
         replace.length ? extractTaggedRegions(source, replace, { mode: 'replace' }) : null,
       );
       let nextId = 1;
@@ -2777,6 +2797,7 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   }
   return {
     bodyTags: bodyResults,
+    nestedTags: nested.map(item => ({ tag: item.tagName, outer: item.outerTagName })),
     excludedTags: excludedResults,
     replaceTags: replaceResults,
     paragraphs,

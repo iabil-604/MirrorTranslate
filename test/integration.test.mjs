@@ -116,6 +116,35 @@ test('a re-roll on the same floor is translated, not swallowed by the old text\'
   assert.equal(old.reason, 'cancelled', 'the stuck run was called off and says so');
 });
 
+test('a floor whose main model put one body tag inside the other is translated whole instead of stopping', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([
+        { id: 1, text: '黄昏的教室。' },
+        { id: 2, text: '同一时刻，天台上有人在哭。' },
+        { id: 3, text: '樱井笑了。' },
+      ]));
+    },
+  });
+  __testing.configureForTest({
+    settings: { apiMode: 'follow', streamingWriteback: false, retries: 0, bodyTags: ['story_scene', 'parallel_line'] },
+    initialized: true,
+  });
+  const mes = '<story_scene>\n夕暮れの教室。\n\n<parallel_line>\n同じ頃、屋上では誰かが泣いていた。\n</parallel_line>\n\n桜井は笑った。\n</story_scene>';
+  context.chat.push({ mes, swipe_id: 0, swipes: [mes], extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true });
+  assert.equal(result.skipped, false);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /同じ頃、屋上では誰かが泣いていた/, '平行线的内容跟着外层一起送去翻译');
+  assert.match(context.chat[0].mes, /同一时刻，天台上有人在哭。/);
+  assert.match(context.chat[0].mes, /<parallel_line>\n[^\n]*同じ頃[^\n]*\n[^\n]*同一时刻[^\n]*\n<\/parallel_line>/, '里面的标签留在原位，译文跟在它自己那段后面');
+  assert.equal(stripGeneratedTranslationLines(context.chat[0].mes), mes, '去掉译文后和原来一字不差');
+});
+
 test('补译 asks only for the paragraphs that have no translation yet', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });
