@@ -117,8 +117,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.41.2';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.2';
+} from './core.js?v=0.41.3';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.3';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -176,10 +176,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.41.2';
-import { createTtsStore } from './tts-store.js?v=0.41.2';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.2';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.2';
+} from './tts.js?v=0.41.3';
+import { createTtsStore } from './tts-store.js?v=0.41.3';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.3';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.3';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -189,7 +189,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.41.2';
+} from './processing.js?v=0.41.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -206,9 +206,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.41.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.2';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.2';
+} from './prompts.js?v=0.41.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.3';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.3';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -226,8 +226,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.41.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.41.2';
+} from './palette.js?v=0.41.3';
+import { sampleThemeBackground } from './theme-probe.js?v=0.41.3';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -235,7 +235,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.41.2';
+} from './diagnostics.js?v=0.41.3';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -246,7 +246,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.41.2';
+} from './helper.js?v=0.41.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -494,7 +494,7 @@ const CONTROL_CENTER_MARKUP = `
  <section class="jy-card">
   <h2>自动</h2>
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>自动接续翻译</h3><p class="jy-muted">主回复完成后，自动补上译文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label></div>
-  <div class="jy-card-row jy-card-row-dependent"><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label></div>
+  <div class="jy-card-row jy-card-row-dependent" data-jy-dependent="autoSwipe"><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label><p class="jy-muted jy-dependent-reason">先打开上面的「自动接续翻译」，这一项才会生效。</p></div>
   <div class="jy-card-row jy-card-row-dependent" data-jy-stream-row><label class="jy-check"><input type="checkbox" data-jy-field="streamingWriteback">流式写回（beta，勾选后所有翻译走流式；仅独立模式，跟随模式自动回退整包）</label><p class="jy-muted" data-jy-stream-reason>只在独立连接下生效；跟随酒馆时自动回退整包。</p></div>
   <div class="jy-card-row"><span class="jy-label">翻译失败后自动重试</span><span class="jy-card-row-field"><input type="number" data-jy-field="retries" min="0" max="5" step="1" aria-label="翻译失败后自动重试"><span class="jy-muted">次</span></span></div>
  </section>
@@ -523,7 +523,7 @@ const CONTROL_CENTER_MARKUP = `
  <section class="jy-brief jy-desk-card">
   <h2 class="jy-card-title">翻译</h2>
   <div class="jy-summary-row"><div class="jy-summary-copy"><h3>自动接续翻译</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="autoGeneration" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="自动接续翻译"><span></span></label></div>
-  <div class="jy-summary-row"><div class="jy-summary-copy"><h3>切换滑动页时补译</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="autoSwipe" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="autoSwipe" aria-label="切换滑动页时补译"><span></span></label></div>
+  <div class="jy-summary-row jy-summary-row-sub" data-jy-dependent="autoSwipe"><div class="jy-summary-copy"><h3>切换滑动页时补译</h3><p class="jy-muted jy-dependent-reason">先打开上面的「自动接续翻译」，这一项才会生效。</p></div><span class="jy-mini-pill" data-jy-finetune-drift="autoSwipe" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="autoSwipe" aria-label="切换滑动页时补译"><span></span></label></div>
   <div class="jy-summary-row"><div class="jy-summary-copy"><h3>只留译文</h3><p><button type="button" class="jy-text-button" data-jy-action="goto-advanced" data-jy-goto-page="main">打开前先看说明 →</button></p></div><label class="jy-switch"><input type="checkbox" data-jy-field="translationOnly" aria-label="只留译文"><span></span></label></div>
   <label class="jy-summary-row jy-summary-select"><span class="jy-label">翻译文风<span class="jy-mini-pill" data-jy-finetune-profile-drift="styleMode" hidden>改过</span></span><select data-jy-finetune-profile-field="styleMode"></select></label>
   <label class="jy-summary-row jy-summary-select"><span class="jy-label">称谓与角色口吻<span class="jy-mini-pill" data-jy-finetune-profile-drift="honorificMode" hidden>改过</span></span><select data-jy-finetune-profile-field="honorificMode"></select></label>
@@ -9857,6 +9857,8 @@ function updateSummary(root, settings) {
 
 function syncFields(root, settings) {
   for (const choice of root.querySelectorAll('[data-jy-theme]')) choice.setAttribute('aria-pressed', String(choice.dataset.jyTheme === (settings.theme || 'day')));
+  // DESIGN §15.4 依赖: 切换滑动页时补译 only works while 自动接续翻译 is on (scheduleAuto).
+  for (const row of root.querySelectorAll('[data-jy-dependent="autoSwipe"]')) row.dataset.jyDependentOff = String(settings.autoGeneration !== true);
   const selectedProfile = getActivePromptProfile(settings);
   setText(root, '[data-jy-active-profile]', `${selectedProfile.name} · ${normalizeTargetLanguage(selectedProfile.targetLanguage)}`);
   const modelSearch = root.querySelector('[data-jy-model-search]');
@@ -17004,7 +17006,9 @@ function scheduleAuto(messageId, reason) {
     try {
       const settings = runtime.settings;
       if (reason === 'generation' && !settings.autoGeneration) return;
-      if (reason === 'swipe' && !settings.autoSwipe) return;
+      // 切换滑动页时补译 sits under 自动接续翻译 (DESIGN §15.4 依赖): with automatic translation off, turning
+      // to an alternative nobody translated leaves it as it is too.
+      if (reason === 'swipe' && !(settings.autoGeneration && settings.autoSwipe)) return;
       if (reason === 'edit' && !settings.autoEdit) return;
       if (autoTranslateSuppressed(id)) return;
       runtime.tts.awaiting.set(id, { since: Date.now(), token });

@@ -598,3 +598,8 @@ test('the helper sees 点正文跳到悬浮窗 and may offer to switch it off', 
   assert.equal(applyHelperSuggestion(settings, suggestion).segmentJump, false);
   assert.equal(validateHelperSuggestion({ type: 'set', field: 'segmentJump', value: true }, settings), null, '已经开着时不给没用的建议');
 });
+
+test('the helper is told when 切换滑动页时补译 is on but cannot work', () => {
+  assert.ok(buildSettingsSummaryLines(baseSettings({ autoGeneration: false, autoSwipe: true })).includes('切换滑动页时补译：开（自动接续翻译关着，这一项不生效）'));
+  assert.ok(buildSettingsSummaryLines(baseSettings({ autoGeneration: true, autoSwipe: true })).includes('切换滑动页时补译：开'));
+});

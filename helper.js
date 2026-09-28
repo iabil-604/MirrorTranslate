@@ -34,7 +34,7 @@ import {
   pathSet,
   presetDrift,
   unwrapResponseContent,
-} from './core.js?v=0.41.2';
+} from './core.js?v=0.41.3';
 
 // ---------------------------------------------------------------------------------------------
 // Default prompt and quick questions
@@ -161,7 +161,7 @@ export function buildSettingsSummaryLines(settings = {}) {
   if (drift.length) lines.push(`套餐已改过 ${drift.length} 项，不是原样：${drift.map(item => item.label).join('、')}`);
   for (const use of CONNECTION_USES) lines.push(connectionUseLine(settings, use));
   lines.push(`自动接续翻译：${boolLabel(settings.autoGeneration)}`);
-  lines.push(`切换滑动页时补译：${boolLabel(settings.autoSwipe)}`);
+  lines.push(`切换滑动页时补译：${boolLabel(settings.autoSwipe)}${settings.autoSwipe && !settings.autoGeneration ? '（自动接续翻译关着，这一项不生效）' : ''}`);
   lines.push(`提取标签：${(settings.bodyTags || []).join('、') || '（空）'}`);
   lines.push(`替换标签：${(settings.replaceTags || []).join('、') || '（空）'}`);
   lines.push(`排除标签：${(settings.excludedTags || []).join('、') || '（空）'}`);

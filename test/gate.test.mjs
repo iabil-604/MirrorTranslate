@@ -11,7 +11,7 @@ globalThis.document = {
 };
 globalThis.toastr = Object.fromEntries(['success', 'error', 'warning', 'info'].map(kind => [kind, message => toasts.push([kind, message])]));
 
-const { onActivate, onDisable } = await import('../index.js');
+const { onActivate, onDisable, __testing } = await import('../index.js');
 const { readDiagnostics, clearDiagnostics } = await import('../diagnostics.js');
 
 class Emitter {
@@ -236,6 +236,30 @@ test('a reply whose body tag is missing says so on screen, once for the chat', a
   const told = toasts.filter(([kind, message]) => kind === 'warning' && message.includes('正文标签'));
   assert.equal(told.length, 1);
   assert.match(told[0][1], /正文处理/);
+});
+
+test('turning to an untranslated alternative is translated only while 自动接续翻译 is on', async () => {
+  const swiped = floor => readDiagnostics().filter(entry => entry.scope === 'translation.auto' && entry.message.startsWith(`第 ${floor} 楼划动了，自动翻译开始`)).length;
+  const floor = chat[6];
+  const before = { swipes: floor.swipes, swipe_id: floor.swipe_id, mes: floor.mes };
+  floor.swipes = [floor.mes, 'もう一つの返事。'];
+  floor.swipe_id = 1;
+  floor.mes = 'もう一つの返事。';
+  try {
+    clearDiagnostics();
+    __testing.configureForTest({ settings: { autoGeneration: false, autoSwipe: true } });
+    await eventSource.emit(T.MESSAGE_SWIPED, 6);
+    await wait(30);
+    assert.equal(swiped(6), 0, '自动接续翻译关着，切过去也不翻');
+
+    __testing.configureForTest({ settings: { autoGeneration: true, autoSwipe: true } });
+    await eventSource.emit(T.MESSAGE_SWIPED, 6);
+    await wait(30);
+    assert.equal(swiped(6), 1, '两个都开着时照常补译');
+  } finally {
+    __testing.configureForTest({ settings: { autoGeneration: true, autoSwipe: true } });
+    Object.assign(floor, before);
+  }
 });
 
 test.after(() => onDisable());

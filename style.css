@@ -330,6 +330,8 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-card-row-end { justify-content: flex-end; }
 /* 依赖缩进变灰: indented 28px under the switch it depends on; greyed with a reason only while blocked. */
 .jy-card-row-dependent { margin-left: 28px; }
+.jy-card-row-dependent[data-jy-dependent-off="true"] .jy-check { color: var(--jy-muted-soft); }
+.jy-card-row-dependent[data-jy-dependent-off="true"] .jy-dependent-reason { display: block; flex-basis: 100%; margin: -4px 0 0; }
 .jy-card-row-dependent[data-jy-blocked="true"] { opacity: .55; }
 .jy-card-row-dependent[data-jy-blocked="true"] .jy-switch, .jy-card-row-dependent[data-jy-blocked="true"] input { cursor: not-allowed; }
 .jy-launch-danger { margin-left: auto; }
