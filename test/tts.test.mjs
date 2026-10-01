@@ -1016,6 +1016,9 @@ test('on TauriTavern a Fish call goes direct, carries no host headers, and fails
   assert.equal(detectTtsHost({}), 'sillytavern');
   assert.equal(detectTtsHost({ __TAURITAVERN__: { abiVersion: 1 } }), 'tauritavern');
   assert.equal(detectTtsHost({ __TAURITAVERN_MAIN_READY__: Promise.resolve() }), 'tauritavern');
+  assert.equal(detectTtsHost({ location: { protocol: 'tauri:', hostname: 'localhost' } }), 'tauritavern');
+  assert.equal(detectTtsHost({ location: { protocol: 'http:', hostname: 'tauri.localhost' } }), 'tauritavern');
+  assert.equal(detectTtsHost({ location: { protocol: 'http:', hostname: '127.0.0.1' } }), 'sillytavern');
   const fish = { baseUrl: 'https://api.fish.audio', viaProxy: true, key: 'k', model: 's2-pro' };
   assert.equal(fishGoesDirect(fish, 'sillytavern'), false);
   assert.equal(fishGoesDirect(fish, 'tauritavern'), true);
@@ -1031,6 +1034,16 @@ test('on TauriTavern a Fish call goes direct, carries no host headers, and fails
   assert.match(message, /转发地址/);
   assert.doesNotMatch(message, /检查酒馆是否还在运行/);
   assert.match(describeFishFailureOnHost({ network: true, viaProxy: true }), /检查酒馆是否还在运行/);
+  // A tavern answering at the 接口地址 is not the app the reader is in: no config.yaml to edit there.
+  for (const [status, body] of [
+    [404, 'CORS proxy is disabled. Enable it in config.yaml or use the --corsProxy flag.'],
+    [403, 'Invalid CSRF token. Please refresh the page and try again.'],
+  ]) {
+    const said = describeFishFailureOnHost({ status, body, viaProxy: false, host: 'tauritavern' });
+    assert.match(said, /TauriTavern/);
+    assert.match(said, /接口地址/);
+    assert.doesNotMatch(said, /enableCorsProxy|刷新酒馆页面/);
+  }
 });
 
 test('the analysis batch size is a sentence count, with zero meaning the whole floor at once', () => {

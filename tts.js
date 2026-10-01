@@ -15,9 +15,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.41.3';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.41.3';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.41.3';
+} from './core.js?v=0.41.4';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.41.4';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.41.4';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -2589,10 +2589,15 @@ export function registerTtsProvider(adapter) {
 /**
  * Which host page the reader is running in. TauriTavern serves the same SillyTavern frontend from a
  * Rust backend that answers only its own /api routes; the /proxy route of the Node server does not
- * exist there, so a Fish call has to go direct.
+ * exist there, so a Fish call has to go direct. A page served from Tauri's own origin (tauri://localhost,
+ * or http(s)://tauri.localhost on Windows and Android) has no Node server behind it either.
  */
 export function detectTtsHost(scope = globalThis) {
-  return scope?.__TAURITAVERN__ || scope?.__TAURITAVERN_MAIN_READY__ ? 'tauritavern' : 'sillytavern';
+  if (scope?.__TAURITAVERN__ || scope?.__TAURITAVERN_MAIN_READY__) return 'tauritavern';
+  const location = scope?.location;
+  return location?.protocol === 'tauri:' || String(location?.hostname ?? '').toLowerCase() === 'tauri.localhost'
+    ? 'tauritavern'
+    : 'sillytavern';
 }
 
 export function fishGoesDirect(fish, host = 'sillytavern') {
@@ -2645,10 +2650,20 @@ export function describeFishFailure({ status = 0, body = '', viaProxy = true, ne
   const message = typeof payload?.message === 'string' ? payload.message : text.replace(/\s+/g, ' ').slice(0, 240);
   // The host proxy rewrites 401 to 400 so the browser keeps its own Basic auth; the body still says 401.
   const upstream = Number(payload?.status) || Number(status) || 0;
+  // On TauriTavern the call went straight to the 接口地址, so a tavern's own answer came from a tavern
+  // standing there, not from the app the reader is in: TauriTavern has no proxy or config.yaml to fix.
   if (Number(status) === 404 && /CORS proxy is disabled/i.test(text)) {
+    if (host === 'tauritavern') {
+      return 'TauriTavern 里请求直接发往「接口地址」，而那里是一个没开 CORS 代理的酒馆。TauriTavern 自己没有这条代理，也没有 config.yaml 可改：在「接口地址」填一个自己的、带跨域头的转发地址（使用手册第六节有现成的 Cloudflare Worker 脚本）。';
+    }
     return '酒馆的 CORS 代理没有打开。在酒馆目录的 config.yaml 里把 enableCorsProxy 改成 true，重启酒馆后再试。';
   }
-  if (Number(status) === 403 && /csrf/i.test(text)) return '酒馆拒绝了这次代理请求（CSRF）。刷新酒馆页面后再试。';
+  if (Number(status) === 403 && /csrf/i.test(text)) {
+    if (host === 'tauritavern') {
+      return 'TauriTavern 里请求直接发往「接口地址」，那里的酒馆代理只收它自己页面发出的请求（CSRF），TauriTavern 用不了。在「接口地址」填一个自己的、带跨域头的转发地址（使用手册第六节有现成的 Cloudflare Worker 脚本）。';
+    }
+    return '酒馆拒绝了这次代理请求（CSRF）。刷新酒馆页面后再试。';
+  }
   // The tavern's own login page: its login protection (basicAuthMode) turned the request away at the
   // proxy's door, before anything reached Fish. The proxy rewrites Fish's own 401 to 400, so a 401 that
   // arrives as one, with that page, is the tavern's.

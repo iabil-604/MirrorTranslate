@@ -117,8 +117,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.41.3';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.3';
+} from './core.js?v=0.41.4';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.4';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -176,10 +176,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.41.3';
-import { createTtsStore } from './tts-store.js?v=0.41.3';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.3';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.3';
+} from './tts.js?v=0.41.4';
+import { createTtsStore } from './tts-store.js?v=0.41.4';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.4';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.4';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -189,7 +189,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.41.3';
+} from './processing.js?v=0.41.4';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -206,9 +206,9 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.41.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.3';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.3';
+} from './prompts.js?v=0.41.4';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.4';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.4';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -226,8 +226,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.41.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.41.3';
+} from './palette.js?v=0.41.4';
+import { sampleThemeBackground } from './theme-probe.js?v=0.41.4';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -235,7 +235,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.41.3';
+} from './diagnostics.js?v=0.41.4';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -246,7 +246,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.41.3';
+} from './helper.js?v=0.41.4';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -275,6 +275,8 @@ const runtime = {
   processingRevision: 0,
   nativeRegexInstalled: false,
   mainGenerationActive: false,
+  // The host's own GENERATION_STARTED, waiting for the "after commands" of the same generation.
+  hostGenerationStart: null,
   // Bumped by every generation the gate takes, so a late look at the gate can tell a new one apart.
   generationSerial: 0,
   // The generation last stopped by hand, so the render that follows it can say why it is not translated.
@@ -3589,7 +3591,7 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
   const context = getContext();
   const chat = context.chat;
   if (!Array.isArray(chat) || !chat.length) throw new Error('没有打开的聊天。');
-  if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再放回原文。');
+  if (mainGenerationRunning(context)) throw new Error('主回复还在生成，等它写完再放回原文。');
   const chatId = getCurrentChatId(context);
   const withoutMirror = meta => {
     const { stripped: _stripped, mirror: _mirror, projection_hash: _hash, ...rest } = meta;
@@ -3629,7 +3631,7 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
   // The confirm can sit open long enough for the chat under it to move on — a whole different chat can
   // be switched to, or a fresh main generation can start. Either cancels the restore outright rather
   // than writing this plan's text into whatever is showing now.
-  if (getCurrentChatId() !== chatId || runtime.mainGenerationActive) {
+  if (getCurrentChatId() !== chatId || mainGenerationRunning()) {
     throw new Error('放回原文的时候聊天变了，请重新点一次「恢复本聊天的原文」。');
   }
   // A swipe during the wait only moves pages around — script.js copies the live page into its own
@@ -3701,7 +3703,7 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
  * floor that moved on while the confirmation was open (see the re-check right after `ask` resolves).
  */
 async function clearFloorTranslation(messageId = null, { ask = () => true } = {}) {
-  if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再清除译文。');
+  if (mainGenerationRunning()) throw new Error('主回复还在生成，等它写完再清除译文。');
   const snapshot = await readMessageSnapshot(messageId, runtime.settings, { quiet: true });
   const { context, message, messageId: id, swipeId, chatId } = snapshot;
   const lockKey = `${chatId}|${id}|${swipeId}`;
@@ -3732,7 +3734,7 @@ async function clearFloorTranslation(messageId = null, { ask = () => true } = {}
     || getContext().chat[id] !== message
     || Number(message.swipe_id ?? 0) !== swipeId
     || message.mes !== mesBeforeAsk
-    || runtime.mainGenerationActive
+    || mainGenerationRunning()
     || runtime.inflight.has(lockKey)
   ) {
     throw new Error(`第 ${id} 楼在确认清除的时候变了，请重新点一次清除。`);
@@ -6920,9 +6922,27 @@ async function announceTtsUnits(floor, items, settings, tts) {
   }
 }
 
+/**
+ * Whether the host is still writing its reply. The generation events set the flag; the host also marks
+ * the page and shows its stop button for as long as it writes, so a start that nothing ended (a
+ * script's own model call) stops holding the last floor once the page says the host is idle.
+ */
+function mainGenerationRunning(context = getContext()) {
+  if (!runtime.mainGenerationActive) return false;
+  const page = globalThis.document;
+  const stop = page?.getElementById?.('mes_stop');
+  // No host page to look at: the events are all there is.
+  if (!stop) return true;
+  if (page.body?.dataset?.generating === 'true') return true;
+  const stream = context?.streamingProcessor;
+  if (stream && !stream.isFinished && !stream.isStopped) return true;
+  return globalThis.getComputedStyle?.(stop)?.display !== 'none';
+}
+
 /** A floor still being written is read by nobody: the analyses want the whole of it. */
 function requireClosedFloor(messageId) {
-  if (runtime.mainGenerationActive && latestAssistantMessageId(getContext()) === Number(messageId)) {
+  const context = getContext();
+  if (mainGenerationRunning(context) && latestAssistantMessageId(context) === Number(messageId)) {
     throw new Error('这一楼还在生成，等它写完再读。');
   }
 }
@@ -6942,7 +6962,7 @@ const TTS_TRANSLATION_HOLD_MS = 30000;
 function ttsFloorClosed(messageId, { translated = false, reason = 'generation' } = {}) {
   const tts = ttsSettings();
   const id = Number(messageId);
-  if (!tts.enabled || !Number.isInteger(id) || runtime.mainGenerationActive) return;
+  if (!tts.enabled || !Number.isInteger(id) || mainGenerationRunning()) return;
   if (latestAssistantMessageId(getContext()) !== id) return;
   // One pass per floor: the previous appointment is cancelled, never queued behind this one.
   const pending = runtime.tts.closing.get(id);
@@ -6953,7 +6973,7 @@ function ttsFloorClosed(messageId, { translated = false, reason = 'generation' }
   const timer = globalThis.setTimeout(async () => {
     runtime.tts.closing.delete(id);
     runtime.timers.delete(timer);
-    if (runtime.mainGenerationActive) return;
+    if (mainGenerationRunning()) return;
     const settings = runtime.settings;
     const current = ttsSettings(settings);
     const message = getContext().chat?.[id];
@@ -8552,7 +8572,7 @@ function bindTtsDom() {
       }
       const context = getContext();
       const count = Array.isArray(context.chat) ? context.chat.length : 0;
-      const writing = runtime.mainGenerationActive ? latestAssistantMessageId(context) : null;
+      const writing = mainGenerationRunning(context) ? latestAssistantMessageId(context) : null;
       for (const id of ids) {
         // The floor being written is redrawn by the host on every streamed chunk; it gets its buttons
         // once the reply is rendered whole.
@@ -12359,7 +12379,7 @@ async function applyScopedRegexCleanup(plan, engine, alreadyRestyled = false) {
 async function performRegexDedupe(root) {
   // Refused up front while a main reply is generating or a floor is still translating: 酒馆's regex
   // panel reload this can trigger (see applyScopedRegexCleanup) has no business running under either.
-  if (runtime.mainGenerationActive) throw new Error('主回复还在生成，等它写完再删除多余正则。');
+  if (mainGenerationRunning()) throw new Error('主回复还在生成，等它写完再删除多余正则。');
   if ([...runtime.inflight.values()].some(entry => entry.message)) throw new Error('还有楼层在翻译，等它翻完再删除多余正则。');
   const engine = runtime.hostRegex || await loadHostRegex();
   // Read only for the confirm dialog's own wording: `next`/`plan` are rebuilt below, after the confirm
@@ -17249,8 +17269,21 @@ function registerRuntimeEvents() {
   registerPromptFallback(eventTypes);
   // A message sent as a slash command starts a generation the command then takes over: nothing is written
   // and nothing ends it. The host says the generation really goes ahead once the commands have run.
-  bindEvent(eventTypes.GENERATION_AFTER_COMMANDS ?? eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
-    if (!dryRun && !['quiet', 'impersonate'].includes(type)) runtime.mainGenerationActive = true;
+  // 酒馆助手's generate() says that second thing too, for a script's own model call (a table filled, a
+  // picture drawn) that writes no floor and is never said to have ended: it names no options, and no
+  // start of the host's came before it.
+  const hostStarts = Boolean(eventTypes.GENERATION_AFTER_COMMANDS && eventTypes.GENERATION_STARTED);
+  const namesOptions = options => Boolean(options) && typeof options === 'object' && Object.keys(options).length > 0;
+  if (hostStarts) {
+    bindEvent(eventTypes.GENERATION_STARTED, (type, options, dryRun) => {
+      if (!dryRun) runtime.hostGenerationStart = { type, named: namesOptions(options) };
+    });
+  }
+  bindEvent(eventTypes.GENERATION_AFTER_COMMANDS ?? eventTypes.GENERATION_STARTED, (type, options, dryRun) => {
+    const start = runtime.hostGenerationStart;
+    const host = !hostStarts || (start !== null && start.type === type && (namesOptions(options) || !start.named));
+    if (host && !dryRun) runtime.hostGenerationStart = null;
+    if (host && !dryRun && !['quiet', 'impersonate'].includes(type)) runtime.mainGenerationActive = true;
     const unrendered = runtime.generationEnded ? runtime.generationGate.peek() : null;
     const base = runtime.generationBase;
     if (runtime.generationGate.begin(getCurrentChatId(), type, dryRun)) {
@@ -17305,6 +17338,7 @@ function registerRuntimeEvents() {
     // 酒馆助手 announces the end of its own generate() with that generation's id; the host's stop names none.
     if (generationId !== undefined) return;
     runtime.mainGenerationActive = false;
+    runtime.hostGenerationStart = null;
     // The floor being written was left without buttons while it streamed; a stopped reply may not be
     // rendered again, so it gets them now.
     const latest = latestAssistantMessageId(getContext());
@@ -17400,6 +17434,7 @@ function registerRuntimeEvents() {
     runtime.chatSeen = now;
     if (!sameChat) {
       runtime.mainGenerationActive = false;
+      runtime.hostGenerationStart = null;
       runtime.stoppedGeneration = null;
       runtime.generationBase = null;
       runtime.generationEnded = false;
@@ -18021,6 +18056,7 @@ export const __testing = Object.freeze({
   handleSegmentJumpClick,
   segmentJumpHighlightPlan,
   latestAssistantMessageId,
+  requireClosedFloor,
   readMessageSnapshot,
   restyleCurrentChat,
   restoreChatOriginals,
