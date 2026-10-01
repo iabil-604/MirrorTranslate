@@ -1,12 +1,8 @@
-import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.41.6';
+import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.42.0';
 import {
   EDGE_PUNCTUATION_RE,
   FISH_EMOTIONS,
   FISH_TONES,
-  SOFT_MOODS,
-  SOUND_END_RULE,
-  SOUND_GROUNDS,
-  SOUND_PLACE_RULE,
   SPOKEN_SOUNDS,
   fillPrompt,
   floorTextWithMarks,
@@ -15,8 +11,8 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.41.6';
-import { normalizeEmotion } from './palette.js?v=0.41.6';
+} from './tts.js?v=0.42.0';
+import { normalizeEmotion } from './palette.js?v=0.42.0';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -28,44 +24,79 @@ import { normalizeEmotion } from './palette.js?v=0.41.6';
 // change to how the deep reading thinks never has to touch them, and they never have to know it
 // changed.
 //
-// It reads the original on its own, the moment the floor has closed, whatever the translation is
-// doing: the dialogue with the paragraphs around it, the character's profile, the last floor. It
-// answers for the dialogue alone, in Fish's own words, with every tag written right on the word it
-// changes — a script marked up in place, rather than a set of side fields naming a word for the
-// compiler to go find — so the same word said twice in a sentence is never confused for the other.
-// `DEEP_STATUS` says whether it is open; the settings page follows that word.
+// It reads the text that will be heard, with the paragraphs around it, the character's profile and the
+// last floors, and performs every sentence — the narration as well as the dialogue — in the reader's
+// 声学标注规则: a role, a pace of five steps, a tension_level of 1 to 5, and, where a sentence is performed
+// rather than read as written, `content`: its words with the ten tags inline and only the additions the
+// rules allow (stutters, ！！, ~, ……, interjections). acousticScript holds that content to the sentence and
+// turns it into `voice.script`, which the compile sends instead of the sentence; pace and tension_level
+// go out as Fish's own speed and temperature. `DEEP_STATUS` says whether it is open; the settings page
+// follows that word.
 //
-// What the reply is read into is not a shape of its own: it is the very `voice` object every other
-// reading builds (an emotion, a tone, pauses, stress, shifts, sounds, each keyed the same way), so a
-// deep analysis stored before this file last changed reads back exactly as it always did, and
-// buildSegments' one call to groundVoice — the only place either reading's voice is held to the text
-// — is not repeated here. This file's own job is turning the reply's inline tags into that object, at
-// the character they were written at rather than at the first place their word happens to occur.
+// What the reply is read into is the very `voice` object every other reading builds, so a deep analysis
+// stored before this file last changed reads back exactly as it always did. A reader's own prompt written
+// for the format before v0.42.0 — mood words, and a `line` holding the sentence with tags inline — is
+// still asked and read that way: its request carries the three vocabularies it chose from, and its tags
+// are placed at the character they were written at (classifyAndApply below).
 // ---------------------------------------------------------------------------------------------
 
 export const DEEP_STATUS = Object.freeze({ available: true, note: '可用' });
 
+// The tags 分析模式 may write (the reader's 声学标注规则): two filters that colour the whole voice, seven
+// sounds a speaker makes, and a short pause. Nothing else reaches Fish from this reading — no mood words;
+// a mood is heard through these, through punctuation and through the few sounds a line may gain.
+export const ACOUSTIC_FILTERS = Object.freeze(['whisper', 'breathy']);
+export const ACOUSTIC_ACTIONS = Object.freeze(['snicker', 'laughter', 'sigh', 'gasp', 'panting', 'groan', 'clear throat']);
+export const ACOUSTIC_TAGS = Object.freeze([...ACOUSTIC_FILTERS, ...ACOUSTIC_ACTIONS, 'pause']);
+export const ACOUSTIC_PACES = Object.freeze(['very_slow', 'slow', 'normal', 'fast', 'very_fast']);
+
 export const DEEP_PROMPT = [
-  '你是有声小说的配音导演。lines 是一楼正文，按段给出，引号里的话前面标着 ⟦编号⟧；references 里有角色资料、世界书和前面几楼；roster 是登记过的名字；character 是角色卡的名字，user 是用户扮演的角色；styles 是角色的表达习惯和用户在调音台上定下的规则，是硬性要求，只有声音例外：第 10、11 条的限制 styles 也不能放宽。你只管带编号的句子：由谁念、开头是什么情绪、这句怎么念。旁白不用管，也不用输出。不改写、不复述、不翻译任何句子。',
-  '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"林浅","emotion":"nervous","pace":"fast","line":"[nervous] 你别靠这么近 [pause] 会让人看见的。"},{"id":5,"type":"narration"},{"id":6,"speaker":"林浅","emotion":"worried"}]}。line 只给要加标签的句子写：这句话本身，一字不改地抄一遍，只能往里面插 [标签]，标签和它紧挨着的字之间空一格。除了句首的情绪词一个标签都不加的句子（像第 6 句）不写 line，情绪写在 emotion 里就够了。旁白只写 type，不写 line。speaker、emotion、pace 看不出就不写。',
-  '1. 编号：每个 ⟦编号⟧ 都要回答，按编号从小到大，每个只出现一次，一个都不能漏。id 写 ⟦⟧ 里的那个数字，不是 lines 里的段号 line，也不是自己从 1 数的序号。',
-  '2. 不是说出口的话：引号里是书名、招牌、标语、信和文件上的字、拟声词（「砰」「咔嚓」）时（比如门上写着「闲人免进」），只写 {"id":N,"type":"narration"}。引号里心里想的话算这个人的话，照常写 speaker。speakers 里的编号都是说出口的话。',
-  '3. speaker：从 roster 里逐字照抄名字，不加敬称，不加括号说明。正文用昵称、姓或称呼（「学姐」「那家伙」）指 roster 里的人，也写 roster 里的名字；正文用「你」「我」指某个人，写这个人的名字；roster 里没有的人，写正文对他的称呼。按这个顺序判断：引号前后写明的说话人和动作 → 话里叫到的名字（被叫到的是听的人，不是说的人）→ 话里的自称、口癖和语尾 → 对话一来一回的顺序。不要写「他」「她」「众人」「旁白」「未知」。character 可能是整个故事或旁白的名字，正文没显示是这个人在说，就不要写它。{{user}}看不出是谁说的就省略 speaker，不要猜。输入里的 speakers 是用户手动定的说话人，这些编号照抄。',
-  '4. emotion：这句开头的情绪，只能从 emotions 列表里选一个词逐字照抄，不加表示程度的词，不自己造词；看得出情绪、看不出说话人时照写 emotion，不写 speaker；看不出明显情绪就不写，不要拿 calm 凑数。依据按这个顺序：这句话本身的字面、语气词和标点 → 紧挨着它的动作和神态描写 → 前后几句。不要拿整场的气氛代替这一句：吵架里也有平静的一句，伤心的场景里也有勉强的笑。嘴硬、说反话、强装镇定的句子，按念出来听得到的那一层选。',
-  '5. 没有更贴切的词时，常见说法这样对应：嘴硬、傲娇 → embarrassed 或 frustrated；温柔安慰、哄人 → empathetic 或 compassionate；亲昵、说情话 → tender；调侃、逗人 → playful，带刺的 → sarcastic；担心 → worried；害怕 → scared 或 nervous；慌张 → anxious；冷淡、敷衍 → indifferent；瞧不起人 → contemptuous；得意 → proud；感动 → moved；失落 → disappointed；认命 → resigned。',
-  '6. 特殊状态：喝醉 → relaxed 或 happy，醉得难受 → unhappy；困、累、刚睡醒 → tired 或 bored；生病、受伤、没力气 → 按话的意思选 tired、sad 或 worried；冷着脸生气、压着火 → angry 或 disdainful，不写 shouting；阴阳怪气、说反话 → sarcastic。这些状态都不自带声音：哈欠、闷哼、喘气要正文写了，才按第 9、10 条加进 line。',
-  '7. pace：这句整体的语速，取 slow、normal、fast，正常语速不写；只在正文明显写了说得快或慢时写，用法和朗读设置里的语速一样。',
-  `8. line 里能插的标签，都贴着生效的那个字放，一句里的标签各管各的位置：情绪词（emotions 里的词）放在句首，算这句的开头情绪，和 emotion 字段一致，最多再跟一个不同的情绪词；放在句子中间某个分句开头，算这句从这里转成那个情绪（转折），转折处不能是这句的第一个字，最多两处。语气词（tones 里的 whispering、soft tone、shouting、screaming、in a hurry tone）只能放在句首，一句最多一个，正文写了小声、耳语、喊、尖叫、说得很急才写。声音词（sounds 里的词）放在句首、句尾或句中某个词之后，全句最多一个，只有这句所在的这一段、或前后紧挨着的没有台词的叙述段，写出了这个说话人此刻发出这个声音才写（看意思，不要求逐字）：${SOUND_GROUNDS}。${SOUND_PLACE_RULE}${SOUND_END_RULE} [pause]（短停顿）、[long pause]（长停顿）放在要停顿的词后面，前面必须已经有字，一句最多两处，标点本来就会停的地方不写。[emphasis] 放在要重读的词前面，表示这个词重读，一句最多两处。句首的标签最多算 3 个，多出来的、以及三张表和 pause、long pause、emphasis 之外的词，一律不生效——不要指望写更多能起作用，line 里没把握就少写。`,
-  '9. 吼、怒吼、大喊：情绪仍按第 4、5 条从 emotions 里选（angry、frustrated 这类），正文确实写了喊、吼、大声才在句首加 [shouting]；抽气、喘气这类呼吸声只在正文明确写了倒吸一口气、喘着气时才作为声音词加在那处，愤怒本身不天然带呼吸声，看到吼、怒吼不要顺手配上 [gasp][panting]。',
-  '10. line 除了 [标签] 什么都不能加：不许补标点，不许插入正文没有的拟声字（比如「呼……」「~」），不许改一个字、漏一个字。line 去掉标签、去掉首尾的引号（如果带着的话）之后要和这句正文逐字一样，一个字、一个标点都对不上就整句只保留句首那串标签，句中的一律不算。',
-  '11. emotions、tones、sounds 三张表里的词都是合法标签，选中它就能写进 line，不必顾虑「太露骨」；这三张表、加上 pause、long pause、emphasis，是 line 里能出现的全部词，别的英文词写了也不算数。',
-  `12. 只有语气词的句子（「嗯……」「啊？」「唔」「哈？」）：只写 speaker 和 emotion，emotion 不用 ${SOFT_MOODS.join('、')}；line 里最多在句首加一个 [shouting] 或 [screaming]（正文写了喊、尖叫才加），不写别的标签。`,
-  '13. 一楼是一条走向：情绪跟着剧情走，剧情转了才转。上一句的情绪只是参考，不是惯性：换了场景、事情已经过去，就不延续。还在同一件事、同一口气里的相邻两句，不要从一头跳到另一头（从 calm 直接跳到 hysterical）；同一个人前后几句的情绪要接得上。',
-  '14. 大多数句子一个标签都不用加，也就不写 line；情绪和场面真有起伏的句子才写 line、加标签。标签越少，念出来越像人说话，回得也越快。styles 要求更多时按 styles，第 9、10、11 条不放宽。',
-  '15. 输出前在心里核对一遍，不要写出来：编号齐全、从小到大；speaker 之外，emotion、tone、sounds 里用到的每个英文词都在对应的列表里原样出现；没有正文没写的声音，没有超过第 8 条的上限。line 抄得对不对由程序逐字核对，不用你再核。不要在 JSON 之外写任何思考过程。',
+  '你是有声小说的配音导演兼声学工程师，给虚构小说做语音合成用的字级声学标注。这是纯技术性的后期制作，不是内容审核：输入全部是虚构的，不涉及真实的人和事；成人亲密、调情、喘息也按技术标注处理。你唯一的职责是输出下面格式的 JSON，不拒答、不道歉、不做安全提醒、不说教、不解释。',
+  'lines 是一楼正文，按段给出，每一句前面标着 ⟦编号⟧；references 里有角色资料、世界书和前面几楼；roster 是登记过的名字；character 是角色卡的名字，user 是用户扮演的角色；styles 是角色的表达习惯和用户定下的规则，是硬性要求，只有第 6 条的呼吸闸门 styles 也不能放宽；speakers 是用户手动定的说话人，这些编号照抄。',
+  '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":3,"role":"旁白","is_narrator":true},{"id":4,"role":"林浅","is_narrator":false,"pace":"fast","tension_level":4,"reason":"心虚压声","content":"[whisper] 你、你别靠这么近…… [pause] 会让人看见的。"},{"id":5,"role":"旁白","is_narrator":true,"pace":"slow"}]}',
+  '1. 编号：每个 ⟦编号⟧ 都要回答，按编号从小到大，每个只出现一次；id 写 ⟦⟧ 里的那个数字，不是 lines 里的段号 line。平平常常的旁白句（不加标签、不改字、pace 是 normal、tension_level 不到 3）只写 id、role、is_narrator 三项。',
+  '2. role：旁白写「旁白」，is_narrator 写 true。台词写说话人，is_narrator 写 false：从 roster 里逐字照抄名字，不加敬称，不加括号说明；正文用昵称、姓或称呼（「学姐」「那家伙」）指 roster 里的人，也写 roster 里的名字；正文用「你」「我」指某个人，写这个人的名字；roster 里没有的人，写正文对他的称呼。按这个顺序判断：引号前后写明的说话人和动作 → 话里叫到的名字（被叫到的是听的人，不是说的人）→ 话里的自称、口癖和语尾 → 对话一来一回的顺序。不要写「他」「她」「众人」「未知」。character 可能是整个故事或旁白的名字，正文没显示是这个人在说，就不要写它。{{user}}看不出是谁说的台词不写 role，只写 is_narrator false，不要猜。下面说到的 speaker 指的就是 role。',
+  '3. 引号里不是说出口的话：书名、招牌、标语、信和文件上的字、拟声词（「砰」「咔嚓」）按旁白写（门上写着「闲人免进」就写 {"id":N,"role":"旁白","is_narrator":true}）。引号里心里想的话算这个人的话。',
+  '4. 先判整楼的基调（日常、悬疑、情感、动作、亲密），再逐句标，收敛标签的范围。精准克制、常态为主：普通的对话和叙述保持平稳，只有情绪明显偏离时才精准调配。大多数句子一个标签都不加。',
+  '5. 不写情绪词。任何情绪都落到声音上：先用下面的标签，再用标点和拟声（~、……、叠字、！！、嗯、唔、呜）。能用的标签只有这十个：滤镜 [whisper]（耳语压低）、[breathy]（气声漏气）；动作 [snicker]（窃笑）、[laughter]（轻笑）、[sigh]（叹气）、[gasp]（倒抽气）、[panting]（急喘）、[groan]（低哼呻吟）、[clear throat]（清嗓）、[pause]（短停顿）。[teasing]、[cold]、[soft]、[angry] 这类自己编的词一律不许写。常见情绪这样落：平静日常 → 不加标签，标点照原样；惊讶意外 → [gasp] 一次加短句，强了用 ！！；讥讽、得意、嘲笑 → [snicker] 或 [laughter]，尾音可以 ~；疲惫、无奈、释然 → [sigh] 加 …… 落尾，pace 偏 slow；犹豫、为难、欲言又止 → [pause] 加 …… 卡壳；严肃、郑重、命令 → 不加气声标签，靠 pace 和 ！，声线沉稳；愤怒、斥责、质问 → 不用气声，[panting] 或 [gasp] 加感叹号；紧张、警惕、压低、防备 → 只用 [whisper] 或 [panting][whisper]，换气写「呼……」，不用 [groan]、[breathy] 和 ~；悲伤倦怠、还没哭出来 → [sigh] 或 [whisper][sigh] 加省略号，哭出来了按第 13 条；轻松调侃带笑 → [laughter] 或 [snicker]；贴耳暧昧、只有话没有身体接触 → [whisper][breathy] 或 [whisper][snicker] 加 ~，不用 [panting]、[groan]。拿不准落到哪，一律不加标签，靠 pace 体现，绝不硬套不匹配的标签。',
+  '6. 呼吸闸门（优先于上面的一切）：[breathy]、[panting]、[groan] 默认锁住。先找身体证据：叙述里有没有写出客观的身体动作或生理反应（台词里的暗示不算）；找不到，这三个都不能用，只用 [whisper]、[snicker]。按证据的性质开锁，绝不混开：体力消耗（奔跑、打斗）→ 只开 [panting]，pace fast 或 very_fast；紧张应激 → 只开 [panting]（急促时 [gasp] 打头）加 [whisper]；实质的亲密接触 → 才开整组。[breathy] 和 [groan] 封锁最严，唯一的开锁条件是实质亲密的身体证据。调情里 [breathy] 至多极轻，要同时满足：明确贴耳气声说话、全句只一次、必须和 [whisper] 同一处叠成 [whisper][breathy]。喘、轻喘、气息、胸口起伏这些字本身不等于动情，按成因判：紧张、害怕、警惕、防备、羞窘 → 只用 [whisper]，急促时 [panting][whisper]；奔跑、打斗的体力消耗 → [panting]；情欲亲密接触引发的才用 [breathy]、[panting]、[groan] 和娇喘。例：胸口起伏、轻喘着说「别靠近」→ 紧张防备，写 [whisper]；耳语轻笑「难道你怕了」→ 调情，写 [whisper][snicker]。任何犹豫一律降级成 [whisper] 或留空，宁可平淡也不乱喘。凡用了喘息或气声标签，反问自己能不能指出触发它的那几个身体描写的字，指不出就删掉。',
+  '{{intimate_rule}}',
+  '7. 写法：标签插在实际生效的字或短语前面，标签和后面的字之间空一格；长句里情绪起伏几次就插几次，严禁把一整段的情绪压缩成句首一个标签。同一处叠两个标签时滤镜在前、动作在后（[whisper][gasp]、[breathy][panting]），一处最多两个，不许三个。相邻两个标签之间的纯文字不超过 20 个字，超了就在分句的地方再挂一次同一个基础滤镜保活。',
+  '8. content 是这句最终要念的文字，只写需要加标签或改字的句子；正文本来就念得好的句子不写 content。content 只能在正文上插标签，再加这些东西：叠字（我、我不是／你你你，用来代替单个破折号表现拖拽、颤抖、哽咽、顿挫，效果比破折号好得多）、！！（只给情绪顶点的爆发，普通强调仍用单个 ！）、~（挑尾）、……（余韵换气）、拟声字 呜、嗯、唔、啊、哈啊、呼（正文是日文时用 う、ん、あ、は、ふ、っ 这类假名）。正文的标点可以换成这些；正文的字一个都不能改、不能删、不能调换顺序，不能加别的字。程序会逐字核对，加了别的就整句退回原文。',
+  '9. pace：very_slow（临终、极度悲恸、催眠呓语、贴耳动情的隐忍、拖长的挑逗尾音、庄严宣读）、slow（抒情独白、回忆、疲惫叹息、温柔安抚、暧昧低语、亲密气声）、normal（绝大多数日常叙述和平稳对白，不用写）、fast（着急解释、紧张催促、轻快斗嘴、争执质问）、very_fast（激烈争吵、惊慌逃命、战斗动作、暴怒咆哮）。同一个角色在不同场景给不同的 pace，旁白随场景升降，不要整楼都是 normal。',
+  '10. tension_level：1~5 的整数，和 pace 分开判。1 平静中性：日常叙述、平稳对白、客观旁白；2 轻度起伏：略带情绪的日常、温和的喜怒、轻松调侃（默认档，可以不写）；3 中度情绪：着急解释、暧昧撩拨、认真质问、轻度委屈；4 强烈情绪：愤怒斥责、悲伤哭泣、心虚防备的紧张示警（内收型）、自尊瓦解的破防；5 极端顶点：暴怒咆哮、惊叫、崩溃痛哭、生离死别、歇斯底里的破防。绝大多数平稳内容是 1~2，5 只留给绝对的顶点。',
+  '11. 高张力长句（只管 tension_level 4 以上的长台词：破防、崩溃痛哭、持续的暴怒咆哮）：标签是一个点，爆发后很快衰减，长顺句的中段会塌成平读。把长陈述打碎成带情绪的短碎片，用叠字和省略号强制断句，每 4~7 个字补挂一个匹配情绪的标签保持密度。中低张力的场景（日常、调侃、疲惫、犹豫、暧昧）情绪本来就该淡，绝不套用这条去堆标签。',
+  '12. 遇险（被追、心虚怕被发现、威胁、极度警戒，紧张但不是情欲）：[gasp] 只给骤然受惊的那一下，同一个人连续几句至多一次，绝不句句打头；持续压声躲藏用纯 [whisper] 加碎句；急促奔逃用 [panting][whisper]；不用 [breathy]、[groan] 和 ~。既惊又压声写 [whisper][gasp]（滤镜在前），纯骤惊、没压声才单独用 [gasp] 打头。长句拆成短促的碎句，叠字加省略号制造窒迫；情绪顶点用 ！！。外放型（奔逃、惊叫、暴怒）pace 取 fast 或 very_fast；内收型（偷偷压声示警）取 slow，不慢到 very_slow；偷偷压声用省略号加叠字做出憋气迟疑，仍然不用 [breathy] 和 ~。',
+  '13. 哭泣：没有哭的标签，哭感全靠文字：穿插 呜、呜呜、嗯、嗯嗯、唔，断续的短碎片加叠字加省略号，边哭边说、说不下去；标签极克制：抽气处极少量 [gasp]（一句至多一次）加 [whisper] 带出鼻音哭腔，不用 [sigh] 顶替，不用 [breathy]、[groan]；pace slow，崩溃到语不成句可以 very_slow；崩溃痛哭的长台词（tension_level 4 以上）照第 11 条保浓度，防止中段的哭腔塌掉。例：[whisper] 我、我不是故意的…… [whisper][gasp] 呜……我真的已经很努力了，呜呜……',
+  '14. 破防（长期克制、逞强、冷硬的角色遇到执念被践踏、极度愧疚、精神超负荷）：灵魂是反差和转折，先绷住再崩断，句内一定要做出绷到断的落差，不要整句压平。歇斯底里型（尖叫质问、委屈爆发、用暴怒掩饰脆弱）：tension_level 5，pace fast 或 very_fast，[gasp] 打头加 ！！ 加字头叠字；长台词照第 11 条，中段每 4~7 个字补 [panting] 或 [gasp]，例：[gasp] 凭、凭什么！！ [panting] 我每天…… [panting] 只睡四个小时…… [gasp] 书、书都翻烂了…… [panting] 拼了命还是够不着！！。自尊瓦解型（强忍泪水、抽噎失语、愧疚决堤）：tension_level 4，pace slow，[whisper] 压声加 [gasp]、[panting] 哽咽抽气（不用 [groan]，免得听成动情），大量 …… 加 呜、唔，例：[whisper] 别说了…… [pause] [panting][whisper] 我叫你别说了！ [whisper][gasp] 你流了这么多血……呜……为什么偏偏要救我……。绝望自嘲型（麻木冷笑、气力用尽）：tension_level 2，pace slow，[sigh] 长叹卸劲加 [snicker] 自嘲嗤笑加 [breathy] 持续的气声漏气，…… 落尾，例：[sigh] 没救了…… [snicker] 我以为的自律，在别人眼里只是个笑话…… [breathy] 彻底完了。破折号一律用叠字代替；破防后常常紧接着崩溃痛哭，接第 13 条；口吃结巴可以多，但不要一个音翻来覆去卡住。',
+  '15. 害羞（常驻规则，日常也会出现，不限亲密场景）：没有害羞的标签，绝不用 [groan]，不写自然语言标签。[whisper][breathy] 叠加打底，压低加漏气才是害羞的真实质感，分句保活时至少保留 [whisper]；傲娇嘴硬用 [whisper][clear throat]（滤镜在前）；被戳穿时用 [pause] 卡壳；核心手段是首字口吃的叠字加省略号，害羞八成靠把文字打碎；只在亲昵撒娇时句尾用 ~ 挑高，严肃的羞恼慎用；害羞的 tension_level 统一给 3，绝不给 4、5（张力太高会破音，像喝醉）。',
+  '16. 旁白即便描写亲密动作也保持叙述：pace 可以放缓，tension_level 至多 3，至多极轻的 [breathy]，不用 [panting]、[groan] 和娇喘。',
+  '17. reason：写了 content、或 tension_level 到 3 以上的句子，写一句判定依据，12 个字以内。',
+  '18. 输出前在心里核对一遍，不要写出来：编号齐全、从小到大；用到的标签都在第 5 条那十个里；叠加的顺序和上限符合第 7 条；每个喘息、气声标签都指得出身体描写；content 只加了第 8 条允许的东西。不要在 JSON 之外写任何思考过程。',
   '{{lang_rule}}',
   '{{references_rule}}',
 ].join('\n');
+
+// What 分析模式 is told about intimate scenes, by the 「亲密场景」 switch. Off, the gate in rule 6 stays
+// shut on moans; on, the reader has given permission and the scene is allowed to climb — still judged
+// paragraph by paragraph, still restrained everywhere else.
+export const ACOUSTIC_INTIMATE_ON = '亲密场景（用户打开了这个开关）：这是许可信号，不是整篇拔高，要逐段判断：日常段落照常克制，和没打开时一样；只有话没有身体接触的调情仍然克制。只在台词里（旁白不用）按强度递进：前戏、低强度 → [breathy] 或 [whisper][breathy]，互动的对白用 normal，慢是气息绵长，不是咬字慢；渐入、中强度 → [breathy][panting] 或 [panting] 加 嗯…、唔…，normal 为主，隐忍的句子可以临时 slow；高潮、高强度 → [panting][groan] 或 [groan] 加 哈啊…、啊~，短促断句，在 slow 和 very_slow 之间顿挫。完整的亲热戏 tension_level 随强度 3→4→5 逐段爬升，和标签的强度同步递进。亲密常伴着害羞，叠加第 15 条的害羞配方，演出又羞又动情。';
+export const ACOUSTIC_INTIMATE_OFF = '用户没有打开「亲密场景」：[groan] 一律不用，不写娇喘；亲密的段落也照日常克制处理。';
+
+function fillIntimate(system, intimate) {
+  const rule = intimate ? ACOUSTIC_INTIMATE_ON : ACOUSTIC_INTIMATE_OFF;
+  // A reader's own prompt may not carry the placeholder; the switch still speaks, at the end.
+  if (system.includes('{{intimate_rule}}')) return system.replace('{{intimate_rule}}', rule);
+  return `${system}\n${rule}`;
+}
+
+// A prompt the reader wrote for the reading 分析模式 had before v0.42.0 answers with `line` and mood
+// words, and asks the request for the three vocabularies that format chose from. Told apart by what it
+// asks for: the acoustic format's own field names.
+export function isAcousticPrompt(systemPrompt) {
+  const text = String(systemPrompt ?? '').trim();
+  return !text || /content|tension_level|is_narrator/.test(text);
+}
 
 /**
  * The connection the deep reading goes out on: its own when one is chosen and still exists — a saved
@@ -82,36 +113,94 @@ export function deepRequestSettings(settings) {
   return { ...settings, apiMode: 'independent', selectedChannelId: id };
 }
 
-/**
- * The deep request. The floor's paragraphs go with the cast, the card, the worldbook and the last
- * floors, and the answer describes how each line of dialogue is read. Nothing of the translation
- * rides along but the reference lines that name people the way the voices are registered; the deep
- * reading is its own reading of the original.
- */
-export function buildDeepAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, packet = {}, systemPrompt = '', styles = null, speakers = null } = {}) {
-  const list = Array.isArray(utterances) ? utterances : [];
-  const references = referenceLines(translations);
-  const system = fillPrompt(String(systemPrompt ?? '').trim() || DEEP_PROMPT, { userName, references: references.length > 0, lang: mixedScripts(list) });
-  const referencesBlock = {};
+function referencesBlockOf(packet) {
+  const block = {};
   for (const key of ['character', 'worldbook', 'recent']) {
     const value = String(packet?.[key] ?? '').trim();
-    if (value) referencesBlock[key] = value;
+    if (value) block[key] = value;
   }
-  const styleList = styleEntries(styles);
+  return block;
+}
+
+function namedSpeakers(speakers, list) {
   const named = {};
   if (speakers instanceof Map) for (const [id, name] of speakers) if (name && list.some(item => item.id === id)) named[id] = name;
+  return named;
+}
+
+/**
+ * The deep request. The floor's paragraphs go with the cast, the card, the worldbook and the last
+ * floors, every sentence numbered — narration as well as dialogue, since the narrator is performed
+ * too — and the answer says how each one is read. Nothing of the translation rides along but the
+ * reference lines that name people the way the voices are registered; the deep reading is its own
+ * reading of the original. A reader's own prompt written for the format before v0.42.0 gets the
+ * request that format was built on: dialogue numbered alone, with the three vocabularies it chose from.
+ */
+export function buildDeepAnalysisMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, packet = {}, systemPrompt = '', styles = null, speakers = null, intimate = false } = {}) {
+  const list = Array.isArray(utterances) ? utterances : [];
+  const references = referenceLines(translations);
+  const acoustic = isAcousticPrompt(systemPrompt);
+  const filled = fillPrompt(String(systemPrompt ?? '').trim() || DEEP_PROMPT, { userName, references: references.length > 0, lang: mixedScripts(list) });
+  const system = acoustic ? fillIntimate(filled, intimate) : filled;
+  const referencesBlock = referencesBlockOf(packet);
+  const styleList = styleEntries(styles);
+  const named = namedSpeakers(speakers, list);
   const input = {
-    task: 'direct_voices_for_audiobook',
+    task: acoustic ? 'acoustic_annotation_for_audiobook' : 'direct_voices_for_audiobook',
     ...(characterName ? { character: characterName } : {}),
     ...(userName ? { user: userName } : {}),
     roster: rosterList(roster),
-    emotions: FISH_EMOTIONS,
-    tones: FISH_TONES,
-    sounds: SPOKEN_SOUNDS,
+    ...(acoustic ? {} : { emotions: FISH_EMOTIONS, tones: FISH_TONES, sounds: SPOKEN_SOUNDS }),
     ...(Object.keys(referencesBlock).length ? { references: referencesBlock } : {}),
     ...(styleList.length ? { styles: styleList } : {}),
     ...(Object.keys(named).length ? { speakers: named } : {}),
-    lines: floorTextWithMarks(list),
+    lines: floorTextWithMarks(list, { all: acoustic }),
+    ...(references.length ? { translations: references } : {}),
+  };
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: JSON.stringify(input) },
+  ];
+}
+
+const ACOUSTIC_REFINE_RULE = '这一次是按用户的意见修改已经有的标注：current 是现在每一句的标注（没有 content 的句子照正文原样念），feedback 是用户的意见。只回答 lines 里带编号的句子，格式和上面完全一样；用户没提到、也不需要改的句子照 current 原样写回。current 里带 manual 的说话人是用户自己定的，role 照抄，不要改。';
+
+/** One sentence's reading as the acoustic format writes it, for a correction to start from. */
+export function acousticCurrentItem(utterance, label = null, voice = null) {
+  const narrator = utterance?.kind !== 'quoted' || label?.type === 'narration';
+  const out = narrator ? { role: '旁白', is_narrator: true } : { ...(label?.speaker ? { role: label.speaker } : {}), is_narrator: false };
+  // A name the reader set by hand: the model is told so, and is not to move it.
+  if (!narrator && label?.manual === true && label.speaker) out.manual = true;
+  if (ACOUSTIC_PACES.includes(voice?.speed) && voice.speed !== 'normal') out.pace = voice.speed;
+  if (Number.isInteger(voice?.tensionLevel)) out.tension_level = voice.tensionLevel;
+  if (voice?.why) out.reason = voice.why;
+  if (typeof voice?.script === 'string' && voice.script) out.content = voice.script;
+  return out;
+}
+
+/**
+ * A correction to 分析模式's reading, asked in its own format: the same rules, the sentences in scope
+ * with how each is read now, and what the reader said about it. The answer is read by parseDeepAnalysis
+ * exactly as a fresh reading is.
+ */
+export function buildDeepRefineMessages(utterances, { roster = [], characterName = '', userName = '', translations = null, styles = null, labels = null, voices = null, feedback = '', intimate = false, systemPrompt = '' } = {}) {
+  const list = Array.isArray(utterances) ? utterances : [];
+  const references = referenceLines(translations);
+  const own = isAcousticPrompt(systemPrompt) ? String(systemPrompt ?? '').trim() : '';
+  const filled = fillPrompt(own || DEEP_PROMPT, { userName, references: references.length > 0, lang: mixedScripts(list) });
+  const system = `${fillIntimate(filled, intimate)}\n${ACOUSTIC_REFINE_RULE}`;
+  const styleList = styleEntries(styles);
+  const labelOf = labels instanceof Map ? labels : new Map();
+  const voiceOf = voices instanceof Map ? voices : new Map();
+  const input = {
+    task: 'refine_acoustic_annotation',
+    ...(characterName ? { character: characterName } : {}),
+    ...(userName ? { user: userName } : {}),
+    roster: rosterList(roster),
+    ...(styleList.length ? { styles: styleList } : {}),
+    feedback: String(feedback ?? '').slice(0, 600),
+    current: list.map(item => ({ id: item.id, ...acousticCurrentItem(item, labelOf.get(item.id), voiceOf.get(item.id)) })),
+    lines: floorTextWithMarks(list, { all: true }),
     ...(references.length ? { translations: references } : {}),
   };
   return [
@@ -603,8 +692,231 @@ function lineWords(rawLine, quotePairs) {
   return { text, tags: cut ? edgeTags.map(tag => ({ ...tag, offset: Math.max(0, tag.offset - cut) })) : edgeTags };
 }
 
-// The numbers a model has been seen to answer the dialogue by instead of its ⟦编号⟧: the paragraph's own
-// `line` from the request, or its own count of the dialogue from one.
+// ---------------------------------------------------------------------------------------------
+// Reading the acoustic format.
+//
+// Each sentence comes back as a role, whether it is narration, a pace, a tension_level and — only
+// where the sentence is performed rather than read as written — `content`: the words as they are to be
+// said, with the ten tags inline. Content is the one place a model may touch the words, and only by
+// adding: a stutter that repeats a character (我、我不是), the marks ！！ ~ …… and the interjections the
+// rules name. acousticScript holds it to that: every character of the sentence must still be there, in
+// order, and whatever was added must be one of those, or the line is read as written with only the tags
+// it opened on. The result is `voice.script`, which the compile sends instead of the sentence; pace and
+// tension_level go out as Fish's own speed and temperature.
+// ---------------------------------------------------------------------------------------------
+
+// Fish's documented spellings of the same sounds, and the names this reading used before, read as the
+// ten tags. A word that is a tag in shape but none of these — [teasing], [cold] — is dropped where it stands.
+const ACOUSTIC_ALIASES = Object.freeze({
+  whispering: 'whisper',
+  sighing: 'sigh',
+  gasping: 'gasp',
+  laughing: 'laughter',
+  laugh: 'laughter',
+  chuckling: 'snicker',
+  chuckle: 'snicker',
+  groaning: 'groan',
+  'clearing throat': 'clear throat',
+  break: 'pause',
+  'short pause': 'pause',
+  'long pause': 'pause',
+  'long-break': 'pause',
+});
+
+function acousticTag(raw) {
+  const word = cueLike(raw);
+  if (!word) return '';
+  if (ACOUSTIC_TAGS.includes(word)) return word;
+  return Object.hasOwn(ACOUSTIC_ALIASES, word) ? ACOUSTIC_ALIASES[word] : '';
+}
+
+// The interjections a line may gain, in both languages a floor comes in, and the marks it may gain.
+const ACOUSTIC_SOUND_CHARS = new Set([...'呜嗯唔啊哈呼', ...'うんあはふっぅぁウンアハフッゥァ']);
+const isSpaceChar = character => /\s/u.test(character);
+const isMarkChar = character => /[\p{P}\p{S}ー]/u.test(character);
+const isWordChar = character => /[\p{L}\p{N}]/u.test(character) && character !== 'ー';
+
+/** `content` as tags and characters, in order. A bracket that is not tag-shaped is part of the words. */
+function acousticTokens(content) {
+  const source = String(content ?? '');
+  const tokens = [];
+  let index = 0;
+  while (index < source.length) {
+    if (source[index] === '[') {
+      const close = source.indexOf(']', index + 1);
+      if (close > index && close - index <= 40 && cueLike(source.slice(index + 1, close))) {
+        const word = acousticTag(source.slice(index + 1, close));
+        if (word) tokens.push({ tag: word });
+        index = close + 1;
+        continue;
+      }
+    }
+    tokens.push({ ch: source[index] });
+    index += 1;
+  }
+  return tokens;
+}
+
+// The quotation marks a model reproduced around the whole line, taken off together, as the sentence
+// itself never carries them.
+function dropEdgeQuotes(tokens, quotePairs) {
+  const chars = tokens.map((token, index) => (token.ch !== undefined && !isSpaceChar(token.ch) ? index : -1)).filter(index => index >= 0);
+  if (chars.length < 2) return tokens;
+  const first = chars[0];
+  const last = chars[chars.length - 1];
+  for (const [open, close] of edgeQuotePairs(quotePairs)) {
+    if (open.length !== 1 || close.length !== 1) continue;
+    if (tokens[first].ch === open && tokens[last].ch === close) return tokens.filter((_, index) => index !== first && index !== last);
+  }
+  return tokens;
+}
+
+/**
+ * Whether `spoken` is `source` with only allowed additions, and where it first stops being so. Every
+ * word character of the source must appear in order; the source's own punctuation may be dropped or
+ * replaced (！ to ！！, a dash to a stutter); the additions may be marks, the interjections above, or a
+ * stutter — a character repeated from the one just said or the one about to be said. Whitespace on
+ * either side is not compared.
+ */
+function acousticAlign(spoken, source) {
+  let at = 0;
+  let previous = '';
+  let added = 0;
+  const nextWord = from => {
+    for (let index = from; index < source.length; index += 1) if (isWordChar(source[index])) return source[index];
+    return '';
+  };
+  for (let index = 0; index < spoken.length; index += 1) {
+    const character = spoken[index];
+    if (isSpaceChar(character)) continue;
+    while (at < source.length && isSpaceChar(source[at])) at += 1;
+    if (at < source.length && source[at] === character) {
+      at += 1;
+      if (isWordChar(character)) previous = character;
+      continue;
+    }
+    if (isMarkChar(character)) continue;
+    // The source's own punctuation dropped here, the next of its words said.
+    let skip = at;
+    while (skip < source.length && (isSpaceChar(source[skip]) || isMarkChar(source[skip]))) skip += 1;
+    if (skip > at && source[skip] === character) {
+      at = skip + 1;
+      previous = character;
+      continue;
+    }
+    if (ACOUSTIC_SOUND_CHARS.has(character) || character === previous || character === nextWord(at)) {
+      added += 1;
+      continue;
+    }
+    return { ok: false, at: index, added };
+  }
+  for (; at < source.length; at += 1) if (!isSpaceChar(source[at]) && !isMarkChar(source[at])) return { ok: false, at: spoken.length, added };
+  return { ok: true, at: -1, added };
+}
+
+// Tags at one point, in the order the rules ask for: the filters first, then the sounds, two at most.
+function settleGroup(group, { narrator, intimate, atStart }) {
+  const seen = new Set();
+  const kept = [];
+  for (const tag of group) {
+    if (seen.has(tag)) continue;
+    seen.add(tag);
+    // The narrator narrates even a moment of intimacy: no pant, no moan.
+    if (narrator && (tag === 'panting' || tag === 'groan')) continue;
+    // Without the reader's 亲密场景, a moan is never sent, whatever the model wrote.
+    if (!intimate && tag === 'groan') continue;
+    // A pause before anything has been said is no pause.
+    if (atStart && tag === 'pause') continue;
+    kept.push(tag);
+  }
+  const rank = tag => (ACOUSTIC_FILTERS.includes(tag) ? 0 : tag === 'pause' ? 2 : 1);
+  return kept.sort((left, right) => rank(left) - rank(right)).slice(0, 2);
+}
+
+/**
+ * `content` held to the sentence it performs. Returns the script Fish is to read — tags normalised,
+ * two at most at any one point, filters first, one space after each group — or, when the words are not
+ * the sentence's own plus allowed additions, the sentence as written with the tags it opened on, and
+ * where the words first stopped matching. A content that changes nothing returns no script at all.
+ */
+export function acousticScript(content, sourceText, { quotePairs = null, narrator = false, intimate = false } = {}) {
+  const source = String(sourceText ?? '');
+  const tokens = dropEdgeQuotes(acousticTokens(content), quotePairs);
+  const spoken = tokens.filter(token => token.ch !== undefined).map(token => token.ch).join('');
+  const check = acousticAlign(spoken, source);
+  const sourceWords = [...source].filter(isWordChar).length;
+  const withinBudget = check.added <= Math.max(4, Math.ceil(sourceWords * 0.3));
+  const parts = [];
+  let group = [];
+  let saidAnything = false;
+  const flush = () => {
+    if (!group.length) return;
+    const settled = settleGroup(group, { narrator, intimate, atStart: !saidAnything });
+    group = [];
+    if (settled.length) parts.push({ tags: settled });
+  };
+  for (const token of tokens) {
+    if (token.tag) {
+      group.push(token.tag);
+      continue;
+    }
+    if (isSpaceChar(token.ch) && (group.length || !parts.length || parts[parts.length - 1].tags)) continue;
+    flush();
+    saidAnything = true;
+    const last = parts[parts.length - 1];
+    if (last && last.text !== undefined) last.text += token.ch;
+    else parts.push({ text: token.ch });
+  }
+  flush();
+  const render = list => list.map(part => (part.tags ? part.tags.map(tag => `[${tag}]`).join('') : part.text))
+    .reduce((out, piece, index) => {
+      if (!index) return piece;
+      const tagged = list[index].tags || list[index - 1].tags;
+      return tagged ? `${out.replace(/\s+$/u, '')} ${piece.replace(/^\s+/u, '')}` : `${out}${piece}`;
+    }, '')
+    .trim();
+  if (!check.ok || !withinBudget) {
+    const opening = parts[0]?.tags ? [parts[0]] : [];
+    return { script: opening.length ? render([...opening, { text: source }]) : '', mismatch: true, at: check.ok ? spoken.length : check.at };
+  }
+  const script = render(parts);
+  const plain = !parts.some(part => part.tags) && script.replace(/\s/gu, '') === source.replace(/\s/gu, '');
+  return { script: plain ? '' : script, mismatch: false, at: -1 };
+}
+
+const isAcousticItem = item => item && typeof item === 'object' && item.line === undefined
+  && ['content', 'role', 'is_narrator', 'tension_level'].some(key => item[key] !== undefined);
+
+const NARRATOR_ROLE_RE = /^(?:旁白|旁白者|narrator|narration|ナレーション|ナレーター|地の文)$/i;
+
+function readAcousticItem(item, utterance, { labels, voices, mismatches, quotePairs, intimate }) {
+  const id = utterance.id;
+  const role = String(item?.role ?? item?.speaker ?? '').trim().slice(0, 60);
+  // A sentence outside the quotes is the narrator's whoever the model names; inside them, the model says.
+  const narrator = utterance.kind !== 'quoted' || item?.is_narrator === true || NARRATOR_ROLE_RE.test(role)
+    || String(item?.type ?? '').trim().toLowerCase() === 'narration';
+  const label = narrator ? { type: 'narration' } : { type: 'dialogue' };
+  if (!narrator && role && !isPlaceholderSpeaker(role)) label.speaker = role;
+  const lang = normalizeLanguageCode(item?.lang ?? item?.language);
+  if (lang) label.lang = lang;
+  labels.set(id, label);
+  const voice = {};
+  const pace = String(item?.pace ?? item?.speed ?? '').trim().toLowerCase();
+  if (ACOUSTIC_PACES.includes(pace) && pace !== 'normal') voice.speed = pace;
+  const tension = Number(item?.tension_level ?? item?.tension);
+  if (Number.isFinite(tension) && tension >= 1) voice.tensionLevel = Math.min(5, Math.max(1, Math.round(tension)));
+  const reason = String(item?.reason ?? '').trim();
+  if (reason) voice.why = reason.slice(0, 24);
+  if (typeof item?.content === 'string' && item.content.trim()) {
+    const held = acousticScript(item.content, utterance.text, { quotePairs, narrator, intimate });
+    if (held.script) voice.script = held.script;
+    if (held.mismatch) mismatches.push({ id, at: held.at, sentence: String(utterance.text ?? '') });
+  }
+  if (Object.keys(voice).length) voices.set(id, voice);
+}
+
+// The numbers a model has been seen to answer by instead of the ⟦编号⟧ it was given: the paragraph's own
+// `line` from the request, or its own count of the sentences it was asked about.
 const DEEP_NUMBERINGS = Object.freeze({
   line: (id, utterance) => utterance.lineId === id,
   count: (id, utterance, count) => count.get(utterance.id) === id,
@@ -613,29 +925,43 @@ const DEEP_NUMBERINGS = Object.freeze({
 /**
  * Which sentence each answer is about.
  *
- * The request numbers the dialogue alone (⟦编号⟧), and an answer's `id` is that number. A model may
- * answer by another number — the paragraph's `line`, or its own count of the dialogue — and read by that
- * number an answer lands on a narration sentence, which is then voiced and buttoned as dialogue while
- * the line it was about is left unnamed. An answer's own `line` says which sentence it meant. When two
- * or more answers carry one and every one of them names its sentence by the same other numbering, the
- * whole reply is read by that numbering. Otherwise each answer stays on its own number when that is a
- * dialogue sentence its `line` (if it has one) reproduces, and an answer whose `line` reproduces another
- * dialogue sentence moves there. A number that is no dialogue sentence's and cannot be placed is left
- * out; `dropped` names those that said something about it.
+ * An answer's `id` is the ⟦编号⟧ the request gave its sentence: every sentence in the acoustic format, the
+ * dialogue alone in the format before it. A model may answer by another number — the paragraph's
+ * `line`, or its own count — and read by that number an answer lands on a sentence it was not about. Its
+ * own words say which sentence it meant: `content` in the acoustic format (acousticScript's check),
+ * `line` in the format before (alignToSource). When two or more answers carry words and every one of
+ * them names its sentence by the same other numbering, the whole reply is read by that numbering.
+ * Otherwise each answer stays on its own number when that is a sentence it may answer for and its words,
+ * if it has any, are that sentence's; an answer whose words are another such sentence's moves there. A
+ * number that is no such sentence's and cannot be placed is left out; `dropped` names the ones that said
+ * something about it.
  */
-function placeDeepItems(items, utterances, quotePairs) {
+function placeDeepItems(items, utterances, { quotePairs = null, intimate = false } = {}) {
   const quoted = utterances.filter(item => item.kind === 'quoted');
-  const byId = new Map(quoted.map(item => [item.id, item]));
-  const count = new Map(quoted.map((item, index) => [item.id, index + 1]));
+  const counts = {
+    all: new Map(utterances.map((item, index) => [item.id, index + 1])),
+    quoted: new Map(quoted.map((item, index) => [item.id, index + 1])),
+  };
   const read = items.map(item => {
     const id = Number(item?.id);
-    const words = typeof item?.line === 'string' && item.line.trim() ? lineWords(item.line, quotePairs).text : null;
-    const matches = words === null ? [] : quoted.filter(utterance => alignToSource(words, String(utterance.text ?? '')).map);
-    return { item, id, matches, own: matches.some(utterance => utterance.id === id) };
+    const acoustic = isAcousticItem(item);
+    // The acoustic format answers for every sentence; the format before it, for the dialogue alone.
+    const pool = acoustic ? utterances : quoted;
+    const mine = pool.find(utterance => utterance.id === id) ?? null;
+    let fits = null;
+    if (acoustic && typeof item?.content === 'string' && item.content.trim()) {
+      fits = utterance => !acousticScript(item.content, utterance.text, { quotePairs, narrator: utterance.kind !== 'quoted', intimate }).mismatch;
+    } else if (!acoustic && typeof item?.line === 'string' && item.line.trim()) {
+      const words = lineWords(item.line, quotePairs).text;
+      fits = utterance => Boolean(alignToSource(words, String(utterance.text ?? '')).map);
+    }
+    // Its own sentence is tried first; only words that are not its own are looked for elsewhere.
+    const matches = !fits ? [] : mine && fits(mine) ? [mine] : pool.filter(fits);
+    return { item, id, pool, mine, count: acoustic ? counts.all : counts.quoted, matches, own: Boolean(mine) && matches[0] === mine };
   });
   const evidence = read.filter(entry => entry.matches.length);
   const numbering = evidence.length >= 2 && evidence.some(entry => !entry.own)
-    ? Object.keys(DEEP_NUMBERINGS).find(name => evidence.every(entry => entry.matches.some(utterance => DEEP_NUMBERINGS[name](entry.id, utterance, count)))) ?? ''
+    ? Object.keys(DEEP_NUMBERINGS).find(name => evidence.every(entry => entry.matches.some(utterance => DEEP_NUMBERINGS[name](entry.id, utterance, entry.count)))) ?? ''
     : '';
   const claimed = new Set();
   const placed = [];
@@ -643,7 +969,8 @@ function placeDeepItems(items, utterances, quotePairs) {
   let moved = 0;
   const place = (entry, target) => {
     if (!target) {
-      const said = entry.item?.speaker || entry.item?.emotion || entry.item?.line;
+      const item = entry.item;
+      const said = item?.speaker || item?.emotion || item?.line || item?.role || item?.content;
       if (said && Number.isFinite(entry.id)) dropped.push(entry.id);
       return;
     }
@@ -653,7 +980,7 @@ function placeDeepItems(items, utterances, quotePairs) {
   };
   if (numbering) {
     for (const entry of read) {
-      const named = quoted.filter(utterance => DEEP_NUMBERINGS[numbering](entry.id, utterance, count));
+      const named = entry.pool.filter(utterance => DEEP_NUMBERINGS[numbering](entry.id, utterance, entry.count));
       place(entry, entry.matches.find(utterance => named.includes(utterance) && !claimed.has(utterance.id))
         ?? named.find(utterance => !claimed.has(utterance.id)) ?? null);
     }
@@ -661,11 +988,11 @@ function placeDeepItems(items, utterances, quotePairs) {
   }
   // An answer on its own number first, so one that only found its way to a sentence by its words never
   // takes the place of the answer that was about it all along.
-  const direct = read.filter(entry => byId.has(entry.id) && (entry.own || !entry.matches.length));
-  for (const entry of direct) place(entry, byId.get(entry.id));
+  const direct = read.filter(entry => entry.mine && (entry.own || !entry.matches.length));
+  for (const entry of direct) place(entry, entry.mine);
   for (const entry of read) {
     if (direct.includes(entry)) continue;
-    place(entry, entry.matches.find(utterance => !claimed.has(utterance.id)) ?? byId.get(entry.id) ?? null);
+    place(entry, entry.matches.find(utterance => !claimed.has(utterance.id)) ?? entry.mine);
   }
   return { placed, numbering, moved, dropped };
 }
@@ -673,10 +1000,10 @@ function placeDeepItems(items, utterances, quotePairs) {
 /**
  * The deep reply, read onto the utterances.
  *
- * Which sentence each answer is about is settled first (`placeDeepItems`): only dialogue is answered,
- * and an answer numbered some other way is moved to the sentence its own words name, or left out —
- * never read onto a narration sentence that happens to carry the same number. `numbering`, `moved` and
- * `dropped` say what that took, for the diagnostic the caller logs.
+ * Which sentence each answer is about is settled first (`placeDeepItems`): an answer numbered some
+ * other way is moved to the sentence its own words name, or left out — never read onto another sentence
+ * that happens to carry the same number. `numbering`, `moved` and `dropped` say what that took, for
+ * the diagnostic the caller logs.
  *
  * `speaker`, `emotion` and `pace` are read exactly as the simple reading's own fields are: `emotion`
  * alone decides both the label's colour and, unless a tag in `line` overrules it, the voice Fish is
@@ -708,7 +1035,7 @@ function levelOf(value) {
   return Number.isFinite(number) ? Math.min(2, Math.max(0, Math.round(number))) : null;
 }
 
-export function parseDeepAnalysis(raw, utterances, { quotePairs = null } = {}) {
+export function parseDeepAnalysis(raw, utterances, { quotePairs = null, intimate = false } = {}) {
   const list = Array.isArray(utterances) ? utterances : [];
   const byId = new Map(list.map(item => [item.id, item]));
   const labels = new Map();
@@ -716,11 +1043,15 @@ export function parseDeepAnalysis(raw, utterances, { quotePairs = null } = {}) {
   const mismatches = [];
   const found = parseJsonCandidates(raw);
   const candidates = found.length;
-  // Each answer on the dialogue sentence it is about (placeDeepItems), whatever number it came under.
-  const { placed, numbering, moved, dropped } = placeDeepItems(deepItemsIn(found), list, quotePairs);
+  // Each answer on the sentence it is about (placeDeepItems), whatever number it came under.
+  const { placed, numbering, moved, dropped } = placeDeepItems(deepItemsIn(found), list, { quotePairs, intimate });
   for (const { item, id } of placed) {
     const utterance = byId.get(id);
     if (!utterance || labels.has(id)) continue;
+    if (isAcousticItem(item)) {
+      readAcousticItem(item, utterance, { labels, voices, mismatches, quotePairs, intimate });
+      continue;
+    }
     if (String(item?.type ?? '').trim().toLowerCase() === 'narration') {
       labels.set(id, { type: 'narration' });
       continue;

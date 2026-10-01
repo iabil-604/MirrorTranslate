@@ -57,11 +57,13 @@ test('every word a prompt names for a sound or a quiet tone is one the check bef
   for (const word of [...TONE_CUES.whispering, ...TONE_CUES['soft tone']]) {
     assert.equal(groundVoice({ tone: 'whispering' }, { text: '今晚别走。', evidence: `她${word}说` }).changed, false, word);
   }
-  // Every prompt that asks for sounds says them the same way.
-  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEFAULT_TTS_PROMPTS.refine, DEEP_PROMPT]) {
+  // Every prompt that asks for sounds says them the same way. 分析模式 writes its own ten tags instead,
+  // and names no sound word the check before Fish does not know either.
+  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEFAULT_TTS_PROMPTS.refine]) {
     assert.ok(prompt.includes(SOUND_GROUNDS));
     assert.doesNotMatch(prompt, /moaning|flirtatious|slightly|very/);
   }
+  assert.doesNotMatch(DEEP_PROMPT, /moaning|flirtatious|slightly/);
 });
 
 test('what calls for a sound is what the narration says, not a smile, a joke or a moan', () => {
@@ -186,27 +188,28 @@ test('the simple analysis asks for every line in order and the minimal answer fo
   assert.match(DEFAULT_TTS_PROMPTS.simple, /\{"id":N,"type":"narration"\}/);
   assert.doesNotMatch(DEFAULT_TTS_PROMPTS.simple, /写 calm|calm 凑数(?!。)/);
   assert.match(DEEP_PROMPT, /每个 ⟦编号⟧ 都要回答，按编号从小到大/);
-  assert.match(DEEP_PROMPT, /\{"id":N,"type":"narration"\}/);
-  assert.match(DEEP_PROMPT, /不要拿 calm 凑数/);
+  assert.match(DEEP_PROMPT, /\{"id":N,"role":"旁白","is_narrator":true\}/);
   assert.match(DEEP_PROMPT, /在心里核对一遍，不要写出来/);
-  // The reply carries every tag inline on the sentence itself, not as a side field per effect: the
-  // example shows a spoken line (speaker, emotion, pace, line) and a bare narration answer, and
-  // nothing the new format dropped — no strength, no volume, no side field a tag now covers.
-  const example = JSON.parse(DEEP_PROMPT.split('\n')[1].match(/\{"voices".*\]\}/)[0]).voices[0];
-  assert.deepEqual(Object.keys(example).sort(), ['emotion', 'id', 'line', 'pace', 'speaker']);
-  assert.equal('intensity' in example, false, 'the new format carries no strength field of its own');
-  assert.equal('volume' in example, false, 'volume is not part of the deep reply any more');
-  assert.match(example.line, /^\[nervous\] /, 'the example carries its own leading tag, not a side field');
+  // 分析模式 answers in the reader's 声学标注规则: a role, pace, tension_level and the performed content.
+  const example = JSON.parse(DEEP_PROMPT.split('\n').find(line => line.includes('{"voices"')).match(/\{"voices".*\]\}/)[0]).voices.find(item => item.content);
+  assert.deepEqual(Object.keys(example).sort(), ['content', 'id', 'is_narrator', 'pace', 'reason', 'role', 'tension_level']);
+  assert.equal('emotion' in example, false, 'no mood word: a mood is heard through the tags');
+  assert.match(example.content, /^\[whisper\] /, 'the example carries its own leading tag');
   // The words a situation is mapped to are ones the request offers.
   const offered = new Set([...FISH_EMOTIONS, ...SPOKEN_SOUNDS, ...FISH_TONES]);
-  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEEP_PROMPT]) {
+  for (const prompt of [DEFAULT_TTS_PROMPTS.simple]) {
     const named = [...prompt.matchAll(/→\s*([a-z][a-z ]*[a-z](?: 或 [a-z][a-z ]*[a-z])*)/g)].flatMap(match => match[1].split(' 或 '));
     assert.ok(named.length > 5);
     for (const word of named) assert.ok(offered.has(word), word);
   }
+  // 分析模式's own request offers no vocabulary lists — its ten tags are in the prompt — while a reader's
+  // own prompt written for the format before still gets the lists it chooses from.
   const input = JSON.parse(buildDeepAnalysisMessages(splitUtterances([{ lineId: 1, text: '「好。」' }]))[1].content);
-  assert.deepEqual(input.sounds, SPOKEN_SOUNDS);
-  assert.deepEqual(input.emotions, FISH_EMOTIONS);
+  assert.equal(input.sounds, undefined);
+  assert.equal(input.emotions, undefined);
+  const legacy = JSON.parse(buildDeepAnalysisMessages(splitUtterances([{ lineId: 1, text: '「好。」' }]), { systemPrompt: '我自己的提示词：只回 line。' })[1].content);
+  assert.deepEqual(legacy.sounds, SPOKEN_SOUNDS);
+  assert.deepEqual(legacy.emotions, FISH_EMOTIONS);
   assert.ok(FISH_SOUNDS.includes('moaning'), 'a stored moan still parses, to be dropped on its way out');
   // A prompt of the reader's own is offered the same sounds, in the reader's words.
   assert.deepEqual(SOUND_TAGS.filter(word => ['呻吟', '人群笑声', '背景笑声', '观众笑声'].includes(word)), []);
@@ -312,10 +315,10 @@ test('a sound written after a line that trails off is heard where the line start
   assert.equal(read('「才不要呢～」她笑出了声，跑开了。', { emotion: 'playful', sounds: [{ at: 'end', tag: 'laughing' }] }), '[playful][laughing] 才不要呢～');
   // Both ends trail off: there is nowhere to put it.
   assert.equal(read('她叹了口气：「……算了……」', { emotion: 'resigned', sounds: [{ at: 'end', tag: 'sighing' }] }), '[resigned] ……算了……');
-  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEFAULT_TTS_PROMPTS.refine, DEEP_PROMPT]) assert.ok(prompt.includes(SOUND_PLACE_RULE));
+  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEFAULT_TTS_PROMPTS.refine]) assert.ok(prompt.includes(SOUND_PLACE_RULE));
   // A prompt that keeps end for a line with more of its paragraph after it says what becomes of a sound
   // whose line trails off at the start and ends its paragraph, rather than asking for end there too.
-  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEFAULT_TTS_PROMPTS.refine, DEEP_PROMPT]) {
+  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEFAULT_TTS_PROMPTS.refine]) {
     if (/end[^。]*只在同一段里这句后面还有正文时用/.test(prompt)) assert.ok(prompt.includes(`${SOUND_PLACE_RULE}${SOUND_END_RULE}`));
   }
   assert.match(SOUND_END_RULE, /不写/);
@@ -356,11 +359,11 @@ test('on S1 a tender line keeps its warmth and gets no soft tone the text never 
 
 test('the prompts agree: who may go unnamed, what a mood maps to, a quoted thought, a line of nothing but 嗯', () => {
   assert.doesNotMatch(DEEP_PROMPT, /至少写 speaker/, 'rule 1 would demand the guess rule 3 forbids');
-  assert.match(DEEP_PROMPT, /看得出情绪、看不出说话人时照写 emotion，不写 speaker/);
+  assert.match(DEEP_PROMPT, /看不出是谁说的台词不写 role，只写 is_narrator false，不要猜/);
   // A Chinese word the translation's mood table glosses maps to that same word in the analyses.
   const gloss = new Map(FISH_EMOTION_GROUPS.flatMap(([, words]) => words.flatMap(([word, meaning]) => meaning.split('、').map(said => [said, word]))));
   let checked = 0;
-  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEEP_PROMPT]) {
+  for (const prompt of [DEFAULT_TTS_PROMPTS.simple]) {
     for (const [, left, right] of prompt.matchAll(/([^\s：；。，→]+(?:、[^\s：；。，→]+)*)\s*→\s*([a-z][a-z ]*[a-z](?: 或 [a-z][a-z ]*[a-z])*)/g)) {
       for (const said of left.split('、').filter(word => gloss.has(word))) {
         checked += 1;
@@ -368,16 +371,17 @@ test('the prompts agree: who may go unnamed, what a mood maps to, a quoted thoug
       }
     }
   }
-  assert.ok(checked >= 5);
+  assert.ok(checked >= 1);
   // A thought in quotes is its thinker's, as the translation counts it.
-  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEFAULT_TTS_PROMPTS.refine, DEEP_PROMPT]) assert.match(prompt, /引号里心里想的话算这个人的话，照常写 speaker/);
+  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEFAULT_TTS_PROMPTS.refine]) assert.match(prompt, /引号里心里想的话算这个人的话，照常写 speaker/);
+  assert.match(DEEP_PROMPT, /引号里心里想的话算这个人的话/);
   assert.doesNotMatch(DEFAULT_TTS_PROMPTS.refine, /narration（[^）]*(?<!引号外的)心理描写/, 'a correction keeps a thought in quotes as its thinker\'s');
   // The refine prompt says what becomes of a whisper the text never asked for, rather than refusing it.
   assert.doesNotMatch(DEFAULT_TTS_PROMPTS.refine, /就不写 whispering/);
   assert.match(DEFAULT_TTS_PROMPTS.refine, /whispering 和 soft tone 写了也会被丢掉/);
   // The moods a line of nothing but 嗯 may not wear are named one by one, and they are the ones dropped.
   assert.deepEqual([...SOFT_MOODS].sort(), FISH_EMOTIONS.filter(word => ['tender', 'shy'].includes(normalizeEmotion(word))).sort());
-  for (const prompt of [DEFAULT_TTS_PROMPTS.simple, DEEP_PROMPT]) assert.ok(prompt.includes(`emotion 不用 ${SOFT_MOODS.join('、')}`));
+  for (const prompt of [DEFAULT_TTS_PROMPTS.simple]) assert.ok(prompt.includes(`emotion 不用 ${SOFT_MOODS.join('、')}`));
   for (const mood of SOFT_MOODS) assert.equal(groundVoice({ emotion: mood }, { text: '嗯……' }).voice, null, mood);
 });
 

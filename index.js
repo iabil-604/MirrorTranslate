@@ -117,8 +117,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.41.6';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.6';
+} from './core.js?v=0.42.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.42.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -176,10 +176,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.41.6';
-import { createTtsStore } from './tts-store.js?v=0.41.6';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.6';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.6';
+} from './tts.js?v=0.42.0';
+import { createTtsStore } from './tts-store.js?v=0.42.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.42.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.42.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -189,7 +189,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.41.6';
+} from './processing.js?v=0.42.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -207,9 +207,9 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.41.6';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.6';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.6';
+} from './prompts.js?v=0.42.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.42.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.42.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -227,8 +227,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.41.6';
-import { sampleThemeBackground } from './theme-probe.js?v=0.41.6';
+} from './palette.js?v=0.42.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.42.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -236,7 +236,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.41.6';
+} from './diagnostics.js?v=0.42.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -247,7 +247,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.41.6';
+} from './helper.js?v=0.42.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -551,6 +551,7 @@ const CONTROL_CENTER_MARKUP = `
    <div data-jy-finetune-tts-sub>
     <div class="jy-summary-row jy-summary-row-sub"><div class="jy-summary-copy"><h3>分析模式</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="ttsMode" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></label></div>
     <label class="jy-summary-row jy-summary-select jy-summary-row-sub" data-jy-finetune-deep-channel hidden><span class="jy-label">分析模式用的连接</span><select data-jy-tts-field="deepChannelId"></select></label>
+    <div class="jy-summary-row jy-summary-row-sub" data-jy-finetune-intimate hidden><div class="jy-summary-copy"><h3>亲密场景</h3></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="intimate" aria-label="亲密场景"><span></span></label></div>
     <label class="jy-summary-row jy-summary-select jy-summary-row-sub"><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文</option></select></label>
     <div class="jy-summary-row jy-summary-row-sub"><div class="jy-summary-copy"><h3>新回复自动朗读</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="ttsAutoRead" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-tts-field="autoRead" aria-label="新回复自动朗读"><span></span></label></div>
    </div>
@@ -709,13 +710,14 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <div class="jy-text-scope"><h2>读法</h2>
 <div class="jy-card-row"><div class="jy-card-row-text"><h3>分析模式</h3><p class="jy-muted" data-jy-tts-mode-help></p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></label></div>
+<div class="jy-card-row jy-card-row-dependent" data-jy-dependent="ttsIntimate"><label class="jy-check"><input type="checkbox" data-jy-tts-field="intimate">亲密场景</label><p class="jy-muted">打开后，正文写明了亲密接触的段落，分析模式才按场景逐段放开喘息和低吟；日常段落、只有话的调情照样克制。关着时一律不发低吟。</p><p class="jy-muted jy-dependent-reason">先打开上面的「分析模式」，这一项才会生效。</p></div>
 <div class="jy-form-grid jy-form-grid-tight"><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
 <p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译、分析模式、小助手各用哪条，在「模型连接」页最上面的「各功能用哪条连接」里选，分析模式用的连接在这一页「更多 → 分析模式」里也能改。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）也存在「模型连接」页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文（旁白读译文，台词按角色写的语言读原文）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoRead">新回复自动朗读（只读最新一楼，写完才读；正在读别的楼时只提醒、不打断）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">点播放后，做完直接播（关掉就只生成，再点一次才播）</label></div>
 <p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不分析时直接用这些标注，不再请求副模型；打开分析模式，正文一闭合就把这一楼发给副模型分析一次，走分析模式用的连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label><label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label></div>
-<p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>对白读原文：旁白读译文，每一句台词按正文里写的语言读原文——同一楼里日本人的台词读日语、英国人的台词读英语，说话人和情绪仍然取自译文的标注，句内的停顿重读带不过去。不用另外选语言配的音色：Fish 的 S2 系列按每句自己的语言发音，「音色」给角色配的「多国语言」音色也是按这句话自己的语言选的，没配就还是这个角色的默认音色。<br>以上几种模式都给每句写一句中文配音指令：谁在说、基础情绪、情绪怎么变、语气、语速、停顿重读、要不要笑声叹气喘息。S2 系列模型直接读方括号里的中文指令，句内还会插 [重读]、[停顿]、[长停顿] 和声音词，语速音量走 Fish 的参数；S1 读不懂自由文本，退回它认得的英文固定标签。台词本身不经过模型，一个字不改。分析按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮或悬浮窗的改句面板能看到分析结果和最终发给 Fish 的内容，可以改。</p>
+<p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>对白读原文：旁白读译文，每一句台词按正文里写的语言读原文——同一楼里日本人的台词读日语、英国人的台词读英语，说话人和情绪仍然取自译文的标注，句内的停顿重读带不过去。不用另外选语言配的音色：Fish 的 S2 系列按每句自己的语言发音，「音色」给角色配的「多国语言」音色也是按这句话自己的语言选的，没配就还是这个角色的默认音色。<br>不开分析模式时，以上几种读法都给每句写一句中文配音指令：谁在说、基础情绪、情绪怎么变、语气、语速、停顿重读、要不要笑声叹气喘息。S2 系列模型直接读方括号里的中文指令，句内还会插 [重读]、[停顿]、[长停顿] 和声音词，语速音量走 Fish 的参数；S1 读不懂自由文本，退回它认得的英文固定标签。台词本身不经过模型，一个字不改。<br>开着分析模式时按声学标注规则来：不写情绪词，只在字上插十个声音标签；台词可以加叠字、！！、~、……和呜、嗯、唔这类语气词，原文的字程序逐字核对，对不上的句子按原文念。语速分五档；张力 1~5 调 Fish 的 temperature，张力不同的句子分开请求；很短的语气句会加强防重复，免得卡在一个音上。分析按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮或悬浮窗的改句面板能看到分析结果和最终发给 Fish 的内容，可以改。</p>
 </div>
 <section class="jy-text-scope jy-more-group">
 <h2>更多</h2>
@@ -4358,7 +4360,10 @@ async function ttsContextPacket(floor, settings) {
 async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, onPrefix = null, speakers = null, cacheOnly = false } = {}) {
   const roster = ttsKnownNames(settings);
   const tts = ttsSettings(settings);
-  const key = await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side });
+  // 分析模式 in its own format (the reader's 声学标注规则) unless the reader's own prompt is written for
+  // the one before; 亲密场景 changes what it may write, so a reading made with it is kept apart.
+  const acoustic = depth === 'deep' && isAcousticPrompt(tts.prompts.deep);
+  const key = await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side, variant: acoustic && tts.intimate ? 'intimate' : '' });
   if (!force) {
     const stored = await ttsStore().getAnalysis(key);
     if (Array.isArray(stored?.labels) && stored.labels.length) {
@@ -4383,7 +4388,8 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       roster, characterName: context.name2 ?? '', userName: context.name1 ?? '', translations: floor.references,
       // The quick one-call labelling (`apiSpeak`'s analyze) keeps its built-in prompt; only 分析模式's
       // own prompt is the reader's to change.
-      packet, speakers, styles: ttsStyles(settings), systemPrompt: depth === 'deep' ? tts.prompts.deep : '',
+      packet, speakers, styles: ttsStyles(settings, acoustic ? { acoustic: true } : {}), systemPrompt: depth === 'deep' ? tts.prompts.deep : '',
+      intimate: tts.intimate,
     };
     // One request for the whole floor: the paragraphs with their dialogue numbered, the dialogue alone
     // answered. The reply is read as it arrives, and every paragraph whose dialogue is all labelled is
@@ -4400,11 +4406,15 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       const braces = (String(text).match(/}/g) ?? []).length;
       if (braces <= closed) return;
       closed = braces;
-      const partial = depth === 'deep' ? parseDeepAnalysis(text, utterances, { quotePairs: tts.quotePairs }) : parseVoiceAnalysis(text, utterances);
+      const partial = depth === 'deep' ? parseDeepAnalysis(text, utterances, { quotePairs: tts.quotePairs, intimate: tts.intimate }) : parseVoiceAnalysis(text, utterances);
       let ready = 0;
       const readyIds = new Set();
+      // In its own format every sentence is numbered, the narration too, and a plain narration line may
+      // be left out: a paragraph is whole once the reply has reached a number past its last sentence.
+      const reached = acoustic ? Math.max(-1, ...partial.labels.keys()) : Infinity;
       for (const line of paragraphs) {
         if (line.segments.some(item => item.kind === 'quoted' && !partial.labels.has(item.id))) break;
+        if (line.segments.some(item => item.id > reached)) break;
         ready += 1;
         for (const item of line.segments) readyIds.add(item.id);
       }
@@ -4447,11 +4457,14 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       }
       throw error;
     }
-    const parsed = depth === 'deep' ? parseDeepAnalysis(raw, utterances, { quotePairs: tts.quotePairs }) : parseVoiceAnalysis(raw, utterances);
+    const parsed = depth === 'deep' ? parseDeepAnalysis(raw, utterances, { quotePairs: tts.quotePairs, intimate: tts.intimate }) : parseVoiceAnalysis(raw, utterances);
     parsed.labels = stampLabels(parsed.labels, askedAt);
+    const dialogueLabels = [...parsed.labels.values()].filter(label => label.type === 'dialogue').length;
     const seconds = Number(((Date.now() - started) / 1000).toFixed(1));
     recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.analysis', parsed.labels.size
-      ? `${depth === 'deep' ? '分析模式' : '快速标注'}给 ${parsed.labels.size} 句对白标了说话人或情绪${parsed.voices.size ? `，${parsed.voices.size} 句带表演` : ''}，用时 ${seconds} 秒。`
+      ? (acoustic
+        ? `分析模式标了 ${parsed.labels.size} 句（${dialogueLabels} 句对白）${parsed.voices.size ? `，${parsed.voices.size} 句带表演` : ''}，用时 ${seconds} 秒。`
+        : `${depth === 'deep' ? '分析模式' : '快速标注'}给 ${parsed.labels.size} 句对白标了说话人或情绪${parsed.voices.size ? `，${parsed.voices.size} 句带表演` : ''}，用时 ${seconds} 秒。`)
       : `副模型没有返回可用的朗读标注，这一楼按引号区分旁白与对白。`, {
       floor: floor.floorId,
       depth,
@@ -4465,16 +4478,18 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       seconds,
     }, raw, { fullRequest: messages, floor: floor.messageId });
     // A deep reply numbered some other way than the request's ⟦编号⟧ (parseDeepAnalysis put each answer
-    // back on the sentence its words name), or answering numbers that are no dialogue sentence's.
+    // back on the sentence its words name), or answering numbers that are no sentence it was asked about.
     if (depth === 'deep' && (parsed.moved || parsed.dropped?.length)) {
-      const by = parsed.numbering === 'line' ? '按段号' : parsed.numbering === 'count' ? '按对白自己从 1 数的序号' : '';
+      // The acoustic format answers for every sentence; the format before it, for the dialogue alone.
+      const unit = acoustic ? '句子' : '对白';
+      const by = parsed.numbering === 'line' ? '按段号' : parsed.numbering === 'count' ? `按${acoustic ? '' : '对白'}自己从 1 数的序号` : '';
       recordDiagnostic('warn', 'tts.analysis-deep-ids', [
         parsed.moved
           ? by
-            ? `分析模式回的编号是${by}写的，不是 ⟦⟧ 里的编号，已经换算回对应的对白（${parsed.moved} 句）。`
-            : `分析模式有 ${parsed.moved} 句回答的编号不对，已按回答里抄的原句对回到对应的对白上。`
+            ? `分析模式回的编号是${by}写的，不是 ⟦⟧ 里的编号，已经换算回对应的${unit}（${parsed.moved} 句）。`
+            : `分析模式有 ${parsed.moved} 句回答的编号不对，已按回答里写的原句对回到对应的${unit}上。`
           : '',
-        parsed.dropped?.length ? `还有 ${parsed.dropped.length} 个编号对不上任何一句对白，没有用上：${parsed.dropped.slice(0, 8).join('、')}${parsed.dropped.length > 8 ? '…' : ''}。` : '',
+        parsed.dropped?.length ? `还有 ${parsed.dropped.length} 个编号对不上任何一句${acoustic ? '' : '对白'}，没有用上：${parsed.dropped.slice(0, 8).join('、')}${parsed.dropped.length > 8 ? '…' : ''}。` : '',
       ].filter(Boolean).join(''), {
         floor: floor.floorId, depth, numbering: parsed.numbering || null, moved: parsed.moved, dropped: parsed.dropped,
       }, '', { floor: floor.messageId });
@@ -4483,7 +4498,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     // its opening tags (parseDeepAnalysis), and that is worth a diagnostic naming which sentence and
     // where it first stopped matching.
     if (depth === 'deep' && parsed.mismatches?.length) {
-      recordDiagnostic('warn', 'tts.analysis-deep-line', `分析模式有 ${parsed.mismatches.length} 句 line 跟正文对不上，只保留了句首的标签：${parsed.mismatches.slice(0, 3)
+      recordDiagnostic('warn', 'tts.analysis-deep-line', `分析模式有 ${parsed.mismatches.length} 句的写法跟正文对不上${acoustic ? '（只许加标签、叠字、标点和语气词）' : ''}，按正文念，只保留了句首的标签：${parsed.mismatches.slice(0, 3)
         .map(item => `第 ${item.id} 句「${item.sentence.slice(0, 16)}${item.sentence.length > 16 ? '…' : ''}」从第 ${item.at + 1} 个字起不一样`).join('；')}${parsed.mismatches.length > 3 ? '…' : ''}`, {
         floor: floor.floorId, depth, mismatches: parsed.mismatches,
       }, '', { floor: floor.messageId });
@@ -5207,7 +5222,7 @@ async function ttsItemsFor(floor, segments, settings, { range = null } = {}) {
   const dress = item => {
     const override = overrides.get(item.segment.id);
     const carried = { ...item, console: consoleFor(item.segment, settings) };
-    return override ? { ...carried, override: { text: override.text, speed: override.speed, volume: override.volume, speaker: override.speaker } } : carried;
+    return override ? { ...carried, override: { text: override.text, speed: override.speed, volume: override.volume, tension: override.tension, speaker: override.speaker } } : carried;
   };
   const items = plan.items.map(dress);
   const skipped = plan.skipped.map(dress);
@@ -7475,7 +7490,9 @@ async function ttsInspect(messageId, utteranceId, side = null) {
     prosody: provider.prosody(automatic, tts),
     override: item.override ?? null,
     // The reader rewrote the words or the delivery, as against only naming who speaks.
-    edited: Boolean(item.override && (item.override.text || item.override.speed !== undefined || item.override.volume !== undefined)),
+    edited: Boolean(item.override && (item.override.text || item.override.speed !== undefined || item.override.volume !== undefined || item.override.tension !== undefined)),
+    // 分析模式's tension_level for this sentence, which sets Fish's temperature (sentenceSampling).
+    tension: Number.isInteger(segment.voice?.tensionLevel) ? segment.voice.tensionLevel : null,
     manualSpeaker: item.override?.speaker ?? null,
     speakerSource: segment.speakerSource ?? null,
     speakerEvidence: segment.speakerEvidence ?? [],
@@ -7743,6 +7760,30 @@ function currentTtsLabels(prepared) {
 }
 
 /**
+ * A correction in 分析模式's own format answers every sentence in scope, the ones it left alone copied
+ * back as they were. Those are told apart here — the same label and the same voice as now — so they
+ * keep their moment and their audio, and only what actually changed is remade.
+ */
+function keptAcousticRefine(parsed, labelsNow, voicesNow) {
+  // Only what an answer says is compared: who says the sentence and whether it is narration, the acoustic
+  // format's pace, tension, reason and script, and whatever else the answer itself wrote. The floor's
+  // labels carry more — the translation's own mood, where a name came from — that no answer repeats.
+  const keptIds = new Set();
+  for (const [id, label] of parsed.labels) {
+    if (!labelsNow.has(id)) continue;
+    const before = labelsNow.get(id);
+    const voice = parsed.voices.get(id) ?? {};
+    const voiceBefore = voicesNow.get(id) ?? {};
+    const sameLabel = (before.type ?? '') === (label.type ?? '') && (before.speaker ?? '') === (label.speaker ?? '')
+      && (label.emotion === undefined || before.emotion === label.emotion);
+    const fields = new Set(['speed', 'tensionLevel', 'why', 'script', ...Object.keys(voice)]);
+    const sameVoice = [...fields].every(key => JSON.stringify(voiceBefore[key] ?? null) === JSON.stringify(voice[key] ?? null));
+    if (sameLabel && sameVoice) keptIds.add(id);
+  }
+  return { ...parsed, keptIds, reused: keptIds.size };
+}
+
+/**
  * Ask again about what is already labelled, with what the reader thinks of it.
  *
  * The model is handed last time's answer and the complaint, not the job of reading the floor again,
@@ -7805,22 +7846,40 @@ async function askTtsCorrection(messageId, prepared, { which, utteranceId, feedb
   // correction to the translation's marks is kept under the older name the plain reading looks for.
   // Either way it goes to 分析模式's connection.
   const depth = known?.depth === 'deep' || (!known && prepared.depth === 'deep') ? 'deep' : 'simple';
+  const tts = ttsSettings(settings);
+  const acoustic = depth === 'deep' && isAcousticPrompt(tts.prompts.deep);
   const request = ttsRequestSettings(settings);
   const context = getContext();
-  const messages = withAnalysisPrelude(buildRefineAnalysisMessages(scope, {
-    roster: ttsKnownNames(settings),
-    characterName: context.name2 ?? '',
-    userName: context.name1 ?? '',
-    translations: floor.references,
-    styles: ttsStyles(settings),
-    current: base,
-    feedback,
-  }), settings);
+  const messages = withAnalysisPrelude(acoustic
+    ? buildDeepRefineMessages(scope, {
+      roster: ttsKnownNames(settings),
+      characterName: context.name2 ?? '',
+      userName: context.name1 ?? '',
+      translations: floor.references,
+      styles: ttsStyles(settings, { acoustic: true }),
+      // What the reader sees now, the names they set by hand included.
+      labels: base,
+      voices: known?.voices ?? new Map(),
+      feedback,
+      intimate: tts.intimate,
+      systemPrompt: tts.prompts.deep,
+    })
+    : buildRefineAnalysisMessages(scope, {
+      roster: ttsKnownNames(settings),
+      characterName: context.name2 ?? '',
+      userName: context.name1 ?? '',
+      translations: floor.references,
+      styles: ttsStyles(settings),
+      current: base,
+      feedback,
+    }), settings);
   const started = Date.now();
   // The moment of asking, which every sentence this correction changes will carry.
   const askedAt = ttsClock();
   const raw = await requestSubModelRaw(messages, request, undefined);
-  const parsed = parseVoiceAnalysis(raw, scope, { hints: base });
+  const parsed = acoustic
+    ? keptAcousticRefine(parseDeepAnalysis(raw, scope, { quotePairs: tts.quotePairs, intimate: tts.intimate }), known?.labels ?? base, known?.voices ?? new Map())
+    : parseVoiceAnalysis(raw, scope, { hints: base });
   const answered = [...parsed.labels.keys()].filter(id => !parsed.keptIds.has(id));
   recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.refine', parsed.labels.size
     ? `按你的意见改了第 ${messageId} 楼的 ${answered.length} 句标注（${scope.length} 句在范围里，${parsed.reused} 句原样保留），用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒。`
@@ -7851,7 +7910,7 @@ async function askTtsCorrection(messageId, prepared, { which, utteranceId, feedb
   runtime.tts.analysis.set(key, { labels, voices, depth });
   // Kept where the reading looks for it next time, so a reload does not undo the correction.
   await ttsStore().putAnalysis({
-    key: await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side }),
+    key: await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side, variant: acoustic && tts.intimate ? 'intimate' : '' }),
     floorId: floor.floorId,
     version: floor.version,
     depth,
@@ -7937,7 +7996,7 @@ async function askTtsRefine({ messageId, sentence = null }) {
  * The recording is remembered on the override, so playing the sentence — alone or as part of the
  * floor — finds this take rather than the automatic one.
  */
-async function saveTtsOverride(messageId, utteranceId, { text, speed, volume }, side = null) {
+async function saveTtsOverride(messageId, utteranceId, { text, speed, volume, tension }, side = null) {
   const prepared = await ttsPrepared(messageId, side);
   const segment = prepared.segments.find(item => item.id === utteranceId);
   if (!segment) throw new Error('这一句已经变了。');
@@ -7945,6 +8004,8 @@ async function saveTtsOverride(messageId, utteranceId, { text, speed, volume }, 
   if (!cleaned) throw new Error('发给 Fish 的内容不能为空。');
   const speedValue = Number(speed);
   const volumeValue = Number(volume);
+  // Left empty, the tension is the analysis's own; a number is the reader's, 1 to 5.
+  const tensionValue = String(tension ?? '').trim() === '' ? NaN : Math.round(Number(tension));
   // A name the reader set on this sentence stays with it through a rewrite of its words.
   const named = (await ttsOverrides(prepared.floor)).get(utteranceId)?.speaker;
   const record = {
@@ -7952,12 +8013,13 @@ async function saveTtsOverride(messageId, utteranceId, { text, speed, volume }, 
     floorId: prepared.floor.floorId, version: prepared.floor.version, segmentId: utteranceId, text: cleaned,
     ...(Number.isFinite(speedValue) ? { speed: Math.min(2, Math.max(0.5, speedValue)) } : {}),
     ...(Number.isFinite(volumeValue) ? { volume: Math.min(20, Math.max(-20, volumeValue)) } : {}),
+    ...(Number.isFinite(tensionValue) ? { tension: Math.min(5, Math.max(1, tensionValue)) } : {}),
   };
   await ttsStore().putOverride(record);
   forgetTtsItems(messageId);
   const fresh = await ttsPrepared(messageId, prepared.floor.side, { fresh: true });
   const item = fresh.items.find(candidate => candidate.segment.id === utteranceId)
-    ?? { segment, voiceId: resolveSegmentVoice(segment, ttsVoiceConfig(fresh.settings)), override: { text: cleaned, speed: record.speed, volume: record.volume } };
+    ?? { segment, voiceId: resolveSegmentVoice(segment, ttsVoiceConfig(fresh.settings)), override: { text: cleaned, speed: record.speed, volume: record.volume, tension: record.tension } };
   const { record: made } = await ensureTtsRecording(fresh.floor, `sentence:${utteranceId}`, [item], fresh.settings,
     text => setTtsStatus(messageId, text, 'busy'), (id, patch) => ttsStep(fresh.floor, id, patch));
   await ttsStore().putOverride({ ...record, recordKey: made.key });
@@ -9763,6 +9825,8 @@ function syncFinetuneFields(root, settings) {
   if (ttsSub) ttsSub.hidden = !tts.enabled;
   const deepRow = root.querySelector('[data-jy-finetune-deep-channel]');
   if (deepRow) deepRow.hidden = tts.mode !== 'deep';
+  const intimateRow = root.querySelector('[data-jy-finetune-intimate]');
+  if (intimateRow) intimateRow.hidden = tts.mode !== 'deep';
 
   // The active processing profile's own style, not a hard-coded default — otherwise the picker always
   // showed 可爱风 regardless of what was actually active, and picking 可爱风 again did nothing because
@@ -11352,6 +11416,7 @@ function fillTtsChannelPickers(root, settings) {
 function syncTtsFields(root, settings = runtime.settings, { renderLists = true } = {}) {
   if (!root.querySelector('[data-jy-page="tts"]')) return;
   const tts = ttsSettings(settings);
+  for (const row of root.querySelectorAll('[data-jy-dependent="ttsIntimate"]')) row.dataset.jyDependentOff = String(tts.mode !== 'deep');
   for (const element of root.querySelectorAll('[data-jy-tts-field]')) {
     const key = element.dataset.jyTtsField;
     // 分析模式 is one switch (DESIGN §17.2): on is the analysed reading, off the plain one.
@@ -11440,7 +11505,7 @@ function updateTtsModeHelp(root) {
   const askField = root.querySelector('[data-jy-tts-ask-field]');
   if (askField) askField.hidden = analysed;
   help.textContent = analysed
-    ? '开着：正文一闭合就把原文发给副模型，不等翻译、也不用翻译的标注，一次请求：对白由谁念、什么情绪、一句里情绪在哪里变、哪里停顿重读、哪里有叹气笑声这类声音，全是 Fish 官方认得的标签，旁白不管。带角色资料、世界书和前几楼（在「更多 → 分析模式」里勾）。读译文时把结果对到译文上。走分析模式用的连接。'
+    ? '开着：正文一闭合就把原文发给副模型，不等翻译、也不用翻译的标注，一次请求，旁白和对白逐句标：对白由谁念、语速、张力，再按声学标注规则在字上插 Fish 认得的声音标签（耳语、气声、窃笑、轻笑、叹气、倒抽气、急喘、低哼、清嗓、停顿），不写情绪词；台词可以加叠字、！！、~、……和语气词，原文的字不改。带角色资料、世界书和前几楼（在「更多 → 分析模式」里勾）。读译文时把结果对到译文上。走分析模式用的连接。'
     : '关着：不额外请求副模型。翻译过的楼直接用翻译时标好的说话人和情绪——翻译那一次请求本身带了分析；正文里带 <say> 说话人标记的楼，按标记分角色、带情绪读（「音色」卡里打开「让主模型给台词标上说话人和情绪」，主模型写的台词就会带标记）；其余的楼由程序按上下文认谁在说，认不出的用对白默认音色。想让副模型分析一次，点悬浮窗朗读页的「分析这一楼」，或者在下面选按播放时怎么办。';
 }
 
@@ -14148,7 +14213,7 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="intimate"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
       // twinField() above already carried the new value onto every other copy of this same field
       // (deepChannelId/mode/enabled all live on 微调 or 翻译台 too, DESIGN §15.2/§15.3).
       try {
@@ -14969,7 +15034,7 @@ async function openMiniWindow() {
     <label class="jy-mini-inspect-field"><span class="jy-label">发给 Fish 的内容（方括号里是情绪、停顿、强调标签，可以直接改、直接插）</span><textarea data-jy-tts-fish rows="3" spellcheck="false"></textarea></label>
     <div class="jy-mini-inspect-tags" data-jy-tts-tags></div>
     <div class="jy-mini-inspect-custom"><input type="text" data-jy-tts-custom maxlength="40" placeholder="自己写一条指令插到光标处，比如：压低声音"><button type="button" class="jy-text-button" data-jy-action="tts-insert-custom">插入</button></div>
-    <div class="jy-mini-inspect-prosody"><label><span class="jy-label">语速</span><input type="number" data-jy-tts-speed min="0.5" max="2" step="0.05"></label><label><span class="jy-label">音量 dB</span><input type="number" data-jy-tts-volume min="-20" max="20" step="1"></label></div>
+    <div class="jy-mini-inspect-prosody"><label><span class="jy-label">语速</span><input type="number" data-jy-tts-speed min="0.5" max="2" step="0.05"></label><label title="1 平静到 5 极端顶点，越高 Fish 的 temperature 越高；留空按分析的"><span class="jy-label">张力</span><input type="number" data-jy-tts-tension min="1" max="5" step="1"></label><label><span class="jy-label">音量 dB</span><input type="number" data-jy-tts-volume min="-20" max="20" step="1"></label></div>
     <div class="jy-mini-inspect-actions">
       <button type="button" class="jy-button jy-button-primary" data-jy-action="tts-apply" hidden>重新生成并播放</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-refine-sentence" title="说一句哪里不对，让副模型只改这一句的分析">改这一句的分析</button>
@@ -14984,6 +15049,7 @@ async function openMiniWindow() {
     <div class="jy-mini-links">
       <button type="button" class="jy-text-button" data-jy-action="tts-read-floor" title="从头朗读这一楼">从头读</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="按你的意见改这一楼的分析，或者丢掉重来">重新分析</button>
+      <button type="button" class="jy-text-button jy-mini-auto" data-jy-action="tts-intimate" aria-pressed="false" title="打开后，正文写明了亲密接触的段落，分析模式才放开喘息和低吟；和朗读页的「亲密场景」是同一个开关" hidden>亲密场景 关</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-download" title="把这段音频保存到本地">保存到本地</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-locate" title="把聊天滚到正在读的句子">定位到正文</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-copy-analysis" title="把这一楼的分析结果复制成 JSON">复制分析</button>
@@ -15038,6 +15104,7 @@ async function openMiniWindow() {
   const fishInput = win.querySelector('[data-jy-tts-fish]');
   const speedInput = win.querySelector('[data-jy-tts-speed]');
   const volumeInput = win.querySelector('[data-jy-tts-volume]');
+  const tensionInput = win.querySelector('[data-jy-tts-tension]');
   const speakerSelect = win.querySelector('[data-jy-tts-speaker]');
   const tagBox = win.querySelector('[data-jy-tts-tags]');
   const seekBar = win.querySelector('[data-jy-tts-seek]');
@@ -15188,6 +15255,14 @@ async function openMiniWindow() {
     if (auto) {
       auto.textContent = current.autoGeneration ? '自动 开' : '自动 关';
       auto.setAttribute('aria-pressed', String(Boolean(current.autoGeneration)));
+    }
+    // 「亲密场景」, the reading page's own switch, here too while 分析模式 is on.
+    const intimate = win.querySelector('[data-jy-action="tts-intimate"]');
+    if (intimate) {
+      const tts = ttsSettings(current);
+      intimate.hidden = tts.mode !== 'deep';
+      intimate.textContent = tts.intimate ? '亲密场景 开' : '亲密场景 关';
+      intimate.setAttribute('aria-pressed', String(tts.intimate));
     }
     syncMiniTabs();
   };
@@ -15636,6 +15711,7 @@ async function openMiniWindow() {
     fishInput.value = data.override?.text ?? data.text;
     speedInput.value = data.override?.speed ?? data.prosody.speed;
     volumeInput.value = data.override?.volume ?? data.prosody.volume;
+    tensionInput.value = data.override?.tension ?? data.tension ?? '';
     const reset = win.querySelector('[data-jy-action="tts-reset"]');
     if (reset) reset.hidden = !data.override;
     const apply = win.querySelector('[data-jy-action="tts-apply"]');
@@ -15645,7 +15721,7 @@ async function openMiniWindow() {
       : data.manualSpeaker
         ? `说话人是你定的（${data.manualSpeaker}）；上面的下拉框改回「交回自动判断」就恢复。`
         : data.inRange
-          ? '改上面的内容、语速或音量，「重新生成并播放」只重做这一句，整楼朗读时也用这个版本。上面的下拉框可以直接改说话人，改了就按那个人的音色重做，不重新分析。'
+          ? '改上面的内容、语速、张力或音量，「重新生成并播放」只重做这一句，整楼朗读时也用这个版本。上面的下拉框可以直接改说话人，改了就按那个人的音色重做，不重新分析。'
           : '这句不在当前的朗读范围里，改了也不会读。');
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
   };
@@ -16423,6 +16499,7 @@ async function openMiniWindow() {
   globalThis.visualViewport?.removeEventListener('resize', onViewport);
     speedInput.removeEventListener('input', onFishInput);
     volumeInput.removeEventListener('input', onFishInput);
+    tensionInput.removeEventListener('input', onFishInput);
     unsubscribeTask();
     unsubscribeTts();
     unsubscribeProgress();
@@ -16590,6 +16667,14 @@ async function openMiniWindow() {
       toast('info', next.autoGeneration ? '新楼生成完会自动翻译。' : '新楼不再自动翻译，要翻的时候点「翻译本楼」。');
       return;
     }
+    if (action === 'tts-intimate') {
+      const next = mergeSettings(runtime.settings);
+      next.tts = { ...next.tts, intimate: !ttsSettings(runtime.settings).intimate };
+      saveSettings(next);
+      syncQuickPickers();
+      toast('info', `亲密场景已${next.tts.intimate ? '打开' : '关闭'}。没按这个设置分析过的楼层，读的时候会重新分析。`);
+      return;
+    }
     if (action === 'row-close') { editingRow = null; renderRows(); return; }
     if (action === 'log-filter') { logFilter = button.dataset.filter; renderLog(); return; }
     if (action === 'log-open') {
@@ -16676,7 +16761,7 @@ async function openMiniWindow() {
         if (!inspecting) throw new Error('先选一句。');
         button.textContent = '生成中…';
         const { messageId, utteranceId, side } = inspecting;
-        await saveTtsOverride(messageId, utteranceId, { text: fishInput.value, speed: speedInput.value, volume: volumeInput.value }, side);
+        await saveTtsOverride(messageId, utteranceId, { text: fishInput.value, speed: speedInput.value, volume: volumeInput.value, tension: tensionInput.value }, side);
         inspectDirty = false;
         await renderInspector(messageId, utteranceId, { pinned: true, side });
         toast('success', '这一句已按你的版本重新生成。');
@@ -16852,6 +16937,7 @@ async function openMiniWindow() {
   globalThis.visualViewport?.addEventListener('resize', onViewport);
   speedInput.addEventListener('input', onFishInput);
   volumeInput.addEventListener('input', onFishInput);
+  tensionInput.addEventListener('input', onFishInput);
   // Naming who speaks: saved as the reader's word on this sentence, then the sentence is made again in
   // that name's voice and played. The model hears nothing of it.
   speakerSelect?.addEventListener('change', async () => {

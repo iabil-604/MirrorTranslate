@@ -258,38 +258,36 @@ test('a bracketed run the sentence itself was written with (a status line, a sys
   assert.deepEqual(voices.get(quote.id).pauses, [{ after: '，', length: 'short' }]);
 });
 
-test('only a sentence that carries a tag is copied out as a line; the rest answer in fields, so a long floor is not written out twice', () => {
-  const example = JSON.parse(DEEP_PROMPT.split('\n')[1].match(/\{"voices".*\]\}/)[0]).voices;
-  const bare = example.find(item => item.type !== 'narration' && !Object.hasOwn(item, 'line'));
-  assert.ok(bare, 'the worked example shows a spoken sentence with no line');
-  assert.ok(bare.emotion && bare.speaker);
-  assert.match(DEEP_PROMPT, /line 只给要加标签的句子写/);
-  assert.match(DEEP_PROMPT, /大多数句子一个标签都不用加，也就不写 line/);
-  // The copy is checked by the program; the model is not asked to check it again in its head.
-  assert.doesNotMatch(DEEP_PROMPT, /line 去掉标签、去掉首尾引号后和正文这句逐字一样；/);
-  assert.match(DEEP_PROMPT, /由程序逐字核对/);
+// The worked example in 分析模式's own prompt (the reader's 声学标注规则): every sentence numbered, a plain
+// narration line answered with three fields, content only where a sentence is performed.
+const workedExample = () => JSON.parse(DEEP_PROMPT.split('\n').find(line => line.includes('{"voices"')).match(/\{"voices".*\]\}/)[0]).voices;
 
-  const { utterances, quote } = quoteOf('你怎么才来');
-  const { labels, voices, mismatches } = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id, speaker: '林浅', emotion: 'worried' }] }), utterances);
-  assert.deepEqual(mismatches, [], 'no line is not a line that failed to match');
+test('the worked example writes content only where a sentence is performed; plain narration answers with id, role and is_narrator', () => {
+  const example = workedExample();
+  const plain = example.find(item => item.is_narrator === true && !Object.hasOwn(item, 'content') && !Object.hasOwn(item, 'pace'));
+  assert.ok(plain, 'the example shows a plain narration line');
+  assert.deepEqual(Object.keys(plain).sort(), ['id', 'is_narrator', 'role']);
+  const performed = example.find(item => typeof item.content === 'string');
+  assert.equal(performed.is_narrator, false);
+  assert.ok(performed.role && performed.pace && performed.tension_level && performed.reason);
+  assert.match(DEEP_PROMPT, /不写情绪词/);
+  assert.doesNotMatch(DEEP_PROMPT, /"emotion"/, 'the format has no mood field at all');
+  assert.match(DEEP_PROMPT, /正文本来就念得好的句子不写 content/);
+  assert.match(DEEP_PROMPT, /程序会逐字核对/);
+});
+
+test('the prompt\'s own worked example passes the program\'s own check, stutter, marks and pause included', () => {
+  const performed = workedExample().find(item => typeof item.content === 'string');
+  const { utterances, quote } = quoteOf('你别靠这么近，会让人看见的。');
+  const { labels, voices, mismatches } = parseDeepAnalysis(JSON.stringify({ voices: [{ ...performed, id: quote.id }] }), utterances);
+  assert.deepEqual(mismatches, []);
   assert.equal(labels.get(quote.id).speaker, '林浅');
-  assert.equal(voices.get(quote.id).emotion, 'worried');
-  assert.equal(fishOf(utterances, labels, voices, quote.id), '[worried] 你怎么才来');
+  assert.deepEqual(voices.get(quote.id), { speed: 'fast', tensionLevel: 4, why: '心虚压声', script: '[whisper] 你、你别靠这么近…… [pause] 会让人看见的。' });
+  assert.equal(fishOf(utterances, labels, voices, quote.id), '[whisper] 你、你别靠这么近…… [pause] 会让人看见的。');
 });
 
-test('the prompt\'s own worked example does not place a pause where its own rule 8 says punctuation already stops', () => {
-  const match = DEEP_PROMPT.match(/"line":"((?:[^"\\]|\\.)*)"/);
-  assert.ok(match, 'the worked example carries a line field');
-  const line = match[1];
-  const pauseAt = line.indexOf('[pause]');
-  assert.ok(pauseAt > 0, 'the example still shows a mid-sentence pause');
-  const before = line.slice(0, pauseAt).replace(/\[[^\]]*\]\s*/g, '').trimEnd();
-  assert.equal(/[…—～]$/.test(before), false, `a pause must not sit right where trailing-off punctuation already stops, per rule 8: "${before}"`);
-});
-
-test('SOUND_END_RULE, shared by every prompt that uses it, no longer names an "end" field the deep prompt\'s own output format never defines', () => {
-  assert.equal(/\bend\b/i.test(SOUND_END_RULE), false, 'the deep prompt never asks the model for an "end" field, so the shared rule must not name one');
-  assert.ok(DEEP_PROMPT.includes(SOUND_END_RULE), 'the deep prompt still carries the rule itself, just not the bare English word');
+test('SOUND_END_RULE, shared by the prompts that use it, names no "end" field', () => {
+  assert.equal(/\bend\b/i.test(SOUND_END_RULE), false, 'the shared rule must not name a field by the bare English word');
 });
 
 test('SOUND_END_RULE scopes its condition to the line within its own paragraph, the same condition rule 6 states for using `end`, not to the paragraph being the floor\'s last one', () => {
@@ -518,5 +516,5 @@ test('a quoted title answered as narration by its paragraph\'s number stays narr
 });
 
 test('the prompt says which number an answer goes by', () => {
-  assert.match(DEEP_PROMPT, /id 写 ⟦⟧ 里的那个数字，不是 lines 里的段号 line，也不是自己从 1 数的序号/);
+  assert.match(DEEP_PROMPT, /id 写 ⟦⟧ 里的那个数字，不是 lines 里的段号 line/);
 });

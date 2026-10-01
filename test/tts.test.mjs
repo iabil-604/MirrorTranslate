@@ -293,25 +293,28 @@ test('moods become Fish cues: brackets for S2, the fixed parenthesised set for S
 });
 
 
-test('the deep request carries the cast and the references, and its prompt speaks the new inline-tag shape', () => {
+test('the deep request carries the cast and the references, every sentence numbered, and its prompt speaks the acoustic rules', () => {
   const utterances = splitUtterances([{ lineId: 1, text: '泰罗压低了声音：「我……我要裸奔啦。」' }]);
   const messages = buildVoiceAnalysisMessages(utterances, {
     roster: ['泰罗'], characterName: '泰罗', userName: '玩家',
     packet: { character: '泰罗：怕热，嘴硬。', worldbook: '教室没有空调。', recent: '【第 3 楼】泰罗擦汗。' },
   });
   const input = JSON.parse(messages[1].content);
-  assert.equal(input.task, 'direct_voices_for_audiobook');
+  assert.equal(input.task, 'acoustic_annotation_for_audiobook');
   assert.deepEqual(input.references, { character: '泰罗：怕热，嘴硬。', worldbook: '教室没有空调。', recent: '【第 3 楼】泰罗擦汗。' });
-  assert.deepEqual(input.emotions, FISH_EMOTIONS);
-  assert.deepEqual(input.lines, [{ line: 1, text: '泰罗压低了声音：⟦2⟧「我……我要裸奔啦。」' }]);
-  // The fields of the new reply — a tagged line takes the place of the old side fields.
-  for (const field of ['speaker', 'emotion', 'pace', 'line', 'tone', 'sounds', 'styles', 'pause', 'emphasis']) assert.match(messages[0].content, new RegExp(field));
+  assert.equal(input.emotions, undefined, 'no mood vocabulary: 分析模式 writes no mood words');
+  assert.deepEqual(input.lines, [{ line: 1, text: '⟦1⟧泰罗压低了声音：⟦2⟧「我……我要裸奔啦。」' }]);
+  for (const field of ['role', 'is_narrator', 'pace', 'tension_level', 'reason', 'content', 'styles', '[whisper]', '[pause]']) assert.ok(messages[0].content.includes(field), field);
   for (const gone of ['trend', 'pitch', 'energy', 'rhythm', 'ending', 'urgency', 'delivery', 'focus']) assert.doesNotMatch(messages[0].content, new RegExp(`- ${gone}`));
-  assert.match(messages[0].content, /不是惯性/);
   assert.equal('skeleton' in input, false, 'the deep reading takes nothing from the translation');
   assert.equal('previous' in input, false, 'the floors before it come as references or not at all');
-  assert.deepEqual(input.sounds, FISH_SOUND_LIST, 'the sounds Fish lists itself');
-  assert.deepEqual(input.tones, FISH_TONE_LIST);
+  assert.equal(input.sounds, undefined);
+  assert.equal(input.tones, undefined);
+  // 亲密场景 decides which of the two intimacy rules the prompt carries.
+  assert.ok(messages[0].content.includes(ACOUSTIC_INTIMATE_OFF));
+  const intimate = buildVoiceAnalysisMessages(utterances, { intimate: true });
+  assert.ok(intimate[0].content.includes(ACOUSTIC_INTIMATE_ON));
+  assert.equal(intimate[0].content.includes(ACOUSTIC_INTIMATE_OFF), false);
   // A prompt of the reader's own replaces the built-in one, with their name and Fish's tags filled in.
   const custom = buildVoiceAnalysisMessages(utterances, { userName: '玩家', systemPrompt: '自定义提示词，{{user}}标签：{{sounds}}' });
   assert.equal(custom[0].content, `自定义提示词，用户扮演的角色叫 玩家。标签：${SOUND_TAGS.join(' / ')}`);
@@ -319,6 +322,7 @@ test('the deep request carries the cast and the references, and its prompt speak
   const rich = JSON.parse(buildVoiceAnalysisMessages(utterances, { styles: [{ name: '默认', rules: ['停顿感强'] }] })[1].content);
   assert.deepEqual(rich.styles, [{ name: '默认', rules: ['停顿感强'] }]);
 });
+
 test('a structured reply (the simple reading, a correction) becomes labels plus a checked voice per sentence', () => {
   const utterances = splitUtterances([{ lineId: 1, text: '泰罗压低了声音：「我……我要裸奔啦。」' }]);
   const reply = JSON.stringify({
@@ -1100,7 +1104,7 @@ test('the console\'s speed lean nudges the prosody only where the voice said not
 import { SPOKEN_SOUNDS as FISH_SOUND_LIST, FISH_TONES as FISH_TONE_LIST } from '../tts.js';
 
 import { encodeWav as encodeWavFile } from '../tts.js';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages as buildVoiceAnalysisMessages, deepRequestSettings, parseDeepAnalysis } from '../tts-deep.js';
+import { ACOUSTIC_INTIMATE_OFF, ACOUSTIC_INTIMATE_ON, DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages as buildVoiceAnalysisMessages, deepRequestSettings, parseDeepAnalysis } from '../tts-deep.js';
 
 test('a cut of decoded audio is written out as a wav file that names its own shape', () => {
   const left = new Float32Array([0, 0.5, -0.5, 1, -1]);
@@ -1350,32 +1354,36 @@ test('the deep reading is a module of its own, open, on a connection of its own'
 });
 
 
-test('the deep reading asks how a line is said, in Fish\'s own words inlined on it, and nothing it will not use', () => {
+test('the deep reading asks how each sentence is performed in the acoustic rules, and reads its answer onto the sentence', () => {
   const utterances = splitUtterances([{ lineId: 1, text: '泰罗压低了声音：「我……我要裸奔啦。」' }]);
   const quote = utterances.find(item => item.kind === 'quoted');
   const messages = buildVoiceAnalysisMessages(utterances, { roster: ['泰罗'], speakers: new Map([[quote.id, '泰罗']]) });
   const system = messages[0].content;
-  for (const field of ['speaker', 'emotion', 'pace', 'line', 'tone', 'sounds', 'styles', 'pause', 'emphasis']) assert.match(system, new RegExp(field), field);
-  assert.match(system, /旁白不用管，也不用输出/, 'narration needs no mood and no interjections');
+  assert.match(system, /旁白即便描写亲密动作也保持叙述/);
   assert.match(system, /硬性要求/);
+  assert.match(system, /呼吸闸门/);
   assert.doesNotMatch(system, /direction/, 'no free-text directions: they read badly');
   assert.doesNotMatch(system, /skeleton/, 'the deep reading builds on nothing but the floor');
-  assert.doesNotMatch(system, /"why"|why：/, 'the new format has no reason field: a tag says where, not why');
   const input = JSON.parse(messages[1].content);
-  assert.deepEqual(input.tones, FISH_TONE_LIST);
-  assert.deepEqual(input.sounds, FISH_SOUND_LIST, 'the sounds Fish itself lists, not the free-text ones');
   assert.deepEqual(input.speakers, { [quote.id]: '泰罗' }, 'a name the reader set travels with the floor');
-  assert.deepEqual(input.lines, [{ line: 1, text: `泰罗压低了声音：⟦${quote.id}⟧「我……我要裸奔啦。」` }]);
-  // The reply: a turn lands as one of Fish's words at its own word, and a sound the narration never
-  // wrote for this line — a gasp, unlike the whisper the narration does ask for — never reaches Fish.
-  const line = '[nervous][whispering][gasping] 我……我要 [excited] 裸奔啦。';
-  const parsed = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id, speaker: '泰罗', emotion: 'nervous', line }] }), utterances);
-  assert.equal(parsed.voices.get(quote.id).why, undefined, 'the new format carries no reason field at all');
+  assert.deepEqual(input.lines, [{ line: 1, text: `⟦1⟧泰罗压低了声音：⟦${quote.id}⟧「我……我要裸奔啦。」` }]);
+  // The reply: the performed content becomes the script Fish reads, stutter and all.
+  const content = '[whisper] 我、我……我要 [pause] 裸奔啦。';
+  const parsed = parseDeepAnalysis(JSON.stringify({ voices: [{ id: 1, role: '旁白', is_narrator: true }, { id: quote.id, role: '泰罗', is_narrator: false, pace: 'slow', tension_level: 3, reason: '害羞压声', content }] }), utterances);
+  assert.deepEqual(parsed.labels.get(1), { type: 'narration' });
+  assert.equal(parsed.labels.get(quote.id).speaker, '泰罗');
+  assert.deepEqual(parsed.voices.get(quote.id), { speed: 'slow', tensionLevel: 3, why: '害羞压声', script: content });
   const segments = buildSegments(utterances, parsed.labels, { voices: parsed.voices });
   const text = fishTextOf({ segment: segments.find(item => item.id === quote.id), voiceId: 'v' }, { model: 's2-pro' }, { lean: true });
-  assert.equal(text, '[nervous][whispering] 我……我要 [excited] 裸奔啦。', 'the turn lands as one of Fish\'s words at its word, and the gasp the text never wrote is gone');
+  assert.equal(text, content);
+  // A reply in the format before v0.42.0 (a reader's own prompt) is still read as it always was.
+  const line = '[nervous][whispering][gasping] 我……我要 [excited] 裸奔啦。';
+  const legacy = parseDeepAnalysis(JSON.stringify({ voices: [{ id: quote.id, speaker: '泰罗', emotion: 'nervous', line }] }), utterances);
+  const legacySegments = buildSegments(utterances, legacy.labels, { voices: legacy.voices });
+  assert.equal(fishTextOf({ segment: legacySegments.find(item => item.id === quote.id), voiceId: 'v' }, { model: 's2-pro' }, { lean: true }), '[nervous][whispering] 我……我要 [excited] 裸奔啦。');
   assert.equal(DEEP_STATUS.available, true);
 });
+
 test('a sentence whose feeling turns is heard turning: a word of Fish\'s before each clause, sounds where they fall, stresses', () => {
   // The narration beside the line writes the laugh and the sigh the reading places.
   const utterances = splitUtterances([{ lineId: 1, text: '他笑出了声，又叹了口气。' }, { lineId: 2, text: '「本来今天挺开心的，可是你一走，屋里就空了。」' }]);

@@ -8,19 +8,19 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.41.6';
+} from './prompts.js?v=0.42.0';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.41.6';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.42.0';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.41.6';
+import { resolveMoveStyle } from './palette.js?v=0.42.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.41.6';
+export const APP_VERSION = '0.42.0';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -993,6 +993,8 @@ export const DEFAULT_TTS = Object.freeze({
   speechMarks: false,
   // A new reply is read aloud by itself once its text is final.
   autoRead: false,
+  // 亲密场景: 分析模式 may let an intimate scene climb (moans included) where the narration shows it.
+  intimate: false,
   fish: DEFAULT_FISH,
 });
 
@@ -1911,6 +1913,7 @@ export function normalizeTts(value) {
     dialogueFallback: TTS_DIALOGUE_FALLBACKS.includes(source.dialogueFallback) ? source.dialogueFallback : DEFAULT_TTS.dialogueFallback,
     speechMarks: source.speechMarks === true,
     autoRead: source.autoRead === true,
+    intimate: source.intimate === true,
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     fish: normalizeFishSettings(source.fish),
   };
