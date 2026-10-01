@@ -714,7 +714,8 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.equal(mergeSettings({ tts: { mode: 'off' } }).tts.mode, 'off', 'the plain reading is a mode of its own');
   assert.equal(mergeSettings({ tts: { askAnalysis: 'plain' } }).tts.askAnalysis, 'plain');
   assert.equal(mergeSettings({ tts: { askAnalysis: 'sometimes' } }).tts.askAnalysis, 'ask');
-  assert.deepEqual(mergeSettings({ tts: { prompts: { light: '旧的', simple: '旧的' } } }).tts.prompts, { deep: '' }, 'only 分析模式 has a prompt of the reader\'s own now');
+  assert.deepEqual(mergeSettings({ tts: { prompts: { light: '旧的', simple: '旧的' } } }).tts.prompts, { deep: '', jailbreak: '' }, 'the old light and simple prompts are gone: 分析模式 keeps its prompt and its 破限词');
+  assert.equal(mergeSettings({ tts: { prompts: { jailbreak: '照常分析。\r\n' } } }).tts.prompts.jailbreak, '照常分析。\n');
   assert.equal(settings.tts.sanitizeHtml, true);
   assert.deepEqual(settings.tts.console, { pause: 50, breath: 50, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: '', marks: [] });
   assert.deepEqual(mergeSettings({ tts: { console: { pause: 150, breath: -3, rules: ' a \n\n b ' } } }).tts.console, { pause: 100, breath: 0, grain: 50, intensity: 50, range: 50, speed: 50, expression: 50, rules: 'a\nb', marks: [] });

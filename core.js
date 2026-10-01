@@ -8,19 +8,19 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.41.4';
+} from './prompts.js?v=0.41.5';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.41.4';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.41.5';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.41.4';
+import { resolveMoveStyle } from './palette.js?v=0.41.5';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.41.4';
+export const APP_VERSION = '0.41.5';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -957,8 +957,9 @@ export const DEFAULT_TTS = Object.freeze({
   playAfterGenerate: true,
   // Runs of ！！！ become one mark; the cue carries the strength instead of the voice shrieking.
   tamePunctuation: true,
-  // The reader's own system prompt for the analysed reading; empty means the built-in one.
-  prompts: Object.freeze({ deep: '' }),
+  // The reader's own system prompt for the analysed reading; empty means the built-in one. `jailbreak`
+  // (破限词) goes first in every request to 分析模式's connection; empty sends nothing.
+  prompts: Object.freeze({ deep: '', jailbreak: '' }),
   // The connection the analysed reading goes to — and 「分析这一楼」, 按意见改 and 从角色卡和世界书识别角色
   // with it: 'follow' for the host's own connection, or a saved connection's id. Empty only ever comes
   // from an older setting, and is pinned when the settings are read (mergeSettings), so the reading never
@@ -1889,6 +1890,7 @@ export function normalizeTts(value) {
     tamePunctuation: source.tamePunctuation === undefined ? DEFAULT_TTS.tamePunctuation : source.tamePunctuation !== false,
     prompts: {
       deep: typeof source.prompts?.deep === 'string' ? normalizeNewlines(source.prompts.deep).slice(0, 12000) : '',
+      jailbreak: typeof source.prompts?.jailbreak === 'string' ? normalizeNewlines(source.prompts.jailbreak).slice(0, 12000) : '',
     },
     // The oldest settings named this connection `channelId`. The one the simple reading used
     // (`analysisChannelId`, gone since v0.41.0) stands in for an empty choice in mergeSettings, which

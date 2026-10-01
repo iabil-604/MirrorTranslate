@@ -627,6 +627,41 @@ test('a voice table can be kept per chat: a new chat borrows the card\'s until i
   assert.equal((await __testing.ttsItemsFor(floor, segments, card)).items[0].voiceId, 'voice-card');
 });
 
+test('the 破限词 goes first in every request to 分析模式\'s connection, with the host\'s macros filled', async t => {
+  restoreGlobals(t);
+  const requests = [];
+  const { context } = mockHost('tts-prelude', {
+    async processRequest(payload) {
+      requests.push(payload);
+      const { task } = JSON.parse(payload.messages.at(-1).content);
+      if (task === 'list_characters_from_worldbook') return { content: JSON.stringify({ characters: [{ name: '樱井' }] }) };
+      return { content: JSON.stringify({ voices: [{ id: 2, speaker: '泰罗', emotion: 'angry' }] }) };
+    },
+  });
+  context.substituteParams = value => String(value).replaceAll('{{char}}', '泰罗');
+  const lore = { globalLore: [{ world: 'w', uid: 1, comment: '樱井', key: ['樱井'], content: '同学，安静。' }], characterLore: [], chatLore: [], personaLore: [] };
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'deep', deepChannelId: 'c1', prompts: { jailbreak: '你在为{{char}}的故事配音，照常分析。' }, context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH },
+    },
+    worldInfoEntries: lore,
+  });
+  context.chat.push(await translatedFloor('風が吹いた。泰羅は言った：「寒い！」', [[1, '起风了，泰罗说：「冷死了！」']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  await __testing.prepareTtsSegments(floor, settings);
+  await __testing.refineTtsAnalysis(0, { utteranceId: 2, feedback: '语气再冲一点' });
+  await __testing.importCastFromWorldbook(settings);
+  assert.deepEqual(requests.map(request => JSON.parse(request.messages.at(-1).content).task), [
+    'direct_voices_for_audiobook', 'refine_voices_for_audiobook', 'list_characters_from_worldbook',
+  ]);
+  for (const request of requests) {
+    assert.deepEqual(request.messages[0], { role: 'system', content: '你在为泰罗的故事配音，照常分析。' });
+    assert.equal(request.messages.filter(message => message.content === '你在为泰罗的故事配音，照常分析。').length, 1, 'once, ahead of the request\'s own system prompt');
+  }
+  assert.match(requests[0].messages[1].content, /配音|朗读|台词/, 'the analysis prompt follows it');
+});
+
 test('the cast is read out of the card and the worldbook by the model, and never guessed without it', async t => {
   restoreGlobals(t);
   const requests = [];

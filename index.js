@@ -117,8 +117,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.41.4';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.4';
+} from './core.js?v=0.41.5';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.5';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -176,10 +176,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.41.4';
-import { createTtsStore } from './tts-store.js?v=0.41.4';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.4';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.4';
+} from './tts.js?v=0.41.5';
+import { createTtsStore } from './tts-store.js?v=0.41.5';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.5';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.5';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -189,7 +189,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.41.4';
+} from './processing.js?v=0.41.5';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -206,9 +206,10 @@ import {
   isSimplifiedChineseTarget,
   normalizeTargetLanguage,
   promptOptionLabel,
-} from './prompts.js?v=0.41.4';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.4';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.4';
+  resolvePromptVariables,
+} from './prompts.js?v=0.41.5';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.5';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.5';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -226,8 +227,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.41.4';
-import { sampleThemeBackground } from './theme-probe.js?v=0.41.4';
+} from './palette.js?v=0.41.5';
+import { sampleThemeBackground } from './theme-probe.js?v=0.41.5';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -235,7 +236,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.41.4';
+} from './diagnostics.js?v=0.41.5';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -246,7 +247,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.41.4';
+} from './helper.js?v=0.41.5';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -747,6 +748,8 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-tts-console" data-jy-tts-console="default"><div class="jy-tts-console-presets" data-jy-console-preset-host></div><label class="jy-tts-console-field"><span>停顿感</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="pause"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>气息感</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="breath"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>口语颗粒度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="grain"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>情感强度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="intensity"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>情绪表现幅度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="range"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>语速倾向</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="speed"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>声音表现倾向</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="expression"><output>AI 判断</output></label><label class="jy-tts-console-rules"><span class="jy-label">自定义配音规则（一行一条，直接交给副模型）</span><textarea rows="3" data-jy-console-rules spellcheck="false" placeholder="比如：害羞时不要过度娇柔；生气时保持克制；不要每句话都加呼吸"></textarea></label></div>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-prompts"><summary><h2>副模型提示词（高级）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
+<label><span class="jy-label">破限词</span><textarea data-jy-tts-prompt="jailbreak" rows="4" spellcheck="false" placeholder="留空即不发送"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-jailbreak">破限词</button></div>
+<p class="jy-muted">点「破限词」按钮会把翻译规则里的破限词填进来。填了就作为第一条 system 消息，放在发给副模型的每个请求最前面：分析这一楼、按意见改标注、从世界书识别角色都带上，翻译和小助手不带。<code>{{char}}</code>、<code>{{user}}</code> 会换成角色名。</p>
 <p class="jy-muted">留空用内置的。可用占位符：<code>{{user}}</code> 用户扮演的角色，<code>{{sounds}}</code> 声音词表，<code>{{references_rule}}</code> 读原文时关于译文的那条规则。JSON 的输出格式和字段名要照旧，不然解析不出来。</p>
 <label><span class="jy-label">分析模式</span><textarea data-jy-tts-prompt="deep" rows="10" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="deep">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="deep">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="deep">恢复默认</button></div>
 </div></details>
@@ -4382,7 +4385,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     // One request for the whole floor: the paragraphs with their dialogue numbered, the dialogue alone
     // answered. The reply is read as it arrives, and every paragraph whose dialogue is all labelled is
     // handed on, so the floor starts sounding before the model has finished.
-    const messages = depth === 'deep' ? buildDeepAnalysisMessages(utterances, options) : buildTtsAnalysisMessages(utterances, options);
+    const messages = withAnalysisPrelude(depth === 'deep' ? buildDeepAnalysisMessages(utterances, options) : buildTtsAnalysisMessages(utterances, options), settings);
     const started = Date.now();
     const paragraphs = groupSegmentsByLine(utterances.map(item => ({ id: item.id, lineId: item.lineId, kind: item.kind })));
     let announced = 0;
@@ -4483,6 +4486,19 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
  */
 function ttsRequestSettings(settings = runtime.settings) {
   return deepRequestSettings(settings);
+}
+
+/**
+ * The reader's 破限词 for the sub model, put first in every request to 分析模式's connection: the
+ * floor's analysis, a correction, the cast read out of the worldbook. The host's macros ({{char}},
+ * {{user}}) are filled the way the host fills its own prompts. Empty sends nothing.
+ */
+function withAnalysisPrelude(messages, settings = runtime.settings) {
+  const text = String(ttsSettings(settings).prompts?.jailbreak ?? '').trim();
+  if (!text) return messages;
+  const context = getContext();
+  const filled = typeof context.substituteParams === 'function' ? String(context.substituteParams(text) ?? text) : text;
+  return [{ role: 'system', content: filled }, ...messages];
 }
 
 /**
@@ -7714,7 +7730,7 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
   const depth = known?.depth === 'deep' || (!known && prepared.depth === 'deep') ? 'deep' : 'simple';
   const request = ttsRequestSettings(settings);
   const context = getContext();
-  const messages = buildRefineAnalysisMessages(scope, {
+  const messages = withAnalysisPrelude(buildRefineAnalysisMessages(scope, {
     roster: ttsKnownNames(settings),
     characterName: context.name2 ?? '',
     userName: context.name1 ?? '',
@@ -7722,7 +7738,7 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
     styles: ttsStyles(settings),
     current: base,
     feedback,
-  });
+  }), settings);
   const started = Date.now();
   // The moment of asking, which every sentence this correction changes will carry.
   const askedAt = ttsClock();
@@ -11073,7 +11089,7 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
     'tts-deep': DEEP_STATUS.available ? `走 ${channelLabel(settings, connectionUseChoice(settings, 'deep'), { short: true })}` : DEEP_STATUS.note,
     'tts-console': consoleFoldSummary(tts.console),
     // These two had no summary at all before (review finding style.css:822).
-    'tts-prompts': Object.values(tts.prompts ?? {}).some(value => String(value ?? '').trim()) ? '已改' : '内置',
+    'tts-prompts': `${String(tts.prompts?.deep ?? '').trim() ? '已改' : '内置'}${String(tts.prompts?.jailbreak ?? '').trim() ? ' · 破限词已填写' : ''}`,
     'tts-tools': runtime.tts.preview ? `已分析 · ${runtime.tts.preview.segments.length} 句` : '未分析',
   };
   for (const [id, text] of Object.entries(summaries)) setText(root, `[data-jy-fold="${id}"] [data-jy-fold-summary]`, text);
@@ -11268,7 +11284,8 @@ function syncTtsFields(root, settings = runtime.settings, { renderLists = true }
   // The built-in prompt shows as the placeholder, so an empty box means "the default, whatever it is".
   for (const element of root.querySelectorAll('[data-jy-tts-prompt]')) {
     element.value = tts.prompts[element.dataset.jyTtsPrompt] ?? '';
-    element.placeholder = TTS_PROMPT_DEFAULTS[element.dataset.jyTtsPrompt] ?? '';
+    // A box with no built-in text of its own (破限词) keeps the placeholder its markup gives it.
+    if (Object.hasOwn(TTS_PROMPT_DEFAULTS, element.dataset.jyTtsPrompt)) element.placeholder = TTS_PROMPT_DEFAULTS[element.dataset.jyTtsPrompt];
   }
   fillTtsChannelPickers(root, settings);
   setText(root, '[data-jy-tts-title="narrator"]', tts.narratorTitle ? `· ${tts.narratorTitle}` : '');
@@ -11537,7 +11554,7 @@ async function importCastFromWorldbook(settings = runtime.settings, { signal } =
   if (!digest.length && !cards.length) throw new Error('没有可读的世界书条目，也没有角色卡。先给这个角色启用一本世界书，或者发一条消息让酒馆扫描一次，再来识别。');
   const story = castStorySample(context);
   const cardNames = cards.flatMap(card => card.keys);
-  const messages = [
+  const messages = withAnalysisPrelude([
     {
       role: 'system',
       content: [
@@ -11552,7 +11569,7 @@ async function importCastFromWorldbook(settings = runtime.settings, { signal } =
       ].join('\n'),
     },
     { role: 'user', content: JSON.stringify({ task: 'list_characters_from_worldbook', entries: [...cards, ...digest], ...(story ? { story } : {}) }) },
-  ];
+  ], settings);
   let raw;
   const request = ttsRequestSettings(settings);
   try {
@@ -13546,6 +13563,20 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'tts-copy-prompt') {
         await copyText(TTS_PROMPT_DEFAULTS[button.dataset.prompt] ?? '');
         toast('success', `${button.dataset.prompt === 'deep' ? '深度' : '简单'}分析的内置提示词已复制。`);
+      } else if (action === 'tts-fill-jailbreak') {
+        // The translation's own 破限词, its language placeholders already filled in.
+        const profile = getActivePromptProfile(runtime.settings);
+        const text = resolvePromptVariables(String(profile.jailbreakPrompt ?? '').trim(), profile);
+        const textarea = root.querySelector('[data-jy-tts-prompt="jailbreak"]');
+        if (!text) {
+          toast('info', '翻译规则里的破限词是空的，没有可填的。');
+        } else if (textarea) {
+          textarea.value = text;
+          saveSettings(collectSettings(root));
+          syncTtsFields(root, runtime.settings);
+          textarea.focus();
+          toast('success', '已填入翻译的破限词，可以接着改，改完点别处就存。');
+        }
       } else if (action === 'tts-fill-prompt') {
         const textarea = root.querySelector(`[data-jy-tts-prompt="${button.dataset.prompt}"]`);
         if (textarea) {

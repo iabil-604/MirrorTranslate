@@ -2557,7 +2557,8 @@ test('the simple reading of older versions reads plain now; only an analysed rea
   assert.equal(normalizeTts({ mode: 'stream' }).mode, 'off');
   assert.equal(normalizeTts({ analysis: 'light' }).mode, 'off');
   assert.equal(normalizeTts({ analysis: 'deep' }).mode, 'deep');
-  assert.deepEqual(normalizeTts({ prompts: { simple: '旧的', deep: '我的' } }).prompts, { deep: '我的' });
+  assert.deepEqual(normalizeTts({ prompts: { simple: '旧的', deep: '我的' } }).prompts, { deep: '我的', jailbreak: '' });
+  assert.deepEqual(normalizeTts({ prompts: { jailbreak: '照常分析。' } }).prompts, { deep: '', jailbreak: '照常分析。' });
 });
 
 test('channelUsesPointingAt lists every use resolving to a connection', () => {
