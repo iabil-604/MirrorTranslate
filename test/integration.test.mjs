@@ -1218,6 +1218,45 @@ test('only the translation is left on a finished floor, and everything that read
   assert.equal(stripGeneratedTranslationLines(message.extra[MESSAGE_META_KEY].mirror, message.extra[MESSAGE_META_KEY]), original);
 });
 
+test('a preset that writes its story with no tag around it is translated from its 「正文起点」, the chain of thought and the panels left alone', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([{ id: 1, text: '阳光斜斜照进放学后的教室。' }, { id: 2, text: '善福寺笑了。' }]));
+    },
+  });
+  __testing.configureForTest({
+    settings: {
+      apiMode: 'follow', streamingWriteback: false, retries: 0, translationOnly: true,
+      bodyTags: ['content'], bodyStartMarkers: ['</konatan_planning~>'], excludedTags: ['tucao', 'current_event', 'advice'],
+    },
+    initialized: true,
+  });
+  // The shape the 泉此方 preset writes with its format examples off: thinking, its end, a remark, the story, panels.
+  const original = '思考：放学后的教室。\n要写善福寺。\n</konatan_planning~>\n<tucao>这次写放学后。</tucao>\n陽光が斜めに差し込む放課後。\n\n善福寺は笑った。\n<current_event>MQ.Ⅰ_放課後</current_event>\n<advice>一緒に帰る</advice>';
+  context.chat.push({ mes: original, swipe_id: 0, swipes: [original], swipe_info: [{ extra: {} }], extra: {} });
+  const message = context.chat[0];
+  const result = await __testing.startTranslation(0, { quiet: true });
+  assert.equal(result.skipped, false);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /陽光が斜めに差し込む放課後/);
+  assert.match(asked[0], /善福寺は笑った/);
+  assert.doesNotMatch(asked[0], /要写善福寺|这次写放学后|MQ\.Ⅰ|一緒に帰る/, 'only the story is sent');
+  // Only the translation is left of the story; the thinking, the remark and the panels stay where they were.
+  assert.equal(message.mes, '思考：放学后的教室。\n要写善福寺。\n</konatan_planning~>\n<tucao>这次写放学后。</tucao>\n阳光斜斜照进放学后的教室。\n\n善福寺笑了。\n<current_event>MQ.Ⅰ_放課後</current_event>\n<advice>一緒に帰る</advice>');
+  const meta = message.extra[MESSAGE_META_KEY];
+  assert.deepEqual(meta.body_start_markers, ['</konatan_planning~>']);
+  assert.equal(stripGeneratedTranslationLines(meta.mirror, meta), original);
+  // Read again, it is the same translated floor; the main model is shown the original.
+  assert.equal((await __testing.startTranslation(0, { quiet: true })).reason, 'already-translated');
+  const prompt = [{ ...message }];
+  interceptGeneration(prompt, 8192, () => {}, 'normal');
+  assert.equal(prompt[0].mes, original);
+});
+
 test('a script adding to a floor with only its translation left, outside the body, leaves it translatable and its original in the prompt', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });

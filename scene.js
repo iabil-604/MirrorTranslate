@@ -1,4 +1,4 @@
-import { parseJsonCandidates } from './core.js?v=0.42.1';
+import { parseJsonCandidates } from './core.js?v=0.42.2';
 
 // ---------------------------------------------------------------------------------------------
 // The scene of a floor, written down by the translation while it reads the floor anyway.

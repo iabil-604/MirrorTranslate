@@ -1,10 +1,10 @@
 import {
   DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END,
-  deepClone, mergeSettings, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors, parseLyricLineRulesWithErrors,
-} from './core.js?v=0.42.1';
+  deepClone, mergeSettings, parseStartMarkers, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors, parseLyricLineRulesWithErrors,
+} from './core.js?v=0.42.2';
 
 export const PROCESSING_FIELDS = Object.freeze([
-  'bodyTags', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
+  'bodyTags', 'bodyStartMarkers', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
   'translationPrefix', 'translationSuffix', 'autoEdit', 'showFloatingButton', 'floatingStyle',
   'lyricLineRules', 'musicCardRules',
 ]);
@@ -27,7 +27,9 @@ function normalizeProcessingValues(value = {}, strict = false) {
   const values = {};
   for (const key of PROCESSING_FIELDS) {
     if (!Object.hasOwn(value, key)) continue;
-    if (key === 'bodyTags' || key === 'replaceTags' || key === 'excludedTags') {
+    if (key === 'bodyStartMarkers') {
+      values[key] = parseStartMarkers(value[key]);
+    } else if (key === 'bodyTags' || key === 'replaceTags' || key === 'excludedTags') {
       const parsed = parseTagNamesWithErrors(value[key]);
       if (strict && (parsed.invalid.length || (key === 'bodyTags' && !parsed.tags.length))) throw new Error(`方案的 ${key} 需要有效标签名。`);
       values[key] = parsed.tags;

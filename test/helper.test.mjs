@@ -203,6 +203,17 @@ test('buildFloorSnapshotLines reports a missing floor plainly, and marks a long 
   assert.match(lines, /一个错误/);
 });
 
+test('the helper is told the 「正文起点」 setting, and when a floor\'s body came from it', () => {
+  assert.match(buildSettingsSummaryLines(baseSettings()).join('\n'), /正文起点（找不到提取标签时用）：（空）/);
+  assert.match(buildSettingsSummaryLines(baseSettings({ bodyStartMarkers: ['</konatan_planning~>'] })).join('\n'), /正文起点（找不到提取标签时用）：<\/konatan_planning~>/);
+  const floor = {
+    messageId: 2, role: '角色', swipeLabel: '1/1', segmentCount: 2, translationState: '未译',
+    bodyTagsFound: [], replaceTagsFound: [], excludedTagsFound: [], translationOnly: false, errors: [], preview: '本文。',
+  };
+  assert.match(buildFloorSnapshotLines(floor).join('\n'), /正文标签：未找到\n/);
+  assert.match(buildFloorSnapshotLines({ ...floor, startMarkerFound: '</konatan_planning~>' }).join('\n'), /正文标签：未找到，按正文起点「<\/konatan_planning~>」后面算正文/);
+});
+
 // --- run log -------------------------------------------------------------------------------------
 
 test('buildRunLogLines keeps only the last 30 entries and never invents one when there are none', () => {

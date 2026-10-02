@@ -8,19 +8,19 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.42.1';
+} from './prompts.js?v=0.42.2';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.42.1';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.42.2';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.42.1';
+import { resolveMoveStyle } from './palette.js?v=0.42.2';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.42.1';
+export const APP_VERSION = '0.42.2';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -1057,6 +1057,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   segmentJump: true,
   retries: 1,
   bodyTags: Object.freeze(['story_scene']),
+  // 「正文起点」: a reply with none of the extraction tags reads as body from the last of these markers on
+  // (the end of a chain of thought a preset leaves untagged). Empty, such a reply has no body.
+  bodyStartMarkers: Object.freeze([]),
   replaceTags: Object.freeze([]),
   excludedTags: Object.freeze([]),
   preserveLineRules: '',
@@ -1253,6 +1256,22 @@ export function parseTagNames(value, fallback = []) {
   const result = parseTagNamesWithErrors(value).tags;
   if (result.length) return result;
   return Array.isArray(fallback) ? [...fallback] : [];
+}
+
+// 「正文起点」 as kept: one marker a line, trimmed, each once whatever its case; at most ten, of at most
+// 200 characters each.
+export function parseStartMarkers(value) {
+  const source = Array.isArray(value) ? value : normalizeNewlines(String(value ?? '')).split('\n');
+  const result = [];
+  const seen = new Set();
+  for (const item of source) {
+    const marker = String(item ?? '').trim().slice(0, 200);
+    if (!marker || seen.has(marker.toLowerCase())) continue;
+    seen.add(marker.toLowerCase());
+    result.push(marker);
+    if (result.length >= 10) break;
+  }
+  return result;
 }
 
 function parseRegexRule(raw, lineNumber) {
@@ -1994,6 +2013,7 @@ export function mergeSettings(value = {}) {
   );
   merged.excludedTags = parseTagNames(source.excludedTags);
   merged.replaceTags = parseTagNames(source.replaceTags);
+  merged.bodyStartMarkers = parseStartMarkers(source.bodyStartMarkers);
   merged.preserveLineRules = typeof source.preserveLineRules === 'string'
     ? normalizeNewlines(source.preserveLineRules)
     : '';
@@ -2470,11 +2490,12 @@ export function readFloor(message) {
 
 // The tagged regions a record's floor is read by: the body and replace tags it was written with.
 function recordedRegions(text, metadata) {
-  const replaceTags = parseTagNames(metadata?.replace_tags);
-  return mergeExtractedRegions(
-    extractTaggedRegions(text, metadata?.body_tags ?? DEFAULT_SETTINGS.bodyTags),
-    replaceTags.length ? extractTaggedRegions(text, replaceTags, { mode: 'replace' }) : null,
-  ).regions;
+  return extractFloorRegions(text, {
+    bodyTags: metadata?.body_tags ?? DEFAULT_SETTINGS.bodyTags,
+    replaceTags: metadata?.replace_tags,
+    startMarkers: metadata?.body_start_markers,
+    excludedTags: metadata?.excluded_tags,
+  }).regions;
 }
 
 /**
@@ -2612,6 +2633,7 @@ function scanTagGroups(source, tagName, options = {}) {
     : /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
   const stack = [];
   const groups = [];
+  const strays = [];
   let strayCloses = 0;
   for (const match of source.matchAll(tokenPattern)) {
     if (String(match[1]).toLowerCase() !== target) continue;
@@ -2640,6 +2662,7 @@ function scanTagGroups(source, tagName, options = {}) {
     const open = stack.pop();
     if (!open) {
       strayCloses += 1;
+      strays.push({ start: match.index, end: match.index + raw.length, raw });
       continue;
     }
     groups.push({
@@ -2656,7 +2679,72 @@ function scanTagGroups(source, tagName, options = {}) {
   groups.unclosedOpens = stack.length;
   groups.unclosedStack = stack.slice();
   groups.strayCloses = strayCloses;
+  groups.strayCloseStack = strays;
   return groups;
+}
+
+/**
+ * The body of a reply with none of the extraction tags in it, found by its 「正文起点」: what follows the
+ * last place any of the markers stands (the end of a chain of thought a preset left untagged), matched
+ * whatever its case. It ends at a body tag's closing tag the model wrote without the opening one, else
+ * where a replace region begins, else at the end of the floor, less the excluded blocks it ends on. Null
+ * when no marker is there.
+ */
+function markerRegion(source, markers, { closes = [], stopsAt = [], excludedTags = [] } = {}) {
+  let found = null;
+  for (const marker of parseStartMarkers(markers)) {
+    const pattern = new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    for (const match of source.matchAll(pattern)) {
+      const end = match.index + match[0].length;
+      if (!found || end > found.contentStart) found = { openStart: match.index, contentStart: end, openTag: match[0] };
+    }
+  }
+  if (!found) return null;
+  const close = closes.filter(item => item.start >= found.contentStart).sort((left, right) => left.start - right.start)[0];
+  const stop = (Array.isArray(stopsAt) ? stopsAt : []).filter(at => at >= found.contentStart).sort((left, right) => left - right)[0];
+  const closed = close && (stop === undefined || close.start <= stop);
+  // Without a closing tag, the excluded blocks the story ends on (a summary, advice, a status panel
+  // written straight after its last paragraph) stay outside it, where a closing tag would have put them:
+  // the last paragraph's translation then follows the paragraph, not the panels.
+  const closeStart = closed ? close.start : withoutTrailingExcluded(source, found.contentStart, stop ?? source.length, excludedTags);
+  return {
+    tagName: found.openTag,
+    openStart: found.openStart,
+    contentStart: found.contentStart,
+    closeStart,
+    closeEnd: closed ? close.end : closeStart,
+    openTag: found.openTag,
+    closeTag: closed ? close.raw : '',
+    assumedClose: !closed,
+    fromMarker: true,
+    mode: 'bilingual',
+    inner: source.slice(found.contentStart, closeStart),
+  };
+}
+
+// Where `source[from, to)` ends once the excluded blocks and comments it ends on (and the blank space
+// between them) are set aside; `to` itself when it ends on none.
+function withoutTrailingExcluded(source, from, to, excludedTags) {
+  const inner = source.slice(from, to);
+  let ranges;
+  try {
+    ranges = outermostExcludedRanges(inner, excludedTags, { quoteAware: true });
+  } catch {
+    return to;
+  }
+  let end = inner.length;
+  let trimmed = false;
+  for (;;) {
+    let edge = end;
+    while (edge > 0 && /\s/u.test(inner[edge - 1])) edge -= 1;
+    const last = ranges.find(range => range.end === edge);
+    if (!last) break;
+    end = last.start;
+    trimmed = true;
+  }
+  if (!trimmed) return to;
+  while (end > 0 && /\s/u.test(inner[end - 1])) end -= 1;
+  return from + end;
 }
 
 // True when the tag opens but never closes, which is what a half-streamed floor looks like.
@@ -2682,11 +2770,14 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags,
   const mode = options.mode === 'replace' ? 'replace' : 'bilingual';
   const regions = [];
   const missingTags = [];
+  // Closing tags written without their opening one: where a body found by its 「正文起点」 ends.
+  const strayCloseAt = [];
   let unbalanced = 0;
   let assumedCloses = 0;
   for (const tag of tags) {
     const groups = scanTagGroups(source, tag);
     unbalanced += (groups.unclosedOpens || 0) + (groups.strayCloses || 0);
+    strayCloseAt.push(...(groups.strayCloseStack ?? []));
     // Some presets never emit the closing tag at all. A hard failure helps nobody, so an opener with
     // no partner is read as running to the end of the message. Complete groups always win over this.
     if (!groups.length && groups.unclosedStack?.length) {
@@ -2718,10 +2809,14 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags,
     if (mode === 'replace') {
       return { source, regions, missingTags, unbalanced, assumedCloses };
     }
+    // None of the tags, but one of the 「正文起点」 markers: the body is what follows it.
+    const fallback = markerRegion(source, options.startMarkers, { closes: strayCloseAt, stopsAt: options.stopsAt, excludedTags: options.excludedTags });
+    if (fallback) return { source, regions: [fallback], missingTags, unbalanced, assumedCloses, nested: [], startMarker: fallback.openTag };
     if (unbalanced) {
       throw new Error(`正文标签没有成对闭合：${tags.map(tag => `<${tag}>`).join('、')}。这一楼可能还在生成，或预设输出的标签不完整。`);
     }
-    throw new Error(`当前 AI 回复中没有找到正文标签：${tags.map(tag => `<${tag}>`).join('、')}。`);
+    const noMarker = parseStartMarkers(options.startMarkers).length ? '，也没有找到正文起点' : '';
+    throw new Error(`当前 AI 回复中没有找到正文标签：${tags.map(tag => `<${tag}>`).join('、')}${noMarker}。`);
   }
   regions.sort((left, right) => left.openStart - right.openStart);
   // A main model does not always put a block in the same place: <parallel_line> after <story_scene> one
@@ -2749,6 +2844,17 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags,
   return { source, regions: kept, missingTags, unbalanced, assumedCloses, nested };
 }
 
+/**
+ * A floor's regions to translate: its body tags' (or, with none of them there, the body after its
+ * 「正文起点」, which stops where a replace region begins) and its replace tags'.
+ */
+export function extractFloorRegions(text, { bodyTags, replaceTags, startMarkers, excludedTags } = {}) {
+  const replaceList = parseTagNames(replaceTags);
+  const replace = replaceList.length ? extractTaggedRegions(text, replaceList, { mode: 'replace' }) : null;
+  const body = extractTaggedRegions(text, bodyTags, { startMarkers, excludedTags, stopsAt: (replace?.regions ?? []).map(region => region.openStart) });
+  return mergeExtractedRegions(body, replace);
+}
+
 // Body and replace regions live in one floor and are rebuilt in a single pass, so they may sit side
 // by side but never overlap. Both the runtime path and the tag inspector go through here, which is
 // what lets the inspector warn about a nesting the translation would otherwise only hit at run time.
@@ -2766,6 +2872,8 @@ export function mergeExtractedRegions(body, replace) {
     missingTags: [...(body?.missingTags ?? []), ...(replace?.missingTags ?? [])],
     unbalanced: (body?.unbalanced || 0) + (replace?.unbalanced || 0),
     assumedCloses: (body?.assumedCloses || 0) + (replace?.assumedCloses || 0),
+    // The 「正文起点」 the body was found by, when none of the body tags was there.
+    startMarker: body?.startMarker ?? null,
   };
 }
 
@@ -2785,7 +2893,6 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
           ? `最后一组 <${tag}> 没有对应的结束标签，已改用前面 ${groups.length} 组完整内容。`
           : `<${tag}> 没有结束标签，已把开标签之后到楼层末尾的内容当作正文。`);
       }
-      if (strayCloses) errors.push(`发现 ${strayCloses} 个没有对应开始标签的 </${tag}>，已忽略。`);
       return {
         tag,
         count: groups.length,
@@ -2824,6 +2931,22 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
       return { tag, count: 0, error: error.message };
     }
   });
+  // None of the body tags there at all: the body its 「正文起点」 finds instead, when one is set and there.
+  const startMarkers = parseStartMarkers(segmentOptions.bodyStartMarkers);
+  let fallback = null;
+  if (startMarkers.length && bodyResults.every(result => !result.count && !result.unclosedOpens && !result.error)) {
+    try {
+      fallback = extractFloorRegions(source, { bodyTags: body, replaceTags: replace, startMarkers, excludedTags: excluded });
+      if (!fallback.startMarker) fallback = null;
+    } catch {
+      fallback = null;
+    }
+  }
+  // A closing tag without its opening one ends the body a 「正文起点」 found; otherwise it is left out.
+  for (const result of bodyResults) {
+    if (result.strayCloses && !fallback) errors.push(`发现 ${result.strayCloses} 个没有对应开始标签的 </${result.tag}>，已忽略。`);
+  }
+  const markerRegionFound = fallback?.regions.find(region => region.fromMarker) ?? null;
   let paragraphs = 0;
   let translationUnits = 0;
   let customPreservedLines = 0;
@@ -2832,16 +2955,19 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   let lyricLines = 0;
   const structuralTags = new Set();
   let nested = [];
-  if (!errors.length && bodyResults.some(result => result.count)) {
+  if (fallback || (!errors.length && bodyResults.some(result => result.count))) {
     try {
-      const bodyExtraction = extractTaggedRegions(source, body);
-      // A body block written inside another one is translated with it (extractTaggedRegions); the report
-      // says so, so 「采用第 N 组」 is not read as that block being translated on its own.
-      nested = bodyExtraction.nested ?? [];
-      const extraction = mergeExtractedRegions(
-        bodyExtraction,
-        replace.length ? extractTaggedRegions(source, replace, { mode: 'replace' }) : null,
-      );
+      let extraction = fallback;
+      if (!extraction) {
+        const bodyExtraction = extractTaggedRegions(source, body);
+        // A body block written inside another one is translated with it (extractTaggedRegions); the report
+        // says so, so 「采用第 N 组」 is not read as that block being translated on its own.
+        nested = bodyExtraction.nested ?? [];
+        extraction = mergeExtractedRegions(
+          bodyExtraction,
+          replace.length ? extractTaggedRegions(source, replace, { mode: 'replace' }) : null,
+        );
+      }
       let nextId = 1;
       for (const region of extraction.regions) {
         const segmented = segmentSource(region.inner, { ...segmentOptions, excludedTags: excluded, startId: nextId });
@@ -2860,6 +2986,11 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   }
   return {
     bodyTags: bodyResults,
+    // The 「正文起点」 the body was found by, and where it runs to: a closing tag, the end of the floor, or
+    // (neither) the replace region after it.
+    startMarker: markerRegionFound
+      ? { marker: markerRegionFound.openTag, until: markerRegionFound.closeTag, toEnd: markerRegionFound.closeStart >= source.length }
+      : null,
     nestedTags: nested.map(item => ({ tag: item.tagName, outer: item.outerTagName })),
     excludedTags: excludedResults,
     replaceTags: replaceResults,

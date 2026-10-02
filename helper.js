@@ -34,7 +34,7 @@ import {
   pathSet,
   presetDrift,
   unwrapResponseContent,
-} from './core.js?v=0.42.1';
+} from './core.js?v=0.42.2';
 
 // ---------------------------------------------------------------------------------------------
 // Default prompt and quick questions
@@ -163,6 +163,7 @@ export function buildSettingsSummaryLines(settings = {}) {
   lines.push(`自动接续翻译：${boolLabel(settings.autoGeneration)}`);
   lines.push(`切换滑动页时补译：${boolLabel(settings.autoSwipe)}${settings.autoSwipe && !settings.autoGeneration ? '（自动接续翻译关着，这一项不生效）' : ''}`);
   lines.push(`提取标签：${(settings.bodyTags || []).join('、') || '（空）'}`);
+  lines.push(`正文起点（找不到提取标签时用）：${(settings.bodyStartMarkers || []).join('、') || '（空）'}`);
   lines.push(`替换标签：${(settings.replaceTags || []).join('、') || '（空）'}`);
   lines.push(`排除标签：${(settings.excludedTags || []).join('、') || '（空）'}`);
   lines.push(`只留译文：${boolLabel(settings.translationOnly)}`);
@@ -197,7 +198,7 @@ export function buildFloorSnapshotLines(floor) {
   const lines = [];
   lines.push(`第 ${floor.messageId} 楼 · ${floor.role || '角色'} · 滑动页 ${floor.swipeLabel || '—'}`);
   lines.push(`段落：${floor.segmentCount ?? 0} 段 · 翻译状态：${floor.translationState || '未知'}`);
-  lines.push(`正文标签：${floor.bodyTagsFound?.length ? floor.bodyTagsFound.join('、') : '未找到'}`);
+  lines.push(`正文标签：${floor.bodyTagsFound?.length ? floor.bodyTagsFound.join('、') : floor.startMarkerFound ? `未找到，按正文起点「${floor.startMarkerFound}」后面算正文` : '未找到'}`);
   lines.push(`替换标签：${floor.replaceTagsFound?.length ? floor.replaceTagsFound.join('、') : '未设置或未找到'}`);
   lines.push(`排除标签：${floor.excludedTagsFound?.length ? floor.excludedTagsFound.join('、') : '未设置或未找到'}`);
   lines.push(`只留译文（这一楼）：${floor.translationOnly ? '是' : '否'}`);

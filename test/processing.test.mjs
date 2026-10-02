@@ -290,6 +290,15 @@ test('an existing profile\'s saved built-in beautify rule picks up the balanced-
   assert.equal(edited.regexScripts[0].findRegex, legacyFindRegex, 'a replaceString the reader wrote themselves means the rule is theirs, not migrated');
 });
 
+test('a 正文方案 carries its 「正文起点」 with the other extraction settings', () => {
+  const settings = normalizeProcessingSettings({ bodyStartMarkers: ['</konatan_planning~>'] });
+  assert.deepEqual(processingSnapshot(settings).bodyStartMarkers, ['</konatan_planning~>']);
+  const profile = normalizeProcessingProfile({ name: '泉此方', settings: { bodyTags: ['content'], bodyStartMarkers: '</konatan_planning~>\n</think>' }, regexScripts: [] });
+  assert.deepEqual(profile.settings.bodyStartMarkers, ['</konatan_planning~>', '</think>']);
+  // A 方案 saved before the setting existed has none.
+  assert.deepEqual(normalizeProcessingProfile({ name: '旧', settings: { bodyTags: ['story_scene'] }, regexScripts: [] }).settings.bodyStartMarkers, []);
+});
+
 test('a comment in the body is neither translated nor read, and is written back as it was', () => {
   const body = '\n<!-- plotThink:\n[当前张力]: 7/10\n[本轮节奏倾向]: 清晨\n-->\n\n翌朝の空気は澄み切っていた。\n\n「行ってくる」<!-- 小注 -->彼女は頷いた。\n';
   const segmented = segmentSource(body, { paragraphPerLine: true });

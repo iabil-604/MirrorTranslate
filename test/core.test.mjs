@@ -42,6 +42,7 @@ import {
   extractGeneratedTranslations,
   extractReasoningText,
   extractTaggedRegion,
+  extractFloorRegions,
   extractTaggedRegions,
   interceptGenerationChat,
   planTranslationBatches,
@@ -50,6 +51,7 @@ import {
   withoutCarriedColor,
   lineFormatting,
   mergeSettings,
+  parseStartMarkers,
   normalizeTts,
   TTS_MODES,
   getActiveChannel,
@@ -1881,6 +1883,64 @@ test('an excluded tag is left out whole when its quoted attribute holds < or >, 
   // A quote left open is read the way tags always were: the tag ends at the first >.
   assert.deepEqual(texts(segmentSource('彼は<b title="oops>笑った。</b>\n雨が降る。', options)), ['彼は笑った。', '雨が降る。']);
   assert.equal(inspectTagConfiguration('<story_scene>彼は笑った。<pic prompt="x">\n<pic prompt="a > b"/></story_scene>', ['story_scene'], ['pic']).excludedTags[0].count, 2);
+});
+
+test('a reply with none of the extraction tags is read from its 「正文起点」 on', () => {
+  // A preset that writes its chain of thought, ends it, and writes the story with no tag around it.
+  const reply = '思考：放学后的场景。\n</konatan_planning~>\n<tucao>这次写放学后。</tucao>\n陽光が差し込む。\n\n善福寺は笑った。\n<current_event>MQ.Ⅰ</current_event>';
+  const markers = ['</konatan_planning~>'];
+  const found = extractTaggedRegions(reply, ['content'], { startMarkers: markers });
+  assert.equal(found.startMarker, '</konatan_planning~>');
+  assert.equal(found.regions.length, 1);
+  assert.equal(found.regions[0].inner, '\n<tucao>这次写放学后。</tucao>\n陽光が差し込む。\n\n善福寺は笑った。\n<current_event>MQ.Ⅰ</current_event>');
+  // With the blocks around the story excluded, only the story is translated.
+  const segmented = segmentSource(found.regions[0].inner, { excludedTags: ['tucao', 'current_event'] });
+  assert.deepEqual(segmented.segments.map(segment => segment.text), ['陽光が差し込む。', '善福寺は笑った。']);
+  // And the excluded blocks it ends on stay outside it, as a closing tag would have left them: the last
+  // paragraph's translation follows the paragraph, not the panel.
+  const trimmed = extractFloorRegions(reply, { bodyTags: ['content'], startMarkers: markers, excludedTags: ['tucao', 'current_event'] }).regions[0];
+  assert.equal(trimmed.inner, '\n<tucao>这次写放学后。</tucao>\n陽光が差し込む。\n\n善福寺は笑った。');
+  assert.equal(reply.slice(trimmed.closeStart), '\n<current_event>MQ.Ⅰ</current_event>');
+  const layout = segmentSource(trimmed.inner, { excludedTags: ['tucao', 'current_event'] }).layout;
+  const bilingual = `${reply.slice(0, trimmed.contentStart)}${assembleBilingual(layout, new Map([[1, '阳光照进来。'], [2, '善福寺笑了。']]), {})}${reply.slice(trimmed.closeStart)}`;
+  assert.ok(bilingual.indexOf('善福寺笑了。') < bilingual.indexOf('<current_event>'));
+  // A block in the middle of the story is not one it ends on.
+  assert.equal(extractFloorRegions('思考</konatan_planning~>本文。\n<current_event>X</current_event>\n続き。', { bodyTags: ['content'], startMarkers: markers, excludedTags: ['current_event'] }).regions[0].inner, '本文。\n<current_event>X</current_event>\n続き。');
+  // The last marker to appear wins, whatever its case, and whichever of several it is.
+  const twice = 'の</KONATAN_PLANNING~>は</konatan_planning~>本文。';
+  assert.equal(extractTaggedRegions(twice, ['content'], { startMarkers: markers }).regions[0].inner, '本文。');
+  assert.equal(extractTaggedRegions('<think>…</think>前置き</konatan_planning~>本文。', ['content'], { startMarkers: ['</konatan_planning~>', '</think>'] }).regions[0].inner, '本文。');
+  // A closing tag written without its opening one ends the body there.
+  const closed = extractTaggedRegions('思考</konatan_planning~>本文。</content>\n<advice>次へ</advice>', ['content'], { startMarkers: markers });
+  assert.equal(closed.regions[0].inner, '本文。');
+  assert.equal(closed.regions[0].closeTag, '</content>');
+  // A replace region after it is not swallowed: the body stops where it begins.
+  const both = extractFloorRegions('思考</konatan_planning~>本文。\n<status>晴れ</status>', { bodyTags: ['content'], replaceTags: ['status'], startMarkers: markers });
+  assert.deepEqual(both.regions.map(region => [region.mode, region.inner]), [['bilingual', '本文。\n'], ['replace', '晴れ']]);
+  // The tags, when they are there, win; without a marker either, the floor says so.
+  assert.equal(extractTaggedRegions('</konatan_planning~><content>本文。</content>', ['content'], { startMarkers: markers }).regions[0].inner, '本文。');
+  assert.throws(() => extractTaggedRegions('本文だけ。', ['content'], { startMarkers: markers }), /没有找到正文标签：<content>，也没有找到正文起点/);
+  assert.throws(() => extractTaggedRegions('本文だけ。', ['content']), /没有找到正文标签：<content>。/);
+});
+
+test('「正文起点」 is kept one marker a line, and 检查当前楼层 says the body came from it', () => {
+  assert.deepEqual(DEFAULT_SETTINGS.bodyStartMarkers, []);
+  assert.deepEqual(mergeSettings({}).bodyStartMarkers, []);
+  assert.deepEqual(parseStartMarkers(' </think> \r\n\n</THINK>\n</konatan_planning~>'), ['</think>', '</konatan_planning~>']);
+  assert.deepEqual(parseStartMarkers(['a', 'b', '']), ['a', 'b']);
+  assert.equal(parseStartMarkers(Array.from({ length: 15 }, (_, index) => `m${index}`)).length, 10);
+  assert.equal(parseStartMarkers('x'.repeat(300))[0].length, 200);
+  assert.deepEqual(mergeSettings({ bodyStartMarkers: '</think>\n</think>' }).bodyStartMarkers, ['</think>']);
+  const reply = '思考</konatan_planning~>\n陽光が差し込む。\n\n善福寺は笑った。</content>';
+  const report = inspectTagConfiguration(reply, ['content'], [], { bodyStartMarkers: ['</konatan_planning~>'] });
+  assert.deepEqual(report.startMarker, { marker: '</konatan_planning~>', until: '</content>', toEnd: false });
+  assert.equal(report.translationUnits, 2);
+  assert.deepEqual(report.errors, [], 'the closing tag that ends the body is not a problem');
+  // Without the setting it is the same floor as before: no body, and the lone closing tag reported.
+  const plain = inspectTagConfiguration(reply, ['content'], []);
+  assert.equal(plain.startMarker, null);
+  assert.equal(plain.translationUnits, 0);
+  assert.match(plain.errors.join(''), /没有对应开始标签的 <\/content>/);
 });
 
 test('paragraphs carried over by their source text pair up in order, a repeated text in turn', () => {
