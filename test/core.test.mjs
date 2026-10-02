@@ -18,7 +18,13 @@ import {
   assembleReplace,
   assembleTranslationOnly,
   floorText,
+  hashFloorText,
+  hashText,
   hashTextSync,
+  sha256Hex,
+  storedHashMatches,
+  matchSegmentsBySource,
+  remapTranslationsBySource,
   readFloor,
   restoreStrippedForPrompt,
   HIDDEN_START,
@@ -1826,6 +1832,68 @@ test('a floor with only its translation left in it is read from the text kept fo
   assert.equal(hashTextSync('a\r\nb'), hashTextSync('a\nb'));
 });
 
+test('a floor\'s record hash comes out the same on a page with the browser\'s digest and on one without it', async t => {
+  const browser = globalThis.crypto;
+  const restore = () => Object.defineProperty(globalThis, 'crypto', { value: browser, configurable: true, writable: true });
+  t.after(restore);
+  // Lengths around the 55/56/64-byte edges of the padding, multi-byte text and an emoji sequence.
+  const samples = ['', 'abc', 'x'.repeat(55), 'x'.repeat(56), 'y'.repeat(64), 'z'.repeat(1000), '雨が降っている。\n下雨了。', '🎵\u200d中文'];
+  for (const text of samples) {
+    const digest = await browser.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    const expected = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    assert.equal(sha256Hex(text), expected, `length ${text.length}`);
+  }
+  const withDigest = await hashFloorText('雨\r\n風');
+  const cacheWithDigest = await hashText('雨\r\n風');
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true, writable: true });
+  assert.equal(await hashFloorText('雨\n風'), withDigest);
+  // Reading caches live in each page's own storage: their keys on such a page stay what they were.
+  assert.equal(await hashText('雨\n風'), hashTextSync('雨\n風'));
+  restore();
+  assert.notEqual(cacheWithDigest, hashTextSync('雨\n風'));
+  // A record written there before v0.42.1 carries the short fingerprint, and is checked as one.
+  assert.equal(await storedHashMatches(hashTextSync('sig'), 'sig'), true);
+  assert.equal(await storedHashMatches(await hashFloorText('sig'), 'sig'), true);
+  assert.equal(await storedHashMatches(hashTextSync('other'), 'sig'), false);
+  assert.equal(await storedHashMatches('', 'sig'), false);
+  assert.equal(await storedHashMatches(undefined, 'sig'), false);
+});
+
+test('an excluded tag is left out whole when its quoted attribute holds < or >, and one that never closes is left out on its own', () => {
+  const options = { excludedTags: ['pic'], translationPrefix: '{', translationSuffix: '}' };
+  const texts = segmented => segmented.segments.map(segment => segment.text);
+  // A picture's prompt with a LoRA in it, and one with a bare >.
+  const lora = '彼は笑った。\n<pic prompt="1girl, <lora:style:0.6>, rain"/>\n雨が降る。';
+  assert.deepEqual(texts(segmentSource(lora, options)), ['彼は笑った。', '雨が降る。']);
+  assert.deepEqual(texts(segmentSource('彼は笑った。<pic prompt="a > b"/>\n雨が降る。', options)), ['彼は笑った。', '雨が降る。']);
+  // A floor translated under the rules before stays as it was segmented, so its translation still matches.
+  assert.deepEqual(texts(segmentSource(lora, { ...options, segmentationVersion: 3 })), ['彼は笑った。', '<pic prompt="1girl, <lora:style:0.6>, rain"/>', '雨が降る。']);
+  // The tag is still there in a floor with only its translation left, and in a replace region.
+  const both = segmentSource(lora, options);
+  const translations = new Map([[both.segments[0].id, '他笑了。'], [both.segments[1].id, '下雨了。']]);
+  assert.equal(assembleTranslationOnly(both.layout, translations, options), '他笑了。\n<pic prompt="1girl, <lora:style:0.6>, rain"/>\n下雨了。');
+  const inline = segmentSource('彼は笑った。<pic prompt="x">\n雨が降る。', options);
+  const inlineTranslations = new Map([[inline.segments[0].id, '他笑了。'], [inline.segments[1].id, '下雨了。']]);
+  assert.equal(assembleTranslationOnly(inline.layout, inlineTranslations, options), '他笑了。<pic prompt="x">\n下雨了。');
+  assert.match(assembleReplace(inline.layout, inlineTranslations, {}), /他笑了。<pic prompt="x">\n下雨了。/);
+  // A tag that does close keeps everything inside it left out, as before.
+  assert.deepEqual(texts(segmentSource('<pic prompt="x">彼は笑った。</pic>\n雨が降る。', options)), ['雨が降る。']);
+  // A quote left open is read the way tags always were: the tag ends at the first >.
+  assert.deepEqual(texts(segmentSource('彼は<b title="oops>笑った。</b>\n雨が降る。', options)), ['彼は笑った。', '雨が降る。']);
+  assert.equal(inspectTagConfiguration('<story_scene>彼は笑った。<pic prompt="x">\n<pic prompt="a > b"/></story_scene>', ['story_scene'], ['pic']).excludedTags[0].count, 2);
+});
+
+test('paragraphs carried over by their source text pair up in order, a repeated text in turn', () => {
+  const before = [{ id: 1, text: 'A' }, { id: 2, text: 'B' }, { id: 3, text: 'A' }];
+  const after = [{ id: 1, text: 'C' }, { id: 2, text: 'A' }, { id: 3, text: 'B' }, { id: 4, text: 'A' }];
+  assert.deepEqual([...matchSegmentsBySource(before, () => true, after)], [[2, 1], [3, 2], [4, 3]]);
+  // Only the earlier paragraphs named take part.
+  assert.deepEqual([...matchSegmentsBySource(before, id => id !== 1, after)], [[2, 3], [3, 2]]);
+  const translations = new Map([[1, 'a1'], [2, 'b'], [3, 'a3']]);
+  assert.deepEqual([...remapTranslationsBySource(before, translations, after)], [[2, 'a1'], [3, 'b'], [4, 'a3']]);
+  assert.equal(remapTranslationsBySource(before, new Map(), after).size, 0);
+});
+
 test('the main model is shown the original of a floor with only its translation left in it', () => {
   const settings = { translationPrefix: '{', translationSuffix: '}' };
   const layout = segmentSource('\n雨が降っている。\n', settings).layout;
@@ -1877,12 +1945,51 @@ test('a record is told to be a floor’s by what the floor holds, never by the s
   assert.deepEqual(state({ mes: oneWord, swipe_id: 0, extra: record(5) }), { stripped: true, diverged: true, mirror: false });
   const everyLine = projection.replace('一个人也没有。', '一个人也没有！').replace('照着桌面。', '照着桌面！');
   assert.deepEqual(state({ mes: everyLine, swipe_id: 0, extra: record(0) }), { stripped: true, diverged: true, mirror: false });
-  // Continued from the translation (the prompt could not be given the original): protected.
-  assert.equal(readFloor({ mes: `${projection}\n她叹了口气。`, swipe_id: 0, extra: record(0) }).diverged, true);
+  // Continued from the translation (the prompt could not be given the original) inside a body that never
+  // closed: the region itself changed, so it is protected.
+  const openMirror = mirror.replace('</story_scene>', '');
+  const openProjection = projection.replace('</story_scene>', '');
+  const openRecord = { [MESSAGE_META_KEY]: { ...meta, mirror: openMirror, projection_hash: hashTextSync(openProjection), swipe_id: 0 } };
+  assert.equal(readFloor({ mes: `${openProjection}\n她叹了口气。`, swipe_id: 0, extra: openRecord }).diverged, true);
+  // After the closing tag, it is text around the region, and the region is still the record's.
+  const after = readFloor({ mes: `${projection}\n她叹了口气。`, swipe_id: 0, extra: record(0) });
+  assert.deepEqual({ stripped: after.stripped, diverged: after.diverged, text: after.text }, { stripped: true, diverged: false, text: `${mirror}\n她叹了口气。` });
   // Continued from the original, with the host's clean-up of spaces at line ends: an ordinary floor.
   const spaced = mirror.replace('いなかった。', 'いなかった。  ');
   const continued = `${stripGeneratedTranslationLines(mirror, meta)}\n桜井が振り返った。`;
   assert.deepEqual(state({ mes: continued, swipe_id: 0, extra: { [MESSAGE_META_KEY]: { ...meta, mirror: spaced, swipe_id: 0 } } }), { stripped: false, diverged: false, mirror: false });
+});
+
+test('a floor with only its translation left keeps its record when a script adds text around the body, and the main model still gets the original', () => {
+  const settings = { translationPrefix: '{', translationSuffix: '}' };
+  const layout = segmentSource('\n夕暮れの教室には、誰もいなかった。\n', settings).layout;
+  const translations = new Map([[1, '傍晚的教室里，一个人也没有。']]);
+  const mirror = `<story_scene>${assembleBilingual(layout, translations, settings)}</story_scene>`;
+  const projection = `<story_scene>${assembleTranslationOnly(layout, translations, settings)}</story_scene>`;
+  const meta = { schema_version: 4, swipe_id: 0, stripped: true, mirror, projection_hash: hashTextSync(projection), body_tags: ['story_scene'] };
+  const floor = mes => ({ mes, swipe_id: 0, extra: { [MESSAGE_META_KEY]: meta } });
+  // An image script puts a picture's prompt after the body; a status script puts a line before it.
+  const picture = '\n<pic prompt="1girl, <lora:style:0.6>, classroom, sunset"/>';
+  const status = '【傍晚 · 教室】\n';
+  for (const [mes, text] of [
+    [`${projection}${picture}`, `${mirror}${picture}`],
+    [`${status}${projection}`, `${status}${mirror}`],
+    [`${status}${projection}${picture}`, `${status}${mirror}${picture}`],
+  ]) {
+    const read = readFloor(floor(mes));
+    assert.deepEqual({ stripped: read.stripped, diverged: read.diverged, text: read.text }, { stripped: true, diverged: false, text });
+    // The main model is shown the original, the script's addition with it.
+    const prompt = restoreStrippedForPrompt({ mes }, floor(mes));
+    assert.equal(prompt.mes, text);
+  }
+  // A word changed inside the body is still a change to the translation.
+  assert.equal(readFloor(floor(`${projection.replace('一个人也没有', '一个人都没有')}${picture}`)).diverged, true);
+  // A record that names a replace tag reads the floor by it too.
+  const both = `${projection}\n<status>晴れ</status>`;
+  const replaceRecord = { ...meta, replace_tags: ['status'], mirror: `${mirror}\n<status>晴れ</status>`, projection_hash: hashTextSync(both) };
+  const moved = readFloor({ mes: `${both}${picture}`, swipe_id: 0, extra: { [MESSAGE_META_KEY]: replaceRecord } });
+  assert.equal(moved.diverged, false);
+  assert.equal(moved.text, `${mirror}\n<status>晴れ</status>${picture}`);
 });
 
 test('the gate takes the newest reply only, and a render with no type only after a start with none', () => {

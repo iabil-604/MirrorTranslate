@@ -15,9 +15,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.42.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.42.0';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.42.0';
+} from './core.js?v=0.42.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.42.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.42.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -1163,9 +1163,11 @@ export function scriptOutline(script, text) {
   const value = String(script ?? '').trim();
   const words = String(text ?? '').trim();
   if (!value || !words) return '';
-  const lead = value.match(LEADING_SCRIPT_TAGS_RE)?.[1].replace(/\s+/g, '') ?? '';
+  // The tags of a run, each whole and side by side: [clear throat] keeps its own space.
+  const tagsOf = run => (String(run ?? '').match(/\[[^\]]+\]/g) ?? []).join('');
+  const lead = tagsOf(value.match(LEADING_SCRIPT_TAGS_RE)?.[1]);
   const rest = lead ? value.replace(LEADING_SCRIPT_TAGS_RE, '') : value;
-  const trail = rest.trim() ? rest.match(TRAILING_SCRIPT_TAGS_RE)?.[1].replace(/\s+/g, '') ?? '' : '';
+  const trail = rest.trim() ? tagsOf(rest.match(TRAILING_SCRIPT_TAGS_RE)?.[1]) : '';
   if (!lead && !trail) return '';
   return `${lead ? `${lead} ` : ''}${words}${trail ? ` ${trail}` : ''}`;
 }
@@ -2171,14 +2173,17 @@ const S1_SCRIPT_TAGS = Object.freeze({
   laughter: 'laughing', snicker: 'chuckling', 'clear throat': 'clear throat', pause: 'break',
 });
 const LATIN_EDGE_RE = /[A-Za-z0-9]/;
+const CJK_EDGE_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 function compileScript(script, result, { model = 's2-pro', emotionCues = true } = {}) {
   const text = String(script).trim();
-  // A tag taken out leaves a space only between two Latin words; Chinese and Japanese close up.
+  // A tag taken out leaves a space beside a Latin word (Well, I guess) unless Chinese, Japanese or
+  // Korean is on either side, which close up.
   const join = (match, offset, whole, cue) => {
     const before = whole[offset - 1] ?? '';
     const after = whole[offset + match.length] ?? '';
-    const gap = LATIN_EDGE_RE.test(before) && LATIN_EDGE_RE.test(after) ? ' ' : '';
+    const gap = before && after && (LATIN_EDGE_RE.test(before) || LATIN_EDGE_RE.test(after))
+      && !CJK_EDGE_RE.test(before) && !CJK_EDGE_RE.test(after) ? ' ' : '';
     return cue ? `${before ? ' ' : ''}${cue}${after ? ' ' : ''}` : gap;
   };
   let out;
@@ -2426,15 +2431,20 @@ function shortPerformedLine(script) {
 export function sentenceSampling(item, fish, { prosodySplit = true } = {}) {
   const set = Number(fish?.temperature);
   const base = Number.isFinite(set) ? set : 0.7;
-  if (!prosodySplit) return { temperature: base };
   const voice = item?.segment?.voice;
-  const tension = Number(item?.override?.tension ?? voice?.tensionLevel);
+  // The reader's own number was set for this one sentence, and holds however the reading is split.
+  const own = item?.override?.tension === undefined ? NaN : Number(item.override.tension);
+  const ownSet = Object.hasOwn(TENSION_TEMPERATURE, own);
+  if (!prosodySplit && !ownSet) return { temperature: base };
+  const tension = ownSet ? own : Number(voice?.tensionLevel);
   let temperature = base;
   if (Object.hasOwn(TENSION_TEMPERATURE, tension)) {
     temperature = Math.min(Math.max(TEMPERATURE_CEILING, base), Math.max(0.1, base + TENSION_TEMPERATURE[tension]));
   }
   const out = {};
-  if (typeof voice?.script === 'string' && voice.script.trim() && shortPerformedLine(voice.script)) {
+  // What is actually said: the reader's own words where they rewrote the line, else the reading's script.
+  const said = String(item?.override?.text || (typeof voice?.script === 'string' ? voice.script : ''));
+  if (said.trim() && shortPerformedLine(said)) {
     temperature = Math.min(temperature, base);
     out.repetitionPenalty = SHORT_LINE_PENALTY;
   }
@@ -2460,7 +2470,7 @@ export function stripCues(text) {
  * decides, and it counts what the request carries: every sentence as it is sent (`textOf`, its cues
  * included), the line breaks between sentences and the speaker tags.
  */
-export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosodySplit = true, wholeFloor = false, textOf = null } = {}) {
+export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosodySplit = true, wholeFloor = false, textOf = null, fish = null } = {}) {
   const multi = fishSupportsMultiSpeaker(model);
   const budget = Math.max(1, Number(maxChars) || 1500);
   const sent = typeof textOf === 'function' ? item => String(textOf(item)) : item => String(item.segment.text);
@@ -2472,9 +2482,12 @@ export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosod
   for (const item of Array.isArray(items) ? items : []) {
     const hasVoice = Boolean(item.voiceId);
     // Sent as one piece, the floor keeps one prosody: a change of speed or volume is no reason to cut it.
+    // Otherwise sentences share a request only where they would be sent alike at the reader's own
+    // speed, volume and temperature: a reader's own speed is absolute, the reading's steps are relative
+    // to theirs, and at another base the two can coincide where at the real one they do not.
     const step = wholeFloor ? '' : JSON.stringify([
-      sentenceProsody(item, { speed: 1, volume: 0, model }, { prosodySplit }),
-      sentenceSampling(item, { temperature: 0.7 }, { prosodySplit }),
+      sentenceProsody(item, fish ? { ...fish, model } : { speed: 1, volume: 0, model }, { prosodySplit }),
+      sentenceSampling(item, fish ?? { temperature: 0.7 }, { prosodySplit }),
     ]);
     if (run.length && ((!multi && item.voiceId !== voice) || hasVoice !== voiced || step !== prosody)) {
       runs.push(run);
@@ -2629,8 +2642,11 @@ export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit
     const rewritten = Boolean(item.override?.text) || (typeof item.segment?.voice?.script === 'string' && item.segment.voice.script.trim());
     spans.push({ id: item.segment.id, text: rewritten ? stripCues(sentence) : item.segment.text });
   });
-  const prosody = list.length && !wholeFloor ? sentenceProsody(list[0], fish, { prosodySplit }) : flatProsody(fish);
-  const sampling = list.length && !wholeFloor ? sentenceSampling(list[0], fish, { prosodySplit }) : { temperature: fish.temperature };
+  // A reader's own take is one sentence by itself, even where the floor goes whole: its pace, volume and
+  // tension are its own.
+  const flat = wholeFloor && !(list.length === 1 && list[0].override?.text);
+  const prosody = list.length && !flat ? sentenceProsody(list[0], fish, { prosodySplit }) : flatProsody(fish);
+  const sampling = list.length && !flat ? sentenceSampling(list[0], fish, { prosodySplit }) : { temperature: fish.temperature };
   const body = {
     text,
     ...(voices.length ? { reference_id: multi ? voices : voices[0] } : {}),
@@ -2693,9 +2709,9 @@ export const FISH_ADAPTER = Object.freeze({
   /** The text one sentence sends: its cues in the provider's markup ahead of the words. */
   sentenceText: (item, tts) => sentenceFishText(item, tts.fish, fishCompileOptions(tts)),
   /** The provider's prosody parameters for one sentence; a floor sent whole has the floor's. */
-  prosody: (item, tts) => (sendsWholeFloor(tts) ? flatProsody(tts.fish) : sentenceProsody(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false })),
+  prosody: (item, tts) => (sendsWholeFloor(tts) && !item?.override?.text ? flatProsody(tts.fish) : sentenceProsody(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false })),
   /** Fish's temperature for one sentence, and a repetition penalty where one is sent. */
-  sampling: (item, tts) => (sendsWholeFloor(tts) ? { temperature: tts.fish.temperature } : sentenceSampling(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false })),
+  sampling: (item, tts) => (sendsWholeFloor(tts) && !item?.override?.text ? { temperature: tts.fish.temperature } : sentenceSampling(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false })),
   /** A unit's items cut into requests, measured by the text each sentence is actually sent as. */
   parts: (items, tts) => planFishParts(items, {
     model: tts.fish.model,
@@ -2703,6 +2719,7 @@ export const FISH_ADAPTER = Object.freeze({
     prosodySplit: tts?.prosodySplit !== false,
     wholeFloor: sendsWholeFloor(tts),
     textOf: item => sentenceFishText(item, tts.fish, fishCompileOptions(tts)),
+    fish: tts.fish,
   }),
   /** One request's body, with the span each sentence occupies in its text. */
   payload: (items, tts) => buildFishPayload(items, tts.fish, { ...fishCompileOptions(tts), wholeFloor: sendsWholeFloor(tts) }),

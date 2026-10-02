@@ -1,7 +1,8 @@
-import { extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, DEFAULT_QUOTE_PAIRS, MESSAGE_META_KEY } from './core.js?v=0.42.0';
-import { composeAnnotationSection, composeLyricsSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.42.0';
-import { EMOTION_KEYS } from './palette.js?v=0.42.0';
-import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOFT_MOODS, SOUND_CUES, SOUND_PLACE_RULE, SOUND_TAGS, TONE_CUES } from './tts.js?v=0.42.0';
+import { extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, DEFAULT_QUOTE_PAIRS, MESSAGE_META_KEY } from './core.js?v=0.42.1';
+import { composeAnnotationSection, composeLyricsSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.42.1';
+import { EMOTION_KEYS } from './palette.js?v=0.42.1';
+import { composeSceneSection } from './scene.js?v=0.42.1';
+import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOFT_MOODS, SOUND_CUES, SOUND_PLACE_RULE, SOUND_TAGS, TONE_CUES } from './tts.js?v=0.42.1';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -189,6 +190,11 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
   // section above is only ever sent to a request that has something for it to annotate.
   if (requestMeta?.hasLyrics) {
     messages.push({ role: 'system', content: composeLyricsSection() });
+  }
+  // The floor's scene (scene.js) is asked of the pass that first reads a part of it; a repair sees only
+  // the lines that went missing, and a style repair rewrites a finished draft.
+  if (requestMeta?.scene && phase === 'primary') {
+    messages.push({ role: 'system', content: composeSceneSection() });
   }
   const input = {
     task: 'translate_story_to_target_language',

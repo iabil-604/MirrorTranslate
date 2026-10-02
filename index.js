@@ -44,9 +44,12 @@ import {
   getActivePromptProfile,
   resolveFeatureChannel,
   translationChannelChoice,
+  hashFloorText,
   hashText,
+  storedHashMatches,
   interceptGenerationChat,
   planTranslationBatches,
+  matchSegmentsBySource,
   remapTranslationsBySource,
   translationCharBudget,
   inspectTagConfiguration,
@@ -117,8 +120,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.42.0';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.42.0';
+} from './core.js?v=0.42.1';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.42.1';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -176,10 +179,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.42.0';
-import { createTtsStore } from './tts-store.js?v=0.42.0';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.42.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.42.0';
+} from './tts.js?v=0.42.1';
+import { createTtsStore } from './tts-store.js?v=0.42.1';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.42.1';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.42.1';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -189,7 +192,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.42.0';
+} from './processing.js?v=0.42.1';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -207,9 +210,10 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.42.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.42.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.42.0';
+} from './prompts.js?v=0.42.1';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.42.1';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.42.1';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.42.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -227,8 +231,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.42.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.42.0';
+} from './palette.js?v=0.42.1';
+import { sampleThemeBackground } from './theme-probe.js?v=0.42.1';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -236,7 +240,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.42.0';
+} from './diagnostics.js?v=0.42.1';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -247,7 +251,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.42.0';
+} from './helper.js?v=0.42.1';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -297,6 +301,8 @@ const runtime = {
   lateReply: null,
   // The chat the last CHAT_CHANGED was about: the same chat announced again was only redrawn.
   chatSeen: null,
+  // 全翻 while it runs: { chatId, stopped }. 停止 ends the whole run, not only the floor at hand.
+  translateAll: null,
   // The chat and body tags a missing body tag was last pointed out for.
   bodyTagNoted: '',
   // The host's regex engine, borrowed so a floor with only its translation left in it goes to the main
@@ -327,6 +333,8 @@ const runtime = {
   autoSpeakerAliases: new Map(),
   subscribers: new Set(),
   diagnosticSubscribers: new Set(),
+  // Other extensions told whenever a translation writes a floor's scene (the public interface's scene.onChange).
+  sceneListeners: new Set(),
   update: { status: 'idle', installType: null, details: null },
   inflight: new Map(),
   // `${chatId}|${messageId}|${swipeId}` → the hash of the plain original 「清除这一楼的译文」 left there,
@@ -830,6 +838,29 @@ function isAbortError(error) {
   return Boolean(error && typeof error === 'object' && error.name === 'AbortError');
 }
 
+// The same reply across a reload of the chat, which gives every floor a new message object: sent at the
+// same moment by the same speaker, the same alternative showing.
+function sameReply(before, after) {
+  return Boolean(before && after && before.send_date && before.send_date === after.send_date
+    && before.name === after.name && Boolean(before.is_user) === Boolean(after.is_user)
+    && Number(before.swipe_id ?? 0) === Number(after.swipe_id ?? 0));
+}
+
+// Where the floor a translation began on is now: floors deleted above it move it up. One that is no longer
+// that very message (the chat reloaded) is looked for in its old place.
+function floorNow(snapshot) {
+  const chat = getContext().chat ?? [];
+  const at = snapshot.message ? chat.indexOf(snapshot.message) : -1;
+  return at >= 0 ? at : snapshot.messageId;
+}
+
+// The floor shows another alternative (or the chat is another) than the one the run translated.
+function swipeChangedError() {
+  const error = new Error('翻译期间聊天或滑动页已经变化，旧结果没有写回。');
+  error.code = 'JY_SWIPE_CHANGED';
+  return error;
+}
+
 function sourceChangedError() {
   const error = new Error('翻译期间正文内容发生变化，旧结果没有写回。');
   error.code = 'JY_SOURCE_CHANGED';
@@ -1120,6 +1151,12 @@ function saveSettings(next) {
   if (floating) floating.dataset.theme = runtime.settings.theme || 'day';
   // Anything the floor buttons depend on — the switch, the mode, the range — redraws them; switching
   // reading aloud off also ends whatever is playing.
+  // 分析模式's reading depends on the 亲密场景 switch: one made under the other setting is not the floor's
+  // reading now. The store keeps each under its own key, so the next look finds the one that fits, or
+  // the next reading asks again.
+  if (ttsSettings(previous).intimate !== ttsSettings(runtime.settings).intimate) {
+    for (const [key, entry] of [...runtime.tts.analysis]) if (entry?.depth === 'deep' || entry?.derived) runtime.tts.analysis.delete(key);
+  }
   const ttsBefore = JSON.stringify([previous.tts, previous.ttsVoices, previous.voiceLibrary]);
   if (runtime.initialized && ttsBefore !== JSON.stringify([runtime.settings.tts, runtime.settings.ttsVoices, runtime.settings.voiceLibrary])) {
     // Prepared floors were built on the old settings; the next look rebuilds them.
@@ -1368,11 +1405,13 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     paragraphs += segmented.paragraphs;
     nextId += segmented.segments.length;
   }
-  const sourceHash = await hashText(createTranslationSignature(extraction.regions));
+  const signature = createTranslationSignature(extraction.regions);
+  const sourceHash = await hashFloorText(signature);
   const messageHash = await hashText(cleanMessage);
+  const sourceMatches = metadata ? await storedHashMatches(metadata.source_hash, signature, sourceHash) : false;
   const metadataMatches = Boolean(
     metadata
-    && metadata.source_hash === sourceHash
+    && sourceMatches
     // The record of a floor with only its translation left in it was found by the floor's own text.
     && ((floor.stripped && !floor.diverged) || Number(metadata.swipe_id ?? 0) === swipeId)
   );
@@ -1420,6 +1459,8 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     // Only trusted while the segmentation still matches, which is the same condition that makes the
     // stored translations reusable.
     existingAnnotations: metadataMatches ? readStoredAnnotations(metadata) : new Map(),
+    // The scene the translation wrote for this text (scene.js), on the same condition.
+    existingScene: metadataMatches ? normalizeScene(metadata.scene) : null,
     translated,
     // Only the translation is on the floor; `diverged` when it has been changed since, which nothing
     // may translate.
@@ -2608,6 +2649,8 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
   }, raw, { fullRequest: messages, reasoning });
   signal?.throwIfAborted?.();
   const recovered = withoutUntranslated(recoverStructuredTranslations(raw, segments), segments, settings);
+  // The part of the floor this request read, as a scene, when the request asked for one.
+  recovered.scene = requestMeta?.scene && phase === 'primary' ? recoverScene(raw) : null;
   if (!recovered.translations.size) {
     // A reply that is entirely a recognised echo (recovered.echoes) is not a failure in the making —
     // translateOneBatch is about to accept it, or is already one matching reply away from accepting
@@ -2676,10 +2719,12 @@ async function translateOneBatch(batch, settings, signal, packet, translations, 
           knownMoves: state.knownMoves ?? [],
           hasLyrics: pending.some(segment => state.lyricIds?.has(segment.id)),
           hasFragments: pending.some(segment => segment.fragments?.length),
+          scene: true,
         },
       );
       for (const [id, text] of recovered.translations) translations.set(id, text);
       for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
+      if (recovered.scene) state.scenes?.push({ order: pending[0]?.id ?? 0, scene: recovered.scene });
       // A short segment withoutUntranslated dropped as an exact echo of its source: seen unchanged
       // once before (the request this dropped id's own repair answers), it is accepted — its
       // speaker/emotion mark along with it — as the model saying it needs no translation, rather than
@@ -2842,6 +2887,8 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
     seeded: translations.size > 0,
     lyricIds,
     echoSeen: new Map(seedEchoSeen),
+    // Each request's scene, merged into the floor's once every part is back (scene.js).
+    scenes: [],
   };
   let lastError;
   recordDiagnostic('info', 'translation.plan', '已按副 API 的输出上限规划本次请求批次。', {
@@ -2857,7 +2904,7 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
   for (const failure of failures) if (failure) lastError = failure;
   {
     const pending = segments.filter(segment => !translations.has(segment.id));
-    if (!pending.length) return { translations, annotations, missingIds: [], complete: true };
+    if (!pending.length) return { translations, annotations, missingIds: [], complete: true, scene: mergeScenes(state.scenes) };
   }
   if (translations.size) {
     const missingIds = segments.filter(segment => !translations.has(segment.id)).map(segment => segment.id);
@@ -2867,7 +2914,7 @@ async function invokeWithRetries(segments, settings, signal, packet = {}, seedTr
       missingIds,
       lastError: safeError(lastError),
     });
-    return { translations, annotations, missingIds, complete: false };
+    return { translations, annotations, missingIds, complete: false, scene: mergeScenes(state.scenes) };
   }
   throw lastError || new Error('副模型没有返回可恢复的译文。');
 }
@@ -2914,19 +2961,23 @@ async function repairForbiddenPhrases(segments, translations, settings, signal, 
   return translations;
 }
 
-async function writeTranslation(snapshot, translationMap, epoch, settings, annotations = new Map()) {
+async function writeTranslation(snapshot, translationMap, epoch, settings, annotations = new Map(), scene = null) {
   if (!runtime.initialized || runtime.epoch !== epoch) throw new Error('扩展已停用，旧翻译结果没有写回。');
-  const latest = await readMessageSnapshot(snapshot.messageId, settings);
+  const latest = await readMessageSnapshot(floorNow(snapshot), settings);
   if (latest.chatId !== snapshot.chatId || latest.swipeId !== snapshot.swipeId) {
-    throw new Error('翻译期间聊天或滑动页已经变化，旧结果没有写回。');
+    throw swipeChangedError();
   }
   // The bilingual text kept for the floor is only ever made from its real original.
   if (latest.diverged) throw divergedFloorError(snapshot.messageId);
   let effectiveTranslations = translationMap;
+  let runAnnotations = annotations instanceof Map ? annotations : new Map();
   if (latest.sourceHash !== snapshot.sourceHash) {
     // Salvage the paragraphs whose source text survived the edit instead of discarding the whole run.
     effectiveTranslations = remapTranslationsBySource(snapshot.segments, translationMap, latest.segments);
     if (!effectiveTranslations.size) throw sourceChangedError();
+    // Their marks go with them, to the very same paragraphs.
+    const moved = matchSegmentsBySource(snapshot.segments, id => translationMap.has(id), latest.segments);
+    runAnnotations = new Map([...moved].filter(([, before]) => runAnnotations.has(before)).map(([now, before]) => [now, runAnnotations.get(before)]));
     recordDiagnostic('warn', 'translation.resync', '正文在翻译期间变化，已保留仍然对得上的译文，其余段落留待补译。', {
       messageId: snapshot.messageId,
       before: translationMap.size,
@@ -2945,7 +2996,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
   const missingIds = latest.segments.filter(segment => !effectiveTranslations.has(segment.id)).map(segment => segment.id);
   const complete = missingIds.length === 0;
   // Labels the model returned this run win over the ones already stored on the floor.
-  const effectiveAnnotations = new Map([...latest.existingAnnotations, ...(annotations instanceof Map ? annotations : [])]);
+  const effectiveAnnotations = new Map([...latest.existingAnnotations, ...runAnnotations]);
   for (const id of effectiveAnnotations.keys()) if (!effectiveTranslations.has(id)) effectiveAnnotations.delete(id);
   const styleFor = buildSegmentStyler(settings, effectiveAnnotations, buildChatMoveIndex(), effectiveTranslations);
   const bilingual = rebuildTaggedRegions(latest.extraction, region => region.mode === 'replace'
@@ -2982,6 +3033,9 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
     missing_ids: missingIds,
     annotations: storedAnnotations(effectiveAnnotations),
   };
+  // The scene this run wrote, else the one already kept for this very text (scene.js).
+  const keptScene = scene ?? latest.existingScene ?? null;
+  if (keptScene) metadata.scene = keptScene;
   // 「只留译文」: a finished floor holds only its translation, and the bilingual text goes into the
   // metadata. A floor with gaps stays bilingual, so 补译 still has the original beside each gap. So does
   // a floor with swipes on a host that keeps no record per swipe: the mirror would have nowhere to live.
@@ -3022,17 +3076,18 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
     if (Array.isArray(message.swipe_info) && message.swipe_info[snapshot.swipeId]) {
       message.swipe_info[snapshot.swipeId].extra = previous.swipeInfoExtra;
     }
-    latest.context.updateMessageBlock(snapshot.messageId, message);
+    latest.context.updateMessageBlock(latest.messageId, message);
     throw error;
   }
-  latest.context.updateMessageBlock(snapshot.messageId, message);
+  latest.context.updateMessageBlock(latest.messageId, message);
   if (latest.context.eventTypes?.MESSAGE_UPDATED) {
     try {
-      await latest.context.eventSource.emit(latest.context.eventTypes.MESSAGE_UPDATED, snapshot.messageId);
+      await latest.context.eventSource.emit(latest.context.eventTypes.MESSAGE_UPDATED, latest.messageId);
     } catch (error) {
       console.warn(`[${APP_NAME}] 其他扩展的 MESSAGE_UPDATED 监听器报错。`, error);
     }
   }
+  if (scene) notifySceneListeners(latest.messageId, scene);
   return { bilingual, complete, missingIds, rebased, stripped: strip };
 }
 
@@ -3124,19 +3179,23 @@ async function translateMessage(messageId = null, { force = false, quiet = false
 
       updateTask({ status: 'running', message: '正在核对楼层与滑动页…', progress: 95 });
       try {
-        written = await writeTranslation(snapshot, result.translations, epoch, settings, result.annotations);
+        written = await writeTranslation(snapshot, result.translations, epoch, settings, result.annotations, result.scene);
         break;
       } catch (error) {
         if (error?.code === 'JY_SOURCE_CHANGED') {
           if (!consumeRetry(retryBudget, 'source-changed', { messageId: snapshot.messageId })) throw error;
-          snapshot = await readMessageSnapshot(snapshot.messageId, settings);
+          const at = floorNow(snapshot);
+          const there = getContext().chat?.[at];
+          // The floor itself deleted, another one come into its place: that one is not this run's to translate.
+          if (there !== snapshot.message && !sameReply(snapshot.message, there)) throw error;
+          snapshot = await readMessageSnapshot(at, settings);
           if (!snapshot.segments.length) throw new Error('更新后的 AI 回复没有可翻译的正文段落。');
           updateTask({ status: 'running', message: '正文内容已更新，正在按最新正文重新翻译…', progress: 10 });
           continue;
         }
-        if (!consumeRetry(retryBudget, 'write-error', { messageId: snapshot.messageId, error: safeError(error) })) throw error;
+        if (error?.code === 'JY_SWIPE_CHANGED' || !consumeRetry(retryBudget, 'write-error', { messageId: snapshot.messageId, error: safeError(error) })) throw error;
         updateTask({ status: 'running', message: '写回失败，正在重试保存…', progress: 95 });
-        written = await writeTranslation(snapshot, result.translations, epoch, settings, result.annotations);
+        written = await writeTranslation(snapshot, result.translations, epoch, settings, result.annotations, result.scene);
         break;
       }
     }
@@ -3169,9 +3228,10 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     });
     return { skipped: false, messageId: snapshot.messageId, segments: snapshot.segments.length };
   })().catch(error => {
-    if (isAbortError(error)) {
+    // Called off, or the reader turned to another alternative while it ran: not a failure.
+    if (isAbortError(error) || error?.code === 'JY_SWIPE_CHANGED') {
       const current = runtime.inflight.get(lockKey);
-      if (!current || current.promise === work) updateTask({ status: 'idle', title: '翻译已取消', message: '聊天已切换或任务已停止。', progress: 0 });
+      if (!current || current.promise === work) updateTask({ status: 'idle', title: '翻译已取消', message: isAbortError(error) ? '聊天已切换或任务已停止。' : safeError(error), progress: 0 });
       return { skipped: true, reason: 'cancelled' };
     }
     const message = safeError(error);
@@ -3364,6 +3424,8 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     // matching replies there (once, and then the repair that confirms it) before it is accepted,
     // rather than one — see invokeWithRetries and core.js's isShortExactEcho.
     const streamEchoSeen = new Map();
+    // Each batch's scene, merged into the floor's for the last write (scene.js).
+    const scenes = [];
 
     // One progressive write at a time. Overlapping runs each snapshot the floor before the other
     // has assigned, so a failing saveChat could roll the floor back over a newer write.
@@ -3371,11 +3433,15 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     const writeProgress = () => {
       progressChain = progressChain.catch(() => {}).then(async () => {
         if (controller.signal.aborted || runtime.epoch !== epoch) return;
-        const latest = await readMessageSnapshot(snapshot.messageId, settings).catch(() => null);
+        const latest = await readMessageSnapshot(floorNow(snapshot), settings).catch(() => null);
         // Floors before it deleted, another swipe shown, the chat reloaded with a floor put in: this is not
         // the text being translated any more, and the end-of-run write sorts out what still fits.
         if (!latest || latest.sourceHash !== snapshot.sourceHash || latest.swipeId !== snapshot.swipeId) return;
-        await writeTranslation(latest, translations, epoch, settings, annotations);
+        // A forced run writes each paragraph's new translation over its old one as it comes; the rest
+        // keep theirs meanwhile, so a run stopped or failed halfway leaves no paragraph bare.
+        const shown = force ? new Map([...snapshot.existingTranslations, ...translations]) : translations;
+        const shownMarks = force ? new Map([...snapshot.existingAnnotations, ...annotations]) : annotations;
+        await writeTranslation(latest, shown, epoch, settings, shownMarks);
       });
       return progressChain;
     };
@@ -3451,7 +3517,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       const phase = seeded ? 'repair' : 'primary';
       const hasLyrics = pending.some(segment => snapshot.lyricIds?.has(segment.id));
       const hasFragments = pending.some(segment => segment.fragments?.length);
-      const messages = buildTranslationMessages(pending, settings, packet, phase, { roster, styles, knownMoves, hasLyrics, hasFragments });
+      const messages = buildTranslationMessages(pending, settings, packet, phase, { roster, styles, knownMoves, hasLyrics, hasFragments, scene: true });
       // Each batch thinks afresh; carrying the previous batch's thinking into this one would read as
       // the model having already written what it has not started.
       if (lanes === 1) {
@@ -3468,9 +3534,10 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
           segments: pending.length,
           error: safeError(error),
         });
-        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, knownMoves, hasLyrics, hasFragments });
+        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, knownMoves, hasLyrics, hasFragments, scene: true });
         for (const [id, value] of recovered.translations) translations.set(id, value);
         for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
+        if (recovered.scene) scenes.push({ order: pending[0].id, scene: recovered.scene });
         for (const [id, echo] of recovered.echoes ?? []) {
           if (!translations.has(id)) streamEchoSeen.set(id, String(echo.text).replace(/\s+/g, ''));
         }
@@ -3485,6 +3552,8 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       const recovered = withoutUntranslated(recoverStructuredTranslations(raw, pending), pending, settings);
       for (const [id, value] of recovered.translations) translations.set(id, value);
       for (const [id, mark] of recovered.annotations) annotations.set(id, mark);
+      const scene = phase === 'primary' ? recoverScene(raw) : null;
+      if (scene) scenes.push({ order: pending[0].id, scene });
       // The streaming path never confirms an echo itself — one attempt per batch, no repair loop here
       // — but a segment it drops as a recognised echo is still worth remembering: the whole-request
       // repair below is seeded with it, so a second matching reply there is this segment's second
@@ -3543,7 +3612,7 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     await repairForbiddenPhrases(snapshot.segments, translations, settings, controller.signal, packet);
     updateTask({ status: 'running', message: '正在写回楼层…', progress: 95 });
     await progressChain.catch(() => {});
-    const written = await writeTranslation(snapshot, translations, epoch, settings, annotations);
+    const written = await writeTranslation(snapshot, translations, epoch, settings, annotations, mergeScenes(scenes));
     if (!written.complete) {
       updateTask({
         status: 'success',
@@ -3563,9 +3632,10 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     if (!quiet) toast('success', `第 ${snapshot.messageId} 楼流式翻译完成。`);
     return { skipped: false, messageId: snapshot.messageId, segments: translations.size };
   })().catch(error => {
-    if (isAbortError(error)) {
+    // Called off, or the reader turned to another alternative while it ran: not a failure.
+    if (isAbortError(error) || error?.code === 'JY_SWIPE_CHANGED') {
       const current = runtime.inflight.get(lockKey);
-      if (!current || current.promise === work) updateTask({ status: 'idle', title: '翻译已取消', message: '聊天已切换或任务已停止。', progress: 0 });
+      if (!current || current.promise === work) updateTask({ status: 'idle', title: '翻译已取消', message: isAbortError(error) ? '聊天已切换或任务已停止。' : safeError(error), progress: 0 });
       return { skipped: true, reason: 'cancelled' };
     }
     const message = safeError(error);
@@ -3579,6 +3649,37 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
 
   runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash, messageId: snapshot.messageId, message: snapshot.message, since: Date.now() });
   return work;
+}
+
+/**
+ * 全翻: the floors one after another. 停止 ends the run, not only the floor at hand, and so does another
+ * chat being opened: the floors left are the chat's it began in.
+ */
+async function translateFloorsInTurn(floors, { onFloor = null } = {}) {
+  const run = { chatId: getCurrentChatId(), stopped: false };
+  runtime.translateAll = run;
+  let done = 0;
+  try {
+    for (const [index, id] of floors.entries()) {
+      if (run.stopped || getCurrentChatId() !== run.chatId) break;
+      onFloor?.(index, floors.length);
+      try {
+        const result = await startTranslation(id, { force: false, quiet: true });
+        if (result?.reason === 'cancelled') break;
+        if (!result?.skipped || result.reason === 'already-translated') done += 1;
+      } catch (error) {
+        if (isAbortError(error)) break;
+      }
+    }
+  } finally {
+    if (runtime.translateAll === run) runtime.translateAll = null;
+  }
+  return { done, total: floors.length, stopped: run.stopped, otherChat: getCurrentChatId() !== run.chatId };
+}
+
+function stopTranslating() {
+  if (runtime.translateAll) runtime.translateAll.stopped = true;
+  for (const entry of runtime.inflight.values()) entry.controller.abort();
 }
 
 // Single entry point for every translation trigger, so the streaming toggle and the force/quiet
@@ -4369,7 +4470,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     if (Array.isArray(stored?.labels) && stored.labels.length) {
       // Which floor it was asked for: the key is the text alone, and the same words in another chat
       // find the same reading.
-      return { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), depth, cached: true, floorId: stored.floorId ?? '' };
+      return { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), depth, cached: true, floorId: stored.floorId ?? '', format: stored.format ?? '' };
     }
   }
   // Only looking: what the store holds, or nothing. Never a request.
@@ -4503,11 +4604,19 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
         floor: floor.floorId, depth, mismatches: parsed.mismatches,
       }, '', { floor: floor.messageId });
     }
-    // An empty answer is not cached: the next play asks again instead of living with a failed reply.
-    if (parsed.labels.size) {
-      await ttsStore().putAnalysis({ key, floorId: floor.floorId, version: floor.version, depth, labels: [...parsed.labels], voices: [...parsed.voices], analyzedAt: askedAt });
+    // An empty answer is not cached: the next play asks again instead of living with a failed reply. Nor
+    // is one cut off before its answers closed (the provider's output limit): what came back is read
+    // now, and the next reading of the floor asks again for the whole of it.
+    const cut = depth === 'deep' && parsed.complete === false;
+    if (cut && parsed.labels.size) {
+      recordDiagnostic('warn', 'tts.analysis-cut', `分析模式的回答没写完（可能超过了连接的输出上限），这次只用到 ${parsed.labels.size} 句，结果不保存，下次读这一楼会重新分析。`, {
+        floor: floor.floorId, labeled: parsed.labels.size, utterances: utterances.length,
+      }, '', { floor: floor.messageId });
     }
-    return { labels: parsed.labels, voices: parsed.voices, depth, cached: false, analyzedAt: askedAt };
+    if (parsed.labels.size && !cut) {
+      await ttsStore().putAnalysis({ key, floorId: floor.floorId, version: floor.version, depth, labels: [...parsed.labels], voices: [...parsed.voices], analyzedAt: askedAt, format: parsed.format ?? '' });
+    }
+    return { labels: parsed.labels, voices: parsed.voices, depth, cached: false, analyzedAt: askedAt, format: parsed.format ?? '' };
   }, { onPrefix });
 }
 
@@ -4659,14 +4768,21 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   // A line of dialogue the model did not answer at all keeps the translation's whole mark, rather than
   // being left with nobody to say it (and, when lines without a voice are skipped, not read at all).
   const quotedIds = new Set(utterances.filter(item => item.kind === 'quoted').map(item => item.id));
+  // 分析模式's acoustic format leaves out what it wants read plain, and writes no mood words at all: under
+  // it, only the names the translation knew and the story's own marks (<say>) are kept, never the
+  // translation's moods and paces, which would come back as the words the format forbids.
   const adopt = analyzed => {
+    const acoustic = analyzed?.format === 'acoustic'
+      || [...(analyzed?.voices?.values?.() ?? [])].some(voice => voice?.script !== undefined || voice?.tensionLevel !== undefined);
     const adopted = new Map(analyzed.labels);
     for (const [id, hint] of reading.labels) {
       const label = adopted.get(id);
       if (hint.speaker && label && !label.speaker) adopted.set(id, { ...label, speaker: hint.speaker, speakerSource: 'hint' });
-      else if (hint.speaker && !label && quotedIds.has(id)) adopted.set(id, { ...hint, speakerSource: 'hint' });
+      else if (hint.speaker && !label && quotedIds.has(id)) {
+        adopted.set(id, acoustic ? { type: 'dialogue', speaker: hint.speaker, speakerSource: 'hint' } : { ...hint, speakerSource: 'hint' });
+      }
     }
-    return { labels: adopted, voices: mergeVoiceMaps(reading.voices, analyzed.voices) };
+    return { labels: adopted, voices: mergeVoiceMaps(acoustic ? tagged.voices : reading.voices, analyzed.voices) };
   };
   // A reading of this very text kept from before — an earlier session, a page reloaded, a reading asked
   // for by hand — is this floor's reading. Finding it asks nobody. Without this a reload forgot every
@@ -4787,6 +4903,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
         }
       } catch (error) {
         if (isAbortError(error)) {
+          onStep?.('analysis', { state: 'error', label: '分析', detail: '已停止' });
           onStatus?.('');
           throw error;
         }
@@ -5222,7 +5339,7 @@ async function ttsItemsFor(floor, segments, settings, { range = null } = {}) {
   const dress = item => {
     const override = overrides.get(item.segment.id);
     const carried = { ...item, console: consoleFor(item.segment, settings) };
-    return override ? { ...carried, override: { text: override.text, speed: override.speed, volume: override.volume, tension: override.tension, speaker: override.speaker } } : carried;
+    return override ? { ...carried, override: { text: override.text, speed: override.speed, volume: override.volume, tension: override.tension, speaker: override.speaker, recordKey: override.recordKey } } : carried;
   };
   const items = plan.items.map(dress);
   const skipped = plan.skipped.map(dress);
@@ -5266,8 +5383,17 @@ async function findTtsEntry(floor, item, settings) {
   }
   if (item.override?.text) {
     // A rewritten sentence must be heard as rewritten; an older take of the plain text does not count.
-    const own = records.filter(record => record.unit === `sentence:${item.segment.id}` && record.fingerprint === fingerprint && record.overrideText === item.override.text);
-    if (own.length) return { record: own[0], index: 0 };
+    // Newest first, and the take made with this very override — its speed, volume and tension — before
+    // any older take of the same words; a take from before takes carried their identity still counts.
+    const own = records
+      .filter(record => record.unit === `sentence:${item.segment.id}` && record.fingerprint === fingerprint && record.overrideText === item.override.text)
+      .sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0));
+    const identity = itemIdentity(item);
+    const entryOf = record => record.timeline?.findIndex(entry => entry.id === item.segment.id) ?? -1;
+    const exact = own.find(record => record.timeline?.some(entry => entry.id === item.segment.id && entry.identity === identity));
+    const loose = own.find(record => record.timeline?.some(entry => entry.id === item.segment.id && entry.identity === undefined));
+    const chosen = exact ?? loose;
+    if (chosen) return { record: chosen, index: Math.max(0, entryOf(chosen)) };
     return null;
   }
   // Audio made before this sentence's reading was asked for belongs to the reading it replaced.
@@ -5822,8 +5948,10 @@ function setTtsStatus(messageId, text = '', state = 'idle') {
     bar.title = text;
     const plays = [...bar.querySelectorAll('[data-jy-tts-action="play-floor"]')];
     const reading = runtime.tts.transport?.messageId === Number(messageId) ? runtime.tts.transport.side : null;
+    // Nothing being read on this floor (an analysis, a correction, audio being remade): its first side is the one busy.
+    const busySide = reading ?? (state === 'busy' ? primaryTtsSide() : null);
     for (const button of plays) {
-      const mine = plays.length === 1 || button.dataset.jyTtsSide === reading;
+      const mine = plays.length === 1 || button.dataset.jyTtsSide === busySide;
       const html = ttsBarLabel(mine ? state : 'idle', plays.length > 1 ? button.dataset.jyTtsSide : null);
       if (button.innerHTML !== html) button.innerHTML = html;
       button.dataset.state = mine ? state : 'idle';
@@ -6340,7 +6468,7 @@ async function createTtsTransport(messageId, { single = false, paragraph = false
       const rest = everything.filter(item => !covered.has(item.segment.id));
       transport.items = everything;
       if (rest.length) transport.batches.push({ unit: `chunk:${transport.batches.length + 1}`, ids: new Set(rest.map(item => item.segment.id)) });
-      runtime.tts.floors.set(ttsPreparedKey(messageId, floor.side), { floor, segments: result.segments, items: everything, settings });
+      runtime.tts.floors.set(ttsPreparedKey(messageId, floor.side), { floor, segments: result.segments, items: everything, settings, depth: result.depth });
       await announceTtsUnits(floor, everything, settings, tts);
       transport.prepared = true;
       transport.wake?.();
@@ -6368,7 +6496,7 @@ async function createTtsTransport(messageId, { single = false, paragraph = false
     throw new Error(tts.range === 'dialogue' ? '这一楼没有对白可读。' : tts.range === 'narration' ? '这一楼没有旁白可读。' : '这一楼没有可朗读的句子。');
   }
   transport.items = items;
-  runtime.tts.floors.set(ttsPreparedKey(messageId, floor.side), { floor, segments, items, settings });
+  runtime.tts.floors.set(ttsPreparedKey(messageId, floor.side), { floor, segments, items, settings, depth: settled.depth });
   if (fromUtterance !== null) transport.index = items.findIndex(item => item.segment.id === fromUtterance);
   // Reading the whole floor: say up front which paragraphs are already made, so what follows reads
   // as 「这几段要做」 rather than 「整楼重做」.
@@ -7730,6 +7858,10 @@ async function reanalyzeTtsFloor(messageId, side = null) {
       onStatus: text => setTtsStatus(messageId, text, text ? 'busy' : 'idle'),
       onStep: (id, patch) => ttsStep(floor, id, patch),
     });
+    // Nothing on the floor to ask about: the step that said it had started says it is over.
+    if (ttsProgressFor(floor.messageId, floor.side)?.steps.find(step => step.id === 'analysis')?.state === 'active') {
+      ttsStep(floor, 'analysis', { state: 'done', label: '分析模式', detail: '没有要分析的句子' });
+    }
   } catch (error) {
     ttsStep(floor, 'analysis', { state: 'error', label: '分析', detail: isAbortError(error) ? '已停止' : safeError(error) });
     throw error;
@@ -7774,7 +7906,9 @@ function keptAcousticRefine(parsed, labelsNow, voicesNow) {
     const before = labelsNow.get(id);
     const voice = parsed.voices.get(id) ?? {};
     const voiceBefore = voicesNow.get(id) ?? {};
-    const sameLabel = (before.type ?? '') === (label.type ?? '') && (before.speaker ?? '') === (label.speaker ?? '')
+    // The narrator is nobody in particular: a narration line's speaker is not compared.
+    const speakerOf = entry => (entry?.type === 'narration' ? '' : entry?.speaker ?? '');
+    const sameLabel = (before.type ?? '') === (label.type ?? '') && speakerOf(before) === speakerOf(label)
       && (label.emotion === undefined || before.emotion === label.emotion);
     const fields = new Set(['speed', 'tensionLevel', 'why', 'script', ...Object.keys(voice)]);
     const sameVoice = [...fields].every(key => JSON.stringify(voiceBefore[key] ?? null) === JSON.stringify(voice[key] ?? null));
@@ -7876,9 +8010,12 @@ async function askTtsCorrection(messageId, prepared, { which, utteranceId, feedb
   const started = Date.now();
   // The moment of asking, which every sentence this correction changes will carry.
   const askedAt = ttsClock();
-  const raw = await requestSubModelRaw(messages, request, undefined);
+  // A job of its own, so 停止 calls it off and the floor reads as busy while it is out.
+  const raw = await dedupeTtsJob(`refine|${key}`, floor.messageId, signal => requestSubModelRaw(messages, request, signal));
+  // What an answer copied back is compared with what was sent as `current` — the names as the reader
+  // sees them, every sentence included — not with the reading as it was first stored.
   const parsed = acoustic
-    ? keptAcousticRefine(parseDeepAnalysis(raw, scope, { quotePairs: tts.quotePairs, intimate: tts.intimate }), known?.labels ?? base, known?.voices ?? new Map())
+    ? keptAcousticRefine(parseDeepAnalysis(raw, scope, { quotePairs: tts.quotePairs, intimate: tts.intimate }), base, known?.voices ?? new Map())
     : parseVoiceAnalysis(raw, scope, { hints: base });
   const answered = [...parsed.labels.keys()].filter(id => !parsed.keptIds.has(id));
   recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.refine', parsed.labels.size
@@ -7907,7 +8044,8 @@ async function askTtsCorrection(messageId, prepared, { which, utteranceId, feedb
   }
   for (const [id, voice] of parsed.voices) voices.set(id, voice);
   // A sentence that came back as it went in keeps its label, its voice and its moment untouched.
-  runtime.tts.analysis.set(key, { labels, voices, depth });
+  const format = acoustic ? 'acoustic' : (known?.format ?? '');
+  runtime.tts.analysis.set(key, { labels, voices, depth, format });
   // Kept where the reading looks for it next time, so a reload does not undo the correction.
   await ttsStore().putAnalysis({
     key: await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side, variant: acoustic && tts.intimate ? 'intimate' : '' }),
@@ -7916,6 +8054,7 @@ async function askTtsCorrection(messageId, prepared, { which, utteranceId, feedb
     depth,
     labels: [...labels],
     voices: [...voices],
+    format,
   }).catch(() => {});
   return { heard, changed: answered.length, kept: parsed.reused };
 }
@@ -8561,7 +8700,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   runtime.tts.mesSeen.set(messageId, { mes: message?.mes ?? '', key: cheapKey });
   runtime.tts.ranges.set(messageId, ranges);
   const status = runtime.tts.status.get(messageId);
-  if (status && status.state === 'busy' && !ttsJobRunning(messageId)) runtime.tts.status.delete(messageId);
+  if (status && status.state === 'busy' && !ttsJobRunning(messageId) && !runtime.tts.asking.has(messageId)) runtime.tts.status.delete(messageId);
   else if (status) setTtsStatus(messageId, status.text, status.state);
   // A floor redrawn mid-sentence gets its highlight back on the new text.
   const highlighted = runtime.tts.highlighted;
@@ -15381,7 +15520,7 @@ async function openMiniWindow() {
     const show = (action, visible) => {
       for (const button of win.querySelectorAll(`[data-jy-action="${action}"]`)) button.hidden = !visible;
     };
-    show('mini-stop', running);
+    show('mini-stop', running || Boolean(runtime.translateAll));
     show('mini-translate', !running && viewState.key === 'pending');
     renderBriefActions();
     show('mini-retranslate', !running && ['done', 'missing'].includes(viewState.key));
@@ -15389,7 +15528,8 @@ async function openMiniWindow() {
     show('mini-clear-floor', !running && ['done', 'missing'].includes(viewState.key));
     const untranslated = untranslatedFloors(getContext().chat, { limit: 50 }).filter(id => id !== viewFloor);
     const all = win.querySelector('[data-jy-mini-untranslated]');
-    if (all) {
+    // While 全翻 runs, the link says how far it has got.
+    if (all && !runtime.translateAll) {
       all.hidden = !untranslated.length || running;
       all.textContent = `还有 ${untranslated.length} 楼没翻 · 全翻`;
     }
@@ -16805,7 +16945,7 @@ async function openMiniWindow() {
         // In the plain reading only the model's own analysis counts: the translation's marks are not what
         // the reader is asking to redo, they are asking for the model's word on this floor.
         const plainMode = ttsSettings().mode === 'off';
-        const analysed = runtime.tts.analysis.has(ttsLabelKey(prepared.floor))
+        const analysed = ['deep', 'simple'].includes(runtime.tts.analysis.get(ttsLabelKey(prepared.floor))?.depth)
           || (!plainMode && prepared.segments.some(segment => segment.emotion || ['hint', 'model'].includes(segment.speakerSource)));
         let answer = { choice: 'fresh', scope: 'floor', feedback: '' };
         if (analysed || sentenceId !== null) {
@@ -16845,21 +16985,15 @@ async function openMiniWindow() {
         const result = await clearFloorTranslation(viewFloor, { ask: text => typeof globalThis.confirm !== 'function' || globalThis.confirm(text) });
         if (result.cancelled) return;
       } else if (action === 'mini-stop') {
-        for (const entry of runtime.inflight.values()) entry.controller.abort();
+        stopTranslating();
         toast('info', '已请求停止当前翻译。');
       } else if (action === 'mini-translate-all') {
         const floors = untranslatedFloors(getContext().chat, { limit: 20 }).filter(id => id !== viewFloor).reverse();
-        let done = 0;
-        for (const id of floors) {
-          button.textContent = `翻译中 ${done + 1}/${floors.length}`;
-          try {
-            await startTranslation(id, { force: false, quiet: true });
-            done += 1;
-          } catch (error) {
-            if (isAbortError(error)) break;
-          }
-        }
-        toast(done === floors.length ? 'success' : 'warning', `翻了 ${done}/${floors.length} 楼。`);
+        const run = translateFloorsInTurn(floors, { onFloor: (index, total) => { button.textContent = `翻译中 ${index + 1}/${total}`; } });
+        // 停止翻译 shows while the run goes (DESIGN §12.3 正在翻译).
+        renderFloorActions();
+        const { done, total, otherChat } = await run;
+        if (!otherChat) toast(done === total ? 'success' : 'warning', `翻了 ${done}/${total} 楼。`);
       } else if (action === 'row-fix' || action === 'row-retry') {
         const id = Number(button.dataset.id);
         button.textContent = '翻译中…';
@@ -17244,6 +17378,35 @@ function autoTranslateSuppressed(messageId) {
   return false;
 }
 
+// A translation called off by a reload of the chat that moved its floor, started again where the floor is
+// now. Not forced: what was already written back stays, and only the rest is asked for.
+function resumeTranslation(messageId) {
+  const timer = globalThis.setTimeout(() => {
+    runtime.autoTimers.delete(timer);
+    recordDiagnostic('info', 'translation.resume', `聊天重新载入后第 ${messageId} 楼换了位置，接着翻译。`, { floor: messageId }, undefined, { floor: messageId });
+    startTranslation(messageId, { quiet: true, force: false }).catch(error => {
+      if (isAbortError(error)) return;
+      recordDiagnostic('warn', 'translation.resume', `第 ${messageId} 楼接着翻译没有完成：${safeError(error)}`, { floor: messageId }, undefined, { floor: messageId });
+    });
+  }, 0);
+  runtime.autoTimers.add(timer);
+}
+
+/**
+ * The alternative a translation was running for is no longer the one showing: the run is called off,
+ * and the request it still had out with it. What it had already written stays on its own alternative;
+ * turning back to it (自动接续翻译) asks only for the rest.
+ */
+function callOffOtherSwipes(messageId, swipeId) {
+  const chatId = getCurrentChatId();
+  for (const [key, entry] of [...runtime.inflight]) {
+    const [chat, floor, swipe] = key.split('|');
+    if (chat !== chatId || Number(floor) !== messageId || swipe === undefined || Number(swipe) === swipeId) continue;
+    entry.controller.abort();
+    runtime.inflight.delete(key);
+  }
+}
+
 function scheduleAuto(messageId, reason) {
   const timer = globalThis.setTimeout(async () => {
     runtime.autoTimers.delete(timer);
@@ -17600,10 +17763,11 @@ function registerRuntimeEvents() {
     generationEnded();
   });
   bindEvent(eventTypes.MESSAGE_SWIPED, messageId => {
+    const message = getContext().chat?.[Number(messageId)];
+    callOffOtherSwipes(Number(messageId), Number(message?.swipe_id ?? 0));
     // A swipe past the last alternative is a reply about to be generated: the text on the floor is still
     // the old one. The reply is translated when it is rendered; if generating fails, the host puts the
     // floor back on an alternative that was translated already.
-    const message = getContext().chat?.[Number(messageId)];
     if (message && Number(message.swipe_id ?? 0) >= (Array.isArray(message.swipes) ? message.swipes.length : 0)) return;
     scheduleAuto(messageId, 'swipe');
   });
@@ -17672,14 +17836,21 @@ function registerRuntimeEvents() {
       runtime.clearedFloors.clear();
       cancelPendingWork();
     } else {
-      // Reloaded, the chat has new message objects, and a slash command may have put a floor in before a
-      // floor being translated: a translation whose floor is not the message it began on is called off.
+      // Reloaded, the chat has new message objects. A floor being translated that is still in its place
+      // goes on being translated (the write at the end of the run checks its text again). One a slash
+      // command moved, by putting a floor in before it, is called off and translated again where it is
+      // now; one no longer in the chat is only called off.
       const chat = getContext().chat ?? [];
       for (const [key, entry] of [...runtime.inflight]) {
-        if (entry.message && chat[entry.messageId] !== entry.message) {
-          entry.controller.abort();
-          runtime.inflight.delete(key);
+        if (!entry.message || chat[entry.messageId] === entry.message) continue;
+        if (sameReply(entry.message, chat[entry.messageId])) {
+          entry.message = chat[entry.messageId];
+          continue;
         }
+        entry.controller.abort();
+        runtime.inflight.delete(key);
+        const moved = chat.findIndex(message => sameReply(entry.message, message));
+        if (moved >= 0) resumeTranslation(moved);
       }
     }
     scheduleEntries();
@@ -18119,6 +18290,45 @@ function apiSession(floor, items, settings, { play, signal, speaker = '' }) {
   return { started: play ? started : done.then(() => {}), handle };
 }
 
+// ---------------------------------------------------------------------------------------------
+// The public interface's scenes: what the translation wrote down about each floor (scene.js), for
+// whatever another extension builds on it — music for the mood, an outline, a picture.
+// ---------------------------------------------------------------------------------------------
+
+const SCENE_API_VERSION = 1;
+
+/** The scene kept for one floor's text as it reads now; null when it has none or the text changed since. */
+async function apiScene(messageId) {
+  const id = Number(messageId);
+  const message = getContext().chat?.[id];
+  if (!Number.isInteger(id) || !message || message.is_user || message.is_system || !message.extra?.[MESSAGE_META_KEY]) return null;
+  try {
+    const snapshot = await readMessageSnapshot(id, runtime.settings, { quiet: true });
+    return snapshot.existingScene ? { messageId: id, ...snapshot.existingScene } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every floor's scene from `from` to `to` (both included, the whole chat by default), in order. */
+async function apiScenes({ from = 0, to = null } = {}) {
+  const chat = getContext().chat ?? [];
+  const end = to === null || to === undefined ? chat.length - 1 : Number(to);
+  const last = Math.min(chat.length - 1, Number.isFinite(end) ? end : chat.length - 1);
+  const scenes = [];
+  for (let id = Math.max(0, Number(from) || 0); id <= last; id += 1) {
+    const scene = await apiScene(id);
+    if (scene) scenes.push(scene);
+  }
+  return scenes;
+}
+
+function notifySceneListeners(messageId, scene) {
+  for (const listener of runtime.sceneListeners) {
+    try { listener({ messageId, ...scene }); } catch { /* a caller's own bug is not ours */ }
+  }
+}
+
 function installPublicApi() {
   if (typeof globalThis === 'undefined') return;
   const api = {
@@ -18152,6 +18362,22 @@ function installPublicApi() {
       /** Whatever this interface is saying, stopped. A floor being read is left alone. */
       stop() {
         stopTtsPlayback();
+      },
+    }),
+    /**
+     * Each translated floor's scene, written by the translation as it went: tone (one of `tones`),
+     * place, time, cast, summary in the translation's language, visual in English for image models.
+     */
+    scene: Object.freeze({
+      apiVersion: SCENE_API_VERSION,
+      tones: SCENE_TONES,
+      get: messageId => apiScene(messageId),
+      list: options => apiScenes(options ?? {}),
+      /** Told `{ messageId, tone, place, time, cast, summary, visual }` whenever a floor's scene is written. */
+      onChange(listener) {
+        if (typeof listener !== 'function') return () => {};
+        runtime.sceneListeners.add(listener);
+        return () => runtime.sceneListeners.delete(listener);
       },
     }),
   };
@@ -18298,6 +18524,8 @@ export const __testing = Object.freeze({
   regexCleanupSummary,
   applyScopedRegexCleanup,
   startTranslation,
+  stopTranslating,
+  translateFloorsInTurn,
   translateMessageStreaming,
   worldInfoKeyMatches,
   readableWorldInfoEntries,

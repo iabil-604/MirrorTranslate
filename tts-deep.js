@@ -1,4 +1,4 @@
-import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.42.0';
+import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates, unwrapResponseContent } from './core.js?v=0.42.1';
 import {
   EDGE_PUNCTUATION_RE,
   FISH_EMOTIONS,
@@ -11,8 +11,8 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.42.0';
-import { normalizeEmotion } from './palette.js?v=0.42.0';
+} from './tts.js?v=0.42.1';
+import { normalizeEmotion } from './palette.js?v=0.42.1';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -95,7 +95,7 @@ function fillIntimate(system, intimate) {
 // asks for: the acoustic format's own field names.
 export function isAcousticPrompt(systemPrompt) {
   const text = String(systemPrompt ?? '').trim();
-  return !text || /content|tension_level|is_narrator/.test(text);
+  return !text || /tension_level|is_narrator/.test(text);
 }
 
 /**
@@ -667,6 +667,62 @@ function deepItemsOf(candidate) {
   return [];
 }
 
+// Where the object opening at `start` closes, strings and escapes respected; -1 when it never does.
+function objectEnd(text, start) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === '{') depth += 1;
+    else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The answers of a reply, in the order written, read straight off its text: every complete object in
+ * its `voices` array (or in a bare array of answers), however many there are and wherever the text
+ * stops, and whether the array was closed — a reply cut off at the provider's output limit is not. A
+ * reply still arriving reads the same way, so the first answers are never lost to the last ones.
+ */
+function deepItemsFromText(raw) {
+  const value = unwrapResponseContent(raw);
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, '');
+  const key = text.search(/"voices"\s*:\s*\[/);
+  let index = key >= 0 ? text.indexOf('[', key) : text.search(/\[\s*\{/);
+  if (index < 0) return null;
+  const items = [];
+  for (index += 1; index < text.length;) {
+    const character = text[index];
+    if (character === ']') return { items, closed: true };
+    if (character !== '{') {
+      index += 1;
+      continue;
+    }
+    const end = objectEnd(text, index);
+    if (end < 0) break;
+    try {
+      items.push(JSON.parse(text.slice(index, end + 1)));
+    } catch {
+      // An answer that is not JSON is passed over; the ones around it still count.
+    }
+    index = end + 1;
+  }
+  return { items, closed: false };
+}
+
 // Every answer in the reply once, in the order it was written: the envelope comes first among the
 // candidates, and the objects inside it, parsed again on their own, are the same answers a second time.
 function deepItemsIn(candidates) {
@@ -733,26 +789,40 @@ function acousticTag(raw) {
 // The interjections a line may gain, in both languages a floor comes in, and the marks it may gain.
 const ACOUSTIC_SOUND_CHARS = new Set([...'呜嗯唔啊哈呼', ...'うんあはふっぅぁウンアハフッゥァ']);
 const isSpaceChar = character => /\s/u.test(character);
-const isMarkChar = character => /[\p{P}\p{S}ー]/u.test(character);
+// Punctuation and symbols — an emoji, read as the one character it is — and the marks that only shape
+// another character (a variation selector, a zero-width joiner): none is a word a line must keep.
+const isMarkChar = character => /[\p{P}\p{S}\p{M}\p{Cf}ー]/u.test(character);
 const isWordChar = character => /[\p{L}\p{N}]/u.test(character) && character !== 'ー';
 
-/** `content` as tags and characters, in order. A bracket that is not tag-shaped is part of the words. */
-function acousticTokens(content) {
-  const source = String(content ?? '');
+/**
+ * `content` as tags and characters, in order, a character being a code point. A bracket that is not
+ * tag-shaped is part of the words, and so is a tag-shaped one that is none of the ten tags when the
+ * sentence itself is written with it (按下 [OK] 键); any other one is dropped where it stands.
+ */
+function acousticTokens(content, source = '') {
+  const text = String(content ?? '');
+  const own = String(source ?? '');
   const tokens = [];
   let index = 0;
-  while (index < source.length) {
-    if (source[index] === '[') {
-      const close = source.indexOf(']', index + 1);
-      if (close > index && close - index <= 40 && cueLike(source.slice(index + 1, close))) {
-        const word = acousticTag(source.slice(index + 1, close));
-        if (word) tokens.push({ tag: word });
-        index = close + 1;
-        continue;
+  while (index < text.length) {
+    if (text[index] === '[') {
+      const close = text.indexOf(']', index + 1);
+      if (close > index && close - index <= 40 && cueLike(text.slice(index + 1, close))) {
+        const word = acousticTag(text.slice(index + 1, close));
+        if (word) {
+          tokens.push({ tag: word });
+          index = close + 1;
+          continue;
+        }
+        if (!own.includes(text.slice(index, close + 1))) {
+          index = close + 1;
+          continue;
+        }
       }
     }
-    tokens.push({ ch: source[index] });
-    index += 1;
+    const character = String.fromCodePoint(text.codePointAt(index));
+    tokens.push({ ch: character });
+    index += character.length;
   }
   return tokens;
 }
@@ -779,18 +849,20 @@ function dropEdgeQuotes(tokens, quotePairs) {
  * either side is not compared.
  */
 function acousticAlign(spoken, source) {
+  const said = Array.from(String(spoken ?? ''));
+  const text = Array.from(String(source ?? ''));
   let at = 0;
   let previous = '';
   let added = 0;
   const nextWord = from => {
-    for (let index = from; index < source.length; index += 1) if (isWordChar(source[index])) return source[index];
+    for (let index = from; index < text.length; index += 1) if (isWordChar(text[index])) return text[index];
     return '';
   };
-  for (let index = 0; index < spoken.length; index += 1) {
-    const character = spoken[index];
+  for (let index = 0; index < said.length; index += 1) {
+    const character = said[index];
     if (isSpaceChar(character)) continue;
-    while (at < source.length && isSpaceChar(source[at])) at += 1;
-    if (at < source.length && source[at] === character) {
+    while (at < text.length && isSpaceChar(text[at])) at += 1;
+    if (at < text.length && text[at] === character) {
       at += 1;
       if (isWordChar(character)) previous = character;
       continue;
@@ -798,8 +870,8 @@ function acousticAlign(spoken, source) {
     if (isMarkChar(character)) continue;
     // The source's own punctuation dropped here, the next of its words said.
     let skip = at;
-    while (skip < source.length && (isSpaceChar(source[skip]) || isMarkChar(source[skip]))) skip += 1;
-    if (skip > at && source[skip] === character) {
+    while (skip < text.length && (isSpaceChar(text[skip]) || isMarkChar(text[skip]))) skip += 1;
+    if (skip > at && text[skip] === character) {
       at = skip + 1;
       previous = character;
       continue;
@@ -810,8 +882,19 @@ function acousticAlign(spoken, source) {
     }
     return { ok: false, at: index, added };
   }
-  for (; at < source.length; at += 1) if (!isSpaceChar(source[at]) && !isMarkChar(source[at])) return { ok: false, at: spoken.length, added };
+  for (; at < text.length; at += 1) if (!isSpaceChar(text[at]) && !isMarkChar(text[at])) return { ok: false, at: said.length, added };
   return { ok: true, at: -1, added };
+}
+
+// How much a line may gain: a few characters, more for a longer line.
+const addedBudget = source => Math.max(4, Math.ceil([...String(source ?? '')].filter(isWordChar).length * 0.3));
+
+/** Whether `content` performs `sourceText` — acousticScript's own check, without building the script. */
+function acousticFits(content, sourceText, quotePairs) {
+  const source = String(sourceText ?? '');
+  const tokens = dropEdgeQuotes(acousticTokens(content, source), quotePairs);
+  const check = acousticAlign(tokens.filter(token => token.ch !== undefined).map(token => token.ch).join(''), source);
+  return check.ok && check.added <= addedBudget(source);
 }
 
 // Tags at one point, in the order the rules ask for: the filters first, then the sounds, two at most.
@@ -841,11 +924,10 @@ function settleGroup(group, { narrator, intimate, atStart }) {
  */
 export function acousticScript(content, sourceText, { quotePairs = null, narrator = false, intimate = false } = {}) {
   const source = String(sourceText ?? '');
-  const tokens = dropEdgeQuotes(acousticTokens(content), quotePairs);
+  const tokens = dropEdgeQuotes(acousticTokens(content, source), quotePairs);
   const spoken = tokens.filter(token => token.ch !== undefined).map(token => token.ch).join('');
   const check = acousticAlign(spoken, source);
-  const sourceWords = [...source].filter(isWordChar).length;
-  const withinBudget = check.added <= Math.max(4, Math.ceil(sourceWords * 0.3));
+  const withinBudget = check.added <= addedBudget(source);
   const parts = [];
   let group = [];
   let saidAnything = false;
@@ -856,6 +938,14 @@ export function acousticScript(content, sourceText, { quotePairs = null, narrato
     if (settled.length) parts.push({ tags: settled });
   };
   for (const token of tokens) {
+    if (token.tag === 'pause') {
+      // A pause is a moment of its own: the tags after it start the next point, and it never counts
+      // toward the two one point may carry.
+      flush();
+      group.push('pause');
+      flush();
+      continue;
+    }
     if (token.tag) {
       group.push(token.tag);
       continue;
@@ -877,7 +967,7 @@ export function acousticScript(content, sourceText, { quotePairs = null, narrato
     .trim();
   if (!check.ok || !withinBudget) {
     const opening = parts[0]?.tags ? [parts[0]] : [];
-    return { script: opening.length ? render([...opening, { text: source }]) : '', mismatch: true, at: check.ok ? spoken.length : check.at };
+    return { script: opening.length ? render([...opening, { text: source }]) : '', mismatch: true, at: check.ok ? Array.from(spoken).length : check.at };
   }
   const script = render(parts);
   const plain = !parts.some(part => part.tags) && script.replace(/\s/gu, '') === source.replace(/\s/gu, '');
@@ -885,7 +975,8 @@ export function acousticScript(content, sourceText, { quotePairs = null, narrato
 }
 
 const isAcousticItem = item => item && typeof item === 'object' && item.line === undefined
-  && ['content', 'role', 'is_narrator', 'tension_level'].some(key => item[key] !== undefined);
+  && (['content', 'role', 'is_narrator', 'tension_level'].some(key => item[key] !== undefined)
+    || (['pace', 'reason'].some(key => item[key] !== undefined) && item.speaker === undefined && item.emotion === undefined));
 
 const NARRATOR_ROLE_RE = /^(?:旁白|旁白者|narrator|narration|ナレーション|ナレーター|地の文)$/i;
 
@@ -936,7 +1027,10 @@ const DEEP_NUMBERINGS = Object.freeze({
  * number that is no such sentence's and cannot be placed is left out; `dropped` names the ones that said
  * something about it.
  */
-function placeDeepItems(items, utterances, { quotePairs = null, intimate = false } = {}) {
+// The words of an answer or a sentence alone, with no tags and no marks.
+const bareWords = text => Array.from(String(text ?? '').replace(/\[[^\]\n]{1,40}\]/g, '')).filter(isWordChar).join('');
+
+function placeDeepItems(items, utterances, { quotePairs = null } = {}) {
   const quoted = utterances.filter(item => item.kind === 'quoted');
   const counts = {
     all: new Map(utterances.map((item, index) => [item.id, index + 1])),
@@ -948,15 +1042,23 @@ function placeDeepItems(items, utterances, { quotePairs = null, intimate = false
     // The acoustic format answers for every sentence; the format before it, for the dialogue alone.
     const pool = acoustic ? utterances : quoted;
     const mine = pool.find(utterance => utterance.id === id) ?? null;
+    const said = acoustic ? item?.content : item?.line;
     let fits = null;
-    if (acoustic && typeof item?.content === 'string' && item.content.trim()) {
-      fits = utterance => !acousticScript(item.content, utterance.text, { quotePairs, narrator: utterance.kind !== 'quoted', intimate }).mismatch;
-    } else if (!acoustic && typeof item?.line === 'string' && item.line.trim()) {
-      const words = lineWords(item.line, quotePairs).text;
-      fits = utterance => Boolean(alignToSource(words, String(utterance.text ?? '')).map);
+    if (typeof said === 'string' && said.trim()) {
+      if (acoustic) {
+        fits = utterance => acousticFits(said, utterance.text, quotePairs);
+      } else {
+        const words = lineWords(said, quotePairs).text;
+        fits = utterance => Boolean(alignToSource(words, String(utterance.text ?? '')).map);
+      }
     }
-    // Its own sentence is tried first; only words that are not its own are looked for elsewhere.
-    const matches = !fits ? [] : mine && fits(mine) ? [mine] : pool.filter(fits);
+    // Its own sentence is tried first. Words that fail it but are a shortened copy of it — part of it,
+    // in order — are its own all the same, badly copied; only words that are not are looked for elsewhere.
+    const shortened = Boolean(fits && mine) && (() => {
+      const words = bareWords(said);
+      return Boolean(words) && bareWords(mine.text).includes(words);
+    })();
+    const matches = !fits ? [] : mine && (fits(mine) || shortened) ? [mine] : pool.filter(fits);
     return { item, id, pool, mine, count: acoustic ? counts.all : counts.quoted, matches, own: Boolean(mine) && matches[0] === mine };
   });
   const evidence = read.filter(entry => entry.matches.length);
@@ -1041,10 +1143,16 @@ export function parseDeepAnalysis(raw, utterances, { quotePairs = null, intimate
   const labels = new Map();
   const voices = new Map();
   const mismatches = [];
-  const found = parseJsonCandidates(raw);
-  const candidates = found.length;
+  // The answers straight off the text where it is text; any other shape of reply, as every reading reads it.
+  const streamed = deepItemsFromText(raw);
+  const found = streamed?.items.length ? null : parseJsonCandidates(raw);
+  const items = streamed?.items.length ? streamed.items : deepItemsIn(found);
+  const candidates = streamed?.items.length ? 1 : found.length;
+  // A reply cut off before its answers closed: read what is there, but it is not the floor's whole reading.
+  const complete = streamed?.items.length ? streamed.closed : found.some(candidate => deepItemsOf(candidate).length > 0);
   // Each answer on the sentence it is about (placeDeepItems), whatever number it came under.
-  const { placed, numbering, moved, dropped } = placeDeepItems(deepItemsIn(found), list, { quotePairs, intimate });
+  const { placed, numbering, moved, dropped } = placeDeepItems(items, list, { quotePairs });
+  const format = placed.some(({ item }) => isAcousticItem(item)) ? 'acoustic' : 'legacy';
   for (const { item, id } of placed) {
     const utterance = byId.get(id);
     if (!utterance || labels.has(id)) continue;
@@ -1097,5 +1205,5 @@ export function parseDeepAnalysis(raw, utterances, { quotePairs = null, intimate
     }
     if (Object.keys(voice).length) voices.set(id, voice);
   }
-  return { labels, voices, candidates, mismatches, numbering, moved, dropped };
+  return { labels, voices, candidates, mismatches, numbering, moved, dropped, complete, format };
 }

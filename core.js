@@ -8,29 +8,32 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.42.0';
+} from './prompts.js?v=0.42.1';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.42.0';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.42.1';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.42.0';
+import { resolveMoveStyle } from './palette.js?v=0.42.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.42.0';
+export const APP_VERSION = '0.42.1';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
 // card when it actually shows one of the three documented signals, a kana-holding parenthesis no longer
 // counts as an already-bilingual row, and a card's first row starts its own unit apart from whatever
-// narration precedes it. A floor already translated keeps whichever rules produced what is stored on
-// it — recorded on its metadata as `segmentation_version` — so re-deriving its segments for matching
-// never disagrees with what was actually written; a floor with no record yet always starts on the
-// latest rules. See segmentSource's `segmentationVersion` option.
-export const SEGMENTATION_RULES_VERSION = 3;
+// narration precedes it. 4 is v0.42.1's reading of excluded tags: an attribute's quoted value may hold
+// < and > (a picture's prompt, <pic prompt="1girl, <lora:x:0.6>, rain"/>), and an excluded tag that opens
+// and never closes (<pic prompt="…"> with no /) is left out as a tag on its own. A floor already
+// translated keeps whichever rules produced what is stored on it — recorded on its metadata as
+// `segmentation_version` — so re-deriving its segments for matching never disagrees with what was
+// actually written; a floor with no record yet always starts on the latest rules. See segmentSource's
+// `segmentationVersion` option.
+export const SEGMENTATION_RULES_VERSION = 4;
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -675,6 +678,9 @@ export function isShortExactEcho(text, source) {
 const SPEAKER_OPEN_RE = new RegExp(`<span class="(?:custom-)?${SPEAKER_CLASS}(?:[ "][^>]*)?>`);
 const VALID_TAG_RE = /^[A-Za-z][A-Za-z0-9_:-]*$/;
 const STRUCTURAL_TAG_RE = /\\?<(\/?)([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
+// A tag whose attributes' quoted values are read whole, so a > or < inside one does not end the tag. A
+// quote left open on its line falls back to the tag ending at the first >, as tags were always read.
+const QUOTED_TAG_TOKEN_RE = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s(?:"[^"\n]*"|'[^'\n]*'|[^<>"'])*?|\s[^<>]*?)?\s*\/?>/g;
 const HTML_ENTITY_RE = /&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi;
 // A Markdown picture as the host's showdown renders it — ![alt](src "title"), sizes and one level of
 // brackets in the address included — and the empty link a linked picture [![a](b)](c) leaves once the
@@ -2437,9 +2443,12 @@ function strippedRecords(message) {
  * - The floor holds exactly what was written to it: its text is the mirror.
  * - It holds the bilingual text itself, or what the main model was shown of it and more (a continue):
  *   an ordinary floor again.
+ * - Its tagged regions hold just what was written to them, and only the text around them changed (an
+ *   image script's prompt put after </story_scene>, a status line before it): still the record's floor.
+ *   Its text is its own frame around the mirror's regions.
  * - It still carries the record's translation, changed (by hand, by another extension, a continue from
- *   the translation): `diverged`. Its text is what it holds, and nothing may translate it — that would
- *   take the translation for the original and write over the original in the mirror.
+ *   the translation inside a region): `diverged`. Its text is what it holds, and nothing may translate
+ *   it — that would take the translation for the original and write over the original in the mirror.
  * - Anything else is not the record's floor at all (a new reply on a copied record): ordinary.
  */
 export function readFloor(message) {
@@ -2452,9 +2461,50 @@ export function readFloor(message) {
   if (written) return { text: written.mirror, stripped: true, diverged: false, metadata: written };
   for (const metadata of records) {
     if (normalizeNewlines(text) === normalizeNewlines(metadata.mirror) || continuedFromMirror(text, metadata)) continue;
+    const grafted = graftedMirror(text, metadata);
+    if (grafted !== null) return { text: grafted, stripped: true, diverged: false, metadata };
     if (carriesTranslation(text, metadata)) return { text, stripped: true, diverged: true, metadata };
   }
   return ordinary;
+}
+
+// The tagged regions a record's floor is read by: the body and replace tags it was written with.
+function recordedRegions(text, metadata) {
+  const replaceTags = parseTagNames(metadata?.replace_tags);
+  return mergeExtractedRegions(
+    extractTaggedRegions(text, metadata?.body_tags ?? DEFAULT_SETTINGS.bodyTags),
+    replaceTags.length ? extractTaggedRegions(text, replaceTags, { mode: 'replace' }) : null,
+  ).regions;
+}
+
+/**
+ * A floor whose tagged regions still hold just what was written to them, with text added or changed
+ * around them since. What was written is the mirror with the translation-only regions in place of its
+ * own, so the floor's regions put into the mirror's frame must give the record's own fingerprint. The
+ * floor's full text is then the floor's frame around the mirror's regions. Null when a region itself
+ * changed, or the regions cannot be read.
+ */
+function graftedMirror(text, metadata) {
+  try {
+    const source = normalizeNewlines(text);
+    const mirror = normalizeNewlines(metadata.mirror);
+    const now = recordedRegions(source, metadata);
+    const kept = recordedRegions(mirror, metadata);
+    if (!now.length || now.length !== kept.length) return null;
+    const splice = (frame, regions, inners) => {
+      let output = '';
+      let cursor = 0;
+      for (const [index, region] of regions.entries()) {
+        output += `${frame.slice(cursor, region.contentStart)}${inners[index]}`;
+        cursor = region.closeStart;
+      }
+      return output + frame.slice(cursor);
+    };
+    if (hashTextSync(splice(mirror, kept, now.map(region => region.inner))) !== metadata.projection_hash) return null;
+    return splice(source, now, kept.map(region => region.inner));
+  } catch {
+    return null;
+  }
 }
 
 /** The record `readFloor` holds this floor to, or null. */
@@ -2556,7 +2606,10 @@ function scanTagGroups(source, tagName, options = {}) {
   const tag = String(tagName || '').trim();
   if (!VALID_TAG_RE.test(tag)) throw new Error(`标签名称无效：${tag || '（空）'}`);
   const target = tag.toLowerCase();
-  const tokenPattern = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
+  // `quoteAware`: quoted attribute values read whole (QUOTED_TAG_TOKEN_RE).
+  const tokenPattern = options.quoteAware
+    ? new RegExp(QUOTED_TAG_TOKEN_RE)
+    : /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
   const stack = [];
   const groups = [];
   let strayCloses = 0;
@@ -2750,8 +2803,9 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   });
   const excludedResults = excluded.map(tag => {
     try {
-      const groups = scanTagGroups(source, tag, { includeSelfClosing: true });
-      return { tag, count: groups.length };
+      // Read as a new floor is segmented (SEGMENTATION_RULES_VERSION 4): a tag that never closes counts too.
+      const groups = scanTagGroups(source, tag, { includeSelfClosing: true, quoteAware: true });
+      return { tag, count: groups.length + (groups.unclosedStack?.length ?? 0) };
     } catch (error) {
       errors.push(error.message);
       return { tag, count: 0, error: error.message };
@@ -2866,12 +2920,16 @@ function commentRanges(source) {
   return ranges;
 }
 
-function outermostExcludedRanges(source, tagNames) {
+function outermostExcludedRanges(source, tagNames, { quoteAware = false } = {}) {
   const ranges = commentRanges(source);
   for (const tag of parseTagNames(tagNames)) {
-    for (const group of scanTagGroups(source, tag, { includeSelfClosing: true })) {
+    const groups = scanTagGroups(source, tag, { includeSelfClosing: true, quoteAware });
+    for (const group of groups) {
       ranges.push({ start: group.openStart, end: group.closeEnd, tagName: tag });
     }
+    // An excluded tag that opens and never closes is one written on its own (<pic prompt="…"> with no /):
+    // the tag itself is left out, and what follows it is the story's.
+    if (quoteAware) for (const open of groups.unclosedStack ?? []) ranges.push({ start: open.start, end: open.end, tagName: tag });
   }
   ranges.sort((left, right) => left.start - right.start || right.end - left.end);
   const outermost = [];
@@ -2892,11 +2950,11 @@ function outermostExcludedRanges(source, tagNames) {
   return outermost;
 }
 
-function maskExcludedTags(source, tagNames) {
+function maskExcludedTags(source, tagNames, options = {}) {
   const blocks = [];
   let masked = '';
   let cursor = 0;
-  for (const [index, range] of outermostExcludedRanges(source, tagNames).entries()) {
+  for (const [index, range] of outermostExcludedRanges(source, tagNames, options).entries()) {
     const token = `\uE000JY_EXCLUDED_${index}\uE001`;
     masked += `${source.slice(cursor, range.start)}${token}`;
     blocks.push({ token, text: source.slice(range.start, range.end) });
@@ -3496,7 +3554,9 @@ export function segmentSource(text, options = {}) {
   if (parsedRules.errors.length || lyricRules.errors.length) {
     throw new Error([...parsedRules.errors, ...lyricRules.errors].join(' '));
   }
-  const { masked, blocks } = maskExcludedTags(source, options.excludedTags);
+  // Version 4 and up: excluded tags read with their quoted attributes whole, and one that never closes
+  // left out on its own (see SEGMENTATION_RULES_VERSION).
+  const { masked, blocks } = maskExcludedTags(source, options.excludedTags, { quoteAware: segmentationRules >= 4 });
   const structuralTags = new Set();
   // Segment id → the line with its speaker marks as markers, for the reading; see speechMarkedLine.
   const speech = new Map();
@@ -3886,22 +3946,33 @@ export function segmentSource(text, options = {}) {
 // When the floor's body changed while the API was working, the ids no longer line up, but the
 // paragraphs that were not touched still have identical source text. Carrying those across turns a
 // total loss into a partial write that 补译 can finish.
-export function remapTranslationsBySource(previousSegments, translations, currentSegments) {
-  const carried = new Map();
-  if (!(translations instanceof Map) || !translations.size) return carried;
+/**
+ * The paragraphs of the current text that carry over from an earlier one by their source text, in order:
+ * current id → earlier id. Only the earlier paragraphs `kept` names take part; a text found more than
+ * once is matched in turn.
+ */
+export function matchSegmentsBySource(previousSegments, kept, currentSegments) {
+  const pairs = new Map();
   const byText = new Map();
   for (const segment of Array.isArray(previousSegments) ? previousSegments : []) {
+    if (!kept(segment?.id)) continue;
     const text = String(segment?.text ?? '');
-    if (!translations.has(segment?.id)) continue;
     if (!byText.has(text)) byText.set(text, []);
     byText.get(text).push(segment.id);
   }
   for (const segment of Array.isArray(currentSegments) ? currentSegments : []) {
     const queue = byText.get(String(segment?.text ?? ''));
-    if (!queue?.length) continue;
-    const sourceId = queue.shift();
-    const value = translations.get(sourceId);
-    if (value) carried.set(segment.id, value);
+    if (queue?.length) pairs.set(segment.id, queue.shift());
+  }
+  return pairs;
+}
+
+export function remapTranslationsBySource(previousSegments, translations, currentSegments) {
+  const carried = new Map();
+  if (!(translations instanceof Map) || !translations.size) return carried;
+  for (const [currentId, previousId] of matchSegmentsBySource(previousSegments, id => translations.has(id), currentSegments)) {
+    const value = translations.get(previousId);
+    if (value) carried.set(currentId, value);
   }
   return carried;
 }
@@ -4318,6 +4389,11 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
     if (!value || typeof value !== 'object') return;
     if (Array.isArray(value.quotes)) for (const quote of value.quotes) if (quote && typeof quote === 'object') runMarks.add(JSON.stringify(quote));
     if (Array.isArray(value.runs)) consumedRunArrays.add(JSON.stringify(value.runs));
+    // The reply's scene (scene.js) is not a translation either: a list a model wrote in it anyway (the
+    // cast as an array) is skipped the same way, never read as id-less translations by position.
+    if (value.scene && typeof value.scene === 'object') {
+      for (const field of Object.values(value.scene)) if (Array.isArray(field)) consumedRunArrays.add(JSON.stringify(field));
+    }
     for (const key of ['translations', 'items', 'results', 'data']) if (Array.isArray(value[key])) value[key].forEach(collectRuns);
   };
   parsedCandidates.forEach(collectRuns);
@@ -5384,17 +5460,109 @@ export function restyleBilingual(text, options = {}, metadata) {
     });
 }
 
-export async function hashText(text) {
-  const normalized = normalizeNewlines(text);
+async function browserDigest(normalized) {
   try {
     if (globalThis.crypto?.subtle && typeof TextEncoder !== 'undefined') {
       const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
       return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
     }
   } catch {
-    // Non-secure preview/test environments use the deterministic fallback below.
+    // Non-secure pages (an http address other than localhost) have no digest of their own.
   }
-  return hashTextSync(normalized);
+  return null;
+}
+
+export async function hashText(text) {
+  const normalized = normalizeNewlines(text);
+  return await browserDigest(normalized) ?? hashTextSync(normalized);
+}
+
+/**
+ * The hash written into a floor's own record. The record travels with the chat, and the chat is opened
+ * from wherever the reader is — the computer on localhost, a phone on the computer's LAN address, where
+ * the browser has no digest of its own — so this is SHA-256 on every page: the browser's where it has
+ * one, the same algorithm in plain JavaScript where it has not. Reading caches stay on hashText: they
+ * live in the page's own storage and never meet another address.
+ */
+export async function hashFloorText(text) {
+  const normalized = normalizeNewlines(text);
+  return await browserDigest(normalized) ?? sha256Hex(normalized);
+}
+
+// SHA-256 in plain JavaScript, digit for digit what crypto.subtle gives.
+const SHA256_K = Object.freeze([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+export function sha256Hex(text) {
+  const bytes = new TextEncoder().encode(String(text ?? ''));
+  const length = bytes.length;
+  // The message, a 1 bit, zeros, and its length in bits as a 64-bit big-endian number: a whole number of 64-byte blocks.
+  const total = Math.ceil((length + 9) / 64) * 64;
+  const padded = new Uint8Array(total);
+  padded.set(bytes);
+  padded[length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(total - 8, Math.floor(length / 0x20000000), false);
+  view.setUint32(total - 4, (length * 8) >>> 0, false);
+  const hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+  const words = new Uint32Array(64);
+  const rotate = (value, bits) => (value >>> bits) | (value << (32 - bits));
+  for (let block = 0; block < total; block += 64) {
+    for (let index = 0; index < 16; index += 1) words[index] = view.getUint32(block + index * 4, false);
+    for (let index = 16; index < 64; index += 1) {
+      const a = words[index - 15];
+      const b = words[index - 2];
+      const s0 = rotate(a, 7) ^ rotate(a, 18) ^ (a >>> 3);
+      const s1 = rotate(b, 17) ^ rotate(b, 19) ^ (b >>> 10);
+      words[index] = (words[index - 16] + s0 + words[index - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = hash;
+    for (let index = 0; index < 64; index += 1) {
+      const s1 = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25);
+      const choice = (e & f) ^ (~e & g);
+      const first = (h + s1 + choice + SHA256_K[index] + words[index]) >>> 0;
+      const s0 = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22);
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const second = (s0 + majority) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + first) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (first + second) >>> 0;
+    }
+    hash[0] = (hash[0] + a) >>> 0;
+    hash[1] = (hash[1] + b) >>> 0;
+    hash[2] = (hash[2] + c) >>> 0;
+    hash[3] = (hash[3] + d) >>> 0;
+    hash[4] = (hash[4] + e) >>> 0;
+    hash[5] = (hash[5] + f) >>> 0;
+    hash[6] = (hash[6] + g) >>> 0;
+    hash[7] = (hash[7] + h) >>> 0;
+  }
+  return hash.map(word => word.toString(16).padStart(8, '0')).join('');
+}
+
+/**
+ * Whether a hash stored on a floor is the hash of `text`. Floors written on a page without the
+ * browser's own digest before v0.42.1 carry the short fallback fingerprint (fnv1a-…); those are checked
+ * the way they were made.
+ */
+export async function storedHashMatches(stored, text, computed = null) {
+  const value = String(stored ?? '');
+  if (!value) return false;
+  if (value.startsWith('fnv1a-')) return value === hashTextSync(text);
+  return value === (computed ?? await hashFloorText(text));
 }
 
 /**

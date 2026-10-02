@@ -207,3 +207,103 @@ test('an acoustic reply numbered by ⟦编号⟧ is read as it always was; one s
   assert.equal(stray.voices.get(6).script, '[gasp] ここまで防ぎ切るとは思わなかったってばよ！！');
   assert.equal(stray.voices.has(5), false);
 });
+
+test('words the sentence is written with in brackets, emoji and the marks that shape them are not taken for changes', () => {
+  assert.deepEqual(acousticScript('按下 [OK] 键。', '按下 [OK] 键。'), { script: '', mismatch: false, at: -1 });
+  assert.equal(acousticScript('[whisper] 按下 [OK] 键。', '按下 [OK] 键。').script, '[whisper] 按下 [OK] 键。');
+  assert.equal(acousticScript('[teasing] 好的', '好的').script, '', 'a made-up tag the sentence does not have is still dropped');
+  assert.equal(acousticScript('[laughter] 好的', '好的🙂').mismatch, false, 'an emoji left out is a mark left out');
+  assert.equal(acousticScript('[laughter] 好的🙂', '好的🙂').script, '[laughter] 好的🙂');
+  assert.equal(acousticScript('[sigh] 我爱你❤', '我爱你❤️').mismatch, false, 'a variation selector left out changes nothing');
+});
+
+test('a pause is a point of its own: never merged into the tags after it, never cut by their cap', () => {
+  assert.equal(acousticScript('[whisper] 别说了…… [pause] [panting][whisper] 我叫你别说了！', '别说了……我叫你别说了！').script,
+    '[whisper] 别说了…… [pause] [whisper][panting] 我叫你别说了！');
+  assert.equal(acousticScript('你来了…… [pause] [whisper] 别出声', '你来了……别出声').script, '你来了…… [pause] [whisper] 别出声');
+});
+
+test('a prompt is taken for the acoustic format by its own field names, not by a word any prompt may use', () => {
+  assert.equal(isAcousticPrompt(''), true);
+  assert.equal(isAcousticPrompt('只输出 JSON，不要输出 text 或 content 之外的解释。emotion 写情绪，line 写原句。'), false);
+  assert.equal(isAcousticPrompt('每句回 role、is_narrator、pace、tension_level。'), true);
+});
+
+test('an answer that copied its own sentence short stays on it, rather than moving to a shorter sentence its words happen to fit', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '「好的，我知道了。」' }, { lineId: 2, text: '「好的。」' }]);
+  const [first, second] = utterances.filter(item => item.kind === 'quoted').map(item => item.id);
+  const parsed = parseDeepAnalysis(JSON.stringify({ voices: [{ id: first, role: '林浅', is_narrator: false, tension_level: 4, content: '[sigh] 好的……' }] }), utterances);
+  assert.equal(parsed.moved, 0);
+  assert.equal(parsed.labels.get(first).speaker, '林浅');
+  assert.equal(parsed.labels.has(second), false);
+  assert.deepEqual(parsed.mismatches.map(item => item.id), [first], 'the copy is reported, on its own sentence');
+});
+
+test('a long reply is read from its first answer, still arriving or cut off, and says whether it closed', () => {
+  const lines = Array.from({ length: 200 }, (_, index) => ({ lineId: index + 1, text: `第${index + 1}段旁白。「台词${index + 1}。」` }));
+  const utterances = splitUtterances(lines);
+  assert.ok(utterances.length >= 400);
+  const answers = utterances.map(item => (item.kind === 'quoted'
+    ? { id: item.id, role: '泰罗', is_narrator: false }
+    : { id: item.id, role: '旁白', is_narrator: true }));
+  const whole = JSON.stringify({ voices: answers });
+  const full = parseDeepAnalysis(whole, utterances);
+  assert.equal(full.labels.size, utterances.length);
+  assert.equal(full.complete, true);
+  assert.equal(full.format, 'acoustic');
+  // Cut off two thirds of the way: every answer up to the cut is read, the very first ones included.
+  const cut = whole.slice(0, Math.floor(whole.length * 2 / 3));
+  const partial = parseDeepAnalysis(cut, utterances);
+  assert.equal(partial.complete, false);
+  assert.ok(partial.labels.has(utterances[0].id) && partial.labels.has(utterances[1].id));
+  assert.ok(partial.labels.size > 240);
+});
+
+test('an answer with only a pace is read in the acoustic format', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '雨下了一整夜。' }]);
+  const parsed = parseDeepAnalysis(JSON.stringify({ voices: [{ id: 1, pace: 'very_slow' }] }), utterances);
+  assert.deepEqual(parsed.labels.get(1), { type: 'narration' });
+  assert.equal(parsed.voices.get(1).speed, 'very_slow');
+});
+
+test('a script carried to the other language keeps a two-word tag whole', () => {
+  assert.equal(scriptOutline('[whisper][clear throat] 行、行くぞ！！', '出发吧，别磨蹭。'), '[whisper][clear throat] 出发吧，别磨蹭。');
+  assert.equal(scriptOutline('你来了 [clear throat]', '来たね'), '来たね [clear throat]');
+});
+
+test('with cues off, a tag taken out of an English line leaves its space, and Chinese still closes up', () => {
+  const words = text => sentenceFishText({ segment: { id: 1, type: 'dialogue', text: 'x', voice: { script: text } }, voiceId: 'v' }, { model: 's2-pro' }, { emotionCues: false, lean: true });
+  assert.equal(words('Well, [pause] I guess so.'), 'Well, I guess so.');
+  assert.equal(words('Hello. [sigh] I am here.'), 'Hello. I am here.');
+  assert.equal(words('[whisper] 别说了…… [pause] 我叫你别说了！'), '别说了……我叫你别说了！');
+});
+
+test('the reader\'s own tension holds with the split off, and the short-line rule reads what is actually said', () => {
+  const item = { segment: { id: 1, type: 'dialogue', text: '我真的已经很努力了，可是还是不行。', voice: { tensionLevel: 2, script: '呜……' } }, voiceId: 'v' };
+  assert.deepEqual(sentenceSampling(item, { temperature: 0.7 }, { prosodySplit: false }), { temperature: 0.7 });
+  const own = { ...item, override: { text: '我真的已经很努力了，可是还是不行。', tension: 5 } };
+  assert.deepEqual(sentenceSampling(own, { temperature: 0.7 }, { prosodySplit: false }), { temperature: 0.85 }, 'the reader\'s number, and their long line is no short line');
+  assert.deepEqual(sentenceSampling({ ...item, override: { text: '嗯……' } }, { temperature: 0.7 }), { temperature: 0.7, repetitionPenalty: 1.5 });
+});
+
+test('sentences share a request only where they would be sent alike at the reader\'s own speed', () => {
+  const fish = { model: 's2-pro', speed: 1.2, volume: 0, temperature: 0.7 };
+  const items = [
+    { segment: { id: 1, lineId: 1, type: 'narration', text: '风停了。' }, voiceId: 'v', override: { text: '风停了。', speed: 1 } },
+    { segment: { id: 2, lineId: 1, type: 'narration', text: '云散了。' }, voiceId: 'v' },
+    { segment: { id: 3, lineId: 1, type: 'narration', text: '天亮了。' }, voiceId: 'v' },
+  ];
+  const parts = planFishParts(items, { model: 's2-pro', fish });
+  assert.deepEqual(parts.map(part => part.map(item => item.segment.id)), [[1], [2, 3]]);
+  assert.equal(buildFishPayload(parts[1], { ...fish, format: 'mp3' }).body.prosody.speed, 1.2);
+});
+
+test('a reader\'s own take keeps its pace, volume and tension even where the floor goes whole', () => {
+  const fish = { model: 's2-pro', speed: 1, volume: 0, temperature: 0.7, format: 'mp3' };
+  const own = { segment: { id: 2, lineId: 1, type: 'dialogue', text: '我真的已经很努力了，可是还是不行。' }, voiceId: 'v', override: { text: '我真的已经很努力了，可是还是不行。', speed: 0.8, volume: -4, tension: 5 } };
+  const { body } = buildFishPayload([own], fish, { wholeFloor: true });
+  assert.deepEqual([body.prosody.speed, body.prosody.volume, body.temperature], [0.8, -4, 0.85]);
+  const plain = { segment: { id: 3, lineId: 2, type: 'narration', text: '风停了。' }, voiceId: 'v' };
+  const whole = buildFishPayload([plain, { ...own, override: undefined }], fish, { wholeFloor: true }).body;
+  assert.deepEqual([whole.prosody.speed, whole.temperature], [1, 0.7], 'the floor sent whole keeps the reader\'s own settings');
+});
