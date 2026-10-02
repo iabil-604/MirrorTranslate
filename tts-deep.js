@@ -1,4 +1,4 @@
-import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.41.5';
+import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates } from './core.js?v=0.41.6';
 import {
   EDGE_PUNCTUATION_RE,
   FISH_EMOTIONS,
@@ -15,8 +15,8 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.41.5';
-import { normalizeEmotion } from './palette.js?v=0.41.5';
+} from './tts.js?v=0.41.6';
+import { normalizeEmotion } from './palette.js?v=0.41.6';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -48,7 +48,7 @@ export const DEEP_STATUS = Object.freeze({ available: true, note: '可用' });
 export const DEEP_PROMPT = [
   '你是有声小说的配音导演。lines 是一楼正文，按段给出，引号里的话前面标着 ⟦编号⟧；references 里有角色资料、世界书和前面几楼；roster 是登记过的名字；character 是角色卡的名字，user 是用户扮演的角色；styles 是角色的表达习惯和用户在调音台上定下的规则，是硬性要求，只有声音例外：第 10、11 条的限制 styles 也不能放宽。你只管带编号的句子：由谁念、开头是什么情绪、这句怎么念。旁白不用管，也不用输出。不改写、不复述、不翻译任何句子。',
   '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":4,"speaker":"林浅","emotion":"nervous","pace":"fast","line":"[nervous] 你别靠这么近 [pause] 会让人看见的。"},{"id":5,"type":"narration"},{"id":6,"speaker":"林浅","emotion":"worried"}]}。line 只给要加标签的句子写：这句话本身，一字不改地抄一遍，只能往里面插 [标签]，标签和它紧挨着的字之间空一格。除了句首的情绪词一个标签都不加的句子（像第 6 句）不写 line，情绪写在 emotion 里就够了。旁白只写 type，不写 line。speaker、emotion、pace 看不出就不写。',
-  '1. 编号：每个 ⟦编号⟧ 都要回答，按编号从小到大，每个只出现一次，一个都不能漏。',
+  '1. 编号：每个 ⟦编号⟧ 都要回答，按编号从小到大，每个只出现一次，一个都不能漏。id 写 ⟦⟧ 里的那个数字，不是 lines 里的段号 line，也不是自己从 1 数的序号。',
   '2. 不是说出口的话：引号里是书名、招牌、标语、信和文件上的字、拟声词（「砰」「咔嚓」）时（比如门上写着「闲人免进」），只写 {"id":N,"type":"narration"}。引号里心里想的话算这个人的话，照常写 speaker。speakers 里的编号都是说出口的话。',
   '3. speaker：从 roster 里逐字照抄名字，不加敬称，不加括号说明。正文用昵称、姓或称呼（「学姐」「那家伙」）指 roster 里的人，也写 roster 里的名字；正文用「你」「我」指某个人，写这个人的名字；roster 里没有的人，写正文对他的称呼。按这个顺序判断：引号前后写明的说话人和动作 → 话里叫到的名字（被叫到的是听的人，不是说的人）→ 话里的自称、口癖和语尾 → 对话一来一回的顺序。不要写「他」「她」「众人」「旁白」「未知」。character 可能是整个故事或旁白的名字，正文没显示是这个人在说，就不要写它。{{user}}看不出是谁说的就省略 speaker，不要猜。输入里的 speakers 是用户手动定的说话人，这些编号照抄。',
   '4. emotion：这句开头的情绪，只能从 emotions 列表里选一个词逐字照抄，不加表示程度的词，不自己造词；看得出情绪、看不出说话人时照写 emotion，不写 speaker；看不出明显情绪就不写，不要拿 calm 凑数。依据按这个顺序：这句话本身的字面、语气词和标点 → 紧挨着它的动作和神态描写 → 前后几句。不要拿整场的气氛代替这一句：吵架里也有平静的一句，伤心的场景里也有勉强的笑。嘴硬、说反话、强装镇定的句子，按念出来听得到的那一层选。',
@@ -578,8 +578,105 @@ function deepItemsOf(candidate) {
   return [];
 }
 
+// Every answer in the reply once, in the order it was written: the envelope comes first among the
+// candidates, and the objects inside it, parsed again on their own, are the same answers a second time.
+function deepItemsIn(candidates) {
+  const items = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    for (const item of deepItemsOf(candidate)) {
+      const signature = JSON.stringify(item);
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      items.push(item);
+    }
+  }
+  return items;
+}
+
+// A reply's `line` with its tags lifted out, a reproduced pair of quote marks taken off and the lead
+// splitUtterances trims cut: the words alignToSource holds to a sentence, and where each tag stood in them.
+function lineWords(rawLine, quotePairs) {
+  const { text: untagged, tags: rawTags } = stripInlineTags(rawLine);
+  const { text: unquoted, tags: edgeTags } = stripEdgeQuote(untagged, rawTags, quotePairs);
+  const { text, cut } = trimEdgePunctuation(unquoted);
+  return { text, tags: cut ? edgeTags.map(tag => ({ ...tag, offset: Math.max(0, tag.offset - cut) })) : edgeTags };
+}
+
+// The numbers a model has been seen to answer the dialogue by instead of its ⟦编号⟧: the paragraph's own
+// `line` from the request, or its own count of the dialogue from one.
+const DEEP_NUMBERINGS = Object.freeze({
+  line: (id, utterance) => utterance.lineId === id,
+  count: (id, utterance, count) => count.get(utterance.id) === id,
+});
+
+/**
+ * Which sentence each answer is about.
+ *
+ * The request numbers the dialogue alone (⟦编号⟧), and an answer's `id` is that number. A model may
+ * answer by another number — the paragraph's `line`, or its own count of the dialogue — and read by that
+ * number an answer lands on a narration sentence, which is then voiced and buttoned as dialogue while
+ * the line it was about is left unnamed. An answer's own `line` says which sentence it meant. When two
+ * or more answers carry one and every one of them names its sentence by the same other numbering, the
+ * whole reply is read by that numbering. Otherwise each answer stays on its own number when that is a
+ * dialogue sentence its `line` (if it has one) reproduces, and an answer whose `line` reproduces another
+ * dialogue sentence moves there. A number that is no dialogue sentence's and cannot be placed is left
+ * out; `dropped` names those that said something about it.
+ */
+function placeDeepItems(items, utterances, quotePairs) {
+  const quoted = utterances.filter(item => item.kind === 'quoted');
+  const byId = new Map(quoted.map(item => [item.id, item]));
+  const count = new Map(quoted.map((item, index) => [item.id, index + 1]));
+  const read = items.map(item => {
+    const id = Number(item?.id);
+    const words = typeof item?.line === 'string' && item.line.trim() ? lineWords(item.line, quotePairs).text : null;
+    const matches = words === null ? [] : quoted.filter(utterance => alignToSource(words, String(utterance.text ?? '')).map);
+    return { item, id, matches, own: matches.some(utterance => utterance.id === id) };
+  });
+  const evidence = read.filter(entry => entry.matches.length);
+  const numbering = evidence.length >= 2 && evidence.some(entry => !entry.own)
+    ? Object.keys(DEEP_NUMBERINGS).find(name => evidence.every(entry => entry.matches.some(utterance => DEEP_NUMBERINGS[name](entry.id, utterance, count)))) ?? ''
+    : '';
+  const claimed = new Set();
+  const placed = [];
+  const dropped = [];
+  let moved = 0;
+  const place = (entry, target) => {
+    if (!target) {
+      const said = entry.item?.speaker || entry.item?.emotion || entry.item?.line;
+      if (said && Number.isFinite(entry.id)) dropped.push(entry.id);
+      return;
+    }
+    if (target.id !== entry.id) moved += 1;
+    claimed.add(target.id);
+    placed.push({ item: entry.item, id: target.id });
+  };
+  if (numbering) {
+    for (const entry of read) {
+      const named = quoted.filter(utterance => DEEP_NUMBERINGS[numbering](entry.id, utterance, count));
+      place(entry, entry.matches.find(utterance => named.includes(utterance) && !claimed.has(utterance.id))
+        ?? named.find(utterance => !claimed.has(utterance.id)) ?? null);
+    }
+    return { placed, numbering, moved, dropped };
+  }
+  // An answer on its own number first, so one that only found its way to a sentence by its words never
+  // takes the place of the answer that was about it all along.
+  const direct = read.filter(entry => byId.has(entry.id) && (entry.own || !entry.matches.length));
+  for (const entry of direct) place(entry, byId.get(entry.id));
+  for (const entry of read) {
+    if (direct.includes(entry)) continue;
+    place(entry, entry.matches.find(utterance => !claimed.has(utterance.id)) ?? byId.get(entry.id) ?? null);
+  }
+  return { placed, numbering, moved, dropped };
+}
+
 /**
  * The deep reply, read onto the utterances.
+ *
+ * Which sentence each answer is about is settled first (`placeDeepItems`): only dialogue is answered,
+ * and an answer numbered some other way is moved to the sentence its own words name, or left out —
+ * never read onto a narration sentence that happens to carry the same number. `numbering`, `moved` and
+ * `dropped` say what that took, for the diagnostic the caller logs.
  *
  * `speaker`, `emotion` and `pace` are read exactly as the simple reading's own fields are: `emotion`
  * alone decides both the label's colour and, unless a tag in `line` overrules it, the voice Fish is
@@ -612,65 +709,62 @@ function levelOf(value) {
 }
 
 export function parseDeepAnalysis(raw, utterances, { quotePairs = null } = {}) {
-  const byId = new Map((Array.isArray(utterances) ? utterances : []).map(item => [item.id, item]));
+  const list = Array.isArray(utterances) ? utterances : [];
+  const byId = new Map(list.map(item => [item.id, item]));
   const labels = new Map();
   const voices = new Map();
   const mismatches = [];
-  let candidates = 0;
-  for (const candidate of parseJsonCandidates(raw)) {
-    candidates += 1;
-    for (const item of deepItemsOf(candidate)) {
-      const id = Number(item?.id);
-      const utterance = byId.get(id);
-      if (!utterance || labels.has(id)) continue;
-      if (String(item?.type ?? '').trim().toLowerCase() === 'narration') {
-        labels.set(id, { type: 'narration' });
-        continue;
-      }
-      const speaker = String(item?.speaker ?? '').trim().slice(0, 60);
-      const paletteEmotion = normalizeEmotion(item?.emotion);
-      const topEmotion = cueLike(item?.emotion);
-      const rawLine = item?.line;
-      const hasLine = typeof rawLine === 'string' && rawLine.trim();
-      // pace is this reading's own field; a reply built for an old custom prompt (see LEGACY_VOICE_KEYS
-      // below) may instead carry the simple reading's `speed`, read here as the same thing.
-      const paceValue = VOICE_LEVELS.has(item?.pace) ? item.pace : VOICE_LEVELS.has(item?.speed) ? item.speed : null;
-      const hasPace = paceValue !== null && paceValue !== 'normal';
-      const hasLegacyVoice = !hasLine && LEGACY_VOICE_KEYS.some(key => item?.[key] !== undefined);
-      // An id with nothing beside it — no speaker, no mood, no pace, no line — is not an answer: the
-      // model did not address this sentence, and it is left exactly as unlabelled as one it never
-      // named at all, rather than turned into a bare dialogue line by the mere fact of appearing.
-      if (!(speaker && !isPlaceholderSpeaker(speaker)) && !paletteEmotion && !hasLine && !hasPace && !hasLegacyVoice) continue;
-      const label = { type: 'dialogue' };
-      if (speaker && !isPlaceholderSpeaker(speaker)) label.speaker = speaker;
-      if (paletteEmotion) label.emotion = paletteEmotion;
-      const lang = normalizeLanguageCode(item?.lang ?? item?.language);
-      if (lang) label.lang = lang;
-      labels.set(id, label);
-      const voice = {};
-      if (topEmotion && topEmotion !== 'neutral') voice.emotion = topEmotion;
-      if (hasPace) voice.speed = paceValue;
-      const intensity = levelOf(item?.intensity);
-      if (intensity !== null) voice.intensity = intensity;
-      if (hasLine) {
-        const { text: untagged, tags: rawTags } = stripInlineTags(rawLine);
-        const { text: unquoted, tags: edgeTags } = stripEdgeQuote(untagged, rawTags, quotePairs);
-        const { text: leadTrimmed, cut } = trimEdgePunctuation(unquoted);
-        const shiftedTags = cut ? edgeTags.map(tag => ({ ...tag, offset: Math.max(0, tag.offset - cut) })) : edgeTags;
-        const source = String(utterance.text ?? '');
-        const { map, at } = alignToSource(leadTrimmed, source);
-        if (map) {
-          classifyAndApply(voice, shiftedTags.map(tag => ({ word: tag.word, offset: map[tag.offset] })), source, { full: true });
-        } else {
-          classifyAndApply(voice, shiftedTags, source, { full: false });
-          mismatches.push({ id, at, sentence: source });
-        }
-      } else if (hasLegacyVoice) {
-        const legacy = normalizeVoice(item, String(utterance.text ?? ''));
-        if (legacy) Object.assign(voice, legacy);
-      }
-      if (Object.keys(voice).length) voices.set(id, voice);
+  const found = parseJsonCandidates(raw);
+  const candidates = found.length;
+  // Each answer on the dialogue sentence it is about (placeDeepItems), whatever number it came under.
+  const { placed, numbering, moved, dropped } = placeDeepItems(deepItemsIn(found), list, quotePairs);
+  for (const { item, id } of placed) {
+    const utterance = byId.get(id);
+    if (!utterance || labels.has(id)) continue;
+    if (String(item?.type ?? '').trim().toLowerCase() === 'narration') {
+      labels.set(id, { type: 'narration' });
+      continue;
     }
+    const speaker = String(item?.speaker ?? '').trim().slice(0, 60);
+    const paletteEmotion = normalizeEmotion(item?.emotion);
+    const topEmotion = cueLike(item?.emotion);
+    const rawLine = item?.line;
+    const hasLine = typeof rawLine === 'string' && rawLine.trim();
+    // pace is this reading's own field; a reply built for an old custom prompt (see LEGACY_VOICE_KEYS
+    // below) may instead carry the simple reading's `speed`, read here as the same thing.
+    const paceValue = VOICE_LEVELS.has(item?.pace) ? item.pace : VOICE_LEVELS.has(item?.speed) ? item.speed : null;
+    const hasPace = paceValue !== null && paceValue !== 'normal';
+    const hasLegacyVoice = !hasLine && LEGACY_VOICE_KEYS.some(key => item?.[key] !== undefined);
+    // An id with nothing beside it — no speaker, no mood, no pace, no line — is not an answer: the
+    // model did not address this sentence, and it is left exactly as unlabelled as one it never
+    // named at all, rather than turned into a bare dialogue line by the mere fact of appearing.
+    if (!(speaker && !isPlaceholderSpeaker(speaker)) && !paletteEmotion && !hasLine && !hasPace && !hasLegacyVoice) continue;
+    const label = { type: 'dialogue' };
+    if (speaker && !isPlaceholderSpeaker(speaker)) label.speaker = speaker;
+    if (paletteEmotion) label.emotion = paletteEmotion;
+    const lang = normalizeLanguageCode(item?.lang ?? item?.language);
+    if (lang) label.lang = lang;
+    labels.set(id, label);
+    const voice = {};
+    if (topEmotion && topEmotion !== 'neutral') voice.emotion = topEmotion;
+    if (hasPace) voice.speed = paceValue;
+    const intensity = levelOf(item?.intensity);
+    if (intensity !== null) voice.intensity = intensity;
+    if (hasLine) {
+      const { text: words, tags } = lineWords(rawLine, quotePairs);
+      const source = String(utterance.text ?? '');
+      const { map, at } = alignToSource(words, source);
+      if (map) {
+        classifyAndApply(voice, tags.map(tag => ({ word: tag.word, offset: map[tag.offset] })), source, { full: true });
+      } else {
+        classifyAndApply(voice, tags, source, { full: false });
+        mismatches.push({ id, at, sentence: source });
+      }
+    } else if (hasLegacyVoice) {
+      const legacy = normalizeVoice(item, String(utterance.text ?? ''));
+      if (legacy) Object.assign(voice, legacy);
+    }
+    if (Object.keys(voice).length) voices.set(id, voice);
   }
-  return { labels, voices, candidates, mismatches };
+  return { labels, voices, candidates, mismatches, numbering, moved, dropped };
 }

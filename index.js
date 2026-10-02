@@ -117,8 +117,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.41.5';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.5';
+} from './core.js?v=0.41.6';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.41.6';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -176,10 +176,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.41.5';
-import { createTtsStore } from './tts-store.js?v=0.41.5';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.5';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.5';
+} from './tts.js?v=0.41.6';
+import { createTtsStore } from './tts-store.js?v=0.41.6';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.41.6';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, deepRequestSettings, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.41.6';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -189,7 +189,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.41.5';
+} from './processing.js?v=0.41.6';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -207,9 +207,9 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.41.5';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.5';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.5';
+} from './prompts.js?v=0.41.6';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.41.6';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.41.6';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -227,8 +227,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.41.5';
-import { sampleThemeBackground } from './theme-probe.js?v=0.41.5';
+} from './palette.js?v=0.41.6';
+import { sampleThemeBackground } from './theme-probe.js?v=0.41.6';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -236,7 +236,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.41.5';
+} from './diagnostics.js?v=0.41.6';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -247,7 +247,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.41.5';
+} from './helper.js?v=0.41.6';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -385,6 +385,9 @@ const runtime = {
     inspect: null,
     // messageId|side → the steps of the last run on that floor, kept so the panel can show them after.
     progress: new Map(),
+    // Floors whose analysis the reader asked to redo (重新分析, 按意见改) and that has not landed yet: a
+    // look at the floor meanwhile finds the old analysis, and must not report that as the step's end.
+    asking: new Set(),
     // floorId|version already made in the background, so a redraw never starts the same run twice.
     pregenerated: new Set(),
     // Floors a generation just wrote, waiting to be read aloud by themselves; and the texts already
@@ -4461,6 +4464,21 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       contextBytes: packet ? Object.values(packet).reduce((sum, value) => sum + String(value ?? '').length, 0) : undefined,
       seconds,
     }, raw, { fullRequest: messages, floor: floor.messageId });
+    // A deep reply numbered some other way than the request's ⟦编号⟧ (parseDeepAnalysis put each answer
+    // back on the sentence its words name), or answering numbers that are no dialogue sentence's.
+    if (depth === 'deep' && (parsed.moved || parsed.dropped?.length)) {
+      const by = parsed.numbering === 'line' ? '按段号' : parsed.numbering === 'count' ? '按对白自己从 1 数的序号' : '';
+      recordDiagnostic('warn', 'tts.analysis-deep-ids', [
+        parsed.moved
+          ? by
+            ? `分析模式回的编号是${by}写的，不是 ⟦⟧ 里的编号，已经换算回对应的对白（${parsed.moved} 句）。`
+            : `分析模式有 ${parsed.moved} 句回答的编号不对，已按回答里抄的原句对回到对应的对白上。`
+          : '',
+        parsed.dropped?.length ? `还有 ${parsed.dropped.length} 个编号对不上任何一句对白，没有用上：${parsed.dropped.slice(0, 8).join('、')}${parsed.dropped.length > 8 ? '…' : ''}。` : '',
+      ].filter(Boolean).join(''), {
+        floor: floor.floorId, depth, numbering: parsed.numbering || null, moved: parsed.moved, dropped: parsed.dropped,
+      }, '', { floor: floor.messageId });
+    }
     // A deep reply whose line did not reproduce its sentence word for word: the sentence kept only
     // its opening tags (parseDeepAnalysis), and that is worth a diagnostic naming which sentence and
     // where it first stopped matching.
@@ -4570,7 +4588,7 @@ function settledPrefix(utterances, partial, undecided) {
  * warning rather than refusing to read. When both languages are read, the original is labelled from
  * the translation's reading instead of being read a second time.
  */
-async function prepareTtsSegments(floor, settings, { onStatus = null, force = false, onStep = null, onPartial = null, passive = false, analyze = null } = {}) {
+async function prepareTtsSegments(floor, settings, { onStatus = null, force = false, onStep = null, onPartial = null, passive = false, analyze = null, quiet = false } = {}) {
   const tts = ttsSettings(settings);
   const utterances = ttsUtterances(floor, settings);
   // What the translation already said about every quoted run: who, in what mood, in Fish's own words.
@@ -4597,7 +4615,8 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   const { corrected: aliasedSpeakers, learnable: discoveredAliases } = discoverSpeakerAliases(utterances, {
     cast: baseCast, hints: translationSpeakers, tagged: rawTagSpeakers, voiced: voicedNames, learned: autoSpeakerAliases(),
   });
-  noteAutoSpeakerAliases(discoveredAliases, floor.messageId);
+  // The floor's buttons look quietly (ttsSegmentsForButtons): a floor merely shown teaches nothing.
+  if (!quiet) noteAutoSpeakerAliases(discoveredAliases, floor.messageId);
   const tagLabels = aliasedSpeakers.size
     ? new Map([...tagged.labels].map(([id, label]) => [id, aliasedSpeakers.has(id) ? { ...label, speaker: aliasedSpeakers.get(id), speakerSource: 'hint' } : label]))
     : tagged.labels;
@@ -4622,11 +4641,15 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   const floorKey = ttsLabelKey(floor);
   // A model's reading with the translation's marks under it: the translation's name where the model
   // named nobody, its Fish words under whatever the model added — an id-only answer keeps them whole.
+  // A line of dialogue the model did not answer at all keeps the translation's whole mark, rather than
+  // being left with nobody to say it (and, when lines without a voice are skipped, not read at all).
+  const quotedIds = new Set(utterances.filter(item => item.kind === 'quoted').map(item => item.id));
   const adopt = analyzed => {
     const adopted = new Map(analyzed.labels);
     for (const [id, hint] of reading.labels) {
       const label = adopted.get(id);
       if (hint.speaker && label && !label.speaker) adopted.set(id, { ...label, speaker: hint.speaker, speakerSource: 'hint' });
+      else if (hint.speaker && !label && quotedIds.has(id)) adopted.set(id, { ...hint, speakerSource: 'hint' });
     }
     return { labels: adopted, voices: mergeVoiceMaps(reading.voices, analyzed.voices) };
   };
@@ -4665,7 +4688,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
       voices = corrected.voices ?? null;
       depth = corrected.depth ?? depth;
     } else {
-      const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep, passive, analyze });
+      const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep, passive, analyze, quiet });
       const derived = deriveLabelsForSide(read.utterances, read.labels, read.voices, utterances);
       for (const [id, label] of derived.labels) labels.set(id, { ...(labels.get(id) ?? {}), ...label });
       voices = derived.voices;
@@ -4764,7 +4787,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   const pinned = pinSpeakers(labels, resolved, { fallback });
   const dropped = [];
   const segments = buildSegments(utterances, pinned, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices, evidence: ttsEvidence(floor), dropped });
-  noteGroundedTags(floor, dropped, depth);
+  if (!quiet) noteGroundedTags(floor, dropped, depth);
   return { utterances, labels: pinned, voices, segments, depth, passive };
 }
 
@@ -7379,14 +7402,21 @@ async function ttsPrepared(messageId, side = null, { fresh = false } = {}) {
   const which = side ?? primaryTtsSide(settings);
   const key = ttsPreparedKey(messageId, which);
   const known = runtime.tts.floors.get(key);
-  if (known && !fresh && known.settings === settings) return known;
+  // The floor's own text is checked too: a script that rewrites a reply after it has landed need not
+  // announce it, and the reading was left on words the floor no longer has.
+  const message = getContext().chat?.[Number(messageId)];
+  const mes = typeof message?.mes === 'string' ? message.mes : null;
+  if (known && !fresh && known.settings === settings && known.mes === mes) return known;
   const floor = await collectTtsFloor(messageId, settings, which);
   if (!floor) throw new Error(which === 'source' ? '这一楼没有可朗读的原文。' : which === 'dialogue_source' ? '这一楼还没有译文，对白读原文要先翻译过。' : '这一楼没有可朗读的译文。');
   // A look at the floor never asks the model: the list, the inspector and the overrides show what is
   // known so far; the reading itself is what analyses, and it drops this entry when it lands.
-  const { segments, depth, passive } = await prepareTtsSegments(floor, settings, { onStep: (id, patch) => ttsStep(floor, id, patch), passive: true });
+  const { segments, depth, passive } = await prepareTtsSegments(floor, settings, {
+    onStep: (id, patch) => { if (!(id === 'analysis' && runtime.tts.asking.has(floor.messageId))) ttsStep(floor, id, patch); },
+    passive: true,
+  });
   const { items, skipped } = await ttsItemsFor(floor, segments, settings);
-  const prepared = { floor, segments, items, skipped, settings, depth, passive };
+  const prepared = { floor, segments, items, skipped, settings, depth, passive, mes };
   runtime.tts.floors.set(key, prepared);
   if (runtime.tts.floors.size > 40) runtime.tts.floors.delete(runtime.tts.floors.keys().next().value);
   return prepared;
@@ -7659,6 +7689,13 @@ async function reanalyzeTtsFloor(messageId, side = null) {
   const which = side ?? primaryTtsSide(settings);
   const floor = await collectTtsFloor(messageId, settings, which);
   if (!floor) throw new Error('这一楼没有可朗读的文字。');
+  // Said at once, on the floor and in the window. What comes before the request goes out — the audio
+  // already made, the floor's own marks, the references — takes seconds on a phone, and nothing on
+  // screen used to say anything had started until it did.
+  beginTtsProgress(floor);
+  runtime.tts.asking.add(floor.messageId);
+  ttsStep(floor, 'analysis', { state: 'active', label: '分析模式' });
+  setTtsStatus(messageId, '正在分析…', 'busy');
   // Noted before the labels move, on every side the floor is read in: a reading of one language is
   // carried over to the other, and the other side's audio was made from it too.
   const heard = new Map();
@@ -7668,7 +7705,6 @@ async function reanalyzeTtsFloor(messageId, side = null) {
   runtime.tts.analysis.delete(ttsLabelKey(floor));
   // A floor the reader once chose to hear plain is being asked about now.
   runtime.tts.plainFloors.delete(ttsLabelKey(floor));
-  beginTtsProgress(floor);
   try {
     await prepareTtsSegments(floor, settings, {
       force: true,
@@ -7677,7 +7713,11 @@ async function reanalyzeTtsFloor(messageId, side = null) {
       onStatus: text => setTtsStatus(messageId, text, text ? 'busy' : 'idle'),
       onStep: (id, patch) => ttsStep(floor, id, patch),
     });
+  } catch (error) {
+    ttsStep(floor, 'analysis', { state: 'error', label: '分析', detail: isAbortError(error) ? '已停止' : safeError(error) });
+    throw error;
   } finally {
+    runtime.tts.asking.delete(floor.messageId);
     setTtsStatus(messageId, '', 'idle');
     scheduleTtsDecorate(messageId, { force: true });
   }
@@ -7716,12 +7756,49 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
   const which = side ?? primaryTtsSide(settings);
   const prepared = await ttsPrepared(messageId, which);
   const { floor } = prepared;
-  const heard = new Map();
-  for (const each of ttsSidesWith(which, settings)) heard.set(each, await ttsRecordedLines(messageId, each, settings));
   const utterances = ttsUtterances(floor, settings);
   const base = currentTtsLabels(prepared);
   const scope = utteranceId === null ? utterances : utterances.filter(item => item.id === Number(utteranceId));
   if (!scope.length) throw new Error('这一句不在当前的朗读范围里。');
+  // Said at once, on the floor and in the window: the correction is a request of its own, and it used
+  // to run with nothing on screen until its result landed.
+  beginTtsProgress(floor);
+  runtime.tts.asking.add(floor.messageId);
+  ttsStep(floor, 'analysis', { state: 'active', label: '按意见改' });
+  setTtsStatus(messageId, '正在按你的意见改…', 'busy');
+  let corrected;
+  try {
+    corrected = await askTtsCorrection(messageId, prepared, { which, utteranceId, feedback, utterances, base, scope });
+  } catch (error) {
+    ttsStep(floor, 'analysis', { state: 'error', label: '按意见改', detail: isAbortError(error) ? '已停止' : safeError(error) });
+    setTtsStatus(messageId, '', 'idle');
+    throw error;
+  } finally {
+    runtime.tts.asking.delete(floor.messageId);
+  }
+  ttsStep(floor, 'analysis', { state: 'done', label: '按意见改', detail: `改了 ${corrected.changed} 句` });
+  setTtsStatus(messageId, '', 'idle');
+  const resume = ttsResumePoint(messageId);
+  dropPreparedFloors(messageId);
+  forgetTtsItems(messageId);
+  scheduleTtsDecorate(messageId, { force: true });
+  // What was changed is heard changed without a second click: its paragraphs' audio predates the
+  // correction and is made again; every other paragraph keeps what it had.
+  const summary = await remakeTtsSides(messageId, corrected.heard);
+  notifyTtsPanels();
+  void resumeTtsReading(resume);
+  return { remade: summary.made, remake: summary, changed: corrected.changed, kept: corrected.kept, sentences: scope.length };
+}
+
+/**
+ * The correction itself: the request, and its answer laid over the floor's labels and kept. Which
+ * paragraphs had audio is noted first, before any label moves.
+ */
+async function askTtsCorrection(messageId, prepared, { which, utteranceId, feedback, utterances, base, scope }) {
+  const settings = runtime.settings;
+  const { floor } = prepared;
+  const heard = new Map();
+  for (const each of ttsSidesWith(which, settings)) heard.set(each, await ttsRecordedLines(messageId, each, settings));
   const key = ttsLabelKey(floor);
   const known = runtime.tts.analysis.get(key);
   // The floor keeps the depth it was read at: a correction to 分析模式's reading stays one, and a
@@ -7781,16 +7858,7 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
     labels: [...labels],
     voices: [...voices],
   }).catch(() => {});
-  const resume = ttsResumePoint(messageId);
-  dropPreparedFloors(messageId);
-  forgetTtsItems(messageId);
-  scheduleTtsDecorate(messageId, { force: true });
-  // What was changed is heard changed without a second click: its paragraphs' audio predates the
-  // correction and is made again; every other paragraph keeps what it had.
-  const summary = await remakeTtsSides(messageId, heard);
-  notifyTtsPanels();
-  void resumeTtsReading(resume);
-  return { remade: summary.made, remake: summary, changed: answered.length, kept: parsed.reused, sentences: scope.length };
+  return { heard, changed: answered.length, kept: parsed.reused };
 }
 
 /**
@@ -7933,6 +8001,8 @@ async function clearTtsOverride(messageId, utteranceId, side = null) {
   const prepared = await ttsPrepared(messageId, side);
   await ttsStore().deleteOverride(prepared.floor.floorId, prepared.floor.version, utteranceId);
   forgetTtsItems(messageId);
+  // A name picked by hand goes with it, and the floor's buttons follow whoever speaks now.
+  scheduleTtsDecorate(messageId, { force: true });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -8237,6 +8307,30 @@ function textsForSides(sides, nodeTexts) {
  * exactly what gets read. Only the DOM changes; a floor re-rendered by the host simply loses them and
  * gets them back on the next pass.
  */
+/**
+ * The sentences a floor's buttons hang on: the very ones the reading would play, named the way it would
+ * name them — the model's analysis (kept from before a reload as well), the reader's own picks, the
+ * story's marks. The buttons used to be worked out apart from all that, and after an analysis, a name
+ * picked by hand or a reload they sat on other sentences than the ones the reading played.
+ *
+ * A floor already prepared for this very text is taken as it is. Otherwise it is worked out the same
+ * way, quietly — no progress shown, nothing logged, nothing learned — and not kept, so the reading
+ * still prepares it in full the first time it is asked to.
+ */
+async function ttsSegmentsForButtons(floor, settings) {
+  const known = runtime.tts.floors.get(ttsPreparedKey(floor.messageId, floor.side));
+  if (known && known.settings === settings && known.floor.floorId === floor.floorId && known.floor.version === floor.version) {
+    return { segments: known.segments, depth: known.depth };
+  }
+  try {
+    const { segments, depth } = await prepareTtsSegments(floor, settings, { passive: true, quiet: true });
+    return { segments, depth };
+  } catch {
+    const utterances = ttsUtterances(floor, settings);
+    return { segments: buildSegments(utterances, annotationReading(utterances, floor.annotations).labels, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), evidence: ttsEvidence(floor) }), depth: 'plain' };
+  }
+}
+
 async function decorateTtsMessage(messageId, { force = false } = {}) {
   if (typeof document === 'undefined') return;
   const root = ttsMessageText(messageId);
@@ -8287,8 +8381,12 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
       if (prepared && prepared.floor.version !== floor.version) runtime.tts.floors.delete(ttsPreparedKey(messageId, floor.side));
     }
   }
-  const analyses = floors.map(floor => runtime.tts.analysis.get(ttsLabelKey(floor)) ?? null);
-  const signature = `${floors.map((floor, index) => `${floor.side}|${floor.version}|${analyses[index] ? analyses[index].depth : 'plain'}`).join('#')}|${cheapKey}`;
+  // What gets a button is what the reading would play, named as it would name it (ttsSegmentsForButtons).
+  const readings = [];
+  for (const floor of floors) readings.push(await ttsSegmentsForButtons(floor, settings));
+  if (ttsMessageText(messageId) !== root) return;
+  const audible = readings.map(reading => audibleSegments(reading.segments, tts.range, ttsVoiceConfig(settings)));
+  const signature = `${floors.map((floor, index) => `${floor.side}|${floor.version}|${readings[index].depth}|${audible[index].map(segment => `${segment.id}:${segment.type}:${segment.speaker ?? ''}`).join(',')}`).join('#')}|${cheapKey}`;
   if (!force && root.dataset.jyTts === signature && root.querySelector(':scope > .jy-tts-bar')) {
     runtime.tts.mesSeen.set(messageId, { mes: message?.mes ?? '', key: cheapKey });
     return;
@@ -8311,9 +8409,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   const unplacedLines = [];
   floors.forEach((floor, index) => {
     const utterances = ttsUtterances(floor, settings);
-    const labels = analyses[index]?.labels ?? annotationReading(utterances, floor.annotations).labels;
-    const segments = buildSegments(utterances, labels, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: analyses[index]?.voices ?? null, evidence: ttsEvidence(floor) });
-    const visible = audibleSegments(segments, tts.range, ttsVoiceConfig(settings));
+    const visible = audible[index];
     visibleTotal += visible.length;
     // Nothing of it is on the page to hang a button on; the reading is started from the bar.
     if (floor.offPage) return;
@@ -15861,7 +15957,11 @@ async function openMiniWindow() {
     const toggles = [...win.querySelectorAll('[data-jy-action="tts-toggle"]')];
     const stepButtons = [win.querySelector('[data-jy-action="tts-prev"]'), win.querySelector('[data-jy-action="tts-next"]')];
     if (!info) {
-      if (title) putText(title, '没有在读');
+      // Nothing is being read, but the floor may be being analysed: that is what the head says then.
+      const shown = readingTarget().messageId;
+      const status = Number.isInteger(shown) ? runtime.tts.status.get(shown) : null;
+      const busy = status?.state === 'busy' && status.text ? status.text : '';
+      if (title) putText(title, busy || '没有在读');
       if (floorLabel) putText(floorLabel, Number.isInteger(viewFloor) ? `第 ${viewFloor} 楼` : '—');
       if (progress) setSeek(0);
       if (seekBar) {
@@ -15870,7 +15970,7 @@ async function openMiniWindow() {
       }
       setText(win, '[data-jy-tts-clock-now]', '0:00');
       setText(win, '[data-jy-tts-clock-total]', '0:00');
-      if (message) putText(message, '点播放键读这一楼，或者点下面的某一句。');
+      if (message) putText(message, busy ? '好了会提示，这期间可以先做别的。' : '点播放键读这一楼，或者点下面的某一句。');
       for (const toggle of toggles) {
         putText(toggle, '▶');
         if (toggle.dataset.state !== 'idle') toggle.dataset.state = 'idle';
@@ -16445,6 +16545,13 @@ async function openMiniWindow() {
     selectMiniTab('reading');
   };
 
+  // A page's 更多 sheet opened or put away, its toggles told which.
+  const setMoreSheet = (page, open) => {
+    const sheet = page?.querySelector('[data-jy-mini-more]');
+    if (!sheet) return;
+    sheet.hidden = !open;
+    for (const toggle of page.querySelectorAll('[data-jy-action="mini-more"]')) toggle.setAttribute('aria-expanded', String(open));
+  };
   const onClick = async event => {
     const button = event.target.closest('[data-jy-action]');
     if (!button) {
@@ -16469,8 +16576,7 @@ async function openMiniWindow() {
       const page = button.closest('[data-jy-mini-page]');
       const sheet = page?.querySelector('[data-jy-mini-more]');
       if (!sheet) return;
-      sheet.hidden = action === 'mini-more-close' ? true : !sheet.hidden;
-      for (const toggle of page.querySelectorAll('[data-jy-action="mini-more"]')) toggle.setAttribute('aria-expanded', String(!sheet.hidden));
+      setMoreSheet(page, action === 'mini-more-close' ? false : sheet.hidden);
       return;
     }
     if (action === 'tts-stop') { stopTts(); return; }
@@ -16623,6 +16729,12 @@ async function openMiniWindow() {
         }
         if (answer.choice === 'cancel') return;
         button.textContent = '分析中…';
+        // Said the moment it is chosen. The sheet is put away so the page under it shows the run, and
+        // what comes before the request goes out is no longer a silence of several seconds.
+        setMoreSheet(pages.reading, false);
+        toast('info', answer.choice === 'refine'
+          ? `开始按你的意见改第 ${messageId} 楼的分析，改完会提示。`
+          : `开始${analysed ? '重新' : ''}分析第 ${messageId} 楼，分析完会提示。`);
         if (answer.choice === 'refine') {
           const result = await refineTtsAnalysis(messageId, { side, utteranceId: answer.scope === 'sentence' ? sentenceId : null, feedback: answer.feedback });
           toast(result.remake?.failed ? 'warning' : 'success', `改了 ${result.changed} 句，${result.kept} 句保持原样；${describeTtsRemake(result.remake)}。`);

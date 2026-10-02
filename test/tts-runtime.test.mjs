@@ -3013,3 +3013,68 @@ test('a whisper the story\'s own mark asks for is heard, in the original and in 
   const read = await __testing.prepareTtsSegments(translated, runtime());
   assert.equal(read.segments.find(segment => segment.type === 'dialogue').voice?.tone, 'whispering');
 });
+
+test('a line of dialogue 分析模式 left unanswered keeps the translation\'s mark, and an answer under a narration number moves to the line it copied', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-deep-ids', {
+    async processRequest() {
+      // Answered under the number of 「云散了。」 with the first dialogue's own words; the second line of
+      // dialogue left out altogether.
+      return { content: JSON.stringify({ voices: [{ id: 2, speaker: '泰罗', emotion: 'angry', line: '[angry] 好热！' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('風。雲。\n\n「暑い！」\n\n雨。地。\n\n「寒い……」', [[1, '风停了。云散了。'], [2, '「好热！」'], [3, '下雨了。地湿了。'], [4, '「好冷……」']], settings, {
+    2: { speaker: '泰罗', emotion: 'happy', intensity: 1 },
+    4: { speaker: '佐菲', emotion: 'sad', intensity: 1 },
+  }));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  assert.deepEqual(segments.map(item => [item.id, item.type, item.speaker]), [
+    [1, 'narration', 'narrator'], [2, 'narration', 'narrator'], [3, 'dialogue', '泰罗'],
+    [4, 'narration', 'narrator'], [5, 'narration', 'narrator'], [6, 'dialogue', '佐菲'],
+  ]);
+  assert.equal(segments[2].emotion, 'angry', 'the moved answer is the analysis\'s own');
+});
+
+test('a correction says on the floor that it is being asked, and when it is done', async t => {
+  restoreGlobals(t);
+  const seen = [];
+  const { context } = mockHost('tts-refine-status', {
+    async processRequest(payload) {
+      const input = JSON.parse(payload.messages.at(-1).content);
+      if (input.task === 'refine_voices_for_audiobook') {
+        seen.push({ status: __testing.ttsStatusOf(0), steps: structuredClone(__testing.ttsProgressFor(0, 'translation')?.steps ?? []) });
+        return { content: JSON.stringify({ voices: [{ id: 2, type: 'dialogue', speaker: '樱井', emotion: 'nervous' }] }) };
+      }
+      return { content: JSON.stringify({ voices: [{ id: 2, speaker: '泰罗', emotion: 'happy' }] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: { apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1', tts: { enabled: true, mode: 'deep', context: { character: false, worldbook: false, recent: false, floors: 0 }, fish: FISH } },
+  });
+  context.chat.push(await translatedFloor('風。\n\n「暑い！」', [[1, '风停了。'], [2, '「好热！」']], settings));
+  await __testing.prepareTtsSegments(await __testing.collectTtsFloor(0, settings), settings);
+  const result = await __testing.refineTtsAnalysis(0, { feedback: '说话人不对' });
+  assert.equal(result.changed, 1);
+  assert.deepEqual(seen[0].status, { text: '正在按你的意见改…', state: 'busy' }, 'said while the request is out, not only once it lands');
+  assert.deepEqual(seen[0].steps.map(step => [step.id, step.state, step.label]), [['analysis', 'active', '按意见改']]);
+  const done = __testing.ttsProgressFor(0, 'translation').steps.find(step => step.id === 'analysis');
+  assert.deepEqual([done.state, done.detail], ['done', '改了 1 句']);
+  assert.equal(__testing.ttsStatusOf(0), null);
+});
+
+test('a floor rewritten under the reading without a word from the host is read from its new words', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-rewritten');
+  __testing.configureForTest({ settings: { tts: { enabled: true, side: 'source' } } });
+  context.chat.push({ mes: '<story_scene>\n風が吹いた。\n\n「寒い！」\n</story_scene>', swipe_id: 0, extra: {} });
+  const before = await __testing.ttsPrepared(0, 'source');
+  context.chat[0].mes = '<story_scene>\n風が吹いた。\n\n「暑い！」\n</story_scene>';
+  const after = await __testing.ttsPrepared(0, 'source');
+  assert.notEqual(after.floor.version, before.floor.version);
+  assert.equal(after.segments.at(-1).text, '暑い！');
+  assert.equal(await __testing.ttsPrepared(0, 'source'), after, 'the same words are not prepared twice');
+});

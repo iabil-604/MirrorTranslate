@@ -34,7 +34,7 @@ import {
   pathSet,
   presetDrift,
   unwrapResponseContent,
-} from './core.js?v=0.41.5';
+} from './core.js?v=0.41.6';
 
 // ---------------------------------------------------------------------------------------------
 // Default prompt and quick questions
