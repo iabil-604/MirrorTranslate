@@ -71,6 +71,7 @@ import {
   restyleBilingual,
   normalizeTts,
   normalizeVoiceList,
+  VOICE_MOOD_CONDITIONS,
   normalizeVoiceLibrary,
   followVoiceLibrary,
   normalizeLanguageCode,
@@ -119,8 +120,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.42.3';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.42.3';
+} from './core.js?v=0.43.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.43.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -178,10 +179,10 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.42.3';
-import { createTtsStore } from './tts-store.js?v=0.42.3';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.42.3';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.42.3';
+} from './tts.js?v=0.43.0';
+import { createTtsStore } from './tts-store.js?v=0.43.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.43.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.43.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -191,7 +192,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.42.3';
+} from './processing.js?v=0.43.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -209,10 +210,10 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.42.3';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.42.3';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.42.3';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.42.3';
+} from './prompts.js?v=0.43.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.43.0';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.43.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.43.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -230,8 +231,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.42.3';
-import { sampleThemeBackground } from './theme-probe.js?v=0.42.3';
+} from './palette.js?v=0.43.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.43.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -239,7 +240,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.42.3';
+} from './diagnostics.js?v=0.43.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -250,7 +251,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.42.3';
+} from './helper.js?v=0.43.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -558,7 +559,7 @@ const CONTROL_CENTER_MARKUP = `
    <div data-jy-finetune-tts-sub>
     <div class="jy-summary-row jy-summary-row-sub"><div class="jy-summary-copy"><h3>分析模式</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="ttsMode" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></label></div>
     <label class="jy-summary-row jy-summary-select jy-summary-row-sub" data-jy-finetune-deep-channel hidden><span class="jy-label">分析模式用的连接</span><select data-jy-tts-field="deepChannelId"></select></label>
-    <div class="jy-summary-row jy-summary-row-sub" data-jy-finetune-intimate hidden><div class="jy-summary-copy"><h3>亲密场景</h3></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="intimate" aria-label="亲密场景"><span></span></label></div>
+    <label class="jy-summary-row jy-summary-select jy-summary-row-sub" data-jy-finetune-intimate hidden><span class="jy-label">亲密场景</span><select data-jy-tts-field="intimate"><option value="off">关</option><option value="auto">自动</option><option value="on">开</option></select></label>
     <label class="jy-summary-row jy-summary-select jy-summary-row-sub"><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文</option></select></label>
     <div class="jy-summary-row jy-summary-row-sub"><div class="jy-summary-copy"><h3>新回复自动朗读</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="ttsAutoRead" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-tts-field="autoRead" aria-label="新回复自动朗读"><span></span></label></div>
    </div>
@@ -717,7 +718,7 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <div class="jy-text-scope"><h2>读法</h2>
 <div class="jy-card-row"><div class="jy-card-row-text"><h3>分析模式</h3><p class="jy-muted" data-jy-tts-mode-help></p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></label></div>
-<div class="jy-card-row jy-card-row-dependent" data-jy-dependent="ttsIntimate"><label class="jy-check"><input type="checkbox" data-jy-tts-field="intimate">亲密场景</label><p class="jy-muted">打开后，正文写明了亲密接触的段落，分析模式才按场景逐段放开喘息和低吟；日常段落、只有话的调情照样克制。关着时一律不发低吟。</p><p class="jy-muted jy-dependent-reason">先打开上面的「分析模式」，这一项才会生效。</p></div>
+<div class="jy-card-row jy-card-row-dependent" data-jy-dependent="ttsIntimate"><label class="jy-card-row-field"><span>亲密场景</span><select data-jy-tts-field="intimate"><option value="off">关</option><option value="auto">自动</option><option value="on">开</option></select></label><p class="jy-muted">关：一律不发低吟。自动：分析模式自己判断这一楼是不是亲密戏（叙述里写出了实质的亲密接触才算），是才逐段放开喘息和低吟。开：你允许了，分析模式按场景逐段放开；日常段落、只有话的调情照样克制。</p><p class="jy-muted jy-dependent-reason">先打开上面的「分析模式」，这一项才会生效。</p></div>
 <div class="jy-form-grid jy-form-grid-tight"><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
 <p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译、分析模式、小助手各用哪条，在「模型连接」页最上面的「各功能用哪条连接」里选，分析模式用的连接在这一页「更多 → 分析模式」里也能改。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）也存在「模型连接」页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文（旁白读译文，台词按角色写的语言读原文）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label></div>
@@ -4456,19 +4457,27 @@ async function ttsContextPacket(floor, settings) {
  * Either way the answer is labels keyed by id and never text. `onRequest` is told only when a request
  * actually goes out, so a cached reading never claims to be thinking.
  */
+// 亲密场景's modes as the reader reads them, in the order a click goes through them.
+const INTIMATE_LABELS = Object.freeze({ off: '关', auto: '自动', on: '开' });
+
+// What a reading made under each 亲密场景 mode is stored under: what it may write differs by mode.
+function intimateVariant(mode) {
+  return ({ on: 'intimate', auto: 'intimate-auto' })[mode] ?? '';
+}
+
 async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, onPrefix = null, speakers = null, cacheOnly = false } = {}) {
   const roster = ttsKnownNames(settings);
   const tts = ttsSettings(settings);
   // 分析模式 in its own format (the reader's 声学标注规则) unless the reader's own prompt is written for
   // the one before; 亲密场景 changes what it may write, so a reading made with it is kept apart.
   const acoustic = depth === 'deep' && isAcousticPrompt(tts.prompts.deep);
-  const key = await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side, variant: acoustic && tts.intimate ? 'intimate' : '' });
+  const key = await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side, variant: acoustic ? intimateVariant(tts.intimate) : '' });
   if (!force) {
     const stored = await ttsStore().getAnalysis(key);
     if (Array.isArray(stored?.labels) && stored.labels.length) {
       // Which floor it was asked for: the key is the text alone, and the same words in another chat
       // find the same reading.
-      return { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), depth, cached: true, floorId: stored.floorId ?? '', format: stored.format ?? '' };
+      return { labels: new Map(stored.labels), voices: new Map(stored.voices ?? []), depth, cached: true, floorId: stored.floorId ?? '', format: stored.format ?? '', tone: stored.tone ?? '' };
     }
   }
   // Only looking: what the store holds, or nothing. Never a request.
@@ -4562,7 +4571,7 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
     const seconds = Number(((Date.now() - started) / 1000).toFixed(1));
     recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.analysis', parsed.labels.size
       ? (acoustic
-        ? `分析模式标了 ${parsed.labels.size} 句（${dialogueLabels} 句对白）${parsed.voices.size ? `，${parsed.voices.size} 句带表演` : ''}，用时 ${seconds} 秒。`
+        ? `分析模式标了 ${parsed.labels.size} 句（${dialogueLabels} 句对白）${parsed.voices.size ? `，${parsed.voices.size} 句带表演` : ''}${parsed.tone ? `，基调「${parsed.tone}」` : ''}${tts.intimate === 'auto' ? `（亲密场景自动：${parsed.tone === '亲密' ? '判成亲密戏，放开喘息和低吟' : '不是亲密戏，照常克制'}）` : ''}，用时 ${seconds} 秒。`
         : `${depth === 'deep' ? '分析模式' : '快速标注'}给 ${parsed.labels.size} 句对白标了说话人或情绪${parsed.voices.size ? `，${parsed.voices.size} 句带表演` : ''}，用时 ${seconds} 秒。`)
       : `副模型没有返回可用的朗读标注，这一楼按引号区分旁白与对白。`, {
       floor: floor.floorId,
@@ -4612,9 +4621,9 @@ async function analyzeTtsFloor(floor, utterances, settings, depth, { force = fal
       }, '', { floor: floor.messageId });
     }
     if (parsed.labels.size && !cut) {
-      await ttsStore().putAnalysis({ key, floorId: floor.floorId, version: floor.version, depth, labels: [...parsed.labels], voices: [...parsed.voices], analyzedAt: askedAt, format: parsed.format ?? '' });
+      await ttsStore().putAnalysis({ key, floorId: floor.floorId, version: floor.version, depth, labels: [...parsed.labels], voices: [...parsed.voices], analyzedAt: askedAt, format: parsed.format ?? '', tone: parsed.tone ?? '' });
     }
-    return { labels: parsed.labels, voices: parsed.voices, depth, cached: false, analyzedAt: askedAt, format: parsed.format ?? '' };
+    return { labels: parsed.labels, voices: parsed.voices, depth, cached: false, analyzedAt: askedAt, format: parsed.format ?? '', tone: parsed.tone ?? '' };
   }, { onPrefix });
 }
 
@@ -4760,6 +4769,8 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   let resolved = resolveSpeakers(utterances, { cast, manual, tagged: tagSpeakers, infer: false });
   // Where a label's speaker came from when nobody else named one: the translation's mark or the model.
   let fallback = 'hint';
+  // The floor's tone as 分析模式 judged it, carried to every sentence.
+  let tone = '';
   const floorKey = ttsLabelKey(floor);
   // A model's reading with the translation's marks under it: the translation's name where the model
   // named nobody, its Fish words under whatever the model added — an id-only answer keeps them whole.
@@ -4816,18 +4827,21 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
       labels = corrected.labels;
       voices = corrected.voices ?? null;
       depth = corrected.depth ?? depth;
+      tone = corrected.tone ?? '';
     } else {
       const read = await prepareTtsSegments(primary, settings, { onStatus, force, onStep, passive, analyze, quiet });
       const derived = deriveLabelsForSide(read.utterances, read.labels, read.voices, utterances);
       for (const [id, label] of derived.labels) labels.set(id, { ...(labels.get(id) ?? {}), ...label });
       voices = derived.voices;
       depth = read.depth ?? depth;
-      runtime.tts.analysis.set(key, { labels, voices, depth, derived: true });
+      tone = read.tone ?? '';
+      runtime.tts.analysis.set(key, { labels, voices, depth, derived: true, tone });
     }
   } else if (asked?.labels?.size) {
     labels = asked.labels;
     voices = asked.voices ?? null;
     depth = asked.depth ?? 'deep';
+    tone = asked.tone ?? '';
     fallback = depth === 'annotations' ? 'hint' : 'model';
     onStep?.('analysis', { state: 'done', label: depth === 'annotations' ? '不分析' : '分析模式', detail: depth === 'annotations' ? '用翻译时的标注' : '这一楼按你的要求分析过' });
   } else if (depth === 'off' && annotated) {
@@ -4857,6 +4871,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
       labels = known.labels;
       voices = known.voices;
       depth = known.depth;
+      tone = known.tone ?? '';
       fallback = 'model';
       onStep?.('analysis', { state: 'done', label: '分析模式', detail: '已有结果' });
     } else if (passive) {
@@ -4890,6 +4905,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
           labels = adopted.labels;
           fallback = 'model';
           voices = adopted.voices;
+          tone = analyzed.tone ?? '';
           runtime.tts.analysis.set(key, { ...analyzed, ...adopted, depth });
           if (runtime.tts.analysis.size > 200) runtime.tts.analysis.delete(runtime.tts.analysis.keys().next().value);
           dropPreparedFloors(floor.messageId);
@@ -4917,8 +4933,9 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   const pinned = pinSpeakers(labels, resolved, { fallback });
   const dropped = [];
   const segments = buildSegments(utterances, pinned, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices, evidence: ttsEvidence(floor), dropped });
+  if (tone) for (const segment of segments) segment.tone = tone;
   if (!quiet) noteGroundedTags(floor, dropped, depth);
-  return { utterances, labels: pinned, voices, segments, depth, passive };
+  return { utterances, labels: pinned, voices, segments, depth, passive, tone };
 }
 
 /**
@@ -8013,7 +8030,7 @@ async function askTtsCorrection(messageId, prepared, { which, utteranceId, feedb
   // What an answer copied back is compared with what was sent as `current` — the names as the reader
   // sees them, every sentence included — not with the reading as it was first stored.
   const parsed = acoustic
-    ? keptAcousticRefine(parseDeepAnalysis(raw, scope, { quotePairs: tts.quotePairs, intimate: tts.intimate }), base, known?.voices ?? new Map())
+    ? keptAcousticRefine(parseDeepAnalysis(raw, scope, { quotePairs: tts.quotePairs, intimate: tts.intimate, tone: known?.tone ?? '' }), base, known?.voices ?? new Map())
     : parseVoiceAnalysis(raw, scope, { hints: base });
   const answered = [...parsed.labels.keys()].filter(id => !parsed.keptIds.has(id));
   recordDiagnostic(parsed.labels.size ? 'info' : 'warn', 'tts.refine', parsed.labels.size
@@ -8043,16 +8060,18 @@ async function askTtsCorrection(messageId, prepared, { which, utteranceId, feedb
   for (const [id, voice] of parsed.voices) voices.set(id, voice);
   // A sentence that came back as it went in keeps its label, its voice and its moment untouched.
   const format = acoustic ? 'acoustic' : (known?.format ?? '');
-  runtime.tts.analysis.set(key, { labels, voices, depth, format });
+  const tone = parsed.tone || known?.tone || '';
+  runtime.tts.analysis.set(key, { labels, voices, depth, format, tone });
   // Kept where the reading looks for it next time, so a reload does not undo the correction.
   await ttsStore().putAnalysis({
-    key: await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side, variant: acoustic && tts.intimate ? 'intimate' : '' }),
+    key: await analysisCacheKey({ utterances, source: 'model', depth, side: floor.side, variant: acoustic ? intimateVariant(tts.intimate) : '' }),
     floorId: floor.floorId,
     version: floor.version,
     depth,
     labels: [...labels],
     voices: [...voices],
     format,
+    tone,
   }).catch(() => {});
   return { heard, changed: answered.length, kept: parsed.reused };
 }
@@ -10904,6 +10923,56 @@ function ttsLanguageRowElement(doc, lang, voiceId, settings = runtime.settings) 
   return row;
 }
 
+// 情绪音色's conditions in the reader's words (core.js VOICE_MOOD_CONDITIONS).
+const MOOD_LABELS = Object.freeze({
+  whisper: '耳语、气声',
+  laugh: '笑着说',
+  burst: '张力 4 以上',
+  ...Object.fromEntries(VOICE_MOOD_CONDITIONS.filter(when => when.startsWith('tone:')).map(when => [when, `基调：${when.slice(5)}`])),
+});
+
+/** One 情绪音色 row: when, and the voice; the same shape as a language row. */
+function ttsMoodRowElement(doc, mood, settings = runtime.settings) {
+  const row = doc.createElement('div');
+  row.className = 'jy-tts-lang-row jy-tts-mood-row';
+  row.dataset.jyTtsMoodRow = '';
+  const when = doc.createElement('select');
+  when.dataset.jyTtsMoodWhen = '';
+  when.setAttribute('aria-label', '什么样的句子用这个音色');
+  for (const value of VOICE_MOOD_CONDITIONS) {
+    const option = doc.createElement('option');
+    option.value = value;
+    option.textContent = MOOD_LABELS[value] ?? value;
+    when.appendChild(option);
+  }
+  when.value = VOICE_MOOD_CONDITIONS.includes(mood?.when) ? mood.when : VOICE_MOOD_CONDITIONS[0];
+  const scope = doc.createElement('span');
+  scope.className = 'jy-tts-pick';
+  scope.dataset.jyTtsPickScope = '';
+  const id = doc.createElement('input');
+  id.type = 'text';
+  id.placeholder = '这种句子用的 Voice ID';
+  id.spellcheck = false;
+  id.dataset.jyTtsMoodId = '';
+  id.value = mood?.voiceId ?? '';
+  scope.append(id, ttsLibraryPicker(doc, settings));
+  const remove = doc.createElement('button');
+  remove.type = 'button';
+  remove.className = 'jy-text-button';
+  remove.dataset.jyAction = 'tts-remove-mood';
+  remove.textContent = '×';
+  remove.setAttribute('aria-label', '去掉这个情绪音色');
+  row.append(when, scope, remove);
+  return row;
+}
+
+function readMoodRows(container) {
+  return [...container?.querySelectorAll('[data-jy-tts-mood-row]') ?? []].map(row => ({
+    when: row.querySelector('[data-jy-tts-mood-when]')?.value ?? '',
+    voiceId: row.querySelector('[data-jy-tts-mood-id]')?.value.trim() ?? '',
+  }));
+}
+
 function readLanguageRows(container) {
   const result = {};
   for (const row of container?.querySelectorAll('[data-jy-tts-lang-row]') ?? []) {
@@ -11245,11 +11314,21 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   remove.className = 'jy-text-button';
   remove.dataset.jyAction = 'tts-remove-voice';
   remove.textContent = '移除';
-  tools.append(addLang, unbind, remove);
+  const addMood = doc.createElement('button');
+  addMood.type = 'button';
+  addMood.className = 'jy-button jy-tts-lang-button';
+  addMood.dataset.jyAction = 'tts-add-mood';
+  addMood.textContent = '＋ 情绪音色';
+  addMood.title = '同一个声优分别克隆的几种声音（耳语、怒吼……）：按分析模式的结果，耳语、笑、张力高或某种基调的句子换成另一个 Voice ID。要开分析模式才会换。';
+  tools.append(addLang, addMood, unbind, remove);
   const langs = doc.createElement('div');
   langs.className = 'jy-tts-lang-list';
   langs.dataset.jyTtsVoiceLangs = '';
   for (const [lang, id] of Object.entries(voice.voices ?? {})) langs.appendChild(ttsLanguageRowElement(doc, lang, id, settings));
+  const moods = doc.createElement('div');
+  moods.className = 'jy-tts-mood-list';
+  moods.dataset.jyTtsVoiceMoods = '';
+  for (const mood of voice.moods ?? []) moods.appendChild(ttsMoodRowElement(doc, mood, settings));
   // Folded, a row is one line: the name, whether it has a voice of its own, and what is bound.
   const summary = doc.createElement('summary');
   summary.className = 'jy-tts-voice-summary';
@@ -11270,7 +11349,7 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   consoleFold.append(consoleSummary, consoleFieldsElement(doc, voice.console ?? DEFAULT_CONSOLE, { scope: 'row' }));
   const body = doc.createElement('div');
   body.className = 'jy-tts-voice-body';
-  body.append(name, aliases, scope, title, silence, tools, langs, consoleFold);
+  body.append(name, aliases, scope, title, silence, tools, langs, moods, consoleFold);
   row.append(summary, body);
   return row;
 }
@@ -11288,6 +11367,7 @@ function ttsVoiceRowMeta(voice, settings = runtime.settings) {
   if (voice.voiceId) parts.push(ttsVoiceName(voice.voiceId, settings, voice.title));
   const langs = Object.entries(voice.voices ?? {});
   if (langs.length) parts.push(langs.map(([code, id]) => `${languageLabel(code)}：${ttsVoiceName(id, settings)}`).join('、'));
+  if ((voice.moods ?? []).length) parts.push(`情绪音色 ${voice.moods.length}`);
   if ((voice.aliases ?? []).length) parts.push(`别名 ${voice.aliases.length}`);
   return parts.join(' · ');
 }
@@ -11735,6 +11815,7 @@ function collectTtsFields(root, current) {
       mute: row.querySelector('[data-jy-tts-voice-mute]')?.checked === true,
       title: voiceId === row.dataset.voiceId ? row.dataset.title : '',
       console: readConsoleFields(row.querySelector('[data-jy-tts-console="row"]')),
+      moods: readMoodRows(row.querySelector('[data-jy-tts-voice-moods]')),
     };
   });
   const list = normalizeVoiceList(rows);
@@ -13789,6 +13870,19 @@ function createControlCenter(rootDocument = document) {
           list.appendChild(ttsLanguageRowElement(list.ownerDocument, '', '', runtime.settings));
           list.querySelector('[data-jy-tts-lang-row]:last-child [data-jy-tts-lang-id]')?.focus();
         }
+      } else if (action === 'tts-add-mood') {
+        const list = button.closest('[data-jy-tts-voice-row]')?.querySelector('[data-jy-tts-voice-moods]');
+        if (list) {
+          // The first condition this character has no voice for yet.
+          const taken = new Set(readMoodRows(list).map(mood => mood.when));
+          const when = VOICE_MOOD_CONDITIONS.find(value => !taken.has(value)) ?? VOICE_MOOD_CONDITIONS[0];
+          list.appendChild(ttsMoodRowElement(list.ownerDocument, { when, voiceId: '' }, runtime.settings));
+          list.querySelector('[data-jy-tts-mood-row]:last-child [data-jy-tts-mood-id]')?.focus();
+        }
+      } else if (action === 'tts-remove-mood') {
+        button.closest('[data-jy-tts-mood-row]')?.remove();
+        saveSettings(collectSettings(root));
+        syncTtsFields(root, runtime.settings);
       } else if (action === 'tts-remove-lang') {
         button.closest('[data-jy-tts-lang-row]')?.remove();
         saveSettings(collectSettings(root));
@@ -15197,7 +15291,7 @@ async function openMiniWindow() {
     <div class="jy-mini-links">
       <button type="button" class="jy-text-button" data-jy-action="tts-read-floor" title="从头朗读这一楼">从头读</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="按你的意见改这一楼的分析，或者丢掉重来">重新分析</button>
-      <button type="button" class="jy-text-button jy-mini-auto" data-jy-action="tts-intimate" aria-pressed="false" title="打开后，正文写明了亲密接触的段落，分析模式才放开喘息和低吟；和朗读页的「亲密场景」是同一个开关" hidden>亲密场景 关</button>
+      <button type="button" class="jy-text-button jy-mini-auto" data-jy-action="tts-intimate" aria-pressed="false" title="点一下换一档：关 → 自动 → 开。自动是分析模式自己判断这一楼是不是亲密戏；和朗读页的「亲密场景」是同一个设置" hidden>亲密场景 关</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-download" title="把这段音频保存到本地">保存到本地</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-locate" title="把聊天滚到正在读的句子">定位到正文</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-copy-analysis" title="把这一楼的分析结果复制成 JSON">复制分析</button>
@@ -15409,8 +15503,8 @@ async function openMiniWindow() {
     if (intimate) {
       const tts = ttsSettings(current);
       intimate.hidden = tts.mode !== 'deep';
-      intimate.textContent = tts.intimate ? '亲密场景 开' : '亲密场景 关';
-      intimate.setAttribute('aria-pressed', String(tts.intimate));
+      intimate.textContent = `亲密场景 ${INTIMATE_LABELS[tts.intimate] ?? INTIMATE_LABELS.off}`;
+      intimate.setAttribute('aria-pressed', String(tts.intimate !== 'off'));
     }
     syncMiniTabs();
   };
@@ -16817,11 +16911,14 @@ async function openMiniWindow() {
       return;
     }
     if (action === 'tts-intimate') {
+      // 关 → 自动 → 开 → 关.
+      const order = Object.keys(INTIMATE_LABELS);
+      const mode = order[(order.indexOf(ttsSettings(runtime.settings).intimate) + 1) % order.length];
       const next = mergeSettings(runtime.settings);
-      next.tts = { ...next.tts, intimate: !ttsSettings(runtime.settings).intimate };
+      next.tts = { ...next.tts, intimate: mode };
       saveSettings(next);
       syncQuickPickers();
-      toast('info', `亲密场景已${next.tts.intimate ? '打开' : '关闭'}。没按这个设置分析过的楼层，读的时候会重新分析。`);
+      toast('info', `亲密场景改成「${INTIMATE_LABELS[mode]}」。没按这个设置分析过的楼层，读的时候会重新分析。`);
       return;
     }
     if (action === 'row-close') { editingRow = null; renderRows(); return; }

@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 
 import {
   analysisCacheKey, buildFishPayload, buildSegments, consoleDirections, deriveLabelsForSide, floorTextWithMarks,
-  planFishParts, scriptOutline, sentenceFishText, sentenceProsody, sentenceSampling, splitUtterances,
+  moodVoiceFor, planFishParts, planVoices, resolveSegmentVoice, scriptOutline, sentenceFishText, sentenceProsody, sentenceSampling, splitUtterances,
 } from '../tts.js';
-import { ACOUSTIC_INTIMATE_ON, DEEP_PROMPT, acousticCurrentItem, acousticScript, isAcousticPrompt, parseDeepAnalysis } from '../tts-deep.js';
+import {
+  ACOUSTIC_INTIMATE_AUTO, ACOUSTIC_INTIMATE_ON, ACOUSTIC_TONE_RULES, DEEP_PROMPT, acousticCurrentItem, acousticScript, buildDeepAnalysisMessages,
+  intimateAllowed, isAcousticPrompt, parseDeepAnalysis,
+} from '../tts-deep.js';
+import { STORY_TONES, mergeSettings, normalizeTts, normalizeVoiceList } from '../core.js';
 
 // ---------------------------------------------------------------------------------------------
 // 分析模式 in the reader's 声学标注规则: the content a model writes is held to the sentence, the tags are
@@ -338,4 +342,73 @@ test('分析模式 is told to keep the question marks of one-character questions
   assert.match(ACOUSTIC_INTIMATE_ON, /叠加第 16 条的害羞配方/);
   assert.match(DEEP_PROMPT, /16\. 害羞/);
   assert.match(ACOUSTIC_INTIMATE_ON, /单字疑问照第 9 条保住 ？，不改成 ~/);
+});
+
+test('亲密场景 has three modes, and a saved yes/no switch keeps meaning what it meant', () => {
+  assert.equal(normalizeTts({}).intimate, 'off');
+  assert.equal(normalizeTts({ intimate: true }).intimate, 'on');
+  assert.equal(normalizeTts({ intimate: false }).intimate, 'off');
+  assert.equal(normalizeTts({ intimate: 'auto' }).intimate, 'auto');
+  assert.equal(normalizeTts({ intimate: 'maybe' }).intimate, 'off');
+  assert.equal(mergeSettings({ tts: { intimate: true } }).tts.intimate, 'on');
+  // Who may moan: 开 always (the tone still bans it where the floor is no romance), 自动 only a floor judged intimate.
+  assert.deepEqual(['off', 'auto', 'on'].map(mode => intimateAllowed(mode, '亲密')), [false, true, true]);
+  assert.deepEqual(['off', 'auto', 'on'].map(mode => intimateAllowed(mode, '浪漫')), [false, false, true]);
+  // The request says which mode it is under.
+  const system = mode => buildDeepAnalysisMessages([{ id: 1, kind: 'quoted', text: '「嗯？」', lineId: 1 }], { intimate: mode })[0].content;
+  assert.match(system('auto'), /亲密场景（自动，由你判断）/);
+  assert.ok(system('auto').includes(ACOUSTIC_INTIMATE_AUTO));
+  assert.match(system('on'), /亲密场景（用户打开了这个开关）/);
+  assert.match(system('off'), /用户没有打开「亲密场景」/);
+  assert.match(system(true), /亲密场景（用户打开了这个开关）/, 'the old yes still reads as 开');
+});
+
+test('分析模式 answers with the floor\'s tone first, and the code holds each tone to what it never carries', () => {
+  assert.match(DEEP_PROMPT, /4\. 先判整楼的基调，写进最前面的 tone，从这几个词里选一个最贴切的：日常、轻松、温馨、浪漫、亲密、悲伤、紧张、悬疑、恐怖、战斗、壮阔/);
+  assert.deepEqual(Object.keys(ACOUSTIC_TONE_RULES), [...STORY_TONES]);
+  const utterances = [{ id: 1, kind: 'narration', text: '她靠了过来。', lineId: 1 }, { id: 2, kind: 'quoted', text: '「别这样……」', lineId: 2 }];
+  const answer = (tone, content, where = 'head') => {
+    const voices = [{ id: 1, role: '旁白', is_narrator: true, tension_level: 5 }, { id: 2, role: '樱井', is_narrator: false, content }];
+    return JSON.stringify(where === 'head' ? { tone, voices } : where === 'tail' ? { voices, tone } : { voices });
+  };
+  const script = (raw, options) => parseDeepAnalysis(raw, utterances, options).voices.get(2)?.script ?? '';
+  // Read before the voices, after them, or not at all; a correction leaving it out keeps the floor's.
+  assert.equal(parseDeepAnalysis(answer('大概是紧张吧', '别这样……'), utterances).tone, '紧张');
+  assert.equal(parseDeepAnalysis(answer('恐怖', '别这样……', 'tail'), utterances).tone, '恐怖');
+  assert.equal(parseDeepAnalysis(answer('', '别这样……', 'none'), utterances).tone, '');
+  assert.equal(parseDeepAnalysis(answer('', '别这样……', 'none'), utterances, { tone: '悲伤' }).tone, '悲伤');
+  // A fearful floor never breathes or moans, a grieving one never moans, an intimate one under 自动 may.
+  assert.equal(script(answer('恐怖', '[whisper][breathy] 别这样……'), { intimate: 'on' }), '[whisper] 别这样……');
+  assert.equal(script(answer('悲伤', '[groan] 别这样……'), { intimate: 'on' }), '别这样……');
+  assert.equal(script(answer('亲密', '[breathy][groan] 别这样……'), { intimate: 'auto' }), '[breathy][groan] 别这样……');
+  assert.equal(script(answer('浪漫', '[breathy][groan] 别这样……'), { intimate: 'auto' }), '[breathy] 别这样……');
+  assert.equal(script(answer('浪漫', '[breathy][groan] 别这样……'), { intimate: 'on' }), '[breathy][groan] 别这样……');
+  // The narrator narrates even a climax.
+  assert.equal(parseDeepAnalysis(answer('亲密', '别这样……'), utterances, { intimate: 'on' }).voices.get(1).tensionLevel, 3);
+});
+
+test('a character\'s 情绪音色 is picked locally from what the analysis found in the line, after the language voice', () => {
+  const [row] = normalizeVoiceList([{
+    name: '樱井', voiceId: 'base',
+    moods: [{ when: 'whisper', voiceId: 'soft' }, { when: 'laugh', voiceId: 'giggle' }, { when: 'burst', voiceId: 'roar' }, { when: 'tone:恐怖', voiceId: 'scared' },
+      { when: 'whisper', voiceId: 'second' }, { when: 'nonsense', voiceId: 'x' }, { when: 'burst', voiceId: '' }],
+  }]);
+  assert.deepEqual(row.moods.map(mood => [mood.when, mood.voiceId]), [['whisper', 'soft'], ['laugh', 'giggle'], ['burst', 'roar'], ['tone:恐怖', 'scared']], 'one voice per condition, the first kept');
+  const config = { voices: [row], dialogueVoice: 'default' };
+  const line = (voice, extra = {}) => ({ type: 'dialogue', speaker: '樱井', voice, ...extra });
+  assert.equal(resolveSegmentVoice(line({ script: '[whisper][breathy] 喜欢吗？' }), config), 'soft');
+  assert.equal(resolveSegmentVoice(line({ script: '[snicker] 笨蛋~' }), config), 'giggle');
+  assert.equal(resolveSegmentVoice(line({ script: '住手！！', tensionLevel: 5 }), config), 'roar');
+  assert.equal(resolveSegmentVoice(line({ script: '走吧。' }, { tone: '恐怖' }), config), 'scared');
+  // A whisper only at the end is not a whispered line; a line nobody analysed keeps the character's voice.
+  assert.equal(resolveSegmentVoice(line({ script: '走吧。 [whisper] 别出声' }), config), 'base');
+  assert.equal(resolveSegmentVoice(line(undefined), config), 'base');
+  assert.equal(moodVoiceFor(row, line(undefined)), '');
+  // A voice for the line's language comes first.
+  assert.equal(resolveSegmentVoice(line({ script: '[whisper] ん？' }, { lang: 'ja' }), { voices: [{ ...row, voices: { ja: 'ja-voice' } }] }), 'ja-voice');
+  // A row with no voice of its own still has its moods, and counts as voiced where one fits.
+  const [bare] = normalizeVoiceList([{ name: '樱井', moods: [{ when: 'whisper', voiceId: 'soft' }] }]);
+  const plan = planVoices([line({ script: '[whisper] 嗯。' }), line({ script: '嗯。' })], { voices: [bare], dialogueVoice: 'default' });
+  assert.deepEqual(plan.items.map(item => item.voiceId), ['soft', 'default']);
+  assert.deepEqual(plan.defaulted, ['樱井'], 'the line without a mood falls back to the default, and says so');
 });

@@ -3220,6 +3220,53 @@ test('the 亲密场景 switch takes effect at once: a floor read under the other
   assert.equal(requests.length, 2, 'without asking again');
 });
 
+test('亲密场景「自动」: the floor\'s own tone decides the moans, and each line is said in the 情绪音色 it calls for', async t => {
+  restoreGlobals(t);
+  const prompts = [];
+  let tone = '亲密';
+  const { context } = mockHost('tts-intimate-auto', {
+    async processRequest(payload) {
+      prompts.push(payload.messages.at(-2).content);
+      return { content: JSON.stringify({ tone, voices: [
+        { id: 1, role: '旁白', is_narrator: true, tension_level: 5 },
+        { id: 2, role: '樱井', is_narrator: false, tension_level: 4, content: '[groan] 嗯……别这样。' },
+        { id: 3, role: '樱井', is_narrator: false, tension_level: 3, content: '[whisper][breathy] 喜欢吗？' },
+        { id: 4, role: '樱井', is_narrator: false },
+      ] }) };
+    },
+  });
+  const settings = __testing.configureForTest({
+    settings: {
+      apiMode: 'independent', channels: [CHANNEL], selectedChannelId: 'c1',
+      tts: { enabled: true, mode: 'deep', intimate: 'auto', context: { character: false, worldbook: false, recent: false, floors: 0 }, narratorVoice: 'voice-narrator', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '樱井', voiceId: 'voice-sakurai', moods: [{ when: 'whisper', voiceId: 'voice-soft' }, { when: 'burst', voiceId: 'voice-burst' }] }] },
+    },
+  });
+  context.chat.push(await translatedFloor('彼女は身を寄せた。\n\n「ん……やめて」\n\n「好き？」\n\n「行こう」', [[1, '她靠了过来。'], [2, '「嗯……别这样。」'], [3, '「喜欢吗？」'], [4, '「走吧。」']], settings));
+  const read = async () => (await __testing.prepareTtsSegments(await __testing.collectTtsFloor(0, runtime()), runtime())).segments;
+  const segments = await read();
+  assert.match(prompts[0], /亲密场景（自动，由你判断）/, 'the prompt leaves the judging to the model');
+  assert.match(prompts[0], /写进最前面的 tone/);
+  assert.deepEqual(segments.map(segment => segment.tone), ['亲密', '亲密', '亲密', '亲密'], 'every line knows its floor\'s tone');
+  assert.equal(segments[1].voice.script, '[groan] 嗯……别这样。', 'judged intimate, the moan stands');
+  assert.equal(segments[0].voice.tensionLevel, 3, 'the narrator is held to tension 3');
+  // Each line in the voice it calls for: a burst, a whisper, the character's own voice for the rest.
+  const fish = mockFish();
+  await __testing.pregenerateTtsFloor(0, { quiet: true });
+  assert.deepEqual(fish.map(call => [call.body.text, call.body.reference_id]), [
+    ['她靠了过来。', 'voice-narrator'],
+    ['[groan] 嗯……别这样。', 'voice-burst'],
+    ['[whisper][breathy] 喜欢吗？', 'voice-soft'],
+    ['走吧。', 'voice-sakurai'],
+  ]);
+  // Asked again, the model judges the floor romantic rather than intimate: no moan is sent.
+  tone = '浪漫';
+  await __testing.reanalyzeTtsFloor(0);
+  const again = await read();
+  assert.equal(again[1].tone, '浪漫');
+  assert.doesNotMatch(again[1].voice?.script ?? '', /groan/);
+});
+
 test('分析模式\'s acoustic reading takes no mood from the translation\'s marks', async t => {
   restoreGlobals(t);
   const { context } = mockHost('tts-acoustic-marks', {

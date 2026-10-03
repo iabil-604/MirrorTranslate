@@ -260,9 +260,12 @@ test('a bracketed run the sentence itself was written with (a status line, a sys
 
 // The worked example in 分析模式's own prompt (the reader's 声学标注规则): every sentence numbered, a plain
 // narration line answered with three fields, content only where a sentence is performed.
-const workedExample = () => JSON.parse(DEEP_PROMPT.split('\n').find(line => line.includes('{"voices"')).match(/\{"voices".*\]\}/)[0]).voices;
+// The answer opens with the floor's tone, then its voices.
+const workedAnswer = () => JSON.parse(DEEP_PROMPT.split('\n').find(line => line.includes('"voices":[')).match(/\{"tone".*\]\}/)[0]);
+const workedExample = () => workedAnswer().voices;
 
 test('the worked example writes content only where a sentence is performed; plain narration answers with id, role and is_narrator', () => {
+  assert.equal(workedAnswer().tone, '紧张', 'the answer says the floor\'s tone first');
   const example = workedExample();
   const plain = example.find(item => item.is_narrator === true && !Object.hasOwn(item, 'content') && !Object.hasOwn(item, 'pace'));
   assert.ok(plain, 'the example shows a plain narration line');

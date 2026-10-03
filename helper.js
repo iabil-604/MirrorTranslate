@@ -34,7 +34,7 @@ import {
   pathSet,
   presetDrift,
   unwrapResponseContent,
-} from './core.js?v=0.42.3';
+} from './core.js?v=0.43.0';
 
 // ---------------------------------------------------------------------------------------------
 // Default prompt and quick questions
@@ -174,6 +174,7 @@ export function buildSettingsSummaryLines(settings = {}) {
   lines.push(`特效字：${boolLabel(coloring.effects)}`);
   lines.push(`朗读功能：${boolLabel(tts.enabled)}`);
   lines.push(`分析模式：${TTS_MODE_LABELS[tts.mode] || tts.mode || '未知'}`);
+  lines.push(`亲密场景：${({ off: '关', auto: '自动（分析模式判断）', on: '开' })[tts.intimate === true ? 'on' : tts.intimate] ?? '关'}`);
   lines.push(`副模型提示词 › 破限词：${String(tts.prompts?.jailbreak ?? '').trim() ? '已填写' : '未填写'}`);
   lines.push(`Fish Audio › 模型：${fish.model || '未知'}`);
   lines.push(`Fish Audio API Key：${keyStatus(fish.key)}`);

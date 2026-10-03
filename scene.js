@@ -1,4 +1,4 @@
-import { parseJsonCandidates } from './core.js?v=0.42.3';
+import { STORY_TONES, parseJsonCandidates, storyToneOf } from './core.js?v=0.43.0';
 
 // ---------------------------------------------------------------------------------------------
 // The scene of a floor, written down by the translation while it reads the floor anyway.
@@ -13,7 +13,8 @@ import { parseJsonCandidates } from './core.js?v=0.42.3';
 // keeps it. Each function below takes `picture` to read it the other way.
 // ---------------------------------------------------------------------------------------------
 
-export const SCENE_TONES = Object.freeze(['日常', '轻松', '温馨', '浪漫', '亲密', '悲伤', '紧张', '悬疑', '恐怖', '战斗', '壮阔']);
+// The same tones 分析模式 judges a floor by (core.js STORY_TONES).
+export const SCENE_TONES = STORY_TONES;
 export const SCENE_PICTURE = false;
 
 // How long each field may be once read back: one that runs on is cut, never refused. A floor
@@ -50,12 +51,7 @@ function sceneText(value, limit) {
 /** A scene as it is kept: the known fields only, each a string, the mood one of SCENE_TONES or none. */
 export function normalizeScene(value, { picture = SCENE_PICTURE } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const toneWord = sceneText(value.tone, 20);
-  // The first of the listed moods the model's word contains, by where it stands in that word.
-  const tone = SCENE_TONES
-    .map(word => ({ word, at: toneWord.indexOf(word) }))
-    .filter(item => item.at >= 0)
-    .sort((left, right) => left.at - right.at)[0]?.word ?? '';
+  const tone = storyToneOf(sceneText(value.tone, 20));
   const scene = {
     tone,
     place: sceneText(value.place, SCENE_LIMITS.place),

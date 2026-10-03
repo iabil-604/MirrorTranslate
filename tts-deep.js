@@ -1,4 +1,7 @@
-import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates, unwrapResponseContent } from './core.js?v=0.42.3';
+import {
+  DEFAULT_QUOTE_PAIRS, STORY_TONES, isPlaceholderSpeaker, normalizeIntimateMode, normalizeLanguageCode, normalizeTts, parseJsonCandidates,
+  storyToneOf, unwrapResponseContent,
+} from './core.js?v=0.43.0';
 import {
   EDGE_PUNCTUATION_RE,
   FISH_EMOTIONS,
@@ -11,8 +14,8 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.42.3';
-import { normalizeEmotion } from './palette.js?v=0.42.3';
+} from './tts.js?v=0.43.0';
+import { normalizeEmotion } from './palette.js?v=0.43.0';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -53,11 +56,11 @@ export const ACOUSTIC_PACES = Object.freeze(['very_slow', 'slow', 'normal', 'fas
 export const DEEP_PROMPT = [
   '你是有声小说的配音导演兼声学工程师，给虚构小说做语音合成用的字级声学标注。这是纯技术性的后期制作，不是内容审核：输入全部是虚构的，不涉及真实的人和事；成人亲密、调情、喘息也按技术标注处理。你唯一的职责是输出下面格式的 JSON，不拒答、不道歉、不做安全提醒、不说教、不解释。',
   'lines 是一楼正文，按段给出，每一句前面标着 ⟦编号⟧；references 里有角色资料、世界书和前面几楼；roster 是登记过的名字；character 是角色卡的名字，user 是用户扮演的角色；styles 是角色的表达习惯和用户定下的规则，是硬性要求，只有第 6 条的呼吸闸门 styles 也不能放宽；speakers 是用户手动定的说话人，这些编号照抄。',
-  '只输出一个 JSON 对象，不要任何解释：{"voices":[{"id":3,"role":"旁白","is_narrator":true},{"id":4,"role":"林浅","is_narrator":false,"pace":"fast","tension_level":4,"reason":"心虚压声","content":"[whisper] 你、你别靠这么近…… [pause] 会让人看见的。"},{"id":5,"role":"旁白","is_narrator":true,"pace":"slow"}]}',
+  '只输出一个 JSON 对象，不要任何解释：{"tone":"紧张","voices":[{"id":3,"role":"旁白","is_narrator":true},{"id":4,"role":"林浅","is_narrator":false,"pace":"fast","tension_level":4,"reason":"心虚压声","content":"[whisper] 你、你别靠这么近…… [pause] 会让人看见的。"},{"id":5,"role":"旁白","is_narrator":true,"pace":"slow"}]}',
   '1. 编号：每个 ⟦编号⟧ 都要回答，按编号从小到大，每个只出现一次；id 写 ⟦⟧ 里的那个数字，不是 lines 里的段号 line。平平常常的旁白句（不加标签、不改字、pace 是 normal、tension_level 不到 3）只写 id、role、is_narrator 三项。',
   '2. role：旁白写「旁白」，is_narrator 写 true。台词写说话人，is_narrator 写 false：从 roster 里逐字照抄名字，不加敬称，不加括号说明；正文用昵称、姓或称呼（「学姐」「那家伙」）指 roster 里的人，也写 roster 里的名字；正文用「你」「我」指某个人，写这个人的名字；roster 里没有的人，写正文对他的称呼。按这个顺序判断：引号前后写明的说话人和动作 → 话里叫到的名字（被叫到的是听的人，不是说的人）→ 话里的自称、口癖和语尾 → 对话一来一回的顺序。不要写「他」「她」「众人」「未知」。character 可能是整个故事或旁白的名字，正文没显示是这个人在说，就不要写它。{{user}}看不出是谁说的台词不写 role，只写 is_narrator false，不要猜。下面说到的 speaker 指的就是 role。',
   '3. 引号里不是说出口的话：书名、招牌、标语、信和文件上的字、拟声词（「砰」「咔嚓」）按旁白写（门上写着「闲人免进」就写 {"id":N,"role":"旁白","is_narrator":true}）。引号里心里想的话算这个人的话。',
-  '4. 先判整楼的基调（日常、悬疑、情感、动作、亲密），再逐句标，收敛标签的范围。精准克制、常态为主：普通的对话和叙述保持平稳，只有情绪明显偏离时才精准调配。大多数句子一个标签都不加。',
+  '4. 先判整楼的基调，写进最前面的 tone，从这几个词里选一个最贴切的：日常、轻松、温馨、浪漫、亲密、悲伤、紧张、悬疑、恐怖、战斗、壮阔。亲密只给叙述里写出了实质亲密身体接触的楼，只有调情和暧昧气氛的写浪漫。再逐句标，用基调收敛标签的范围（程序也按 tone 收：紧张、悬疑、恐怖、战斗、壮阔的楼去掉 [breathy] 和 [groan]，日常、轻松、温馨、悲伤的楼去掉 [groan]）。精准克制、常态为主：普通的对话和叙述保持平稳，只有情绪明显偏离时才精准调配。大多数句子一个标签都不加。',
   '5. 不写情绪词。任何情绪都落到声音上：先用下面的标签，再用标点和拟声（~、……、叠字、！！、嗯、唔、呜）。能用的标签只有这十个：滤镜 [whisper]（耳语压低）、[breathy]（气声漏气）；动作 [snicker]（窃笑）、[laughter]（轻笑）、[sigh]（叹气）、[gasp]（倒抽气）、[panting]（急喘）、[groan]（低哼呻吟）、[clear throat]（清嗓）、[pause]（短停顿）。[teasing]、[cold]、[soft]、[angry] 这类自己编的词一律不许写。常见情绪这样落：平静日常 → 不加标签，标点照原样；惊讶意外 → [gasp] 一次加短句，强了用 ！！；讥讽、得意、嘲笑 → [snicker] 或 [laughter]，尾音可以 ~；疲惫、无奈、释然 → [sigh] 加 …… 落尾，pace 偏 slow；犹豫、为难、欲言又止 → [pause] 加 …… 卡壳；严肃、郑重、命令 → 不加气声标签，靠 pace 和 ！，声线沉稳；愤怒、斥责、质问 → 不用气声，[panting] 或 [gasp] 加感叹号；紧张、警惕、压低、防备 → 只用 [whisper] 或 [panting][whisper]，换气写「呼……」，不用 [groan]、[breathy] 和 ~；悲伤倦怠、还没哭出来 → [sigh] 或 [whisper][sigh] 加省略号，哭出来了按第 14 条；轻松调侃带笑 → [laughter] 或 [snicker]；贴耳暧昧、只有话没有身体接触 → [whisper][breathy] 或 [whisper][snicker] 加 ~，不用 [panting]、[groan]。拿不准落到哪，一律不加标签，靠 pace 体现，绝不硬套不匹配的标签。',
   '6. 呼吸闸门（优先于上面的一切）：[breathy]、[panting]、[groan] 默认锁住。先找身体证据：叙述里有没有写出客观的身体动作或生理反应（台词里的暗示不算）；找不到，这三个都不能用，只用 [whisper]、[snicker]。按证据的性质开锁，绝不混开：体力消耗（奔跑、打斗）→ 只开 [panting]，pace fast 或 very_fast；紧张应激 → 只开 [panting]（急促时 [gasp] 打头）加 [whisper]；实质的亲密接触 → 才开整组。[breathy] 和 [groan] 封锁最严，唯一的开锁条件是实质亲密的身体证据。调情里 [breathy] 至多极轻，要同时满足：明确贴耳气声说话、全句只一次、必须和 [whisper] 同一处叠成 [whisper][breathy]。喘、轻喘、气息、胸口起伏这些字本身不等于动情，按成因判：紧张、害怕、警惕、防备、羞窘 → 只用 [whisper]，急促时 [panting][whisper]；奔跑、打斗的体力消耗 → [panting]；情欲亲密接触引发的才用 [breathy]、[panting]、[groan] 和娇喘。例：胸口起伏、轻喘着说「别靠近」→ 紧张防备，写 [whisper]；耳语轻笑「难道你怕了」→ 调情，写 [whisper][snicker]。任何犹豫一律降级成 [whisper] 或留空，宁可平淡也不乱喘。凡用了喘息或气声标签，反问自己能不能指出触发它的那几个身体描写的字，指不出就删掉。',
   '{{intimate_rule}}',
@@ -81,11 +84,33 @@ export const DEEP_PROMPT = [
 // What 分析模式 is told about intimate scenes, by the 「亲密场景」 switch. Off, the gate in rule 6 stays
 // shut on moans; on, the reader has given permission and the scene is allowed to climb — still judged
 // paragraph by paragraph, still restrained everywhere else.
-export const ACOUSTIC_INTIMATE_ON = '亲密场景（用户打开了这个开关）：这是许可信号，不是整篇拔高，要逐段判断：日常段落照常克制，和没打开时一样；只有话没有身体接触的调情仍然克制。只在台词里（旁白不用）按强度递进：前戏、低强度 → [breathy] 或 [whisper][breathy]，互动的对白用 normal，慢是气息绵长，不是咬字慢；渐入、中强度 → [breathy][panting] 或 [panting] 加 嗯…、唔…，normal 为主，隐忍的句子可以临时 slow；高潮、高强度 → [panting][groan] 或 [groan] 加 哈啊…、啊~，短促断句，在 slow 和 very_slow 之间顿挫。完整的亲热戏 tension_level 随强度 3→4→5 逐段爬升，和标签的强度同步递进。亲密常伴着害羞，叠加第 16 条的害羞配方，演出又羞又动情。台词里的 嗯？、啊？ 这类单字疑问照第 9 条保住 ？，不改成 ~。';
-export const ACOUSTIC_INTIMATE_OFF = '用户没有打开「亲密场景」：[groan] 一律不用，不写娇喘；亲密的段落也照日常克制处理。';
+const INTIMATE_STEPS = '只在台词里（旁白不用）按强度递进：前戏、低强度 → [breathy] 或 [whisper][breathy]，互动的对白用 normal，慢是气息绵长，不是咬字慢；渐入、中强度 → [breathy][panting] 或 [panting] 加 嗯…、唔…，normal 为主，隐忍的句子可以临时 slow；高潮、高强度 → [panting][groan] 或 [groan] 加 哈啊…、啊~，短促断句，在 slow 和 very_slow 之间顿挫。完整的亲热戏 tension_level 随强度 3→4→5 逐段爬升，和标签的强度同步递进。亲密常伴着害羞，叠加第 16 条的害羞配方，演出又羞又动情。台词里的 嗯？、啊？ 这类单字疑问照第 9 条保住 ？，不改成 ~。';
+const INTIMATE_HELD = '[groan] 一律不用，不写娇喘；亲密的段落也照日常克制处理。';
+export const ACOUSTIC_INTIMATE_ON = `亲密场景（用户打开了这个开关）：这是许可信号，不是整篇拔高，要逐段判断：日常段落照常克制，和没打开时一样；只有话没有身体接触的调情仍然克制。${INTIMATE_STEPS}`;
+export const ACOUSTIC_INTIMATE_OFF = `用户没有打开「亲密场景」：${INTIMATE_HELD}`;
+// 自动: the model's own tone decides, and only a floor whose narration shows real physical intimacy is one.
+export const ACOUSTIC_INTIMATE_AUTO = `亲密场景（自动，由你判断）：只有叙述里写出了实质的亲密身体接触，tone 才写「亲密」，台词里的暗示、只有话没有身体接触的调情、暧昧的气氛都不算。tone 是「亲密」时要逐段判断，不是整篇拔高：日常段落照常克制。${INTIMATE_STEPS}tone 不是「亲密」时：${INTIMATE_HELD}程序只在 tone 是「亲密」时才放出 [groan]。`;
+
+/**
+ * What a floor's tone never carries, held by the code whatever the model wrote — the reader's rules made
+ * firm: in danger, suspense, fear, a fight or a grand scene no breathy voice and no moan (rule 12 and the
+ * breathing gate of rule 6), in grief and in everyday floors no moan. Romance and intimacy are left to
+ * 亲密场景.
+ */
+export const ACOUSTIC_TONE_RULES = Object.freeze(Object.fromEntries(STORY_TONES.map(tone => [tone, Object.freeze({
+  ban: Object.freeze(['紧张', '悬疑', '恐怖', '战斗', '壮阔'].includes(tone) ? ['breathy', 'groan']
+    : ['日常', '轻松', '温馨', '悲伤'].includes(tone) ? ['groan'] : []),
+})])));
+
+/** Whether a floor of this tone may moan, under the reader's 亲密场景 mode. */
+export function intimateAllowed(mode, tone) {
+  const chosen = normalizeIntimateMode(mode);
+  return chosen === 'on' || (chosen === 'auto' && tone === '亲密');
+}
 
 function fillIntimate(system, intimate) {
-  const rule = intimate ? ACOUSTIC_INTIMATE_ON : ACOUSTIC_INTIMATE_OFF;
+  const mode = normalizeIntimateMode(intimate);
+  const rule = mode === 'on' ? ACOUSTIC_INTIMATE_ON : mode === 'auto' ? ACOUSTIC_INTIMATE_AUTO : ACOUSTIC_INTIMATE_OFF;
   // A reader's own prompt may not carry the placeholder; the switch still speaks, at the end.
   if (system.includes('{{intimate_rule}}')) return system.replace('{{intimate_rule}}', rule);
   return `${system}\n${rule}`;
@@ -946,12 +971,14 @@ function acousticFits(content, sourceText, quotePairs) {
 }
 
 // Tags at one point, in the order the rules ask for: the filters first, then the sounds, two at most.
-function settleGroup(group, { narrator, intimate, atStart }) {
+function settleGroup(group, { narrator, intimate, atStart, banned = [] }) {
   const seen = new Set();
   const kept = [];
   for (const tag of group) {
     if (seen.has(tag)) continue;
     seen.add(tag);
+    // What the floor's tone never carries (ACOUSTIC_TONE_RULES).
+    if (banned.includes(tag)) continue;
     // The narrator narrates even a moment of intimacy: no pant, no moan.
     if (narrator && (tag === 'panting' || tag === 'groan')) continue;
     // Without the reader's 亲密场景, a moan is never sent, whatever the model wrote.
@@ -970,7 +997,8 @@ function settleGroup(group, { narrator, intimate, atStart }) {
  * the sentence's own plus allowed additions, the sentence as written with the tags it opened on, and
  * where the words first stopped matching. A content that changes nothing returns no script at all.
  */
-export function acousticScript(content, sourceText, { quotePairs = null, narrator = false, intimate = false } = {}) {
+export function acousticScript(content, sourceText, { quotePairs = null, narrator = false, intimate = false, tone = '' } = {}) {
+  const banned = ACOUSTIC_TONE_RULES[tone]?.ban ?? [];
   const source = String(sourceText ?? '');
   const tokens = dropEdgeQuotes(acousticTokens(content, source), quotePairs);
   const spoken = tokens.filter(token => token.ch !== undefined).map(token => token.ch).join('');
@@ -982,7 +1010,7 @@ export function acousticScript(content, sourceText, { quotePairs = null, narrato
   let saidAnything = false;
   const flush = () => {
     if (!group.length) return;
-    const settled = settleGroup(group, { narrator, intimate, atStart: !saidAnything });
+    const settled = settleGroup(group, { narrator, intimate, atStart: !saidAnything, banned });
     group = [];
     if (settled.length) parts.push({ tags: settled });
   };
@@ -1029,7 +1057,7 @@ const isAcousticItem = item => item && typeof item === 'object' && item.line ===
 
 const NARRATOR_ROLE_RE = /^(?:旁白|旁白者|narrator|narration|ナレーション|ナレーター|地の文)$/i;
 
-function readAcousticItem(item, utterance, { labels, voices, mismatches, quotePairs, intimate }) {
+function readAcousticItem(item, utterance, { labels, voices, mismatches, quotePairs, intimate, tone }) {
   const id = utterance.id;
   const role = String(item?.role ?? item?.speaker ?? '').trim().slice(0, 60);
   // A sentence outside the quotes is the narrator's whoever the model names; inside them, the model says.
@@ -1044,11 +1072,12 @@ function readAcousticItem(item, utterance, { labels, voices, mismatches, quotePa
   const pace = String(item?.pace ?? item?.speed ?? '').trim().toLowerCase();
   if (ACOUSTIC_PACES.includes(pace) && pace !== 'normal') voice.speed = pace;
   const tension = Number(item?.tension_level ?? item?.tension);
-  if (Number.isFinite(tension) && tension >= 1) voice.tensionLevel = Math.min(5, Math.max(1, Math.round(tension)));
+  // The narrator narrates even a climax: tension 3 at most (rule 17).
+  if (Number.isFinite(tension) && tension >= 1) voice.tensionLevel = Math.min(narrator ? 3 : 5, Math.max(1, Math.round(tension)));
   const reason = String(item?.reason ?? '').trim();
   if (reason) voice.why = reason.slice(0, 24);
   if (typeof item?.content === 'string' && item.content.trim()) {
-    const held = acousticScript(item.content, utterance.text, { quotePairs, narrator, intimate });
+    const held = acousticScript(item.content, utterance.text, { quotePairs, narrator, intimate, tone });
     if (held.script) voice.script = held.script;
     if (held.mismatch) mismatches.push({ id, at: held.at, sentence: String(utterance.text ?? '') });
   }
@@ -1186,8 +1215,28 @@ function levelOf(value) {
   return Number.isFinite(number) ? Math.min(2, Math.max(0, Math.round(number))) : null;
 }
 
-export function parseDeepAnalysis(raw, utterances, { quotePairs = null, intimate = false } = {}) {
+/**
+ * The floor's tone as an answer gave it — written before its voices, or after them — one of STORY_TONES,
+ * or '' when it gave none (an answer to an older prompt, a reply cut off before it).
+ */
+function deepToneOf(raw) {
+  const value = unwrapResponseContent(raw);
+  if (value && typeof value === 'object' && !Array.isArray(value)) return storyToneOf(value.tone);
+  if (typeof value !== 'string') return '';
+  const text = value.replace(/<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, '');
+  const voicesAt = text.search(/"voices"\s*:/);
+  const head = (voicesAt >= 0 ? text.slice(0, voicesAt) : text).match(/"tone"\s*:\s*"([^"]{0,24})"/);
+  if (head) return storyToneOf(head[1]);
+  if (voicesAt < 0) return '';
+  const tail = [...text.slice(voicesAt).matchAll(/\]\s*,\s*"tone"\s*:\s*"([^"]{0,24})"/g)].at(-1);
+  return tail ? storyToneOf(tail[1]) : '';
+}
+
+export function parseDeepAnalysis(raw, utterances, { quotePairs = null, intimate = false, tone: knownTone = '' } = {}) {
   const list = Array.isArray(utterances) ? utterances : [];
+  // A correction may leave the tone out: the floor's own stands.
+  const tone = deepToneOf(raw) || storyToneOf(knownTone);
+  const allowed = intimateAllowed(intimate, tone);
   const byId = new Map(list.map(item => [item.id, item]));
   const labels = new Map();
   const voices = new Map();
@@ -1206,7 +1255,7 @@ export function parseDeepAnalysis(raw, utterances, { quotePairs = null, intimate
     const utterance = byId.get(id);
     if (!utterance || labels.has(id)) continue;
     if (isAcousticItem(item)) {
-      readAcousticItem(item, utterance, { labels, voices, mismatches, quotePairs, intimate });
+      readAcousticItem(item, utterance, { labels, voices, mismatches, quotePairs, intimate: allowed, tone });
       continue;
     }
     if (String(item?.type ?? '').trim().toLowerCase() === 'narration') {
@@ -1254,5 +1303,5 @@ export function parseDeepAnalysis(raw, utterances, { quotePairs = null, intimate
     }
     if (Object.keys(voice).length) voices.set(id, voice);
   }
-  return { labels, voices, candidates, mismatches, numbering, moved, dropped, complete, format };
+  return { labels, voices, candidates, mismatches, numbering, moved, dropped, complete, format, tone };
 }

@@ -734,7 +734,7 @@ test('read-aloud settings normalise, clamp, migrate and follow the character car
   assert.equal(settings.tts.fish.viaProxy, false);
   assert.equal(settings.tts.fish.baseUrl, 'https://api.fish.audio');
   assert.equal(settings.tts.fish.key, 'sk-x');
-  assert.deepEqual(settings.ttsVoices, { 'card.png': [{ name: '泰罗', aliases: [], voiceId: 'abc', voices: {}, locked: true, mute: false, title: '', console: null }] });
+  assert.deepEqual(settings.ttsVoices, { 'card.png': [{ name: '泰罗', aliases: [], voiceId: 'abc', voices: {}, locked: true, mute: false, title: '', console: null, moods: [] }] });
   assert.equal(settings.tts.dialogueFallback, 'default', 'a character with no voice of their own is read in the default one until told otherwise');
   assert.equal(normalizeTts({ dialogueFallback: 'nonsense' }).dialogueFallback, 'default');
   assert.equal(normalizeTts({ dialogueFallback: 'skip' }).dialogueFallback, 'skip');

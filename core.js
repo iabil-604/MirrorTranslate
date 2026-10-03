@@ -8,19 +8,19 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.42.3';
+} from './prompts.js?v=0.43.0';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.42.3';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.43.0';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.42.3';
+import { resolveMoveStyle } from './palette.js?v=0.43.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.42.3';
+export const APP_VERSION = '0.43.0';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -745,6 +745,31 @@ export const DEFAULT_COLORING = Object.freeze({
 // each line is played). The simple reading that used to sit between them is gone since v0.41.0: a
 // translated floor already carries its marks, and the plain reading names speakers by itself.
 export const TTS_MODES = Object.freeze(['off', 'deep']);
+// 亲密场景: never (off), as 分析模式 judges each floor (auto: only a floor whose narration shows real
+// physical intimacy, judged by its tone), or with the reader's permission (on: judged paragraph by paragraph).
+export const TTS_INTIMATE_MODES = Object.freeze(['off', 'auto', 'on']);
+// A floor's tone, in the one list the translation's scene card and 分析模式 both choose from.
+export const STORY_TONES = Object.freeze(['日常', '轻松', '温馨', '浪漫', '亲密', '悲伤', '紧张', '悬疑', '恐怖', '战斗', '壮阔']);
+
+/** The first of STORY_TONES a model's word for a tone contains, by where it stands in that word; '' for none. */
+export function storyToneOf(value) {
+  const word = String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, 20);
+  return STORY_TONES
+    .map(tone => ({ tone, at: word.indexOf(tone) }))
+    .filter(item => item.at >= 0)
+    .sort((left, right) => left.at - right.at)[0]?.tone ?? '';
+}
+
+// 亲密场景 was a yes/no switch before v0.43.0: yes is 开.
+export function normalizeIntimateMode(value) {
+  if (value === true) return 'on';
+  return TTS_INTIMATE_MODES.includes(value) ? value : 'off';
+}
+
+// 情绪音色: when a character's line is said in another of their voices — the same actor cloned whispering,
+// roaring… — by what 分析模式 found in the line: its opening whisper or breathy voice, its laugh, its
+// tension of 4 and up, or the floor's tone.
+export const VOICE_MOOD_CONDITIONS = Object.freeze(['whisper', 'laugh', 'burst', ...STORY_TONES.map(tone => `tone:${tone}`)]);
 // What a play does on a plain floor nobody has analysed: ask, analyse it without asking, or read the plain text.
 export const TTS_ASK_MODES = Object.freeze(['ask', 'analyze', 'plain']);
 // Punctuation the reader pairs with a tag: the Chinese word shown, Fish's own tag sent, and where the tag
@@ -999,8 +1024,9 @@ export const DEFAULT_TTS = Object.freeze({
   speechMarks: false,
   // A new reply is read aloud by itself once its text is final.
   autoRead: false,
-  // 亲密场景: 分析模式 may let an intimate scene climb (moans included) where the narration shows it.
-  intimate: false,
+  // 亲密场景 (TTS_INTIMATE_MODES): 分析模式 may let an intimate scene climb (moans included) where the
+  // narration shows it — never, as it judges the floor, or by the reader's leave.
+  intimate: 'off',
   fish: DEFAULT_FISH,
 });
 
@@ -1718,6 +1744,21 @@ function normalizeVoiceTitle(value) {
   return String(value ?? '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 80);
 }
 
+/** A row's 情绪音色 as kept: one voice per condition, the first of each kept, at most eight. */
+export function normalizeVoiceMoods(value) {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const when = String(item?.when ?? '').trim();
+    const voiceId = normalizeVoiceId(item?.voiceId);
+    if (!VOICE_MOOD_CONDITIONS.includes(when) || !voiceId || seen.has(when)) continue;
+    seen.add(when);
+    result.push({ when, voiceId, title: normalizeVoiceTitle(item?.title) });
+    if (result.length >= 8) break;
+  }
+  return result;
+}
+
 // lang → voice id. An entry without a language is dropped rather than guessed at.
 export function normalizeLanguageVoices(value) {
   const result = {};
@@ -1754,7 +1795,10 @@ export function normalizeVoiceList(value) {
       const locked = item.locked === undefined ? Boolean(voiceId || Object.keys(voices).length) : item.locked === true;
       // A console of its own only when something on it was moved; null means the default console.
       // Muted: this character's lines are not read at all. Never by accident — only an explicit true.
-      return { name, aliases, voiceId, voices, locked, mute: item.mute === true, title: normalizeVoiceTitle(item.title), console: normalizeConsole(item.console, { sparse: true }) };
+      return {
+        name, aliases, voiceId, voices, locked, mute: item.mute === true, title: normalizeVoiceTitle(item.title),
+        console: normalizeConsole(item.console, { sparse: true }), moods: normalizeVoiceMoods(item.moods),
+      };
     })
     .filter(item => {
       if (!item || seen.has(item.name)) return false;
@@ -1938,7 +1982,7 @@ export function normalizeTts(value) {
     dialogueFallback: TTS_DIALOGUE_FALLBACKS.includes(source.dialogueFallback) ? source.dialogueFallback : DEFAULT_TTS.dialogueFallback,
     speechMarks: source.speechMarks === true,
     autoRead: source.autoRead === true,
-    intimate: source.intimate === true,
+    intimate: normalizeIntimateMode(source.intimate),
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     fish: normalizeFishSettings(source.fish),
   };

@@ -15,9 +15,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.42.3';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.42.3';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.42.3';
+} from './core.js?v=0.43.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.43.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.43.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -1824,6 +1824,35 @@ export function languageVoice(table, lang) {
   return sibling ? table[sibling] : '';
 }
 
+// The tags a script opens on, before anything is said: the manner the whole line is said in.
+function openingTags(script) {
+  const head = String(script ?? '').match(/^\s*((?:\[[^\]\n]{1,40}\]\s*)+)/u)?.[1] ?? '';
+  return [...head.matchAll(/\[([^\]\n]{1,40})\]/gu)].map(match => match[1].trim().toLowerCase());
+}
+
+/**
+ * The 情绪音色 a line is said in (VOICE_MOOD_CONDITIONS), found locally from what 分析模式 said about
+ * it: the first of the character's moods that fits — a line opening in a whisper or a breathy voice, one
+ * opening on a laugh, one of tension 4 and up, or any line of a floor of that tone. '' when none fits, or
+ * the floor was not analysed.
+ */
+export function moodVoiceFor(entry, segment) {
+  const moods = Array.isArray(entry?.moods) ? entry.moods : [];
+  if (!moods.length) return '';
+  const voice = segment?.voice ?? {};
+  const opening = openingTags(voice.script);
+  const fits = {
+    whisper: opening.includes('whisper') || opening.includes('breathy'),
+    laugh: opening.includes('laughter') || opening.includes('snicker'),
+    burst: Number(voice.tensionLevel) >= 4,
+  };
+  for (const mood of moods) {
+    if (!mood?.voiceId) continue;
+    if (fits[mood.when] || (segment?.tone && mood.when === `tone:${segment.tone}`)) return mood.voiceId;
+  }
+  return '';
+}
+
 export function resolveSegmentVoice(segment, { voices = [], narratorVoice = '', narratorVoices = {}, dialogueVoice = '' } = {}) {
   const lang = String(segment?.lang ?? '');
   if (segment?.type === 'narration') return languageVoice(narratorVoices, lang) || narratorVoice || dialogueVoice || '';
@@ -1831,6 +1860,9 @@ export function resolveSegmentVoice(segment, { voices = [], narratorVoice = '', 
   if (entry) {
     const byLanguage = languageVoice(entry.voices, lang);
     if (byLanguage) return byLanguage;
+    // The same actor in another voice, where the line is said that way.
+    const mood = moodVoiceFor(entry, segment);
+    if (mood) return mood;
     if (entry.locked !== false && entry.voiceId) return entry.voiceId;
   }
   return dialogueVoice || narratorVoice || '';
@@ -1854,7 +1886,7 @@ export function planVoices(segments, config) {
     if (!voiceId) unvoiced.add(who);
     else if (segment.type === 'dialogue') {
       const entry = findVoiceEntry(config?.voices, segment.speaker);
-      const own = entry && (languageVoice(entry.voices, segment.lang) || (entry.locked !== false && entry.voiceId));
+      const own = entry && (languageVoice(entry.voices, segment.lang) || moodVoiceFor(entry, segment) || (entry.locked !== false && entry.voiceId));
       if (!own) defaulted.add(who);
     }
     items.push({ segment, voiceId });

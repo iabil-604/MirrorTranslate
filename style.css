@@ -754,6 +754,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-tts-voice-row { grid-template-areas: "name aliases" "lock lock" "voice voice" "title title" "tools tools" "langs langs"; grid-template-columns: 1fr 1fr; }
   .jy-tts-voice-row .jy-tts-lock { justify-self: start; }
   .jy-tts-lang-row { grid-template-columns: 78px minmax(0,1fr) auto; }
+  .jy-tts-lang-row.jy-tts-mood-row { grid-template-columns: 96px minmax(0,1fr) auto; }
   .jy-tts-library-body { grid-template-columns: minmax(0,1fr) 92px; grid-template-areas: "name lang" "id id" "title remove"; }
   .jy-tts-pick select { width: 44%; }
 }
@@ -902,10 +903,16 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-tts-voice-summary-name { font-weight: 650; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jy-tts-voice-summary-meta { color: var(--jy-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
 .jy-tts-voice-row .jy-tts-lock { flex: 0 0 auto; }
-.jy-tts-voice-body { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); grid-template-areas: "name aliases" "voice voice" "title title" "mute mute" "tools tools" "langs langs" "console console"; gap: 6px; padding: 2px 0 12px 14px; }
+.jy-tts-voice-body { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); grid-template-areas: "name aliases" "voice voice" "title title" "mute mute" "tools tools" "langs langs" "moods moods" "console console"; gap: 6px; padding: 2px 0 12px 14px; }
 .jy-tts-voice-body > .jy-tts-pick { grid-area: voice; }
 .jy-tts-voice-body .jy-tts-voice-tools { grid-area: tools; }
 .jy-tts-voice-body .jy-tts-lang-list { grid-area: langs; }
+.jy-tts-voice-body .jy-tts-mood-list { grid-area: moods; }
+.jy-tts-mood-list { display: flex; flex-direction: column; gap: 5px; }
+.jy-tts-mood-list:empty { display: none; }
+.jy-tts-lang-row.jy-tts-mood-row { grid-template-columns: 112px minmax(0,1fr) auto; }
+.jy-tts-mood-row [data-jy-tts-mood-id] { font-family: Consolas, ui-monospace, monospace; }
+.jy-card-row-dependent[data-jy-dependent-off="true"] .jy-card-row-field { color: var(--jy-muted-soft); }
 .jy-tts-voice-body .jy-tts-voice-mute { grid-area: mute; }
 .jy-tts-voice-body .jy-tts-title:empty { display: none; }
 @media (max-width: 640px) {

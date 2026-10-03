@@ -191,7 +191,7 @@ test('the simple analysis asks for every line in order and the minimal answer fo
   assert.match(DEEP_PROMPT, /\{"id":N,"role":"旁白","is_narrator":true\}/);
   assert.match(DEEP_PROMPT, /在心里核对一遍，不要写出来/);
   // 分析模式 answers in the reader's 声学标注规则: a role, pace, tension_level and the performed content.
-  const example = JSON.parse(DEEP_PROMPT.split('\n').find(line => line.includes('{"voices"')).match(/\{"voices".*\]\}/)[0]).voices.find(item => item.content);
+  const example = JSON.parse(DEEP_PROMPT.split('\n').find(line => line.includes('"voices":[')).match(/\{"tone".*\]\}/)[0]).voices.find(item => item.content);
   assert.deepEqual(Object.keys(example).sort(), ['content', 'id', 'is_narrator', 'pace', 'reason', 'role', 'tension_level']);
   assert.equal('emotion' in example, false, 'no mood word: a mood is heard through the tags');
   assert.match(example.content, /^\[whisper\] /, 'the example carries its own leading tag');
