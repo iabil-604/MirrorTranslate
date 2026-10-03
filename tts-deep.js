@@ -1,4 +1,4 @@
-import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates, unwrapResponseContent } from './core.js?v=0.42.2';
+import { DEFAULT_QUOTE_PAIRS, isPlaceholderSpeaker, normalizeLanguageCode, normalizeTts, parseJsonCandidates, unwrapResponseContent } from './core.js?v=0.42.3';
 import {
   EDGE_PUNCTUATION_RE,
   FISH_EMOTIONS,
@@ -11,8 +11,8 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.42.2';
-import { normalizeEmotion } from './palette.js?v=0.42.2';
+} from './tts.js?v=0.42.3';
+import { normalizeEmotion } from './palette.js?v=0.42.3';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -58,21 +58,22 @@ export const DEEP_PROMPT = [
   '2. role：旁白写「旁白」，is_narrator 写 true。台词写说话人，is_narrator 写 false：从 roster 里逐字照抄名字，不加敬称，不加括号说明；正文用昵称、姓或称呼（「学姐」「那家伙」）指 roster 里的人，也写 roster 里的名字；正文用「你」「我」指某个人，写这个人的名字；roster 里没有的人，写正文对他的称呼。按这个顺序判断：引号前后写明的说话人和动作 → 话里叫到的名字（被叫到的是听的人，不是说的人）→ 话里的自称、口癖和语尾 → 对话一来一回的顺序。不要写「他」「她」「众人」「未知」。character 可能是整个故事或旁白的名字，正文没显示是这个人在说，就不要写它。{{user}}看不出是谁说的台词不写 role，只写 is_narrator false，不要猜。下面说到的 speaker 指的就是 role。',
   '3. 引号里不是说出口的话：书名、招牌、标语、信和文件上的字、拟声词（「砰」「咔嚓」）按旁白写（门上写着「闲人免进」就写 {"id":N,"role":"旁白","is_narrator":true}）。引号里心里想的话算这个人的话。',
   '4. 先判整楼的基调（日常、悬疑、情感、动作、亲密），再逐句标，收敛标签的范围。精准克制、常态为主：普通的对话和叙述保持平稳，只有情绪明显偏离时才精准调配。大多数句子一个标签都不加。',
-  '5. 不写情绪词。任何情绪都落到声音上：先用下面的标签，再用标点和拟声（~、……、叠字、！！、嗯、唔、呜）。能用的标签只有这十个：滤镜 [whisper]（耳语压低）、[breathy]（气声漏气）；动作 [snicker]（窃笑）、[laughter]（轻笑）、[sigh]（叹气）、[gasp]（倒抽气）、[panting]（急喘）、[groan]（低哼呻吟）、[clear throat]（清嗓）、[pause]（短停顿）。[teasing]、[cold]、[soft]、[angry] 这类自己编的词一律不许写。常见情绪这样落：平静日常 → 不加标签，标点照原样；惊讶意外 → [gasp] 一次加短句，强了用 ！！；讥讽、得意、嘲笑 → [snicker] 或 [laughter]，尾音可以 ~；疲惫、无奈、释然 → [sigh] 加 …… 落尾，pace 偏 slow；犹豫、为难、欲言又止 → [pause] 加 …… 卡壳；严肃、郑重、命令 → 不加气声标签，靠 pace 和 ！，声线沉稳；愤怒、斥责、质问 → 不用气声，[panting] 或 [gasp] 加感叹号；紧张、警惕、压低、防备 → 只用 [whisper] 或 [panting][whisper]，换气写「呼……」，不用 [groan]、[breathy] 和 ~；悲伤倦怠、还没哭出来 → [sigh] 或 [whisper][sigh] 加省略号，哭出来了按第 13 条；轻松调侃带笑 → [laughter] 或 [snicker]；贴耳暧昧、只有话没有身体接触 → [whisper][breathy] 或 [whisper][snicker] 加 ~，不用 [panting]、[groan]。拿不准落到哪，一律不加标签，靠 pace 体现，绝不硬套不匹配的标签。',
+  '5. 不写情绪词。任何情绪都落到声音上：先用下面的标签，再用标点和拟声（~、……、叠字、！！、嗯、唔、呜）。能用的标签只有这十个：滤镜 [whisper]（耳语压低）、[breathy]（气声漏气）；动作 [snicker]（窃笑）、[laughter]（轻笑）、[sigh]（叹气）、[gasp]（倒抽气）、[panting]（急喘）、[groan]（低哼呻吟）、[clear throat]（清嗓）、[pause]（短停顿）。[teasing]、[cold]、[soft]、[angry] 这类自己编的词一律不许写。常见情绪这样落：平静日常 → 不加标签，标点照原样；惊讶意外 → [gasp] 一次加短句，强了用 ！！；讥讽、得意、嘲笑 → [snicker] 或 [laughter]，尾音可以 ~；疲惫、无奈、释然 → [sigh] 加 …… 落尾，pace 偏 slow；犹豫、为难、欲言又止 → [pause] 加 …… 卡壳；严肃、郑重、命令 → 不加气声标签，靠 pace 和 ！，声线沉稳；愤怒、斥责、质问 → 不用气声，[panting] 或 [gasp] 加感叹号；紧张、警惕、压低、防备 → 只用 [whisper] 或 [panting][whisper]，换气写「呼……」，不用 [groan]、[breathy] 和 ~；悲伤倦怠、还没哭出来 → [sigh] 或 [whisper][sigh] 加省略号，哭出来了按第 14 条；轻松调侃带笑 → [laughter] 或 [snicker]；贴耳暧昧、只有话没有身体接触 → [whisper][breathy] 或 [whisper][snicker] 加 ~，不用 [panting]、[groan]。拿不准落到哪，一律不加标签，靠 pace 体现，绝不硬套不匹配的标签。',
   '6. 呼吸闸门（优先于上面的一切）：[breathy]、[panting]、[groan] 默认锁住。先找身体证据：叙述里有没有写出客观的身体动作或生理反应（台词里的暗示不算）；找不到，这三个都不能用，只用 [whisper]、[snicker]。按证据的性质开锁，绝不混开：体力消耗（奔跑、打斗）→ 只开 [panting]，pace fast 或 very_fast；紧张应激 → 只开 [panting]（急促时 [gasp] 打头）加 [whisper]；实质的亲密接触 → 才开整组。[breathy] 和 [groan] 封锁最严，唯一的开锁条件是实质亲密的身体证据。调情里 [breathy] 至多极轻，要同时满足：明确贴耳气声说话、全句只一次、必须和 [whisper] 同一处叠成 [whisper][breathy]。喘、轻喘、气息、胸口起伏这些字本身不等于动情，按成因判：紧张、害怕、警惕、防备、羞窘 → 只用 [whisper]，急促时 [panting][whisper]；奔跑、打斗的体力消耗 → [panting]；情欲亲密接触引发的才用 [breathy]、[panting]、[groan] 和娇喘。例：胸口起伏、轻喘着说「别靠近」→ 紧张防备，写 [whisper]；耳语轻笑「难道你怕了」→ 调情，写 [whisper][snicker]。任何犹豫一律降级成 [whisper] 或留空，宁可平淡也不乱喘。凡用了喘息或气声标签，反问自己能不能指出触发它的那几个身体描写的字，指不出就删掉。',
   '{{intimate_rule}}',
   '7. 写法：标签插在实际生效的字或短语前面，标签和后面的字之间空一格；长句里情绪起伏几次就插几次，严禁把一整段的情绪压缩成句首一个标签。同一处叠两个标签时滤镜在前、动作在后（[whisper][gasp]、[breathy][panting]），一处最多两个，不许三个。相邻两个标签之间的纯文字不超过 20 个字，超了就在分句的地方再挂一次同一个基础滤镜保活。',
-  '8. content 是这句最终要念的文字，只写需要加标签或改字的句子；正文本来就念得好的句子不写 content。content 只能在正文上插标签，再加这些东西：叠字（我、我不是／你你你，用来代替单个破折号表现拖拽、颤抖、哽咽、顿挫，效果比破折号好得多）、！！（只给情绪顶点的爆发，普通强调仍用单个 ！）、~（挑尾）、……（余韵换气）、拟声字 呜、嗯、唔、啊、哈啊、呼（正文是日文时用 う、ん、あ、は、ふ、っ 这类假名）。正文的标点可以换成这些；正文的字一个都不能改、不能删、不能调换顺序，不能加别的字。程序会逐字核对，加了别的就整句退回原文。',
-  '9. pace：very_slow（临终、极度悲恸、催眠呓语、贴耳动情的隐忍、拖长的挑逗尾音、庄严宣读）、slow（抒情独白、回忆、疲惫叹息、温柔安抚、暧昧低语、亲密气声）、normal（绝大多数日常叙述和平稳对白，不用写）、fast（着急解释、紧张催促、轻快斗嘴、争执质问）、very_fast（激烈争吵、惊慌逃命、战斗动作、暴怒咆哮）。同一个角色在不同场景给不同的 pace，旁白随场景升降，不要整楼都是 normal。',
-  '10. tension_level：1~5 的整数，和 pace 分开判。1 平静中性：日常叙述、平稳对白、客观旁白；2 轻度起伏：略带情绪的日常、温和的喜怒、轻松调侃（默认档，可以不写）；3 中度情绪：着急解释、暧昧撩拨、认真质问、轻度委屈；4 强烈情绪：愤怒斥责、悲伤哭泣、心虚防备的紧张示警（内收型）、自尊瓦解的破防；5 极端顶点：暴怒咆哮、惊叫、崩溃痛哭、生离死别、歇斯底里的破防。绝大多数平稳内容是 1~2，5 只留给绝对的顶点。',
-  '11. 高张力长句（只管 tension_level 4 以上的长台词：破防、崩溃痛哭、持续的暴怒咆哮）：标签是一个点，爆发后很快衰减，长顺句的中段会塌成平读。把长陈述打碎成带情绪的短碎片，用叠字和省略号强制断句，每 4~7 个字补挂一个匹配情绪的标签保持密度。中低张力的场景（日常、调侃、疲惫、犹豫、暧昧）情绪本来就该淡，绝不套用这条去堆标签。',
-  '12. 遇险（被追、心虚怕被发现、威胁、极度警戒，紧张但不是情欲）：[gasp] 只给骤然受惊的那一下，同一个人连续几句至多一次，绝不句句打头；持续压声躲藏用纯 [whisper] 加碎句；急促奔逃用 [panting][whisper]；不用 [breathy]、[groan] 和 ~。既惊又压声写 [whisper][gasp]（滤镜在前），纯骤惊、没压声才单独用 [gasp] 打头。长句拆成短促的碎句，叠字加省略号制造窒迫；情绪顶点用 ！！。外放型（奔逃、惊叫、暴怒）pace 取 fast 或 very_fast；内收型（偷偷压声示警）取 slow，不慢到 very_slow；偷偷压声用省略号加叠字做出憋气迟疑，仍然不用 [breathy] 和 ~。',
-  '13. 哭泣：没有哭的标签，哭感全靠文字：穿插 呜、呜呜、嗯、嗯嗯、唔，断续的短碎片加叠字加省略号，边哭边说、说不下去；标签极克制：抽气处极少量 [gasp]（一句至多一次）加 [whisper] 带出鼻音哭腔，不用 [sigh] 顶替，不用 [breathy]、[groan]；pace slow，崩溃到语不成句可以 very_slow；崩溃痛哭的长台词（tension_level 4 以上）照第 11 条保浓度，防止中段的哭腔塌掉。例：[whisper] 我、我不是故意的…… [whisper][gasp] 呜……我真的已经很努力了，呜呜……',
-  '14. 破防（长期克制、逞强、冷硬的角色遇到执念被践踏、极度愧疚、精神超负荷）：灵魂是反差和转折，先绷住再崩断，句内一定要做出绷到断的落差，不要整句压平。歇斯底里型（尖叫质问、委屈爆发、用暴怒掩饰脆弱）：tension_level 5，pace fast 或 very_fast，[gasp] 打头加 ！！ 加字头叠字；长台词照第 11 条，中段每 4~7 个字补 [panting] 或 [gasp]，例：[gasp] 凭、凭什么！！ [panting] 我每天…… [panting] 只睡四个小时…… [gasp] 书、书都翻烂了…… [panting] 拼了命还是够不着！！。自尊瓦解型（强忍泪水、抽噎失语、愧疚决堤）：tension_level 4，pace slow，[whisper] 压声加 [gasp]、[panting] 哽咽抽气（不用 [groan]，免得听成动情），大量 …… 加 呜、唔，例：[whisper] 别说了…… [pause] [panting][whisper] 我叫你别说了！ [whisper][gasp] 你流了这么多血……呜……为什么偏偏要救我……。绝望自嘲型（麻木冷笑、气力用尽）：tension_level 2，pace slow，[sigh] 长叹卸劲加 [snicker] 自嘲嗤笑加 [breathy] 持续的气声漏气，…… 落尾，例：[sigh] 没救了…… [snicker] 我以为的自律，在别人眼里只是个笑话…… [breathy] 彻底完了。破折号一律用叠字代替；破防后常常紧接着崩溃痛哭，接第 13 条；口吃结巴可以多，但不要一个音翻来覆去卡住。',
-  '15. 害羞（常驻规则，日常也会出现，不限亲密场景）：没有害羞的标签，绝不用 [groan]，不写自然语言标签。[whisper][breathy] 叠加打底，压低加漏气才是害羞的真实质感，分句保活时至少保留 [whisper]；傲娇嘴硬用 [whisper][clear throat]（滤镜在前）；被戳穿时用 [pause] 卡壳；核心手段是首字口吃的叠字加省略号，害羞八成靠把文字打碎；只在亲昵撒娇时句尾用 ~ 挑高，严肃的羞恼慎用；害羞的 tension_level 统一给 3，绝不给 4、5（张力太高会破音，像喝醉）。',
-  '16. 旁白即便描写亲密动作也保持叙述：pace 可以放缓，tension_level 至多 3，至多极轻的 [breathy]，不用 [panting]、[groan] 和娇喘。',
-  '17. reason：写了 content、或 tension_level 到 3 以上的句子，写一句判定依据，12 个字以内。',
-  '18. 输出前在心里核对一遍，不要写出来：编号齐全、从小到大；用到的标签都在第 5 条那十个里；叠加的顺序和上限符合第 7 条；每个喘息、气声标签都指得出身体描写；content 只加了第 8 条允许的东西。不要在 JSON 之外写任何思考过程。',
+  '8. content 是这句最终要念的文字，只写需要加标签或改字的句子；正文本来就念得好的句子不写 content。content 只能在正文上插标签，再加这些东西：叠字（我、我不是／你你你，用来代替单个破折号表现拖拽、颤抖、哽咽、顿挫，效果比破折号好得多）、！！（只给情绪顶点的爆发，普通强调仍用单个 ！）、~（挑尾）、……（余韵换气）、拟声字 呜、嗯、唔、啊、哈啊、呼（正文是日文时用 う、ん、あ、は、ふ、っ 这类假名）。正文的标点可以换成这些（第 9 条的单字疑问的 ？ 除外）；正文的字一个都不能改、不能删、不能调换顺序，不能加别的字。程序会逐字核对，加了别的就整句退回原文。',
+  '9. 疑问尾词保护（务必执行，防止疑问被主情绪盖平）：一句的主体是某种情绪（调情、陈述、愤怒、亲密等），但其中出现光杆的单字疑问（没有实词的单字疑问，如 嗯？、啊？、哈？、诶？，日文的 ん？、え？），不管它在句首、句中还是句尾，这个疑问字都单独处理，不被主情绪的标签盖掉。保问号：它的 ？ 绝不能改成 ~，也不能删；可以和 ~ 并存写成 嗯~？，表示又娇又问，但 ？ 必须留着，它是疑问上扬的触发点。气声让位：主情绪用了 [breathy] 这类气声标签时，到这个疑问字要单独拆出一个触发点，去掉 [breathy]（气声会压平疑问的上扬），至多留 [whisper]，例：主情绪是气声调情、句尾是疑问时写 [whisper][breathy] 喜欢这条裙子吗？ [whisper] 嗯？——前段气声照旧，末尾的 嗯？ 单独拆出、只留 [whisper]、保住问号。别单独成段：疑问字尽量跟在它所疑问的内容后面同一段，不要让 嗯？ 单独成为一个超短的语段（超短的语段会被收敛参数压平上扬）。',
+  '10. pace：very_slow（临终、极度悲恸、催眠呓语、贴耳动情的隐忍、拖长的挑逗尾音、庄严宣读）、slow（抒情独白、回忆、疲惫叹息、温柔安抚、暧昧低语、亲密气声）、normal（绝大多数日常叙述和平稳对白，不用写）、fast（着急解释、紧张催促、轻快斗嘴、争执质问）、very_fast（激烈争吵、惊慌逃命、战斗动作、暴怒咆哮）。同一个角色在不同场景给不同的 pace，旁白随场景升降，不要整楼都是 normal。',
+  '11. tension_level：1~5 的整数，和 pace 分开判。1 平静中性：日常叙述、平稳对白、客观旁白；2 轻度起伏：略带情绪的日常、温和的喜怒、轻松调侃（默认档，可以不写）；3 中度情绪：着急解释、暧昧撩拨、认真质问、轻度委屈；4 强烈情绪：愤怒斥责、悲伤哭泣、心虚防备的紧张示警（内收型）、自尊瓦解的破防；5 极端顶点：暴怒咆哮、惊叫、崩溃痛哭、生离死别、歇斯底里的破防。绝大多数平稳内容是 1~2，5 只留给绝对的顶点。',
+  '12. 高张力长句（只管 tension_level 4 以上的长台词：破防、崩溃痛哭、持续的暴怒咆哮）：标签是一个点，爆发后很快衰减，长顺句的中段会塌成平读。把长陈述打碎成带情绪的短碎片，用叠字和省略号强制断句，每 4~7 个字补挂一个匹配情绪的标签保持密度。中低张力的场景（日常、调侃、疲惫、犹豫、暧昧）情绪本来就该淡，绝不套用这条去堆标签。',
+  '13. 遇险（被追、心虚怕被发现、威胁、极度警戒，紧张但不是情欲）：[gasp] 只给骤然受惊的那一下，同一个人连续几句至多一次，绝不句句打头；持续压声躲藏用纯 [whisper] 加碎句；急促奔逃用 [panting][whisper]；不用 [breathy]、[groan] 和 ~。既惊又压声写 [whisper][gasp]（滤镜在前），纯骤惊、没压声才单独用 [gasp] 打头。长句拆成短促的碎句，叠字加省略号制造窒迫；情绪顶点用 ！！。外放型（奔逃、惊叫、暴怒）pace 取 fast 或 very_fast；内收型（偷偷压声示警）取 slow，不慢到 very_slow；偷偷压声用省略号加叠字做出憋气迟疑，仍然不用 [breathy] 和 ~。',
+  '14. 哭泣：没有哭的标签，哭感全靠文字：穿插 呜、呜呜、嗯、嗯嗯、唔，断续的短碎片加叠字加省略号，边哭边说、说不下去；标签极克制：抽气处极少量 [gasp]（一句至多一次）加 [whisper] 带出鼻音哭腔，不用 [sigh] 顶替，不用 [breathy]、[groan]；pace slow，崩溃到语不成句可以 very_slow；崩溃痛哭的长台词（tension_level 4 以上）照第 12 条保浓度，防止中段的哭腔塌掉。例：[whisper] 我、我不是故意的…… [whisper][gasp] 呜……我真的已经很努力了，呜呜……',
+  '15. 破防（长期克制、逞强、冷硬的角色遇到执念被践踏、极度愧疚、精神超负荷）：灵魂是反差和转折，先绷住再崩断，句内一定要做出绷到断的落差，不要整句压平。歇斯底里型（尖叫质问、委屈爆发、用暴怒掩饰脆弱）：tension_level 5，pace fast 或 very_fast，[gasp] 打头加 ！！ 加字头叠字；长台词照第 12 条，中段每 4~7 个字补 [panting] 或 [gasp]，例：[gasp] 凭、凭什么！！ [panting] 我每天…… [panting] 只睡四个小时…… [gasp] 书、书都翻烂了…… [panting] 拼了命还是够不着！！。自尊瓦解型（强忍泪水、抽噎失语、愧疚决堤）：tension_level 4，pace slow，[whisper] 压声加 [gasp]、[panting] 哽咽抽气（不用 [groan]，免得听成动情），大量 …… 加 呜、唔，例：[whisper] 别说了…… [pause] [panting][whisper] 我叫你别说了！ [whisper][gasp] 你流了这么多血……呜……为什么偏偏要救我……。绝望自嘲型（麻木冷笑、气力用尽）：tension_level 2，pace slow，[sigh] 长叹卸劲加 [snicker] 自嘲嗤笑加 [breathy] 持续的气声漏气，…… 落尾，例：[sigh] 没救了…… [snicker] 我以为的自律，在别人眼里只是个笑话…… [breathy] 彻底完了。破折号一律用叠字代替；破防后常常紧接着崩溃痛哭，接第 14 条；口吃结巴可以多，但不要一个音翻来覆去卡住。',
+  '16. 害羞（常驻规则，日常也会出现，不限亲密场景）：没有害羞的标签，绝不用 [groan]，不写自然语言标签。[whisper][breathy] 叠加打底，压低加漏气才是害羞的真实质感，分句保活时至少保留 [whisper]；傲娇嘴硬用 [whisper][clear throat]（滤镜在前）；被戳穿时用 [pause] 卡壳；核心手段是首字口吃的叠字加省略号，害羞八成靠把文字打碎；只在亲昵撒娇时句尾用 ~ 挑高，严肃的羞恼慎用；害羞的 tension_level 统一给 3，绝不给 4、5（张力太高会破音，像喝醉）。',
+  '17. 旁白即便描写亲密动作也保持叙述：pace 可以放缓，tension_level 至多 3，至多极轻的 [breathy]，不用 [panting]、[groan] 和娇喘。',
+  '18. reason：写了 content、或 tension_level 到 3 以上的句子，写一句判定依据，12 个字以内。',
+  '19. 输出前在心里核对一遍，不要写出来：编号齐全、从小到大；用到的标签都在第 5 条那十个里；叠加的顺序和上限符合第 7 条；每个喘息、气声标签都指得出身体描写；content 只加了第 8 条允许的东西；光杆单字疑问的 ？ 一个都没丢（第 9 条）。不要在 JSON 之外写任何思考过程。',
   '{{lang_rule}}',
   '{{references_rule}}',
 ].join('\n');
@@ -80,7 +81,7 @@ export const DEEP_PROMPT = [
 // What 分析模式 is told about intimate scenes, by the 「亲密场景」 switch. Off, the gate in rule 6 stays
 // shut on moans; on, the reader has given permission and the scene is allowed to climb — still judged
 // paragraph by paragraph, still restrained everywhere else.
-export const ACOUSTIC_INTIMATE_ON = '亲密场景（用户打开了这个开关）：这是许可信号，不是整篇拔高，要逐段判断：日常段落照常克制，和没打开时一样；只有话没有身体接触的调情仍然克制。只在台词里（旁白不用）按强度递进：前戏、低强度 → [breathy] 或 [whisper][breathy]，互动的对白用 normal，慢是气息绵长，不是咬字慢；渐入、中强度 → [breathy][panting] 或 [panting] 加 嗯…、唔…，normal 为主，隐忍的句子可以临时 slow；高潮、高强度 → [panting][groan] 或 [groan] 加 哈啊…、啊~，短促断句，在 slow 和 very_slow 之间顿挫。完整的亲热戏 tension_level 随强度 3→4→5 逐段爬升，和标签的强度同步递进。亲密常伴着害羞，叠加第 15 条的害羞配方，演出又羞又动情。';
+export const ACOUSTIC_INTIMATE_ON = '亲密场景（用户打开了这个开关）：这是许可信号，不是整篇拔高，要逐段判断：日常段落照常克制，和没打开时一样；只有话没有身体接触的调情仍然克制。只在台词里（旁白不用）按强度递进：前戏、低强度 → [breathy] 或 [whisper][breathy]，互动的对白用 normal，慢是气息绵长，不是咬字慢；渐入、中强度 → [breathy][panting] 或 [panting] 加 嗯…、唔…，normal 为主，隐忍的句子可以临时 slow；高潮、高强度 → [panting][groan] 或 [groan] 加 哈啊…、啊~，短促断句，在 slow 和 very_slow 之间顿挫。完整的亲热戏 tension_level 随强度 3→4→5 逐段爬升，和标签的强度同步递进。亲密常伴着害羞，叠加第 16 条的害羞配方，演出又羞又动情。台词里的 嗯？、啊？ 这类单字疑问照第 9 条保住 ？，不改成 ~。';
 export const ACOUSTIC_INTIMATE_OFF = '用户没有打开「亲密场景」：[groan] 一律不用，不写娇喘；亲密的段落也照日常克制处理。';
 
 function fillIntimate(system, intimate) {
@@ -851,6 +852,8 @@ function dropEdgeQuotes(tokens, quotePairs) {
 function acousticAlign(spoken, source) {
   const said = Array.from(String(spoken ?? ''));
   const text = Array.from(String(source ?? ''));
+  // Source character → the place in `spoken` it was said at (-1: dropped, or punctuation replaced).
+  const placed = new Array(text.length).fill(-1);
   let at = 0;
   let previous = '';
   let added = 0;
@@ -863,6 +866,7 @@ function acousticAlign(spoken, source) {
     if (isSpaceChar(character)) continue;
     while (at < text.length && isSpaceChar(text[at])) at += 1;
     if (at < text.length && text[at] === character) {
+      placed[at] = index;
       at += 1;
       if (isWordChar(character)) previous = character;
       continue;
@@ -872,6 +876,7 @@ function acousticAlign(spoken, source) {
     let skip = at;
     while (skip < text.length && (isSpaceChar(text[skip]) || isMarkChar(text[skip]))) skip += 1;
     if (skip > at && text[skip] === character) {
+      placed[skip] = index;
       at = skip + 1;
       previous = character;
       continue;
@@ -880,10 +885,53 @@ function acousticAlign(spoken, source) {
       added += 1;
       continue;
     }
-    return { ok: false, at: index, added };
+    return { ok: false, at: index, added, placed };
   }
-  for (; at < text.length; at += 1) if (!isSpaceChar(text[at]) && !isMarkChar(text[at])) return { ok: false, at: said.length, added };
-  return { ok: true, at: -1, added };
+  for (; at < text.length; at += 1) if (!isSpaceChar(text[at]) && !isMarkChar(text[at])) return { ok: false, at: said.length, added, placed };
+  return { ok: true, at: -1, added, placed };
+}
+
+const QUESTION_MARKS = new Set(['？', '?']);
+
+/**
+ * A one-character question in the sentence (嗯？ 啊？ え？ — the character alone, no word around it)
+ * keeps its question mark however the line is performed: a rising 嗯？ said as 嗯~ is another word
+ * (the reader's 疑问尾词保护). Where the content dropped the mark or put ~ or …… in its place, a ？
+ * follows what was said of that character — its stutters and its marks — before the next word.
+ */
+function keepBareQuestions(tokens, source, placed) {
+  const text = Array.from(String(source ?? ''));
+  const asked = [];
+  for (let index = 0; index < text.length - 1; index += 1) {
+    if (!isWordChar(text[index]) || !QUESTION_MARKS.has(text[index + 1])) continue;
+    if (index > 0 && isWordChar(text[index - 1])) continue;
+    asked.push(index);
+  }
+  if (!asked.length) return tokens;
+  const said = tokens.map((token, index) => (token.ch !== undefined ? index : -1)).filter(index => index >= 0);
+  const after = new Set();
+  for (const index of asked) {
+    const from = placed[index];
+    if (from === undefined || from < 0) continue;
+    let next = said.length;
+    for (let later = index + 1; later < text.length; later += 1) {
+      if (isWordChar(text[later]) && placed[later] >= 0) {
+        next = placed[later];
+        break;
+      }
+    }
+    const between = said.slice(from + 1, next).map(at => tokens[at].ch);
+    if (between.some(character => QUESTION_MARKS.has(character))) continue;
+    let end = from;
+    while (end + 1 < next) {
+      const character = tokens[said[end + 1]].ch;
+      if (character !== text[index] && !(isMarkChar(character) && !isSpaceChar(character))) break;
+      end += 1;
+    }
+    after.add(said[end]);
+  }
+  if (!after.size) return tokens;
+  return tokens.flatMap((token, index) => (after.has(index) ? [token, { ch: '？' }] : [token]));
 }
 
 // How much a line may gain: a few characters, more for a longer line.
@@ -928,6 +976,7 @@ export function acousticScript(content, sourceText, { quotePairs = null, narrato
   const spoken = tokens.filter(token => token.ch !== undefined).map(token => token.ch).join('');
   const check = acousticAlign(spoken, source);
   const withinBudget = check.added <= addedBudget(source);
+  const performed = check.ok && withinBudget ? keepBareQuestions(tokens, source, check.placed) : tokens;
   const parts = [];
   let group = [];
   let saidAnything = false;
@@ -937,7 +986,7 @@ export function acousticScript(content, sourceText, { quotePairs = null, narrato
     group = [];
     if (settled.length) parts.push({ tags: settled });
   };
-  for (const token of tokens) {
+  for (const token of performed) {
     if (token.tag === 'pause') {
       // A pause is a moment of its own: the tags after it start the next point, and it never counts
       // toward the two one point may carry.

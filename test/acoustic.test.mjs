@@ -5,7 +5,7 @@ import {
   analysisCacheKey, buildFishPayload, buildSegments, consoleDirections, deriveLabelsForSide, floorTextWithMarks,
   planFishParts, scriptOutline, sentenceFishText, sentenceProsody, sentenceSampling, splitUtterances,
 } from '../tts.js';
-import { acousticCurrentItem, acousticScript, isAcousticPrompt, parseDeepAnalysis } from '../tts-deep.js';
+import { ACOUSTIC_INTIMATE_ON, DEEP_PROMPT, acousticCurrentItem, acousticScript, isAcousticPrompt, parseDeepAnalysis } from '../tts-deep.js';
 
 // ---------------------------------------------------------------------------------------------
 // 分析模式 in the reader's 声学标注规则: the content a model writes is held to the sentence, the tags are
@@ -306,4 +306,36 @@ test('a reader\'s own take keeps its pace, volume and tension even where the flo
   const plain = { segment: { id: 3, lineId: 2, type: 'narration', text: '风停了。' }, voiceId: 'v' };
   const whole = buildFishPayload([plain, { ...own, override: undefined }], fish, { wholeFloor: true }).body;
   assert.deepEqual([whole.prosody.speed, whole.temperature], [1, 0.7], 'the floor sent whole keeps the reader\'s own settings');
+});
+
+test('a one-character question keeps its question mark however the analysis performs it (疑问尾词保护)', () => {
+  const said = (source, content) => acousticScript(content, source, { intimate: true }).script;
+  // ~ in its place, nothing after it, a stutter and an ellipsis: the question mark follows what was said.
+  assert.equal(said('「嗯？」', '[whisper][breathy] 嗯~'), '[whisper][breathy] 嗯~？');
+  assert.equal(said('喜欢这条裙子吗？嗯？', '[whisper][breathy] 喜欢这条裙子吗？ [whisper] 嗯'), '[whisper][breathy] 喜欢这条裙子吗？ [whisper] 嗯？');
+  assert.equal(said('嗯？', '嗯嗯……'), '嗯嗯……？');
+  // At the start, before the words it asks about, and in Japanese.
+  assert.equal(said('嗯？喜欢这条裙子吗？', '[whisper][breathy] 嗯~ [whisper] 喜欢这条裙子吗~'), '[whisper][breathy] 嗯~？ [whisper] 喜欢这条裙子吗~');
+  assert.equal(said('え？そうなの？', '[whisper] え～ そうなの～'), '[whisper] え～？ そうなの～');
+  // One that kept it is left as written; a question with words in it is the model's to shape.
+  assert.equal(said('嗯？', '嗯~？'), '嗯~？');
+  assert.equal(said('好啊？', '[snicker] 好啊~'), '[snicker] 好啊~');
+  // A content that does not fit still falls back to the sentence as written, question mark and all.
+  assert.equal(said('嗯？', '[whisper] 不对'), '[whisper] 嗯？');
+});
+
+test('分析模式 is told to keep the question marks of one-character questions, the intimate rule included', () => {
+  const numbers = DEEP_PROMPT.split('\n').map(line => line.match(/^(\d+)\. /)?.[1]).filter(Boolean).map(Number);
+  assert.deepEqual(numbers, Array.from({ length: 19 }, (_, index) => index + 1));
+  assert.match(DEEP_PROMPT, /9\. 疑问尾词保护（务必执行，防止疑问被主情绪盖平）/);
+  assert.match(DEEP_PROMPT, /它的 ？ 绝不能改成 ~，也不能删；可以和 ~ 并存写成 嗯~？/);
+  assert.match(DEEP_PROMPT, /\[whisper\]\[breathy\] 喜欢这条裙子吗？ \[whisper\] 嗯？/);
+  assert.match(DEEP_PROMPT, /正文的标点可以换成这些（第 9 条的单字疑问的 ？ 除外）/);
+  // The rules that point at others still point at the same ones.
+  assert.match(DEEP_PROMPT, /哭出来了按第 14 条/);
+  assert.match(DEEP_PROMPT, /14\. 哭泣/);
+  assert.match(DEEP_PROMPT, /12\. 高张力长句/);
+  assert.match(ACOUSTIC_INTIMATE_ON, /叠加第 16 条的害羞配方/);
+  assert.match(DEEP_PROMPT, /16\. 害羞/);
+  assert.match(ACOUSTIC_INTIMATE_ON, /单字疑问照第 9 条保住 ？，不改成 ~/);
 });
