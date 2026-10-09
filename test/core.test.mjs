@@ -18,7 +18,13 @@ import {
   assembleReplace,
   assembleTranslationOnly,
   floorText,
+  hashFloorText,
+  hashText,
   hashTextSync,
+  sha256Hex,
+  storedHashMatches,
+  matchSegmentsBySource,
+  remapTranslationsBySource,
   readFloor,
   restoreStrippedForPrompt,
   HIDDEN_START,
@@ -36,6 +42,7 @@ import {
   extractGeneratedTranslations,
   extractReasoningText,
   extractTaggedRegion,
+  extractFloorRegions,
   extractTaggedRegions,
   interceptGenerationChat,
   planTranslationBatches,
@@ -44,6 +51,9 @@ import {
   withoutCarriedColor,
   lineFormatting,
   mergeSettings,
+  parseStartMarkers,
+  normalizeTts,
+  TTS_MODES,
   getActiveChannel,
   getActivePromptProfile,
   normalizeOpenAiBaseUrl,
@@ -1123,6 +1133,36 @@ test('the tag inspector reports replace tags and catches a nesting the run would
   assert.equal(flat.translationUnits, 2);
 });
 
+test('a body tag written inside another is translated as part of the outer block; only crossing tags are refused', () => {
+  const tags = ['story_scene', 'parallel_line'];
+  const inside = '<story_scene>\n一。\n<parallel_line>\n二。\n</parallel_line>\n三。\n</story_scene>';
+  const nested = extractTaggedRegions(inside, tags);
+  assert.deepEqual(nested.regions.map(region => region.tagName), ['story_scene'], '外层整块翻译');
+  assert.match(nested.regions[0].inner, /<parallel_line>\n二。\n<\/parallel_line>/, '里面的标签留在外层正文里');
+  assert.deepEqual(nested.nested, [{ tagName: 'parallel_line', outerTagName: 'story_scene' }]);
+
+  const outside = '<story_scene>\n一。\n</story_scene>\n<parallel_line>\n二。\n</parallel_line>';
+  assert.deepEqual(extractTaggedRegions(outside, tags).regions.map(region => region.tagName), ['story_scene', 'parallel_line'], '写在外面时照旧各译各的');
+
+  const reversed = '<parallel_line>\n一。\n<story_scene>\n二。\n</story_scene>\n</parallel_line>';
+  assert.deepEqual(extractTaggedRegions(reversed, tags).regions.map(region => region.tagName), ['parallel_line'], '反过来套也一样以外层为准');
+
+  const unclosed = '<story_scene>\n一。\n<parallel_line>\n二。\n</story_scene>';
+  assert.deepEqual(extractTaggedRegions(unclosed, tags).regions.map(region => region.tagName), ['story_scene'], '里面那个没闭合也算在外层里');
+
+  const crossing = '<story_scene>\n一。\n<parallel_line>\n二。\n</story_scene>\n三。\n</parallel_line>';
+  assert.throws(() => extractTaggedRegions(crossing, tags), /互相交叉/, '互相跨过结束标签的分不出外层，照旧报错');
+});
+
+test('the tag inspector says a nested body tag goes with its outer block, and raises nothing', () => {
+  const floor = '<story_scene>\n叙事一行。\n\n<parallel_line>\n平行线一行。\n</parallel_line>\n</story_scene>';
+  const report = inspectTagConfiguration(floor, ['story_scene', 'parallel_line'], [], {});
+  assert.deepEqual(report.errors, []);
+  assert.deepEqual(report.nestedTags, [{ tag: 'parallel_line', outer: 'story_scene' }]);
+  assert.equal(report.translationUnits, 2);
+  assert.deepEqual(inspectTagConfiguration(floor, ['story_scene'], [], {}).nestedTags, []);
+});
+
 test('speaker and emotion labels ride alongside the translation without touching it', () => {
   const raw = JSON.stringify({ translations: [
     { id: 1, text: '「你到底在想什么！」', speaker: '英梨梨', emotion: 'angry', intensity: 2 },
@@ -1794,6 +1834,126 @@ test('a floor with only its translation left in it is read from the text kept fo
   assert.equal(hashTextSync('a\r\nb'), hashTextSync('a\nb'));
 });
 
+test('a floor\'s record hash comes out the same on a page with the browser\'s digest and on one without it', async t => {
+  const browser = globalThis.crypto;
+  const restore = () => Object.defineProperty(globalThis, 'crypto', { value: browser, configurable: true, writable: true });
+  t.after(restore);
+  // Lengths around the 55/56/64-byte edges of the padding, multi-byte text and an emoji sequence.
+  const samples = ['', 'abc', 'x'.repeat(55), 'x'.repeat(56), 'y'.repeat(64), 'z'.repeat(1000), '雨が降っている。\n下雨了。', '🎵\u200d中文'];
+  for (const text of samples) {
+    const digest = await browser.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    const expected = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    assert.equal(sha256Hex(text), expected, `length ${text.length}`);
+  }
+  const withDigest = await hashFloorText('雨\r\n風');
+  const cacheWithDigest = await hashText('雨\r\n風');
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true, writable: true });
+  assert.equal(await hashFloorText('雨\n風'), withDigest);
+  // Reading caches live in each page's own storage: their keys on such a page stay what they were.
+  assert.equal(await hashText('雨\n風'), hashTextSync('雨\n風'));
+  restore();
+  assert.notEqual(cacheWithDigest, hashTextSync('雨\n風'));
+  // A record written there before v0.42.1 carries the short fingerprint, and is checked as one.
+  assert.equal(await storedHashMatches(hashTextSync('sig'), 'sig'), true);
+  assert.equal(await storedHashMatches(await hashFloorText('sig'), 'sig'), true);
+  assert.equal(await storedHashMatches(hashTextSync('other'), 'sig'), false);
+  assert.equal(await storedHashMatches('', 'sig'), false);
+  assert.equal(await storedHashMatches(undefined, 'sig'), false);
+});
+
+test('an excluded tag is left out whole when its quoted attribute holds < or >, and one that never closes is left out on its own', () => {
+  const options = { excludedTags: ['pic'], translationPrefix: '{', translationSuffix: '}' };
+  const texts = segmented => segmented.segments.map(segment => segment.text);
+  // A picture's prompt with a LoRA in it, and one with a bare >.
+  const lora = '彼は笑った。\n<pic prompt="1girl, <lora:style:0.6>, rain"/>\n雨が降る。';
+  assert.deepEqual(texts(segmentSource(lora, options)), ['彼は笑った。', '雨が降る。']);
+  assert.deepEqual(texts(segmentSource('彼は笑った。<pic prompt="a > b"/>\n雨が降る。', options)), ['彼は笑った。', '雨が降る。']);
+  // A floor translated under the rules before stays as it was segmented, so its translation still matches.
+  assert.deepEqual(texts(segmentSource(lora, { ...options, segmentationVersion: 3 })), ['彼は笑った。', '<pic prompt="1girl, <lora:style:0.6>, rain"/>', '雨が降る。']);
+  // The tag is still there in a floor with only its translation left, and in a replace region.
+  const both = segmentSource(lora, options);
+  const translations = new Map([[both.segments[0].id, '他笑了。'], [both.segments[1].id, '下雨了。']]);
+  assert.equal(assembleTranslationOnly(both.layout, translations, options), '他笑了。\n<pic prompt="1girl, <lora:style:0.6>, rain"/>\n下雨了。');
+  const inline = segmentSource('彼は笑った。<pic prompt="x">\n雨が降る。', options);
+  const inlineTranslations = new Map([[inline.segments[0].id, '他笑了。'], [inline.segments[1].id, '下雨了。']]);
+  assert.equal(assembleTranslationOnly(inline.layout, inlineTranslations, options), '他笑了。<pic prompt="x">\n下雨了。');
+  assert.match(assembleReplace(inline.layout, inlineTranslations, {}), /他笑了。<pic prompt="x">\n下雨了。/);
+  // A tag that does close keeps everything inside it left out, as before.
+  assert.deepEqual(texts(segmentSource('<pic prompt="x">彼は笑った。</pic>\n雨が降る。', options)), ['雨が降る。']);
+  // A quote left open is read the way tags always were: the tag ends at the first >.
+  assert.deepEqual(texts(segmentSource('彼は<b title="oops>笑った。</b>\n雨が降る。', options)), ['彼は笑った。', '雨が降る。']);
+  assert.equal(inspectTagConfiguration('<story_scene>彼は笑った。<pic prompt="x">\n<pic prompt="a > b"/></story_scene>', ['story_scene'], ['pic']).excludedTags[0].count, 2);
+});
+
+test('a reply with none of the extraction tags is read from its 「正文起点」 on', () => {
+  // A preset that writes its chain of thought, ends it, and writes the story with no tag around it.
+  const reply = '思考：放学后的场景。\n</konatan_planning~>\n<tucao>这次写放学后。</tucao>\n陽光が差し込む。\n\n善福寺は笑った。\n<current_event>MQ.Ⅰ</current_event>';
+  const markers = ['</konatan_planning~>'];
+  const found = extractTaggedRegions(reply, ['content'], { startMarkers: markers });
+  assert.equal(found.startMarker, '</konatan_planning~>');
+  assert.equal(found.regions.length, 1);
+  assert.equal(found.regions[0].inner, '\n<tucao>这次写放学后。</tucao>\n陽光が差し込む。\n\n善福寺は笑った。\n<current_event>MQ.Ⅰ</current_event>');
+  // With the blocks around the story excluded, only the story is translated.
+  const segmented = segmentSource(found.regions[0].inner, { excludedTags: ['tucao', 'current_event'] });
+  assert.deepEqual(segmented.segments.map(segment => segment.text), ['陽光が差し込む。', '善福寺は笑った。']);
+  // And the excluded blocks it ends on stay outside it, as a closing tag would have left them: the last
+  // paragraph's translation follows the paragraph, not the panel.
+  const trimmed = extractFloorRegions(reply, { bodyTags: ['content'], startMarkers: markers, excludedTags: ['tucao', 'current_event'] }).regions[0];
+  assert.equal(trimmed.inner, '\n<tucao>这次写放学后。</tucao>\n陽光が差し込む。\n\n善福寺は笑った。');
+  assert.equal(reply.slice(trimmed.closeStart), '\n<current_event>MQ.Ⅰ</current_event>');
+  const layout = segmentSource(trimmed.inner, { excludedTags: ['tucao', 'current_event'] }).layout;
+  const bilingual = `${reply.slice(0, trimmed.contentStart)}${assembleBilingual(layout, new Map([[1, '阳光照进来。'], [2, '善福寺笑了。']]), {})}${reply.slice(trimmed.closeStart)}`;
+  assert.ok(bilingual.indexOf('善福寺笑了。') < bilingual.indexOf('<current_event>'));
+  // A block in the middle of the story is not one it ends on.
+  assert.equal(extractFloorRegions('思考</konatan_planning~>本文。\n<current_event>X</current_event>\n続き。', { bodyTags: ['content'], startMarkers: markers, excludedTags: ['current_event'] }).regions[0].inner, '本文。\n<current_event>X</current_event>\n続き。');
+  // The last marker to appear wins, whatever its case, and whichever of several it is.
+  const twice = 'の</KONATAN_PLANNING~>は</konatan_planning~>本文。';
+  assert.equal(extractTaggedRegions(twice, ['content'], { startMarkers: markers }).regions[0].inner, '本文。');
+  assert.equal(extractTaggedRegions('<think>…</think>前置き</konatan_planning~>本文。', ['content'], { startMarkers: ['</konatan_planning~>', '</think>'] }).regions[0].inner, '本文。');
+  // A closing tag written without its opening one ends the body there.
+  const closed = extractTaggedRegions('思考</konatan_planning~>本文。</content>\n<advice>次へ</advice>', ['content'], { startMarkers: markers });
+  assert.equal(closed.regions[0].inner, '本文。');
+  assert.equal(closed.regions[0].closeTag, '</content>');
+  // A replace region after it is not swallowed: the body stops where it begins.
+  const both = extractFloorRegions('思考</konatan_planning~>本文。\n<status>晴れ</status>', { bodyTags: ['content'], replaceTags: ['status'], startMarkers: markers });
+  assert.deepEqual(both.regions.map(region => [region.mode, region.inner]), [['bilingual', '本文。\n'], ['replace', '晴れ']]);
+  // The tags, when they are there, win; without a marker either, the floor says so.
+  assert.equal(extractTaggedRegions('</konatan_planning~><content>本文。</content>', ['content'], { startMarkers: markers }).regions[0].inner, '本文。');
+  assert.throws(() => extractTaggedRegions('本文だけ。', ['content'], { startMarkers: markers }), /没有找到正文标签：<content>，也没有找到正文起点/);
+  assert.throws(() => extractTaggedRegions('本文だけ。', ['content']), /没有找到正文标签：<content>。/);
+});
+
+test('「正文起点」 is kept one marker a line, and 检查当前楼层 says the body came from it', () => {
+  assert.deepEqual(DEFAULT_SETTINGS.bodyStartMarkers, []);
+  assert.deepEqual(mergeSettings({}).bodyStartMarkers, []);
+  assert.deepEqual(parseStartMarkers(' </think> \r\n\n</THINK>\n</konatan_planning~>'), ['</think>', '</konatan_planning~>']);
+  assert.deepEqual(parseStartMarkers(['a', 'b', '']), ['a', 'b']);
+  assert.equal(parseStartMarkers(Array.from({ length: 15 }, (_, index) => `m${index}`)).length, 10);
+  assert.equal(parseStartMarkers('x'.repeat(300))[0].length, 200);
+  assert.deepEqual(mergeSettings({ bodyStartMarkers: '</think>\n</think>' }).bodyStartMarkers, ['</think>']);
+  const reply = '思考</konatan_planning~>\n陽光が差し込む。\n\n善福寺は笑った。</content>';
+  const report = inspectTagConfiguration(reply, ['content'], [], { bodyStartMarkers: ['</konatan_planning~>'] });
+  assert.deepEqual(report.startMarker, { marker: '</konatan_planning~>', until: '</content>', toEnd: false });
+  assert.equal(report.translationUnits, 2);
+  assert.deepEqual(report.errors, [], 'the closing tag that ends the body is not a problem');
+  // Without the setting it is the same floor as before: no body, and the lone closing tag reported.
+  const plain = inspectTagConfiguration(reply, ['content'], []);
+  assert.equal(plain.startMarker, null);
+  assert.equal(plain.translationUnits, 0);
+  assert.match(plain.errors.join(''), /没有对应开始标签的 <\/content>/);
+});
+
+test('paragraphs carried over by their source text pair up in order, a repeated text in turn', () => {
+  const before = [{ id: 1, text: 'A' }, { id: 2, text: 'B' }, { id: 3, text: 'A' }];
+  const after = [{ id: 1, text: 'C' }, { id: 2, text: 'A' }, { id: 3, text: 'B' }, { id: 4, text: 'A' }];
+  assert.deepEqual([...matchSegmentsBySource(before, () => true, after)], [[2, 1], [3, 2], [4, 3]]);
+  // Only the earlier paragraphs named take part.
+  assert.deepEqual([...matchSegmentsBySource(before, id => id !== 1, after)], [[2, 3], [3, 2]]);
+  const translations = new Map([[1, 'a1'], [2, 'b'], [3, 'a3']]);
+  assert.deepEqual([...remapTranslationsBySource(before, translations, after)], [[2, 'a1'], [3, 'b'], [4, 'a3']]);
+  assert.equal(remapTranslationsBySource(before, new Map(), after).size, 0);
+});
+
 test('the main model is shown the original of a floor with only its translation left in it', () => {
   const settings = { translationPrefix: '{', translationSuffix: '}' };
   const layout = segmentSource('\n雨が降っている。\n', settings).layout;
@@ -1845,12 +2005,51 @@ test('a record is told to be a floor’s by what the floor holds, never by the s
   assert.deepEqual(state({ mes: oneWord, swipe_id: 0, extra: record(5) }), { stripped: true, diverged: true, mirror: false });
   const everyLine = projection.replace('一个人也没有。', '一个人也没有！').replace('照着桌面。', '照着桌面！');
   assert.deepEqual(state({ mes: everyLine, swipe_id: 0, extra: record(0) }), { stripped: true, diverged: true, mirror: false });
-  // Continued from the translation (the prompt could not be given the original): protected.
-  assert.equal(readFloor({ mes: `${projection}\n她叹了口气。`, swipe_id: 0, extra: record(0) }).diverged, true);
+  // Continued from the translation (the prompt could not be given the original) inside a body that never
+  // closed: the region itself changed, so it is protected.
+  const openMirror = mirror.replace('</story_scene>', '');
+  const openProjection = projection.replace('</story_scene>', '');
+  const openRecord = { [MESSAGE_META_KEY]: { ...meta, mirror: openMirror, projection_hash: hashTextSync(openProjection), swipe_id: 0 } };
+  assert.equal(readFloor({ mes: `${openProjection}\n她叹了口气。`, swipe_id: 0, extra: openRecord }).diverged, true);
+  // After the closing tag, it is text around the region, and the region is still the record's.
+  const after = readFloor({ mes: `${projection}\n她叹了口气。`, swipe_id: 0, extra: record(0) });
+  assert.deepEqual({ stripped: after.stripped, diverged: after.diverged, text: after.text }, { stripped: true, diverged: false, text: `${mirror}\n她叹了口气。` });
   // Continued from the original, with the host's clean-up of spaces at line ends: an ordinary floor.
   const spaced = mirror.replace('いなかった。', 'いなかった。  ');
   const continued = `${stripGeneratedTranslationLines(mirror, meta)}\n桜井が振り返った。`;
   assert.deepEqual(state({ mes: continued, swipe_id: 0, extra: { [MESSAGE_META_KEY]: { ...meta, mirror: spaced, swipe_id: 0 } } }), { stripped: false, diverged: false, mirror: false });
+});
+
+test('a floor with only its translation left keeps its record when a script adds text around the body, and the main model still gets the original', () => {
+  const settings = { translationPrefix: '{', translationSuffix: '}' };
+  const layout = segmentSource('\n夕暮れの教室には、誰もいなかった。\n', settings).layout;
+  const translations = new Map([[1, '傍晚的教室里，一个人也没有。']]);
+  const mirror = `<story_scene>${assembleBilingual(layout, translations, settings)}</story_scene>`;
+  const projection = `<story_scene>${assembleTranslationOnly(layout, translations, settings)}</story_scene>`;
+  const meta = { schema_version: 4, swipe_id: 0, stripped: true, mirror, projection_hash: hashTextSync(projection), body_tags: ['story_scene'] };
+  const floor = mes => ({ mes, swipe_id: 0, extra: { [MESSAGE_META_KEY]: meta } });
+  // An image script puts a picture's prompt after the body; a status script puts a line before it.
+  const picture = '\n<pic prompt="1girl, <lora:style:0.6>, classroom, sunset"/>';
+  const status = '【傍晚 · 教室】\n';
+  for (const [mes, text] of [
+    [`${projection}${picture}`, `${mirror}${picture}`],
+    [`${status}${projection}`, `${status}${mirror}`],
+    [`${status}${projection}${picture}`, `${status}${mirror}${picture}`],
+  ]) {
+    const read = readFloor(floor(mes));
+    assert.deepEqual({ stripped: read.stripped, diverged: read.diverged, text: read.text }, { stripped: true, diverged: false, text });
+    // The main model is shown the original, the script's addition with it.
+    const prompt = restoreStrippedForPrompt({ mes }, floor(mes));
+    assert.equal(prompt.mes, text);
+  }
+  // A word changed inside the body is still a change to the translation.
+  assert.equal(readFloor(floor(`${projection.replace('一个人也没有', '一个人都没有')}${picture}`)).diverged, true);
+  // A record that names a replace tag reads the floor by it too.
+  const both = `${projection}\n<status>晴れ</status>`;
+  const replaceRecord = { ...meta, replace_tags: ['status'], mirror: `${mirror}\n<status>晴れ</status>`, projection_hash: hashTextSync(both) };
+  const moved = readFloor({ mes: `${both}${picture}`, swipe_id: 0, extra: { [MESSAGE_META_KEY]: replaceRecord } });
+  assert.equal(moved.diverged, false);
+  assert.equal(moved.text, `${mirror}\n<status>晴れ</status>${picture}`);
 });
 
 test('the gate takes the newest reply only, and a render with no type only after a start with none', () => {
@@ -2463,7 +2662,7 @@ test('pagesForMode lists the rail per DESIGN §15.1/§16.1, and resolvePageForMo
   assert.deepEqual(Object.keys(CONTROL_CENTER_PAGES).sort(), [...UI_MODES].sort());
 });
 
-test('connection uses: translation and analysis resolve directly, deep defers to analysis until it has its own choice', () => {
+test('connection uses: three fixed ones, each holding exactly one choice (DESIGN §17.1)', () => {
   const settings = mergeSettings({
     apiMode: 'independent',
     channels: [
@@ -2471,46 +2670,77 @@ test('connection uses: translation and analysis resolve directly, deep defers to
       { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
     ],
     selectedChannelId: 'c1',
-    tts: { analysisChannelId: 'c2', deepChannelId: '' },
+    tts: { deepChannelId: 'c2' },
   });
+  assert.deepEqual(CONNECTION_USES, ['translation', 'deep', 'helper']);
   assert.equal(connectionUseChoice(settings, 'translation'), 'c1');
-  assert.equal(connectionUseChoice(settings, 'analysis'), 'c2');
-  assert.equal(connectionUseChoice(settings, 'deep'), 'c2', 'empty deepChannelId defers to analysis');
+  assert.equal(connectionUseChoice(settings, 'deep'), 'c2');
+  assert.equal(connectionUseChoice(settings, 'helper'), 'follow');
 
   const pinned = setConnectionUse(settings, 'deep', 'c1');
   assert.equal(pinned.tts.deepChannelId, 'c1');
   assert.equal(connectionUseChoice(pinned, 'deep'), 'c1');
-
-  const followingAgain = setConnectionUse(pinned, 'deep', '');
-  assert.equal(followingAgain.tts.deepChannelId, '', "setting deep back to '' returns it to following analysis");
-  assert.equal(connectionUseChoice(followingAgain, 'deep'), 'c2');
+  // A use never points at nothing: an empty choice is the host's own connection.
+  assert.equal(setConnectionUse(pinned, 'deep', '').tts.deepChannelId, 'follow');
+  assert.equal(setConnectionUse(pinned, 'helper', '').helper.channelId, 'follow');
 
   const movedTranslation = setConnectionUse(settings, 'translation', 'follow');
   assert.equal(movedTranslation.apiMode, 'follow');
   assert.equal(connectionUseChoice(movedTranslation, 'translation'), 'follow');
+  assert.equal(connectionUseChoice(movedTranslation, 'deep'), 'c2', 'moving the translation moves nothing else');
 
-  const movedAnalysis = setConnectionUse(settings, 'analysis', 'c1');
-  assert.equal(movedAnalysis.tts.analysisChannelId, 'c1');
-
-  assert.deepEqual(CONNECTION_USES, ['translation', 'analysis', 'deep', 'helper']);
+  assert.throws(() => connectionUseChoice(settings, 'analysis'), 'the simple reading\'s own use is gone');
   assert.throws(() => connectionUseChoice(settings, 'bogus'));
   assert.throws(() => setConnectionUse(settings, 'bogus', 'c1'));
 });
 
-test('channelUsesPointingAt lists every use resolving to a connection, deep included when it only defers there', () => {
+test('an old setting whose analysed reading deferred to the simple reading\'s connection keeps going there', () => {
+  const channels = [
+    { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
+    { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
+  ];
+  // 「和朗读分析用同一条」: an empty deep choice meant whatever 朗读分析 used.
+  const deferred = mergeSettings({ schemaVersion: 13, apiMode: 'independent', channels, selectedChannelId: 'c1', tts: { mode: 'deep', analysisChannelId: 'c2', deepChannelId: '' } });
+  assert.equal(deferred.tts.deepChannelId, 'c2');
+  assert.equal(Object.hasOwn(deferred.tts, 'analysisChannelId'), false, 'the old field is not carried on');
+  // Its own choice wins over the old one.
+  const own = mergeSettings({ schemaVersion: 13, apiMode: 'independent', channels, selectedChannelId: 'c1', tts: { analysisChannelId: 'c2', deepChannelId: 'c1' } });
+  assert.equal(own.tts.deepChannelId, 'c1');
+  // Nothing chosen anywhere: pinned to what the translation uses today, never left empty.
+  const fresh = mergeSettings({ schemaVersion: 13, apiMode: 'independent', channels, selectedChannelId: 'c2', tts: {} });
+  assert.equal(fresh.tts.deepChannelId, 'c2');
+  // A deleted connection falls back the same way.
+  const gone = mergeSettings({ schemaVersion: 13, apiMode: 'follow', channels, selectedChannelId: 'c1', tts: { deepChannelId: 'deleted' } });
+  assert.equal(gone.tts.deepChannelId, 'follow');
+});
+
+test('the simple reading of older versions reads plain now; only an analysed reading stays analysed', () => {
+  assert.deepEqual(TTS_MODES, ['off', 'deep']);
+  assert.equal(normalizeTts({ mode: 'simple' }).mode, 'off');
+  assert.equal(normalizeTts({ mode: 'deep' }).mode, 'deep');
+  assert.equal(normalizeTts({ mode: 'off' }).mode, 'off');
+  assert.equal(normalizeTts({}).mode, 'off', 'a fresh reading is plain');
+  assert.equal(normalizeTts({ mode: 'floor' }).mode, 'deep');
+  assert.equal(normalizeTts({ mode: 'stream' }).mode, 'off');
+  assert.equal(normalizeTts({ analysis: 'light' }).mode, 'off');
+  assert.equal(normalizeTts({ analysis: 'deep' }).mode, 'deep');
+  assert.deepEqual(normalizeTts({ prompts: { simple: '旧的', deep: '我的' } }).prompts, { deep: '我的', jailbreak: '' });
+  assert.deepEqual(normalizeTts({ prompts: { jailbreak: '照常分析。' } }).prompts, { deep: '', jailbreak: '照常分析。' });
+});
+
+test('channelUsesPointingAt lists every use resolving to a connection', () => {
   const settings = mergeSettings({
     apiMode: 'independent',
     channels: [{ id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' }],
     selectedChannelId: 'c1',
-    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+    tts: { deepChannelId: 'c1' },
   });
-  assert.deepEqual(channelUsesPointingAt(settings, 'c1'), ['translation', 'analysis', 'deep']);
-  // 小助手 was never pointed at c1 above, so it still resolves to 跟随酒馆 (its own default) rather
-  // than following the translation the way 深度分析 does.
+  assert.deepEqual(channelUsesPointingAt(settings, 'c1'), ['translation', 'deep']);
+  // 小助手 was never pointed at c1 above, so it still resolves to 跟随酒馆, its own default.
   assert.deepEqual(channelUsesPointingAt(settings, 'follow'), ['helper']);
 });
 
-test('reassignConnectionUsesOnDelete moves every use a deleted connection served to 跟随酒馆, leaving a deferring deep still deferring', () => {
+test('reassignConnectionUsesOnDelete moves every use a deleted connection served to 跟随酒馆', () => {
   const twoChannels = [
     { id: 'c1', name: '连接一', url: 'https://a', key: 'k', model: 'm' },
     { id: 'c2', name: '连接二', url: 'https://b', key: 'k', model: 'm' },
@@ -2519,25 +2749,19 @@ test('reassignConnectionUsesOnDelete moves every use a deleted connection served
     apiMode: 'independent',
     channels: twoChannels,
     selectedChannelId: 'c1',
-    tts: { analysisChannelId: 'c1', deepChannelId: '' },
+    tts: { deepChannelId: 'c1' },
+    helper: { channelId: 'c1' },
   });
   const result = reassignConnectionUsesOnDelete(settings, 'c1');
-  assert.deepEqual(result.moved, ['translation', 'analysis', 'deep']);
+  assert.deepEqual(result.moved, ['translation', 'deep', 'helper']);
   assert.equal(result.settings.apiMode, 'follow');
-  assert.equal(result.settings.tts.analysisChannelId, 'follow');
-  assert.equal(result.settings.tts.deepChannelId, '', 'deep never had its own choice, so its field is left untouched');
-  assert.equal(connectionUseChoice(result.settings, 'deep'), 'follow');
+  assert.equal(result.settings.tts.deepChannelId, 'follow');
+  assert.equal(result.settings.helper.channelId, 'follow');
 
-  const pinnedSettings = mergeSettings({
-    apiMode: 'independent',
-    channels: twoChannels,
-    selectedChannelId: 'c2',
-    tts: { analysisChannelId: 'c2', deepChannelId: 'c1' },
-  });
-  const pinnedResult = reassignConnectionUsesOnDelete(pinnedSettings, 'c1');
-  assert.deepEqual(pinnedResult.moved, ['deep']);
-  assert.equal(pinnedResult.settings.tts.deepChannelId, 'follow');
-  assert.equal(pinnedResult.settings.apiMode, 'independent', 'translation used c2, untouched by deleting c1');
+  const partial = mergeSettings({ apiMode: 'independent', channels: twoChannels, selectedChannelId: 'c2', tts: { deepChannelId: 'c1' } });
+  const partialResult = reassignConnectionUsesOnDelete(partial, 'c1');
+  assert.deepEqual(partialResult.moved, ['deep']);
+  assert.equal(partialResult.settings.apiMode, 'independent', 'translation used c2, untouched by deleting c1');
 
   const untouched = reassignConnectionUsesOnDelete(settings, 'not-a-real-id');
   assert.deepEqual(untouched.moved, []);
@@ -2629,7 +2853,8 @@ test('applyPreset writes only the managed fields and remembers the package id; p
   const audiobook = applyPreset(base, 'audiobook');
   assert.equal(audiobook.preset, 'audiobook');
   assert.equal(audiobook.tts.enabled, true);
-  assert.equal(audiobook.tts.mode, 'simple');
+  assert.equal(audiobook.tts.mode, 'off', '有声小说 reads with the translation\'s marks; 分析模式 comes with 全都要');
+  assert.equal(applyPreset(base, 'everything').tts.mode, 'deep');
   assert.equal(audiobook.tts.autoRead, true);
   assert.equal(audiobook.coloring.speakers, true);
   assert.equal(audiobook.coloring.effects, false, '特效字 only comes with 全都要');
@@ -2802,4 +3027,10 @@ test('a one-beat hiragana moan drawn through a glide into another vowel before �
   for (const line of ['アン', 'ケン', 'カン', 'オーエン', 'はっけん', 'けん', 'かん']) {
     assert.equal(isShortExactEcho(line, line), false, `${line} is a name or a word, never accepted as an echo`);
   }
+});
+
+test('点正文跳到悬浮窗 starts on, and only an explicit false turns it off', () => {
+  assert.equal(mergeSettings({}).segmentJump, true);
+  assert.equal(mergeSettings({ segmentJump: false }).segmentJump, false);
+  assert.equal(mergeSettings({ segmentJump: 'no' }).segmentJump, true);
 });

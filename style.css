@@ -282,8 +282,6 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-desk-connection-open { flex: 1 1 12em; min-width: 12em; display: flex; flex-wrap: wrap; align-items: baseline; align-content: center; column-gap: 8px; row-gap: 2px; border: 0; background: none; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
 .jy-desk-connection-open strong { font-size: 12.5px; font-weight: 650; }
 .jy-desk-connection-open small { color: var(--jy-muted-soft); font-size: 11px; overflow-wrap: anywhere; }
-.jy-desk-connection-uses { display: flex; gap: 10px; flex-wrap: wrap; margin-left: auto; }
-.jy-desk-connection-uses label { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--jy-muted); white-space: nowrap; }
 .jy-desk-connection-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
 .jy-desk-connection-form .jy-actions { grid-column: 1 / -1; margin-top: 2px; }
 .jy-form-section { display: grid; grid-template-columns: 132px minmax(0,1fr); gap: 20px; padding: 18px 0; border-bottom: 1px solid var(--jy-line); }
@@ -332,6 +330,8 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-card-row-end { justify-content: flex-end; }
 /* 依赖缩进变灰: indented 28px under the switch it depends on; greyed with a reason only while blocked. */
 .jy-card-row-dependent { margin-left: 28px; }
+.jy-card-row-dependent[data-jy-dependent-off="true"] .jy-check { color: var(--jy-muted-soft); }
+.jy-card-row-dependent[data-jy-dependent-off="true"] .jy-dependent-reason { display: block; flex-basis: 100%; margin: -4px 0 0; }
 .jy-card-row-dependent[data-jy-blocked="true"] { opacity: .55; }
 .jy-card-row-dependent[data-jy-blocked="true"] .jy-switch, .jy-card-row-dependent[data-jy-blocked="true"] input { cursor: not-allowed; }
 .jy-launch-danger { margin-left: auto; }
@@ -345,21 +345,21 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 /* Pushes the two red 方案管理 buttons to the end of their row without a third one drifting there too. */
 .jy-actions-spacer { flex: 1 1 auto; }
 
-/* DESIGN §15.4 模型连接: one card per connection, its head carrying the 用在 checkboxes. */
+/* DESIGN §17.1 各功能用哪条连接: three fixed rows (翻译 / 分析模式 / 小助手) at the top of 模型连接 and of
+   the API Key 卡; on a phone each picker drops under its name (.jy-summary-select, §15.5). */
+.jy-connection-uses { margin-bottom: 12px; }
+.jy-connection-uses > h3 { margin: 0 0 6px; font-size: 12px; font-weight: 650; color: var(--jy-muted); }
+.jy-connection-uses-card .jy-connection-uses { margin-bottom: 0; }
+.jy-connection-uses-card .jy-connection-uses > h2 { margin-bottom: 8px; }
+
+/* DESIGN §15.4 模型连接: one card per connection; which feature uses it is chosen above them (§17.1). */
 .jy-channel-card { margin-bottom: 10px; }
 .jy-channel-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
 .jy-channel-card-toggle { flex: 1 1 200px; display: flex; min-width: 0; border: 0; background: transparent; padding: 0; text-align: left; color: inherit; }
 .jy-channel-card-toggle .jy-card-row-text h2 { font-size: 13px; overflow-wrap: anywhere; }
-.jy-channel-card-uses { display: flex; flex-wrap: wrap; gap: 3px 14px; }
-.jy-channel-card-uses .jy-check { padding: 0; white-space: nowrap; }
 .jy-channel-card-chevron { flex: none; border: 0; background: transparent; color: var(--jy-muted-soft); font-size: 11px; padding: 4px; }
-/* DESIGN §15.1 触屏 ≥ 44: these rows measured 19–21px tall and the chevron 17×26 under touch, and
-   every 用在 checkbox shared one generic name with no connection attached (review finding
-   style.css:270 — the aria-label fix for the name is in index.js's makeChannelUseCheckbox /
-   buildDeskConnectionRow). */
+/* DESIGN §15.1 触屏 ≥ 44: these rows measured 19–21px tall and the chevron 17×26 under touch. */
 @media (pointer: coarse), (hover: none) {
-  .jy-desk-connection-uses label,
-  .jy-channel-card-uses .jy-check { min-height: 44px; padding: 6px 0; }
   .jy-channel-card-toggle,
   .jy-desk-connection-open { min-height: 44px; }
   .jy-channel-card-chevron { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0; }
@@ -557,14 +557,12 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-card-row select, .jy-card-row-field input[type="number"] { max-width: none; width: 100%; }
   .jy-card-row-dependent { margin-left: 18px; }
   .jy-channel-card-toggle { flex-basis: 100%; }
-  .jy-channel-card-uses { gap: 4px 12px; font-size: 11px; }
   /* DESIGN §15.5: 套餐卡单列四张，每张 ≥ 64；正常模式其余卡片单列。 */
   .jy-preset-grid { grid-template-columns: 1fr; }
   .jy-preset-grid input + span { min-height: 64px; display: flex; flex-direction: column; justify-content: center; }
   .jy-desk-columns { grid-template-columns: 1fr; }
   .jy-summary-select { flex-wrap: wrap; }
   .jy-summary-select select { min-width: 0; width: 100%; }
-  .jy-desk-connection-uses { margin-left: 0; width: 100%; }
   .jy-desk-connection-form { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
@@ -743,20 +741,21 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-tts-lang-block .jy-row-between { align-items: center; margin-bottom: 4px; }
 .jy-tts-lang-block .jy-label { margin: 0; }
 .jy-tts-library { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
-.jy-tts-library-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr) 92px auto; grid-template-areas: "name id lang remove" "title title title title"; gap: 6px; align-items: center; padding-bottom: 8px; border-bottom: 1px solid var(--jy-line-soft); }
-.jy-tts-library-row [data-jy-tts-library-name] { grid-area: name; }
-.jy-tts-library-row [data-jy-tts-library-id] { grid-area: id; font-family: Consolas, ui-monospace, monospace; }
-.jy-tts-library-row [data-jy-tts-library-lang] { grid-area: lang; }
-.jy-tts-library-row .jy-tts-title { grid-area: title; font-size: 11.5px; }
-.jy-tts-library-row .jy-tts-title:empty { display: none; }
-.jy-tts-library-row [data-jy-action="tts-remove-library"] { grid-area: remove; }
+.jy-tts-library-body { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr) 92px auto; grid-template-areas: "name id lang remove" "title title title title"; gap: 6px; align-items: center; padding: 2px 0 12px 14px; }
+.jy-tts-library-body [data-jy-tts-library-name] { grid-area: name; }
+.jy-tts-library-body [data-jy-tts-library-id] { grid-area: id; font-family: Consolas, ui-monospace, monospace; }
+.jy-tts-library-body [data-jy-tts-library-lang] { grid-area: lang; }
+.jy-tts-library-body .jy-tts-title { grid-area: title; font-size: 11.5px; }
+.jy-tts-library-body .jy-tts-title:empty { display: none; }
+.jy-tts-library-body [data-jy-action="tts-remove-library"] { grid-area: remove; }
 .jy-behaviors .jy-inline-field input[type="number"] { width: 64px; }
 .jy-behaviors > .jy-label { margin: 0; align-self: center; }
 @media (max-width: 640px) {
   .jy-tts-voice-row { grid-template-areas: "name aliases" "lock lock" "voice voice" "title title" "tools tools" "langs langs"; grid-template-columns: 1fr 1fr; }
   .jy-tts-voice-row .jy-tts-lock { justify-self: start; }
   .jy-tts-lang-row { grid-template-columns: 78px minmax(0,1fr) auto; }
-  .jy-tts-library-row { grid-template-columns: minmax(0,1fr) 92px; grid-template-areas: "name lang" "id id" "title remove"; }
+  .jy-tts-lang-row.jy-tts-mood-row { grid-template-columns: 96px minmax(0,1fr) auto; }
+  .jy-tts-library-body { grid-template-columns: minmax(0,1fr) 92px; grid-template-areas: "name lang" "id id" "title remove"; }
   .jy-tts-pick select { width: 44%; }
 }
 
@@ -876,23 +875,51 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-more-group > h2 { margin: 0 0 10px; font-size: 14px; font-weight: 650; }
 .jy-fold-list { display: flex; flex-direction: column; gap: 8px; }
 .jy-fold-list > .jy-fold { padding: 12px 14px; background: var(--jy-band); border: 1px solid var(--jy-band-line); border-radius: var(--jy-radius-sm); }
-.jy-tts-voice-row { display: block; padding: 0; border-bottom: 1px solid var(--jy-line-soft); }
-.jy-tts-voice-row > summary { display: flex; align-items: center; gap: 8px; padding: 9px 0; cursor: pointer; list-style: none; font-size: 12.5px; }
-.jy-tts-voice-row > summary::-webkit-details-marker { display: none; }
-.jy-tts-voice-row > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--jy-muted); border-bottom: 1.5px solid var(--jy-muted); transform: rotate(-45deg); transition: transform var(--jy-hover); flex: 0 0 auto; }
-.jy-tts-voice-row[open] > summary::before { transform: rotate(45deg); }
+.jy-tts-voice-row, .jy-tts-library-row { display: block; padding: 0; border-bottom: 1px solid var(--jy-line-soft); }
+.jy-tts-voice-row:last-child, .jy-tts-library-row:last-child { border-bottom: 0; }
+.jy-tts-voice-row > summary, .jy-tts-library-row > summary { display: flex; align-items: center; gap: 8px; padding: 9px 0; cursor: pointer; list-style: none; font-size: 12.5px; }
+.jy-tts-voice-row > summary::-webkit-details-marker, .jy-tts-library-row > summary::-webkit-details-marker { display: none; }
+.jy-tts-voice-row > summary::before, .jy-tts-library-row > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--jy-muted); border-bottom: 1.5px solid var(--jy-muted); transform: rotate(-45deg); transition: transform var(--jy-hover); flex: 0 0 auto; }
+.jy-tts-voice-row[open] > summary::before, .jy-tts-library-row[open] > summary::before { transform: rotate(45deg); }
+/* DESIGN §17.4 列表框: 角色表 and 音色库 each scroll inside a box of their own. */
+.jy-tts-voice-list, .jy-tts-library { gap: 0; max-height: 360px; overflow-y: auto; overscroll-behavior: contain; padding: 0 10px; border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
+.jy-tts-voice-list > .jy-muted, .jy-tts-library > .jy-muted { margin: 10px 0; }
+/* DESIGN §17.5 招式表: a fold under 特效字, its list in the same kind of box as 角色表 and 音色库. */
+.jy-dependent > .jy-move-fold { margin: 4px 0 8px; }
+.jy-move-list { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; overscroll-behavior: contain; margin: 0 0 8px; padding: 0 10px; border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
+.jy-move-list > .jy-muted { margin: 10px 0; }
+.jy-move-row { display: flex; flex-direction: column; gap: 4px; padding: 9px 0; border-bottom: 1px solid var(--jy-line-soft); }
+.jy-move-row:last-child { border-bottom: 0; }
+.jy-move-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; }
+.jy-move-swatch { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--jy-line); }
+.jy-move-swatch[data-state="off"], .jy-move-swatch[data-state="none"] { background: transparent !important; border-style: dashed; border-color: var(--jy-line-strong); }
+.jy-move-name { flex: 1 1 auto; min-width: 0; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jy-move-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding-left: 20px; }
+.jy-move-field { display: inline-flex; align-items: center; gap: 6px; }
+.jy-move-field .jy-label { margin: 0; white-space: nowrap; }
+.jy-move-field select { width: auto; min-width: 0; }
+.jy-move-field input[type="color"] { width: 36px; height: 28px; padding: 0; cursor: pointer; }
+.jy-move-field input[type="color"][hidden] { display: none; }
 .jy-tts-voice-summary-name { font-weight: 650; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jy-tts-voice-summary-meta { color: var(--jy-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
 .jy-tts-voice-row .jy-tts-lock { flex: 0 0 auto; }
-.jy-tts-voice-body { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); grid-template-areas: "name aliases" "voice voice" "title title" "mute mute" "tools tools" "langs langs" "console console"; gap: 6px; padding: 2px 0 12px 14px; }
+.jy-tts-voice-body { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); grid-template-areas: "name aliases" "voice voice" "title title" "mute mute" "tools tools" "langs langs" "moods moods" "console console"; gap: 6px; padding: 2px 0 12px 14px; }
 .jy-tts-voice-body > .jy-tts-pick { grid-area: voice; }
 .jy-tts-voice-body .jy-tts-voice-tools { grid-area: tools; }
 .jy-tts-voice-body .jy-tts-lang-list { grid-area: langs; }
+.jy-tts-voice-body .jy-tts-mood-list { grid-area: moods; }
+.jy-tts-mood-list { display: flex; flex-direction: column; gap: 5px; }
+.jy-tts-mood-list:empty { display: none; }
+.jy-tts-lang-row.jy-tts-mood-row { grid-template-columns: 112px minmax(0,1fr) auto; }
+.jy-tts-mood-row [data-jy-tts-mood-id] { font-family: Consolas, ui-monospace, monospace; }
+.jy-card-row-dependent[data-jy-dependent-off="true"] .jy-card-row-field { color: var(--jy-muted-soft); }
 .jy-tts-voice-body .jy-tts-voice-mute { grid-area: mute; }
 .jy-tts-voice-body .jy-tts-title:empty { display: none; }
 @media (max-width: 640px) {
   /* No columns at all on a phone: one field per line, in the order they are read. A grid here only
      ever had two narrow columns to give, and anything it could not place broke the rest. */
+  .jy-tts-voice-list, .jy-tts-library, .jy-move-list { max-height: 50dvh; }
+  .jy-move-fields { padding-left: 0; }
   .jy-tts-voice-body { display: flex; flex-direction: column; align-items: stretch; gap: 9px; padding: 4px 0 14px 8px; }
   .jy-tts-voice-body > * { min-width: 0; max-width: 100%; }
   .jy-tts-voice-body > .jy-tts-pick { flex-direction: column; align-items: stretch; gap: 6px; }
@@ -1042,7 +1069,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-inspect-actions .jy-button[hidden], .jy-mini-inspect-actions .jy-text-button[hidden] { display: none; }
 .jy-mini-log-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .jy-mini-log-filters[hidden] { display: none; }
-.jy-mini-log-filters .jy-mini-chip[aria-pressed="true"] { background: var(--jy-accent); border-color: var(--jy-accent); color: var(--jy-on-accent); }
+.jy-mini-chip[aria-pressed="true"] { background: var(--jy-accent); border-color: var(--jy-accent); color: var(--jy-on-accent); }
 .jy-mini-chip-error { color: var(--jy-error); }
 .jy-mini-log-filters .jy-text-button { margin-left: auto; font-size: 11.5px; }
 .jy-mini-log-item { display: flex; flex-direction: column; gap: 2px; padding: 7px 6px; border-top: 1px solid var(--jy-line-soft); border-radius: 6px; cursor: pointer; }
@@ -1225,14 +1252,18 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-call [data-jy-call-typing] .jy-button { flex: 0 0 auto; white-space: nowrap; }
 .jy-mini[data-touch="true"] .jy-mini-call [data-jy-call-input], .jy-mini[data-touch="true"] .jy-mini-call [data-jy-call-typing] .jy-button { min-height: 44px; }
 
-/* DESIGN §16 小助手：对话卡片沿用 .jy-desk-card 的底与描边，输入区沿用 .jy-footer 的吸底与安全区，
-   这里只重排布局，不新增颜色、字号、圆角或动效 token。 */
-.jy-helper-conversation { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+/* DESIGN §17.3 小助手聊天框：页头、快捷问题、聊天框、输入区自上而下，整页不滚，聊天框自己滚；
+   输入区沿用 .jy-footer 的吸底与安全区。只重排布局，不新增颜色、字号、圆角或动效 token。 */
+.jy-page[data-jy-page="helper"]:not([hidden]) { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.jy-helper-conversation { flex: 1 1 auto; min-height: 240px; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1px solid var(--jy-line); border-radius: var(--jy-radius); background: var(--jy-field); }
 .jy-helper-turn { display: flex; flex-direction: column; gap: 8px; }
-.jy-helper-question { margin: 0; font-size: 12px; color: var(--jy-muted); }
-.jy-helper-answer { margin: 0; font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.jy-helper-answer.is-error { color: var(--jy-error); }
-.jy-helper-suggestions { display: flex; flex-direction: column; }
+.jy-helper-bubble { max-width: 88%; margin: 0; padding: 8px 11px; border-radius: var(--jy-radius); overflow-wrap: anywhere; }
+.jy-helper-question { align-self: flex-end; background: var(--jy-accent-soft); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; }
+.jy-helper-answer { align-self: flex-start; background: var(--jy-surface); border: 1px solid var(--jy-line-soft); }
+.jy-helper-answer-text { margin: 0; font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; }
+.jy-helper-answer-text.is-error { color: var(--jy-error); }
+.jy-helper-suggestions { display: flex; flex-direction: column; margin-top: 6px; }
+@media (max-width: 640px) { .jy-helper-conversation { min-height: 200px; } }
 .jy-helper-suggestion { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--jy-line-soft); font-size: 13px; }
 .jy-helper-suggestion > span { min-width: 0; overflow-wrap: anywhere; }
 .jy-helper-suggestion-done { flex: none; color: var(--jy-ok); font-size: 12px; font-weight: 600; }

@@ -1,7 +1,8 @@
-import { extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, DEFAULT_QUOTE_PAIRS, MESSAGE_META_KEY } from './core.js?v=0.41.0-beta.1';
-import { composeAnnotationSection, composeLyricsSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.41.0-beta.1';
-import { EMOTION_KEYS } from './palette.js?v=0.41.0-beta.1';
-import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOFT_MOODS, SOUND_CUES, SOUND_PLACE_RULE, SOUND_TAGS, TONE_CUES } from './tts.js?v=0.41.0-beta.1';
+import { extractFloorRegions, extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, DEFAULT_QUOTE_PAIRS, MESSAGE_META_KEY } from './core.js?v=0.44.0-beta.1';
+import { composeAnnotationSection, composeLyricsSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.44.0-beta.1';
+import { EMOTION_KEYS } from './palette.js?v=0.44.0-beta.1';
+import { composeSceneSection } from './scene.js?v=0.44.0-beta.1';
+import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOFT_MOODS, SOUND_CUES, SOUND_PLACE_RULE, SOUND_TAGS, TONE_CUES } from './tts.js?v=0.44.0-beta.1';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -62,14 +63,23 @@ function relevantMessages(snapshot, settings, includeTarget = false) {
  * region the translation works on, and nothing else.
  *
  * A user's own message carries no extraction tags and is prose already, so it travels as written.
- * An AI floor with no tags has no body to quote — it is a floor this extension could not have
- * translated either — so it contributes nothing rather than dragging its panels along.
+ * An AI floor with neither its tags nor its 「正文起点」 has no body to quote — it is a floor this
+ * extension could not have translated either — so it contributes nothing rather than dragging its
+ * panels along.
  */
 function referenceBody(message, settings) {
   const stripped = stripGeneratedTranslationLines(floorText(message), message?.extra?.[MESSAGE_META_KEY]);
   if (message?.is_user) return stripped;
   const regions = [];
-  for (const [tags, mode] of [[settings.bodyTags, 'bilingual'], [settings.replaceTags, 'replace']]) {
+  try {
+    // As the floor itself is translated: its body tags, else what follows its 「正文起点」, and its replace tags.
+    regions.push(...extractFloorRegions(stripped, {
+      bodyTags: settings.bodyTags, replaceTags: settings.replaceTags, startMarkers: settings.bodyStartMarkers, excludedTags: settings.excludedTags,
+    }).regions);
+  } catch {
+    // Read tag by tag below.
+  }
+  if (!regions.length) for (const [tags, mode] of [[settings.bodyTags, 'bilingual'], [settings.replaceTags, 'replace']]) {
     if (!Array.isArray(tags) || !tags.length) continue;
     try {
       regions.push(...extractTaggedRegions(stripped, tags, { mode }).regions);
@@ -189,6 +199,11 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
   // section above is only ever sent to a request that has something for it to annotate.
   if (requestMeta?.hasLyrics) {
     messages.push({ role: 'system', content: composeLyricsSection() });
+  }
+  // The floor's scene (scene.js) is asked of the pass that first reads a part of it; a repair sees only
+  // the lines that went missing, and a style repair rewrites a finished draft.
+  if (requestMeta?.scene && phase === 'primary') {
+    messages.push({ role: 'system', content: composeSceneSection() });
   }
   const input = {
     task: 'translate_story_to_target_language',

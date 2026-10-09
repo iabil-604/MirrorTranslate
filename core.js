@@ -8,30 +8,33 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.41.0-beta.1';
+} from './prompts.js?v=0.44.0-beta.1';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.41.0-beta.1';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.44.0-beta.1';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.41.0-beta.1';
-import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.41.0-beta.1';
+import { resolveMoveStyle } from './palette.js?v=0.44.0-beta.1';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.44.0-beta.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.41.0-beta.1';
+export const APP_VERSION = '0.44.0-beta.1';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
 // card when it actually shows one of the three documented signals, a kana-holding parenthesis no longer
 // counts as an already-bilingual row, and a card's first row starts its own unit apart from whatever
-// narration precedes it. A floor already translated keeps whichever rules produced what is stored on
-// it — recorded on its metadata as `segmentation_version` — so re-deriving its segments for matching
-// never disagrees with what was actually written; a floor with no record yet always starts on the
-// latest rules. See segmentSource's `segmentationVersion` option.
-export const SEGMENTATION_RULES_VERSION = 3;
+// narration precedes it. 4 is v0.42.1's reading of excluded tags: an attribute's quoted value may hold
+// < and > (a picture's prompt, <pic prompt="1girl, <lora:x:0.6>, rain"/>), and an excluded tag that opens
+// and never closes (<pic prompt="…"> with no /) is left out as a tag on its own. A floor already
+// translated keeps whichever rules produced what is stored on it — recorded on its metadata as
+// `segmentation_version` — so re-deriving its segments for matching never disagrees with what was
+// actually written; a floor with no record yet always starts on the latest rules. See segmentSource's
+// `segmentationVersion` option.
+export const SEGMENTATION_RULES_VERSION = 4;
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -676,6 +679,9 @@ export function isShortExactEcho(text, source) {
 const SPEAKER_OPEN_RE = new RegExp(`<span class="(?:custom-)?${SPEAKER_CLASS}(?:[ "][^>]*)?>`);
 const VALID_TAG_RE = /^[A-Za-z][A-Za-z0-9_:-]*$/;
 const STRUCTURAL_TAG_RE = /\\?<(\/?)([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
+// A tag whose attributes' quoted values are read whole, so a > or < inside one does not end the tag. A
+// quote left open on its line falls back to the tag ending at the first >, as tags were always read.
+const QUOTED_TAG_TOKEN_RE = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s(?:"[^"\n]*"|'[^'\n]*'|[^<>"'])*?|\s[^<>]*?)?\s*\/?>/g;
 const HTML_ENTITY_RE = /&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi;
 // A Markdown picture as the host's showdown renders it — ![alt](src "title"), sizes and one level of
 // brackets in the address included — and the empty link a linked picture [![a](b)](c) leaves once the
@@ -735,10 +741,37 @@ export const DEFAULT_COLORING = Object.freeze({
 // 'floor' sends the whole floor as one recording after a deep reading of it; 'stream' sends one
 // paragraph at a time and starts playing as soon as the first one is back. The old 'sentence' mode is
 // folded into 'stream': a single sentence is found inside whichever recording already holds it.
-// The two readings: the simple one gives every sentence its feeling, the deep one asks a model why
-// and how to play it, on top of the simple one.
-export const TTS_MODES = Object.freeze(['off', 'simple', 'deep']);
-// What a play does on a floor the simple reading has not seen: ask, analyse without asking, or read the plain text.
+// The reading is plain ('off' — the text itself, the translation's own marks and the story's <say>
+// marks, no model asked) or analysed ('deep', shown as 分析模式: a model reads the floor and says how
+// each line is played). The simple reading that used to sit between them is gone since v0.41.0: a
+// translated floor already carries its marks, and the plain reading names speakers by itself.
+export const TTS_MODES = Object.freeze(['off', 'deep']);
+// 亲密场景: never (off), as 分析模式 judges each floor (auto: only a floor whose narration shows real
+// physical intimacy, judged by its tone), or with the reader's permission (on: judged paragraph by paragraph).
+export const TTS_INTIMATE_MODES = Object.freeze(['off', 'auto', 'on']);
+// A floor's tone, in the one list the translation's scene card and 分析模式 both choose from.
+export const STORY_TONES = Object.freeze(['日常', '轻松', '温馨', '浪漫', '亲密', '悲伤', '紧张', '悬疑', '恐怖', '战斗', '壮阔']);
+
+/** The first of STORY_TONES a model's word for a tone contains, by where it stands in that word; '' for none. */
+export function storyToneOf(value) {
+  const word = String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, 20);
+  return STORY_TONES
+    .map(tone => ({ tone, at: word.indexOf(tone) }))
+    .filter(item => item.at >= 0)
+    .sort((left, right) => left.at - right.at)[0]?.tone ?? '';
+}
+
+// 亲密场景 was a yes/no switch before v0.43.0: yes is 开.
+export function normalizeIntimateMode(value) {
+  if (value === true) return 'on';
+  return TTS_INTIMATE_MODES.includes(value) ? value : 'off';
+}
+
+// 情绪音色: when a character's line is said in another of their voices — the same actor cloned whispering,
+// roaring, singing… — by what 分析模式 found in the line: its opening whisper or breathy voice, its laugh,
+// its tension of 4 and up, or the floor's tone; and by the reader setting the line to 唱 (`sing`).
+export const VOICE_MOOD_CONDITIONS = Object.freeze(['whisper', 'laugh', 'burst', 'sing', ...STORY_TONES.map(tone => `tone:${tone}`)]);
+// What a play does on a plain floor nobody has analysed: ask, analyse it without asking, or read the plain text.
 export const TTS_ASK_MODES = Object.freeze(['ask', 'analyze', 'plain']);
 // Punctuation the reader pairs with a tag: the Chinese word shown, Fish's own tag sent, and where the tag
 // lands by default (inline: in place of the punctuation; head: at the start of the clause it closes).
@@ -962,7 +995,7 @@ export const DEFAULT_TTS = Object.freeze({
   // listening in the background and no audio store opened.
   enabled: false,
   side: 'translation',
-  mode: 'simple',
+  mode: 'off',
   range: 'all',
   emotionCues: true,
   // The copy sent to the voice loses the markup a preset or the colouring wrapped around the words.
@@ -984,14 +1017,13 @@ export const DEFAULT_TTS = Object.freeze({
   playAfterGenerate: true,
   // Runs of ！！！ become one mark; the cue carries the strength instead of the voice shrieking.
   tamePunctuation: true,
-  // The reader's own system prompts for the two readings; empty means the built-in ones.
-  prompts: Object.freeze({ simple: '', deep: '' }),
-  // The connection the reading's analysis goes to: 'follow' for the host's own connection, or a saved
-  // connection's id. Empty only ever comes from an older setting, and is pinned to the translation's
-  // choice when the settings are read, so the reading never follows the translation silently.
-  analysisChannelId: '',
-  // The connection the deep reading goes to: empty is the same one as the analysis above, 'follow' the
-  // host's own, else a saved connection's id.
+  // The reader's own system prompt for the analysed reading; empty means the built-in one. `jailbreak`
+  // (破限词) goes first in every request to 分析模式's connection; empty sends nothing.
+  prompts: Object.freeze({ deep: '', jailbreak: '' }),
+  // The connection the analysed reading goes to — and 「分析这一楼」, 按意见改 and 从角色卡和世界书识别角色
+  // with it: 'follow' for the host's own connection, or a saved connection's id. Empty only ever comes
+  // from an older setting, and is pinned when the settings are read (mergeSettings), so the reading never
+  // follows the translation silently.
   deepChannelId: '',
   // The longest one analysis may take, counted from the request going out, whether or not the model
   // is still writing. The connection's own timeout only counts silence, so a model that thinks out
@@ -999,7 +1031,7 @@ export const DEFAULT_TTS = Object.freeze({
   analysisLimitSec: 150,
   // Sentences per analysis batch; 0 sends the whole floor in one request.
   batchSize: 0,
-  // A play on a floor the simple reading has not seen: ask first, always analyse, or read the plain text.
+  // A play on a plain floor nobody has analysed: ask first, always analyse, or read the plain text.
   askAnalysis: 'ask',
   // The deep reading is shelved while it is reworked; this hatch keeps it reachable for tests.
   deepUnlocked: false,
@@ -1037,6 +1069,9 @@ export const DEFAULT_TTS = Object.freeze({
   sttApiKey: '',
   sttModel: 'FunAudioLLM/SenseVoiceSmall',
   sttLang: 'zh',
+  // 亲密场景 (TTS_INTIMATE_MODES): 分析模式 may let an intimate scene climb (moans included) where the
+  // narration shows it — never, as it judges the floor, or by the reader's leave.
+  intimate: 'off',
   fish: DEFAULT_FISH,
   doubao: DEFAULT_DOUBAO,
   minimax: DEFAULT_MINIMAX,
@@ -1062,6 +1097,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   preset: '',
   coloring: DEFAULT_COLORING,
   speakerPalette: {},
+  // DESIGN §17.5 招式表: moves set by hand, per character card like the speaker palette.
+  moveOverrides: {},
   tts: DEFAULT_TTS,
   helper: DEFAULT_HELPER,
   ttsVoices: {},
@@ -1088,8 +1125,14 @@ export const DEFAULT_SETTINGS = Object.freeze({
   floorButtons: 'line',
   // Mirrors the floating window's main controls for a thumb on the left.
   leftHanded: false,
+  // 「点正文跳到悬浮窗」 (DESIGN §17.7): a plain click on a translated paragraph opens the floating window
+  // on that paragraph's row. Off, a click on the floor's text is left entirely to the host.
+  segmentJump: true,
   retries: 1,
   bodyTags: Object.freeze(['story_scene']),
+  // 「正文起点」: a reply with none of the extraction tags reads as body from the last of these markers on
+  // (the end of a chain of thought a preset leaves untagged). Empty, such a reply has no body.
+  bodyStartMarkers: Object.freeze([]),
   replaceTags: Object.freeze([]),
   excludedTags: Object.freeze([]),
   preserveLineRules: '',
@@ -1288,6 +1331,22 @@ export function parseTagNames(value, fallback = []) {
   return Array.isArray(fallback) ? [...fallback] : [];
 }
 
+// 「正文起点」 as kept: one marker a line, trimmed, each once whatever its case; at most ten, of at most
+// 200 characters each.
+export function parseStartMarkers(value) {
+  const source = Array.isArray(value) ? value : normalizeNewlines(String(value ?? '')).split('\n');
+  const result = [];
+  const seen = new Set();
+  for (const item of source) {
+    const marker = String(item ?? '').trim().slice(0, 200);
+    if (!marker || seen.has(marker.toLowerCase())) continue;
+    seen.add(marker.toLowerCase());
+    result.push(marker);
+    if (result.length >= 10) break;
+  }
+  return result;
+}
+
 function parseRegexRule(raw, lineNumber) {
   const end = raw.lastIndexOf('/');
   if (end <= 0) return { error: `第 ${lineNumber} 行正则缺少结束斜杠。` };
@@ -1403,47 +1462,39 @@ export function getActiveChannel(settings) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Connection uses: the three places a saved connection (or the host's own) can be put to work,
-// named the way the control center names them rather than by the settings fields underneath —
-// 'translation' is apiMode + selectedChannelId, 'analysis' is tts.analysisChannelId, 'deep' is
-// tts.deepChannelId. Each use holds exactly one choice at a time; the pages that used to have three
-// separate pickers for this (翻译用哪条连接 / 朗读分析用的连接 / 深度分析用的连接) become one checkbox
-// per connection per use, and these helpers are what that checkbox reads and writes.
+// Connection uses: the fixed places a saved connection (or the host's own) is put to work, named the
+// way the control center names them rather than by the settings fields underneath — 'translation' is
+// apiMode + selectedChannelId, 'deep' (分析模式) is tts.deepChannelId, 'helper' is helper.channelId.
+// Each use holds exactly one choice at a time; 「各功能用哪条连接」 (DESIGN §17.1) shows one picker per
+// use, and these helpers are what those pickers read and write.
 // ---------------------------------------------------------------------------------------------
 
-export const CONNECTION_USES = Object.freeze(['translation', 'analysis', 'deep', 'helper']);
+export const CONNECTION_USES = Object.freeze(['translation', 'deep', 'helper']);
 
 /**
  * What a use points at right now, resolved to something real: 'follow' for the host's own connection,
- * or a saved connection's id. 深度分析's own empty value — 「和朗读分析用同一条」 — resolves through to
- * whatever 朗读分析 resolves to, so all three uses are always directly comparable to a connection id.
+ * or a saved connection's id, so every use is always directly comparable to a connection id.
  */
 export function connectionUseChoice(settings, use) {
   if (use === 'translation') return translationChannelChoice(settings);
-  if (use === 'analysis') return resolveFeatureChannel(settings?.tts?.analysisChannelId, settings);
-  if (use === 'deep') {
-    const own = String(settings?.tts?.deepChannelId ?? '').trim();
-    return own ? resolveFeatureChannel(own, settings) : connectionUseChoice(settings, 'analysis');
-  }
+  if (use === 'deep') return resolveFeatureChannel(settings?.tts?.deepChannelId, settings);
   if (use === 'helper') return resolveFeatureChannel(settings?.helper?.channelId, settings);
   throw new Error(`未知用途：${use}`);
 }
 
 /**
- * Points a use at a connection — 'follow' for the host's own, a saved connection's id, or (深度分析
- * only) '' for 「和朗读分析用同一条」. A use holds exactly one choice, so pointing it here is what moves
- * it away from wherever it pointed before; nothing else needs writing.
+ * Points a use at a connection — 'follow' for the host's own, else a saved connection's id. A use holds
+ * exactly one choice, so pointing it here is what moves it away from wherever it pointed before.
  */
 export function setConnectionUse(settings, use, choice) {
-  const value = String(choice ?? '').trim();
+  const value = String(choice ?? '').trim() || 'follow';
   if (use === 'translation') {
-    return value && value !== 'follow'
+    return value !== 'follow'
       ? { ...settings, apiMode: 'independent', selectedChannelId: value }
       : { ...settings, apiMode: 'follow' };
   }
-  if (use === 'analysis') return { ...settings, tts: { ...settings.tts, analysisChannelId: value || 'follow' } };
   if (use === 'deep') return { ...settings, tts: { ...settings.tts, deepChannelId: value } };
-  if (use === 'helper') return { ...settings, helper: { ...settings.helper, channelId: value || 'follow' } };
+  if (use === 'helper') return { ...settings, helper: { ...settings.helper, channelId: value } };
   throw new Error(`未知用途：${use}`);
 }
 
@@ -1454,34 +1505,13 @@ export function channelUsesPointingAt(settings, channelId) {
 
 /**
  * Deleting a connection cannot leave a use pointing at nothing still in the list, so every use it
- * served moves to 跟随酒馆 first. 深度分析 is left to defer (its field stays '') when it was only
- * following 朗读分析 to this connection — moving 朗读分析 already carries it along, and leaving the
- * field empty means it keeps deferring afterwards instead of being pinned to today's fallback.
- * Returns the adjusted settings and which uses moved, for whoever deletes the connection to say so.
+ * served moves to 跟随酒馆 first. Returns the adjusted settings and which uses moved, for whoever
+ * deletes the connection to say so.
  */
 export function reassignConnectionUsesOnDelete(settings, channelId) {
-  const moved = [];
+  const moved = channelUsesPointingAt(settings, channelId);
   let next = settings;
-  if (connectionUseChoice(next, 'translation') === channelId) {
-    next = setConnectionUse(next, 'translation', 'follow');
-    moved.push('translation');
-  }
-  const deepOwnChoice = String(next?.tts?.deepChannelId ?? '').trim();
-  const analysisPointedHere = connectionUseChoice(next, 'analysis') === channelId;
-  if (analysisPointedHere) {
-    next = setConnectionUse(next, 'analysis', 'follow');
-    moved.push('analysis');
-  }
-  if (deepOwnChoice && deepOwnChoice === channelId) {
-    next = setConnectionUse(next, 'deep', 'follow');
-    moved.push('deep');
-  } else if (!deepOwnChoice && analysisPointedHere) {
-    moved.push('deep');
-  }
-  if (connectionUseChoice(next, 'helper') === channelId) {
-    next = setConnectionUse(next, 'helper', 'follow');
-    moved.push('helper');
-  }
+  for (const use of moved) next = setConnectionUse(next, use, 'follow');
   return { settings: next, moved };
 }
 
@@ -1490,10 +1520,9 @@ export function reassignConnectionUsesOnDelete(settings, channelId) {
 // Each sets exactly the nine fields below and nothing else — 只留译文、流式写回、全部连接与密钥、提取标
 // 签、翻译规则文字、音色、主题 are never touched by a package, per the same section.
 //
-// The four packages' actual field values are a proposal — 镜译 has never shipped a package system
-// before this branch — chosen to read as a cost ladder (translation only → + display → + simple
-// reading → + deep reading, the priciest pass). They are pending 常夜灯's sign-off before a page ships
-// them; presetContent is the one place to change once that lands.
+// The four packages read as a cost ladder (translation only → + display → + reading aloud on the
+// translation's own marks → + 分析模式, the priciest pass), confirmed by 常夜灯 2026-09-26 and moved to
+// the two-way 分析模式 on 2026-09-27; presetContent is the one place to change them.
 // ---------------------------------------------------------------------------------------------
 
 export const PRESET_MANAGED_FIELDS = Object.freeze([
@@ -1532,7 +1561,7 @@ const CONSOLE_PRESET_CONTENT = Object.freeze({
   audiobook: Object.freeze({
     autoGeneration: true, autoSwipe: true,
     coloringSpeakers: true, coloringEmotions: true, coloringEffects: false,
-    ttsEnabled: true, ttsMode: 'simple', ttsAutoRead: true, ttsPlayAfterGenerate: true,
+    ttsEnabled: true, ttsMode: 'off', ttsAutoRead: true, ttsPlayAfterGenerate: true,
   }),
   everything: Object.freeze({
     autoGeneration: true, autoSwipe: true,
@@ -1698,6 +1727,34 @@ export function normalizeColoring(value) {
 
 // One entry per character whose speech gets its own colour. `source` is the declared hair or eye
 // colour; the displayed colour is derived from it and the current band, never stored.
+// DESIGN §17.5 招式表: what the reader set by hand for one move name. A field left out is automatic —
+// the element the chat fixed first, the tier the translator reported, the colour the element gives —
+// and `off` keeps the name in place without a colour or weight of its own.
+export function normalizeMoveOverride(value) {
+  if (!value || typeof value !== 'object') return null;
+  const name = String(value.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 24);
+  if (!name) return null;
+  const override = { name };
+  const element = String(value.element ?? '').replace(/\s+/g, ' ').trim().slice(0, 12);
+  if (element) override.element = element;
+  const tier = Math.round(Number(value.tier));
+  if (tier >= 1 && tier <= 3) override.tier = tier;
+  const color = String(value.color ?? '').trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(color)) override.color = color;
+  if (value.off === true) override.off = true;
+  return Object.keys(override).length > 1 ? override : null;
+}
+
+/** One card's hand settings, one entry per move name (the last one given wins), nothing automatic kept. */
+export function normalizeMoveOverrides(list) {
+  const byName = new Map();
+  for (const item of Array.isArray(list) ? list : []) {
+    const override = normalizeMoveOverride(item);
+    if (override) byName.set(override.name, override);
+  }
+  return [...byName.values()].slice(0, 300);
+}
+
 export function normalizeSpeakerList(value) {
   const seen = new Set();
   return (Array.isArray(value) ? value : [])
@@ -1732,6 +1789,21 @@ export function normalizeVoiceId(value) {
 
 function normalizeVoiceTitle(value) {
   return String(value ?? '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 80);
+}
+
+/** A row's 情绪音色 as kept: one voice per condition, the first of each kept, at most eight. */
+export function normalizeVoiceMoods(value) {
+  const seen = new Set();
+  const result = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const when = String(item?.when ?? '').trim();
+    const voiceId = normalizeVoiceId(item?.voiceId);
+    if (!VOICE_MOOD_CONDITIONS.includes(when) || !voiceId || seen.has(when)) continue;
+    seen.add(when);
+    result.push({ when, voiceId, title: normalizeVoiceTitle(item?.title) });
+    if (result.length >= 8) break;
+  }
+  return result;
 }
 
 // lang → voice id. An entry without a language is dropped rather than guessed at.
@@ -1770,7 +1842,10 @@ export function normalizeVoiceList(value) {
       const locked = item.locked === undefined ? Boolean(voiceId || Object.keys(voices).length) : item.locked === true;
       // A console of its own only when something on it was moved; null means the default console.
       // Muted: this character's lines are not read at all. Never by accident — only an explicit true.
-      return { name, aliases, voiceId, voices, locked, mute: item.mute === true, title: normalizeVoiceTitle(item.title), console: normalizeConsole(item.console, { sparse: true }) };
+      return {
+        name, aliases, voiceId, voices, locked, mute: item.mute === true, title: normalizeVoiceTitle(item.title),
+        console: normalizeConsole(item.console, { sparse: true }), moods: normalizeVoiceMoods(item.moods),
+      };
     })
     .filter(item => {
       if (!item || seen.has(item.name)) return false;
@@ -1946,11 +2021,12 @@ export function normalizeTts(value) {
   // Older settings named how the audio was made (whole floor, stream, sentence) and how deeply the
   // floor was read (auto, deep, light, annotations). Only the depth survives as the mode: the whole
   // floor read deeply, the stream read simply, and a depth named outright wins over either.
-  const legacyMode = source.mode === 'floor' ? 'deep' : ['stream', 'sentence'].includes(source.mode) ? 'simple' : source.mode;
-  const wanted = TTS_MODES.includes(source.mode)
+  // The simple reading of v0.40 and earlier reads plain now (a translated floor keeps its marks either
+  // way), and so do the light and stream readings before it; only a depth named deep stays analysed.
+  const legacyMode = source.mode === 'floor' ? 'deep' : ['stream', 'sentence', 'simple'].includes(source.mode) ? 'off' : source.mode;
+  const mode = TTS_MODES.includes(source.mode)
     ? source.mode
-    : source.analysis === 'deep' ? 'deep' : ['light', 'annotations'].includes(source.analysis) ? 'simple' : legacyMode;
-  const mode = wanted;
+    : source.analysis === 'deep' ? 'deep' : ['light', 'annotations'].includes(source.analysis) ? 'off' : legacyMode;
   return {
     enabled: source.enabled === true,
     side: TTS_SIDES.includes(source.side) ? source.side : DEFAULT_TTS.side,
@@ -1967,14 +2043,12 @@ export function normalizeTts(value) {
     playAfterGenerate: source.playAfterGenerate === undefined ? DEFAULT_TTS.playAfterGenerate : source.playAfterGenerate !== false,
     tamePunctuation: source.tamePunctuation === undefined ? DEFAULT_TTS.tamePunctuation : source.tamePunctuation !== false,
     prompts: {
-      // The light reading's prompt of earlier versions is the simple reading's now.
-      simple: typeof source.prompts?.simple === 'string' ? normalizeNewlines(source.prompts.simple).slice(0, 12000)
-        : typeof source.prompts?.light === 'string' ? normalizeNewlines(source.prompts.light).slice(0, 12000) : '',
       deep: typeof source.prompts?.deep === 'string' ? normalizeNewlines(source.prompts.deep).slice(0, 12000) : '',
+      jailbreak: typeof source.prompts?.jailbreak === 'string' ? normalizeNewlines(source.prompts.jailbreak).slice(0, 12000) : '',
     },
-    // The connection chosen for analysis in earlier versions is the deep reading's now. The reading's
-    // own choice is made explicit in mergeSettings, which knows the translation's.
-    analysisChannelId: String(source.analysisChannelId ?? '').trim().slice(0, 80),
+    // The oldest settings named this connection `channelId`. The one the simple reading used
+    // (`analysisChannelId`, gone since v0.41.0) stands in for an empty choice in mergeSettings, which
+    // also pins it, knowing the translation's.
     deepChannelId: String(source.deepChannelId ?? source.channelId ?? '').trim().slice(0, 80),
     analysisLimitSec: clampInteger(source.analysisLimitSec, 20, 900, DEFAULT_TTS.analysisLimitSec),
     batchSize: normalizeBatchSize(source.batchSize),
@@ -2001,6 +2075,7 @@ export function normalizeTts(value) {
     sttApiKey: String(source.sttApiKey ?? '').trim().slice(0, 400),
     sttModel: String(source.sttModel ?? DEFAULT_TTS.sttModel).trim().slice(0, 120),
     sttLang: String(source.sttLang ?? DEFAULT_TTS.sttLang).trim().slice(0, 20),
+    intimate: normalizeIntimateMode(source.intimate),
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     fish: normalizeFishSettings(source.fish),
     doubao: normalizeDoubaoSettings(source.doubao),
@@ -2077,6 +2152,7 @@ export function mergeSettings(value = {}) {
   );
   merged.excludedTags = parseTagNames(source.excludedTags);
   merged.replaceTags = parseTagNames(source.replaceTags);
+  merged.bodyStartMarkers = parseStartMarkers(source.bodyStartMarkers);
   merged.preserveLineRules = typeof source.preserveLineRules === 'string'
     ? normalizeNewlines(source.preserveLineRules)
     : '';
@@ -2144,6 +2220,13 @@ export function mergeSettings(value = {}) {
     merged.worldInfoBooks[characterKey] = [...new Set(list.map(name => String(name ?? '')).filter(Boolean))];
   }
   merged.coloring = normalizeColoring(source.coloring);
+  // 招式表's hand settings follow the character card too (DESIGN §17.5).
+  merged.moveOverrides = {};
+  const rawMoveOverrides = source.moveOverrides && typeof source.moveOverrides === 'object' ? source.moveOverrides : {};
+  for (const [characterKey, list] of Object.entries(rawMoveOverrides)) {
+    const overrides = normalizeMoveOverrides(list);
+    if (overrides.length) merged.moveOverrides[characterKey] = overrides;
+  }
   // The speaker palette follows the character card, like the worldbook whitelist above.
   merged.speakerPalette = {};
   const rawPalette = source.speakerPalette && typeof source.speakerPalette === 'object' ? source.speakerPalette : {};
@@ -2156,15 +2239,17 @@ export function mergeSettings(value = {}) {
   // another feature's choice behind the reader's back. A reading that used to follow the translation
   // is pinned, once, to whatever the translation used at the time, so nothing changes on the day this
   // is read and nothing changes silently after it. A choice that points at a deleted connection is
-  // treated the same way.
-  merged.tts.analysisChannelId = resolveFeatureChannel(merged.tts.analysisChannelId, merged);
+  // treated the same way. An analysed reading that deferred to the simple reading's connection
+  // (「和朗读分析用同一条」, before v0.41.0) takes that connection as its own.
+  const legacyAnalysisChannel = String(source.tts?.analysisChannelId ?? '').trim();
+  const ownDeepChannel = merged.tts.deepChannelId === 'follow' || merged.channels.some(channel => channel.id === merged.tts.deepChannelId)
+    ? merged.tts.deepChannelId
+    : '';
+  merged.tts.deepChannelId = resolveFeatureChannel(ownDeepChannel || legacyAnalysisChannel, merged);
   if (merged.tts.callChannelId && merged.tts.callChannelId !== 'follow' && !merged.channels.some(channel => channel.id === merged.tts.callChannelId)) {
     merged.tts.callChannelId = '';
   }
-  if (merged.tts.deepChannelId && merged.tts.deepChannelId !== 'follow' && !merged.channels.some(channel => channel.id === merged.tts.deepChannelId)) {
-    merged.tts.deepChannelId = '';
-  }
-  // 小助手 is a shelf entry too (DESIGN §16.3): its own choice, resolved the same way 朗读分析's is —
+  // 小助手 is a shelf entry too (DESIGN §16.3): its own choice, resolved the same way 分析模式's is —
   // 'follow' stays 'follow', a deleted or never-set connection falls back to whatever the translation
   // uses right now.
   merged.helper = normalizeHelper(source.helper);
@@ -2192,6 +2277,7 @@ export function mergeSettings(value = {}) {
     ? merged.floorButtons
     : (FLOOR_BUTTON_LEGACY[merged.floorButtons] ?? DEFAULT_SETTINGS.floorButtons);
   merged.leftHanded = merged.leftHanded === true;
+  merged.segmentJump = merged.segmentJump !== false;
   for (const key of [
     'profileId',
     'apiUrl',
@@ -2550,9 +2636,12 @@ function strippedRecords(message) {
  * - The floor holds exactly what was written to it: its text is the mirror.
  * - It holds the bilingual text itself, or what the main model was shown of it and more (a continue):
  *   an ordinary floor again.
+ * - Its tagged regions hold just what was written to them, and only the text around them changed (an
+ *   image script's prompt put after </story_scene>, a status line before it): still the record's floor.
+ *   Its text is its own frame around the mirror's regions.
  * - It still carries the record's translation, changed (by hand, by another extension, a continue from
- *   the translation): `diverged`. Its text is what it holds, and nothing may translate it — that would
- *   take the translation for the original and write over the original in the mirror.
+ *   the translation inside a region): `diverged`. Its text is what it holds, and nothing may translate
+ *   it — that would take the translation for the original and write over the original in the mirror.
  * - Anything else is not the record's floor at all (a new reply on a copied record): ordinary.
  */
 export function readFloor(message) {
@@ -2565,9 +2654,51 @@ export function readFloor(message) {
   if (written) return { text: written.mirror, stripped: true, diverged: false, metadata: written };
   for (const metadata of records) {
     if (normalizeNewlines(text) === normalizeNewlines(metadata.mirror) || continuedFromMirror(text, metadata)) continue;
+    const grafted = graftedMirror(text, metadata);
+    if (grafted !== null) return { text: grafted, stripped: true, diverged: false, metadata };
     if (carriesTranslation(text, metadata)) return { text, stripped: true, diverged: true, metadata };
   }
   return ordinary;
+}
+
+// The tagged regions a record's floor is read by: the body and replace tags it was written with.
+function recordedRegions(text, metadata) {
+  return extractFloorRegions(text, {
+    bodyTags: metadata?.body_tags ?? DEFAULT_SETTINGS.bodyTags,
+    replaceTags: metadata?.replace_tags,
+    startMarkers: metadata?.body_start_markers,
+    excludedTags: metadata?.excluded_tags,
+  }).regions;
+}
+
+/**
+ * A floor whose tagged regions still hold just what was written to them, with text added or changed
+ * around them since. What was written is the mirror with the translation-only regions in place of its
+ * own, so the floor's regions put into the mirror's frame must give the record's own fingerprint. The
+ * floor's full text is then the floor's frame around the mirror's regions. Null when a region itself
+ * changed, or the regions cannot be read.
+ */
+function graftedMirror(text, metadata) {
+  try {
+    const source = normalizeNewlines(text);
+    const mirror = normalizeNewlines(metadata.mirror);
+    const now = recordedRegions(source, metadata);
+    const kept = recordedRegions(mirror, metadata);
+    if (!now.length || now.length !== kept.length) return null;
+    const splice = (frame, regions, inners) => {
+      let output = '';
+      let cursor = 0;
+      for (const [index, region] of regions.entries()) {
+        output += `${frame.slice(cursor, region.contentStart)}${inners[index]}`;
+        cursor = region.closeStart;
+      }
+      return output + frame.slice(cursor);
+    };
+    if (hashTextSync(splice(mirror, kept, now.map(region => region.inner))) !== metadata.projection_hash) return null;
+    return splice(source, now, kept.map(region => region.inner));
+  } catch {
+    return null;
+  }
 }
 
 /** The record `readFloor` holds this floor to, or null. */
@@ -2669,9 +2800,13 @@ function scanTagGroups(source, tagName, options = {}) {
   const tag = String(tagName || '').trim();
   if (!VALID_TAG_RE.test(tag)) throw new Error(`标签名称无效：${tag || '（空）'}`);
   const target = tag.toLowerCase();
-  const tokenPattern = /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
+  // `quoteAware`: quoted attribute values read whole (QUOTED_TAG_TOKEN_RE).
+  const tokenPattern = options.quoteAware
+    ? new RegExp(QUOTED_TAG_TOKEN_RE)
+    : /\\?<\/?([A-Za-z][A-Za-z0-9_:-]*)(?:\s[^<>]*?)?\s*\/?>/g;
   const stack = [];
   const groups = [];
+  const strays = [];
   let strayCloses = 0;
   for (const match of source.matchAll(tokenPattern)) {
     if (String(match[1]).toLowerCase() !== target) continue;
@@ -2700,6 +2835,7 @@ function scanTagGroups(source, tagName, options = {}) {
     const open = stack.pop();
     if (!open) {
       strayCloses += 1;
+      strays.push({ start: match.index, end: match.index + raw.length, raw });
       continue;
     }
     groups.push({
@@ -2716,7 +2852,72 @@ function scanTagGroups(source, tagName, options = {}) {
   groups.unclosedOpens = stack.length;
   groups.unclosedStack = stack.slice();
   groups.strayCloses = strayCloses;
+  groups.strayCloseStack = strays;
   return groups;
+}
+
+/**
+ * The body of a reply with none of the extraction tags in it, found by its 「正文起点」: what follows the
+ * last place any of the markers stands (the end of a chain of thought a preset left untagged), matched
+ * whatever its case. It ends at a body tag's closing tag the model wrote without the opening one, else
+ * where a replace region begins, else at the end of the floor, less the excluded blocks it ends on. Null
+ * when no marker is there.
+ */
+function markerRegion(source, markers, { closes = [], stopsAt = [], excludedTags = [] } = {}) {
+  let found = null;
+  for (const marker of parseStartMarkers(markers)) {
+    const pattern = new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    for (const match of source.matchAll(pattern)) {
+      const end = match.index + match[0].length;
+      if (!found || end > found.contentStart) found = { openStart: match.index, contentStart: end, openTag: match[0] };
+    }
+  }
+  if (!found) return null;
+  const close = closes.filter(item => item.start >= found.contentStart).sort((left, right) => left.start - right.start)[0];
+  const stop = (Array.isArray(stopsAt) ? stopsAt : []).filter(at => at >= found.contentStart).sort((left, right) => left - right)[0];
+  const closed = close && (stop === undefined || close.start <= stop);
+  // Without a closing tag, the excluded blocks the story ends on (a summary, advice, a status panel
+  // written straight after its last paragraph) stay outside it, where a closing tag would have put them:
+  // the last paragraph's translation then follows the paragraph, not the panels.
+  const closeStart = closed ? close.start : withoutTrailingExcluded(source, found.contentStart, stop ?? source.length, excludedTags);
+  return {
+    tagName: found.openTag,
+    openStart: found.openStart,
+    contentStart: found.contentStart,
+    closeStart,
+    closeEnd: closed ? close.end : closeStart,
+    openTag: found.openTag,
+    closeTag: closed ? close.raw : '',
+    assumedClose: !closed,
+    fromMarker: true,
+    mode: 'bilingual',
+    inner: source.slice(found.contentStart, closeStart),
+  };
+}
+
+// Where `source[from, to)` ends once the excluded blocks and comments it ends on (and the blank space
+// between them) are set aside; `to` itself when it ends on none.
+function withoutTrailingExcluded(source, from, to, excludedTags) {
+  const inner = source.slice(from, to);
+  let ranges;
+  try {
+    ranges = outermostExcludedRanges(inner, excludedTags, { quoteAware: true });
+  } catch {
+    return to;
+  }
+  let end = inner.length;
+  let trimmed = false;
+  for (;;) {
+    let edge = end;
+    while (edge > 0 && /\s/u.test(inner[edge - 1])) edge -= 1;
+    const last = ranges.find(range => range.end === edge);
+    if (!last) break;
+    end = last.start;
+    trimmed = true;
+  }
+  if (!trimmed) return to;
+  while (end > 0 && /\s/u.test(inner[end - 1])) end -= 1;
+  return from + end;
 }
 
 // True when the tag opens but never closes, which is what a half-streamed floor looks like.
@@ -2742,11 +2943,14 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags,
   const mode = options.mode === 'replace' ? 'replace' : 'bilingual';
   const regions = [];
   const missingTags = [];
+  // Closing tags written without their opening one: where a body found by its 「正文起点」 ends.
+  const strayCloseAt = [];
   let unbalanced = 0;
   let assumedCloses = 0;
   for (const tag of tags) {
     const groups = scanTagGroups(source, tag);
     unbalanced += (groups.unclosedOpens || 0) + (groups.strayCloses || 0);
+    strayCloseAt.push(...(groups.strayCloseStack ?? []));
     // Some presets never emit the closing tag at all. A hard failure helps nobody, so an opener with
     // no partner is read as running to the end of the message. Complete groups always win over this.
     if (!groups.length && groups.unclosedStack?.length) {
@@ -2778,20 +2982,50 @@ export function extractTaggedRegions(text, tagNames = DEFAULT_SETTINGS.bodyTags,
     if (mode === 'replace') {
       return { source, regions, missingTags, unbalanced, assumedCloses };
     }
+    // None of the tags, but one of the 「正文起点」 markers: the body is what follows it.
+    const fallback = markerRegion(source, options.startMarkers, { closes: strayCloseAt, stopsAt: options.stopsAt, excludedTags: options.excludedTags });
+    if (fallback) return { source, regions: [fallback], missingTags, unbalanced, assumedCloses, nested: [], startMarker: fallback.openTag };
     if (unbalanced) {
       throw new Error(`正文标签没有成对闭合：${tags.map(tag => `<${tag}>`).join('、')}。这一楼可能还在生成，或预设输出的标签不完整。`);
     }
-    throw new Error(`当前 AI 回复中没有找到正文标签：${tags.map(tag => `<${tag}>`).join('、')}。`);
+    const noMarker = parseStartMarkers(options.startMarkers).length ? '，也没有找到正文起点' : '';
+    throw new Error(`当前 AI 回复中没有找到正文标签：${tags.map(tag => `<${tag}>`).join('、')}${noMarker}。`);
   }
   regions.sort((left, right) => left.openStart - right.openStart);
-  regions.unbalanced = unbalanced;
-  regions.assumedCloses = assumedCloses;
-  for (let index = 1; index < regions.length; index += 1) {
-    if (regions[index].openStart < regions[index - 1].closeEnd) {
-      throw new Error(`正文提取标签发生嵌套：<${regions[index - 1].tagName}> 与 <${regions[index].tagName}>。请只保留外层正文标签。`);
+  // A main model does not always put a block in the same place: <parallel_line> after <story_scene> one
+  // floor, inside it the next. A block that sits inside another one is already part of it, so the outer
+  // block is translated whole, the inner tag lines kept where they are. One left open inside another
+  // (running to the end of the floor only because it never closed) counts as inside it too. Only blocks
+  // that genuinely cross each other's end have no outer block to go by.
+  const kept = [];
+  const nested = [];
+  for (const region of regions) {
+    const outer = kept.find(item => region.openStart >= item.contentStart
+      && (region.closeEnd <= item.closeStart || (region.assumedClose && region.openStart < item.closeStart)));
+    if (outer) {
+      nested.push({ tagName: region.tagName, outerTagName: outer.tagName });
+      continue;
     }
+    const crossed = kept.find(item => region.openStart < item.closeEnd);
+    if (crossed) {
+      throw new Error(`正文提取标签互相交叉：<${crossed.tagName}> 与 <${region.tagName}> 都跨过了对方的结束标签，分不出哪个在外层。请检查这一楼的标签。`);
+    }
+    kept.push(region);
   }
-  return { source, regions, missingTags, unbalanced, assumedCloses };
+  kept.unbalanced = unbalanced;
+  kept.assumedCloses = assumedCloses;
+  return { source, regions: kept, missingTags, unbalanced, assumedCloses, nested };
+}
+
+/**
+ * A floor's regions to translate: its body tags' (or, with none of them there, the body after its
+ * 「正文起点」, which stops where a replace region begins) and its replace tags'.
+ */
+export function extractFloorRegions(text, { bodyTags, replaceTags, startMarkers, excludedTags } = {}) {
+  const replaceList = parseTagNames(replaceTags);
+  const replace = replaceList.length ? extractTaggedRegions(text, replaceList, { mode: 'replace' }) : null;
+  const body = extractTaggedRegions(text, bodyTags, { startMarkers, excludedTags, stopsAt: (replace?.regions ?? []).map(region => region.openStart) });
+  return mergeExtractedRegions(body, replace);
 }
 
 // Body and replace regions live in one floor and are rebuilt in a single pass, so they may sit side
@@ -2802,7 +3036,7 @@ export function mergeExtractedRegions(body, replace) {
     .sort((left, right) => left.openStart - right.openStart);
   for (let index = 1; index < regions.length; index += 1) {
     if (regions[index].openStart < regions[index - 1].closeEnd) {
-      throw new Error(`<${regions[index - 1].tagName}> 与 <${regions[index].tagName}> 的区域交叉重叠，请检查提取标签与替换标签的嵌套。镜译不支持标签嵌套。`);
+      throw new Error(`<${regions[index - 1].tagName}> 与 <${regions[index].tagName}> 的区域交叉重叠：替换标签不能和提取标签套在一起，请检查这一楼的标签或这两处设置。`);
     }
   }
   return {
@@ -2811,6 +3045,8 @@ export function mergeExtractedRegions(body, replace) {
     missingTags: [...(body?.missingTags ?? []), ...(replace?.missingTags ?? [])],
     unbalanced: (body?.unbalanced || 0) + (replace?.unbalanced || 0),
     assumedCloses: (body?.assumedCloses || 0) + (replace?.assumedCloses || 0),
+    // The 「正文起点」 the body was found by, when none of the body tags was there.
+    startMarker: body?.startMarker ?? null,
   };
 }
 
@@ -2830,7 +3066,6 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
           ? `最后一组 <${tag}> 没有对应的结束标签，已改用前面 ${groups.length} 组完整内容。`
           : `<${tag}> 没有结束标签，已把开标签之后到楼层末尾的内容当作正文。`);
       }
-      if (strayCloses) errors.push(`发现 ${strayCloses} 个没有对应开始标签的 </${tag}>，已忽略。`);
       return {
         tag,
         count: groups.length,
@@ -2848,8 +3083,9 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   });
   const excludedResults = excluded.map(tag => {
     try {
-      const groups = scanTagGroups(source, tag, { includeSelfClosing: true });
-      return { tag, count: groups.length };
+      // Read as a new floor is segmented (SEGMENTATION_RULES_VERSION 4): a tag that never closes counts too.
+      const groups = scanTagGroups(source, tag, { includeSelfClosing: true, quoteAware: true });
+      return { tag, count: groups.length + (groups.unclosedStack?.length ?? 0) };
     } catch (error) {
       errors.push(error.message);
       return { tag, count: 0, error: error.message };
@@ -2868,6 +3104,22 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
       return { tag, count: 0, error: error.message };
     }
   });
+  // None of the body tags there at all: the body its 「正文起点」 finds instead, when one is set and there.
+  const startMarkers = parseStartMarkers(segmentOptions.bodyStartMarkers);
+  let fallback = null;
+  if (startMarkers.length && bodyResults.every(result => !result.count && !result.unclosedOpens && !result.error)) {
+    try {
+      fallback = extractFloorRegions(source, { bodyTags: body, replaceTags: replace, startMarkers, excludedTags: excluded });
+      if (!fallback.startMarker) fallback = null;
+    } catch {
+      fallback = null;
+    }
+  }
+  // A closing tag without its opening one ends the body a 「正文起点」 found; otherwise it is left out.
+  for (const result of bodyResults) {
+    if (result.strayCloses && !fallback) errors.push(`发现 ${result.strayCloses} 个没有对应开始标签的 </${result.tag}>，已忽略。`);
+  }
+  const markerRegionFound = fallback?.regions.find(region => region.fromMarker) ?? null;
   let paragraphs = 0;
   let translationUnits = 0;
   let customPreservedLines = 0;
@@ -2875,12 +3127,20 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   let cardPreservedLines = 0;
   let lyricLines = 0;
   const structuralTags = new Set();
-  if (!errors.length && bodyResults.some(result => result.count)) {
+  let nested = [];
+  if (fallback || (!errors.length && bodyResults.some(result => result.count))) {
     try {
-      const extraction = mergeExtractedRegions(
-        extractTaggedRegions(source, body),
-        replace.length ? extractTaggedRegions(source, replace, { mode: 'replace' }) : null,
-      );
+      let extraction = fallback;
+      if (!extraction) {
+        const bodyExtraction = extractTaggedRegions(source, body);
+        // A body block written inside another one is translated with it (extractTaggedRegions); the report
+        // says so, so 「采用第 N 组」 is not read as that block being translated on its own.
+        nested = bodyExtraction.nested ?? [];
+        extraction = mergeExtractedRegions(
+          bodyExtraction,
+          replace.length ? extractTaggedRegions(source, replace, { mode: 'replace' }) : null,
+        );
+      }
       let nextId = 1;
       for (const region of extraction.regions) {
         const segmented = segmentSource(region.inner, { ...segmentOptions, excludedTags: excluded, startId: nextId });
@@ -2899,6 +3159,12 @@ export function inspectTagConfiguration(text, bodyTags, excludedTags, segmentOpt
   }
   return {
     bodyTags: bodyResults,
+    // The 「正文起点」 the body was found by, and where it runs to: a closing tag, the end of the floor, or
+    // (neither) the replace region after it.
+    startMarker: markerRegionFound
+      ? { marker: markerRegionFound.openTag, until: markerRegionFound.closeTag, toEnd: markerRegionFound.closeStart >= source.length }
+      : null,
+    nestedTags: nested.map(item => ({ tag: item.tagName, outer: item.outerTagName })),
     excludedTags: excludedResults,
     replaceTags: replaceResults,
     paragraphs,
@@ -2958,12 +3224,16 @@ function commentRanges(source) {
   return ranges;
 }
 
-function outermostExcludedRanges(source, tagNames) {
+function outermostExcludedRanges(source, tagNames, { quoteAware = false } = {}) {
   const ranges = commentRanges(source);
   for (const tag of parseTagNames(tagNames)) {
-    for (const group of scanTagGroups(source, tag, { includeSelfClosing: true })) {
+    const groups = scanTagGroups(source, tag, { includeSelfClosing: true, quoteAware });
+    for (const group of groups) {
       ranges.push({ start: group.openStart, end: group.closeEnd, tagName: tag });
     }
+    // An excluded tag that opens and never closes is one written on its own (<pic prompt="…"> with no /):
+    // the tag itself is left out, and what follows it is the story's.
+    if (quoteAware) for (const open of groups.unclosedStack ?? []) ranges.push({ start: open.start, end: open.end, tagName: tag });
   }
   ranges.sort((left, right) => left.start - right.start || right.end - left.end);
   const outermost = [];
@@ -2984,11 +3254,11 @@ function outermostExcludedRanges(source, tagNames) {
   return outermost;
 }
 
-function maskExcludedTags(source, tagNames) {
+function maskExcludedTags(source, tagNames, options = {}) {
   const blocks = [];
   let masked = '';
   let cursor = 0;
-  for (const [index, range] of outermostExcludedRanges(source, tagNames).entries()) {
+  for (const [index, range] of outermostExcludedRanges(source, tagNames, options).entries()) {
     const token = `\uE000JY_EXCLUDED_${index}\uE001`;
     masked += `${source.slice(cursor, range.start)}${token}`;
     blocks.push({ token, text: source.slice(range.start, range.end) });
@@ -3588,7 +3858,9 @@ export function segmentSource(text, options = {}) {
   if (parsedRules.errors.length || lyricRules.errors.length) {
     throw new Error([...parsedRules.errors, ...lyricRules.errors].join(' '));
   }
-  const { masked, blocks } = maskExcludedTags(source, options.excludedTags);
+  // Version 4 and up: excluded tags read with their quoted attributes whole, and one that never closes
+  // left out on its own (see SEGMENTATION_RULES_VERSION).
+  const { masked, blocks } = maskExcludedTags(source, options.excludedTags, { quoteAware: segmentationRules >= 4 });
   const structuralTags = new Set();
   // Segment id → the line with its speaker marks as markers, for the reading; see speechMarkedLine.
   const speech = new Map();
@@ -3978,22 +4250,33 @@ export function segmentSource(text, options = {}) {
 // When the floor's body changed while the API was working, the ids no longer line up, but the
 // paragraphs that were not touched still have identical source text. Carrying those across turns a
 // total loss into a partial write that 补译 can finish.
-export function remapTranslationsBySource(previousSegments, translations, currentSegments) {
-  const carried = new Map();
-  if (!(translations instanceof Map) || !translations.size) return carried;
+/**
+ * The paragraphs of the current text that carry over from an earlier one by their source text, in order:
+ * current id → earlier id. Only the earlier paragraphs `kept` names take part; a text found more than
+ * once is matched in turn.
+ */
+export function matchSegmentsBySource(previousSegments, kept, currentSegments) {
+  const pairs = new Map();
   const byText = new Map();
   for (const segment of Array.isArray(previousSegments) ? previousSegments : []) {
+    if (!kept(segment?.id)) continue;
     const text = String(segment?.text ?? '');
-    if (!translations.has(segment?.id)) continue;
     if (!byText.has(text)) byText.set(text, []);
     byText.get(text).push(segment.id);
   }
   for (const segment of Array.isArray(currentSegments) ? currentSegments : []) {
     const queue = byText.get(String(segment?.text ?? ''));
-    if (!queue?.length) continue;
-    const sourceId = queue.shift();
-    const value = translations.get(sourceId);
-    if (value) carried.set(segment.id, value);
+    if (queue?.length) pairs.set(segment.id, queue.shift());
+  }
+  return pairs;
+}
+
+export function remapTranslationsBySource(previousSegments, translations, currentSegments) {
+  const carried = new Map();
+  if (!(translations instanceof Map) || !translations.size) return carried;
+  for (const [currentId, previousId] of matchSegmentsBySource(previousSegments, id => translations.has(id), currentSegments)) {
+    const value = translations.get(previousId);
+    if (value) carried.set(currentId, value);
   }
   return carried;
 }
@@ -4410,6 +4693,11 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
     if (!value || typeof value !== 'object') return;
     if (Array.isArray(value.quotes)) for (const quote of value.quotes) if (quote && typeof quote === 'object') runMarks.add(JSON.stringify(quote));
     if (Array.isArray(value.runs)) consumedRunArrays.add(JSON.stringify(value.runs));
+    // The reply's scene (scene.js) is not a translation either: a list a model wrote in it anyway (the
+    // cast as an array) is skipped the same way, never read as id-less translations by position.
+    if (value.scene && typeof value.scene === 'object') {
+      for (const field of Object.values(value.scene)) if (Array.isArray(field)) consumedRunArrays.add(JSON.stringify(field));
+    }
     for (const key of ['translations', 'items', 'results', 'data']) if (Array.isArray(value[key])) value[key].forEach(collectRuns);
   };
   parsedCandidates.forEach(collectRuns);
@@ -4762,7 +5050,9 @@ function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) 
   pieces = liftSplitQuotes(pieces);
   // Nothing to carry means nothing to wrap: a line split into runs that all came back bare is the
   // line itself, and wrapping it would only add markers for a reader to strip later.
-  if (!pieces.some(piece => piece?.css || piece?.className || piece?.rawOpen || piece?.rawClose)) return translation;
+  // A move drawn without colour (招式表's 不上色) still keeps its span, so turning its colour back on
+  // later has the span to recolour.
+  if (!pieces.some(piece => piece?.css || piece?.className || piece?.rawOpen || piece?.rawClose || piece?.moveName !== undefined)) return translation;
   return pieces
     .map(piece => {
       const attributes = [
@@ -4780,6 +5070,9 @@ function styledBody(translation, styleBody, wrap = markedAffix, id = undefined) 
         // from scratch against a new band, with only the span's own attributes to go on and no piece tree
         // left to ask, so the same choice has to survive as a marker here or the size comes back.
         piece.moveElement !== undefined && piece.dropSurroundingCss ? 'data-jy-move-nosize="1"' : '',
+        // What the words around it wear (`carveRuns`), for a restyle that takes the move's own colour
+        // away (招式表's 不上色) to put back.
+        piece.moveName !== undefined && piece.moveBaseCss ? `data-jy-move-base="${escapeMoveAttribute(piece.moveBaseCss)}"` : '',
       ].filter(Boolean).join(' ');
       const inner = attributes
         ? `${wrap(`<span ${attributes}>`)}${piece.text}${wrap('</span>')}`
@@ -4877,6 +5170,9 @@ function carveRuns(pieces, ordered) {
         // a move carved out of it later still sees it; a move run carries none of its own, so it falls
         // back to whatever the piece already had.
         hidden: run.hidden ?? piece.hidden,
+        // What the words around a move wear (a speaker's colour, a rhythm step), so 招式表's 不上色 can
+        // put the move back in it later (`styledBody` writes it down, `recolorMoveSpans` reads it).
+        ...(carried ? {} : { moveBaseCss: piece.css || '' }),
         [flag]: true,
       });
       const rest = text.slice(at + run.text.length);
@@ -4956,6 +5252,7 @@ function carveRuns(pieces, ordered) {
         moveElement: undefined,
         moveName: undefined,
         moveTier: undefined,
+        moveBaseCss: undefined,
         moveApplied: false,
       });
       const rest = text.slice(at + run.text.length);
@@ -5391,11 +5688,25 @@ export function recolorMoveSpans(body, options) {
   if (typeof body !== 'string' || !body.includes('data-jy-move-element="')) return body;
   const coloring = normalizeColoring(options?.coloring);
   if (!coloring.speakers || !coloring.effects || !coloring.band) return body;
+  // 招式表's hand settings for this chat's card (DESIGN §17.5), laid over the automatic element and tier
+  // the span itself carries — which is why the span keeps those and never the hand-set ones.
+  const overrides = new Map(normalizeMoveOverrides(options?.moveOverrideList).map(item => [item.name, item]));
   return body.replace(MOVE_SPAN_OPEN_RE, tag => {
     const element = unescapeMoveAttribute(tag.match(/\sdata-jy-move-element="([^"]*)"/)?.[1]);
     const name = unescapeMoveAttribute(tag.match(/\sdata-jy-move-name="([^"]*)"/)?.[1]);
     const tier = unescapeMoveAttribute(tag.match(/\sdata-jy-move-tier="([^"]*)"/)?.[1]);
-    const resolved = resolveMoveStyle({ element, name, tier, band: coloring.band, vividness: coloring.vividness });
+    const override = overrides.get(name);
+    if (override?.off) {
+      // 不上色: the move reads like the words around it — whatever they wore when it was cut out of them
+      // (`data-jy-move-base`), or nothing of its own when they wore nothing.
+      // Still attribute-escaped as written, which is what a style attribute needs anyway.
+      const base = tag.match(/\sdata-jy-move-base="([^"]*)"/)?.[1] ?? '';
+      if (/\sstyle="[^"]*"/.test(tag)) return tag.replace(/\sstyle="[^"]*"/, base ? ` style="${base}"` : '');
+      return base ? tag.replace(/>$/, ` style="${base}">`) : tag;
+    }
+    const resolved = resolveMoveStyle({
+      element: override?.element || element, name, tier: override?.tier || tier, band: coloring.band, vividness: coloring.vividness, color: override?.color || '',
+    });
     if (!resolved) return tag;
     // 字号二选一 (design §2 item 4): `data-jy-move-nosize` (`styledBody`, above) says this move was
     // carved out of a <big>/<small> carried fragment on first render, so its own font-size was dropped
@@ -5453,17 +5764,109 @@ export function restyleBilingual(text, options = {}, metadata) {
     });
 }
 
-export async function hashText(text) {
-  const normalized = normalizeNewlines(text);
+async function browserDigest(normalized) {
   try {
     if (globalThis.crypto?.subtle && typeof TextEncoder !== 'undefined') {
       const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
       return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
     }
   } catch {
-    // Non-secure preview/test environments use the deterministic fallback below.
+    // Non-secure pages (an http address other than localhost) have no digest of their own.
   }
-  return hashTextSync(normalized);
+  return null;
+}
+
+export async function hashText(text) {
+  const normalized = normalizeNewlines(text);
+  return await browserDigest(normalized) ?? hashTextSync(normalized);
+}
+
+/**
+ * The hash written into a floor's own record. The record travels with the chat, and the chat is opened
+ * from wherever the reader is — the computer on localhost, a phone on the computer's LAN address, where
+ * the browser has no digest of its own — so this is SHA-256 on every page: the browser's where it has
+ * one, the same algorithm in plain JavaScript where it has not. Reading caches stay on hashText: they
+ * live in the page's own storage and never meet another address.
+ */
+export async function hashFloorText(text) {
+  const normalized = normalizeNewlines(text);
+  return await browserDigest(normalized) ?? sha256Hex(normalized);
+}
+
+// SHA-256 in plain JavaScript, digit for digit what crypto.subtle gives.
+const SHA256_K = Object.freeze([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+export function sha256Hex(text) {
+  const bytes = new TextEncoder().encode(String(text ?? ''));
+  const length = bytes.length;
+  // The message, a 1 bit, zeros, and its length in bits as a 64-bit big-endian number: a whole number of 64-byte blocks.
+  const total = Math.ceil((length + 9) / 64) * 64;
+  const padded = new Uint8Array(total);
+  padded.set(bytes);
+  padded[length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(total - 8, Math.floor(length / 0x20000000), false);
+  view.setUint32(total - 4, (length * 8) >>> 0, false);
+  const hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+  const words = new Uint32Array(64);
+  const rotate = (value, bits) => (value >>> bits) | (value << (32 - bits));
+  for (let block = 0; block < total; block += 64) {
+    for (let index = 0; index < 16; index += 1) words[index] = view.getUint32(block + index * 4, false);
+    for (let index = 16; index < 64; index += 1) {
+      const a = words[index - 15];
+      const b = words[index - 2];
+      const s0 = rotate(a, 7) ^ rotate(a, 18) ^ (a >>> 3);
+      const s1 = rotate(b, 17) ^ rotate(b, 19) ^ (b >>> 10);
+      words[index] = (words[index - 16] + s0 + words[index - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = hash;
+    for (let index = 0; index < 64; index += 1) {
+      const s1 = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25);
+      const choice = (e & f) ^ (~e & g);
+      const first = (h + s1 + choice + SHA256_K[index] + words[index]) >>> 0;
+      const s0 = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22);
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const second = (s0 + majority) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + first) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (first + second) >>> 0;
+    }
+    hash[0] = (hash[0] + a) >>> 0;
+    hash[1] = (hash[1] + b) >>> 0;
+    hash[2] = (hash[2] + c) >>> 0;
+    hash[3] = (hash[3] + d) >>> 0;
+    hash[4] = (hash[4] + e) >>> 0;
+    hash[5] = (hash[5] + f) >>> 0;
+    hash[6] = (hash[6] + g) >>> 0;
+    hash[7] = (hash[7] + h) >>> 0;
+  }
+  return hash.map(word => word.toString(16).padStart(8, '0')).join('');
+}
+
+/**
+ * Whether a hash stored on a floor is the hash of `text`. Floors written on a page without the
+ * browser's own digest before v0.42.1 carry the short fallback fingerprint (fnv1a-…); those are checked
+ * the way they were made.
+ */
+export async function storedHashMatches(stored, text, computed = null) {
+  const value = String(stored ?? '');
+  if (!value) return false;
+  if (value.startsWith('fnv1a-')) return value === hashTextSync(text);
+  return value === (computed ?? await hashFloorText(text));
 }
 
 /**

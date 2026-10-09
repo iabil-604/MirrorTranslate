@@ -32,7 +32,7 @@ function baseSettings(overrides = {}) {
     apiMode: 'independent',
     selectedChannelId: 'c1',
     channels: [{ id: 'c1', name: '连接一', url: 'https://api.example.com/v1', key: 'sk-realkey1234567890abcdef', model: 'gpt-x' }],
-    tts: { analysisChannelId: 'c1', fish: { key: 'fishkey-secret-000', model: 's2-pro' } },
+    tts: { deepChannelId: 'c1', fish: { key: 'fishkey-secret-000', model: 's2-pro' } },
     ...overrides,
   });
 }
@@ -98,7 +98,7 @@ test('buildSettingsSummaryLines: a secret planted in every field it could reach 
       key: plantedChannelKey,
       model: 'gpt-x',
     }],
-    tts: { analysisChannelId: 'c1', deepChannelId: 'c1', fish: { key: plantedFishKey, model: 's2-pro' } },
+    tts: { deepChannelId: 'c1', fish: { key: plantedFishKey, model: 's2-pro' } },
     helper: { channelId: 'c1', prompt: '' },
   });
   const lines = buildSettingsSummaryLines(settings).join('\n');
@@ -110,11 +110,25 @@ test('buildSettingsSummaryLines: a secret planted in every field it could reach 
 });
 
 test('buildSettingsSummaryLines uses the markup\'s own wording for the Fish rows, not an invented label (review finding helper.js:155)', () => {
-  const settings = baseSettings({ tts: { analysisChannelId: 'c1', fish: { key: 'k', model: 's2-pro', viaProxy: true } } });
+  const settings = baseSettings({ tts: { deepChannelId: 'c1', fish: { key: 'k', model: 's2-pro', viaProxy: true } } });
   const lines = buildSettingsSummaryLines(settings).join('\n');
   assert.match(lines, /Fish Audio › 模型：s2-pro/, '控制中心里这项叫「Fish Audio › 模型」，不是「Fish Audio 模型」');
   assert.match(lines, /经酒馆 CORS 代理发送：开/, '控制中心里这项叫「经酒馆 CORS 代理发送」，不是「Fish 走酒馆代理」');
   assert.doesNotMatch(lines, /Fish 走酒馆代理/);
+});
+
+test('buildSettingsSummaryLines names each use\'s connection as a connection, apart from the 分析模式 switch itself', () => {
+  const settings = baseSettings({
+    channels: [{ id: 'c1', name: '连接一', url: 'https://api.example.com/v1', key: 'k', model: 'gpt-x' }],
+    tts: { enabled: true, mode: 'deep', deepChannelId: 'c1' },
+  });
+  const lines = buildSettingsSummaryLines(settings);
+  assert.ok(lines.includes('翻译用的连接：连接一 · gpt-x · api.example.com'));
+  assert.ok(lines.includes('分析模式用的连接：连接一 · gpt-x · api.example.com'));
+  assert.ok(lines.includes('小助手用的连接：跟随酒馆'));
+  assert.ok(lines.includes('分析模式：开'), '开关本身读作开/关，和它用的连接分开');
+  assert.equal(lines.some(line => line.startsWith('朗读分析')), false, '没有朗读分析这一项了');
+  assert.ok(buildSettingsSummaryLines(baseSettings({ tts: { mode: 'off' } })).includes('分析模式：关'));
 });
 
 test('buildSettingsSummaryLines reports how far the settings have drifted from the remembered 套餐 (review finding helper.js:140)', () => {
@@ -131,7 +145,7 @@ test('buildHelperContext redacts a secret planted in a field the summary legitim
   const plantedInModel = 'sk-model-secret-planted-0005';
   const settings = baseSettings({
     channels: [{ id: 'c1', name: '连接一', url: 'https://api.example.com/v1', key: 'sk-realkey', model: plantedInModel }],
-    tts: { analysisChannelId: 'c1', fish: { key: 'fishkey', model: 's2-pro' } },
+    tts: { deepChannelId: 'c1', fish: { key: 'fishkey', model: 's2-pro' } },
   });
   const ctx = buildHelperContext({
     versions: { appVersion: '0.38.0' },
@@ -187,6 +201,17 @@ test('buildFloorSnapshotLines reports a missing floor plainly, and marks a long 
   assert.match(lines, /缺 1 段/);
   assert.match(lines, /已截断/);
   assert.match(lines, /一个错误/);
+});
+
+test('the helper is told the 「正文起点」 setting, and when a floor\'s body came from it', () => {
+  assert.match(buildSettingsSummaryLines(baseSettings()).join('\n'), /正文起点（找不到提取标签时用）：（空）/);
+  assert.match(buildSettingsSummaryLines(baseSettings({ bodyStartMarkers: ['</konatan_planning~>'] })).join('\n'), /正文起点（找不到提取标签时用）：<\/konatan_planning~>/);
+  const floor = {
+    messageId: 2, role: '角色', swipeLabel: '1/1', segmentCount: 2, translationState: '未译',
+    bodyTagsFound: [], replaceTagsFound: [], excludedTagsFound: [], translationOnly: false, errors: [], preview: '本文。',
+  };
+  assert.match(buildFloorSnapshotLines(floor).join('\n'), /正文标签：未找到\n/);
+  assert.match(buildFloorSnapshotLines({ ...floor, startMarkerFound: '</konatan_planning~>' }).join('\n'), /正文标签：未找到，按正文起点「<\/konatan_planning~>」后面算正文/);
 });
 
 // --- run log -------------------------------------------------------------------------------------
@@ -340,7 +365,7 @@ test('buildHelperContext never loses 可用建议\'s own tail to the final cap s
 test('buildHelperContext\'s 可用建议 section gives the model the actual value domain for every field, and open-page\'s ids for the reader\'s current 界面模式 (review finding helper.js:322)', () => {
   const advanced = mergeSettings({ uiMode: 'advanced', schemaVersion: 13 });
   const ctx = buildHelperContext({ settings: advanced, floor: null, runLog: [], regex: null, knowledgeMarkup: '', manual: '' });
-  assert.match(ctx.text, /tts\.mode（分析模式，可填：off=不分析、simple=简单分析、deep=深度分析）/);
+  assert.match(ctx.text, /tts\.mode（分析模式，可填：off=关、deep=开）/);
   assert.match(ctx.text, /uiMode（界面模式，可填：normal=正常模式、advanced=高级模式）/);
   assert.match(ctx.text, /retries（翻译失败后自动重试，可填：整数 0-5）/);
   assert.match(ctx.text, /open-page（打开页面，value 填：[^；\n]*settings=模型连接/, '高级模式下 open-page 应该带上模型连接页的 id');
@@ -511,7 +536,7 @@ test('describeHelperSuggestion reads naturally for every kind', () => {
   const boolSug = validateHelperSuggestion({ type: 'set', field: 'autoGeneration', value: false }, settings);
   assert.equal(describeHelperSuggestion(boolSug), '把「自动接续翻译」改成「关」');
   const enumSug = validateHelperSuggestion({ type: 'set', field: 'tts.mode', value: 'deep' }, settings);
-  assert.equal(describeHelperSuggestion(enumSug), '把「分析模式」改成「深度分析」');
+  assert.equal(describeHelperSuggestion(enumSug), '把「分析模式」改成「开」');
   const intSug = validateHelperSuggestion({ type: 'set', field: 'retries', value: 3 }, settings);
   assert.equal(describeHelperSuggestion(intSug), '把「翻译失败后自动重试」改成「3」');
   const actionSug = validateHelperSuggestion({ type: 'action', action: 'inspect-floor' }, settings);
@@ -573,4 +598,19 @@ test('parseHelperReply strips only a leading reasoning block and keeps tags the 
   const fenced = '排除标签可以写 <think> 或 <thinking>：\n```\n<thinking>思考</thinking>\n```';
   assert.equal(parseHelperReply(fenced).text, fenced);
   assert.equal(parseHelperReply({ content: '', reasoning: '' }).text, '', '空的回复信封就是空回答');
+});
+
+test('the helper sees 点正文跳到悬浮窗 and may offer to switch it off', () => {
+  assert.ok(buildSettingsSummaryLines(baseSettings()).includes('点正文跳到悬浮窗：开'));
+  assert.ok(buildSettingsSummaryLines(baseSettings({ segmentJump: false })).includes('点正文跳到悬浮窗：关'));
+  const settings = baseSettings();
+  const suggestion = validateHelperSuggestion({ type: 'set', field: 'segmentJump', value: false }, settings);
+  assert.ok(suggestion, '「照这样改」能关掉它');
+  assert.equal(applyHelperSuggestion(settings, suggestion).segmentJump, false);
+  assert.equal(validateHelperSuggestion({ type: 'set', field: 'segmentJump', value: true }, settings), null, '已经开着时不给没用的建议');
+});
+
+test('the helper is told when 切换滑动页时补译 is on but cannot work', () => {
+  assert.ok(buildSettingsSummaryLines(baseSettings({ autoGeneration: false, autoSwipe: true })).includes('切换滑动页时补译：开（自动接续翻译关着，这一项不生效）'));
+  assert.ok(buildSettingsSummaryLines(baseSettings({ autoGeneration: true, autoSwipe: true })).includes('切换滑动页时补译：开'));
 });

@@ -258,19 +258,39 @@ test('a bracketed run the sentence itself was written with (a status line, a sys
   assert.deepEqual(voices.get(quote.id).pauses, [{ after: '，', length: 'short' }]);
 });
 
-test('the prompt\'s own worked example does not place a pause where its own rule 8 says punctuation already stops', () => {
-  const match = DEEP_PROMPT.match(/"line":"((?:[^"\\]|\\.)*)"/);
-  assert.ok(match, 'the worked example carries a line field');
-  const line = match[1];
-  const pauseAt = line.indexOf('[pause]');
-  assert.ok(pauseAt > 0, 'the example still shows a mid-sentence pause');
-  const before = line.slice(0, pauseAt).replace(/\[[^\]]*\]\s*/g, '').trimEnd();
-  assert.equal(/[…—～]$/.test(before), false, `a pause must not sit right where trailing-off punctuation already stops, per rule 8: "${before}"`);
+// The worked example in 分析模式's own prompt (the reader's 声学标注规则): every sentence numbered, a plain
+// narration line answered with three fields, content only where a sentence is performed.
+// The answer opens with the floor's tone, then its voices.
+const workedAnswer = () => JSON.parse(DEEP_PROMPT.split('\n').find(line => line.includes('"voices":[')).match(/\{"tone".*\]\}/)[0]);
+const workedExample = () => workedAnswer().voices;
+
+test('the worked example writes content only where a sentence is performed; plain narration answers with id, role and is_narrator', () => {
+  assert.equal(workedAnswer().tone, '紧张', 'the answer says the floor\'s tone first');
+  const example = workedExample();
+  const plain = example.find(item => item.is_narrator === true && !Object.hasOwn(item, 'content') && !Object.hasOwn(item, 'pace'));
+  assert.ok(plain, 'the example shows a plain narration line');
+  assert.deepEqual(Object.keys(plain).sort(), ['id', 'is_narrator', 'role']);
+  const performed = example.find(item => typeof item.content === 'string');
+  assert.equal(performed.is_narrator, false);
+  assert.ok(performed.role && performed.pace && performed.tension_level && performed.reason);
+  assert.match(DEEP_PROMPT, /不写情绪词/);
+  assert.doesNotMatch(DEEP_PROMPT, /"emotion"/, 'the format has no mood field at all');
+  assert.match(DEEP_PROMPT, /正文本来就念得好的句子不写 content/);
+  assert.match(DEEP_PROMPT, /程序会逐字核对/);
 });
 
-test('SOUND_END_RULE, shared by every prompt that uses it, no longer names an "end" field the deep prompt\'s own output format never defines', () => {
-  assert.equal(/\bend\b/i.test(SOUND_END_RULE), false, 'the deep prompt never asks the model for an "end" field, so the shared rule must not name one');
-  assert.ok(DEEP_PROMPT.includes(SOUND_END_RULE), 'the deep prompt still carries the rule itself, just not the bare English word');
+test('the prompt\'s own worked example passes the program\'s own check, stutter, marks and pause included', () => {
+  const performed = workedExample().find(item => typeof item.content === 'string');
+  const { utterances, quote } = quoteOf('你别靠这么近，会让人看见的。');
+  const { labels, voices, mismatches } = parseDeepAnalysis(JSON.stringify({ voices: [{ ...performed, id: quote.id }] }), utterances);
+  assert.deepEqual(mismatches, []);
+  assert.equal(labels.get(quote.id).speaker, '林浅');
+  assert.deepEqual(voices.get(quote.id), { speed: 'fast', tensionLevel: 4, why: '心虚压声', script: '[whisper] 你、你别靠这么近…… [pause] 会让人看见的。' });
+  assert.equal(fishOf(utterances, labels, voices, quote.id), '[whisper] 你、你别靠这么近…… [pause] 会让人看见的。');
+});
+
+test('SOUND_END_RULE, shared by the prompts that use it, names no "end" field', () => {
+  assert.equal(/\bend\b/i.test(SOUND_END_RULE), false, 'the shared rule must not name a field by the bare English word');
 });
 
 test('SOUND_END_RULE scopes its condition to the line within its own paragraph, the same condition rule 6 states for using `end`, not to the paragraph being the floor\'s last one', () => {
@@ -397,4 +417,107 @@ test('a pause after an auxiliary ending does not widen back across a particle', 
   for (const [text, shown] of [['家にいる', 'いる'], ['彼がいる', 'いる'], ['友達がいるよ', 'いる'], ['話している', '話している']]) {
     assert.equal(pauseDisplay(text, 'いる'), shown, text);
   }
+});
+
+// A floor of narration with a line of dialogue between the paragraphs, as the request numbers it:
+// every sentence has an id, and only the quoted ones are marked ⟦id⟧.
+function trainingFloor() {
+  return splitUtterances([
+    { lineId: 1, text: '朝の演習場には、まだ誰もいなかった。風が草を揺らしている。' },
+    { lineId: 2, text: '踏み込みの一歩で、乾いた赤土が丸くへこんだ。土埃が舞い上がる。' },
+    { lineId: 3, text: '「へへ……すげえな、孟空。前よりずっと腰が据わってるってばよ」' },
+    { lineId: 4, text: '孟空は黙って構えを直した。額の汗が光っている。' },
+    { lineId: 5, text: '「よし……次は、ちょっと拍子を変えるぞ。油断すんなよ！」' },
+    { lineId: 6, text: '二人の間に、また五歩ほどの距離が開いた。' },
+    { lineId: 7, text: '「ここまで防ぎ切るとは思わなかったってばよ！流石だな、孟空！」' },
+  ]);
+}
+const HEHE = 'へへ……すげえな、孟空。前よりずっと腰が据わってるってばよ';
+const YOSHI = 'よし……次は、ちょっと拍子を変えるぞ。油断すんなよ！';
+const KOKOMADE = 'ここまで防ぎ切るとは思わなかったってばよ！流石だな、孟空！';
+
+test('a reply numbered by the paragraph instead of ⟦编号⟧ lands on that paragraph\'s dialogue, never on the narration sharing the number', () => {
+  const utterances = trainingFloor();
+  assert.deepEqual(utterances.filter(item => item.kind === 'quoted').map(item => item.id), [5, 8, 10]);
+  const reply = { voices: [
+    { id: 3, speaker: '鸣人', emotion: 'happy', line: `[happy] ${HEHE}` },
+    { id: 5, speaker: '鸣人', emotion: 'excited' },
+    { id: 7, speaker: '鸣人', emotion: 'proud', line: `[proud] ${KOKOMADE}` },
+  ] };
+  const parsed = parseDeepAnalysis(JSON.stringify(reply), utterances);
+  assert.equal(parsed.numbering, 'line');
+  assert.equal(parsed.moved, 3);
+  assert.deepEqual(parsed.dropped, []);
+  assert.deepEqual(parsed.mismatches, [], 'each line is checked against the sentence it was about');
+  assert.deepEqual([...parsed.labels.keys()].sort((a, b) => a - b), [5, 8, 10]);
+  assert.equal(parsed.voices.get(8).emotion, 'excited', 'an answer without a line follows the same numbering');
+  assert.equal(parsed.labels.get(10).speaker, '鸣人');
+  for (const id of [3, 7]) assert.equal(parsed.labels.has(id), false, `narration ${id} stays narration`);
+});
+
+test('a reply numbered by its own count of the dialogue is read onto the dialogue in order', () => {
+  const utterances = trainingFloor();
+  const reply = { voices: [
+    { id: 1, speaker: '鸣人', emotion: 'happy', line: HEHE },
+    { id: 2, speaker: '鸣人', emotion: 'excited' },
+    { id: 3, speaker: '鸣人', emotion: 'proud', line: `[proud] ${KOKOMADE}` },
+  ] };
+  const parsed = parseDeepAnalysis(JSON.stringify(reply), utterances);
+  assert.equal(parsed.numbering, 'count');
+  assert.deepEqual([...parsed.voices].map(([id, voice]) => [id, voice.emotion]).sort((a, b) => a[0] - b[0]), [[5, 'happy'], [8, 'excited'], [10, 'proud']]);
+});
+
+test('a reply numbered by ⟦编号⟧ is read exactly as before', () => {
+  const utterances = trainingFloor();
+  const reply = { voices: [
+    { id: 5, speaker: '鸣人', emotion: 'happy', line: `[happy] ${HEHE}` },
+    { id: 8, speaker: '鸣人', emotion: 'excited' },
+    { id: 10, speaker: '鸣人', emotion: 'proud', line: `[proud] ${KOKOMADE}` },
+  ] };
+  const parsed = parseDeepAnalysis(JSON.stringify(reply), utterances);
+  assert.equal(parsed.numbering, '');
+  assert.equal(parsed.moved, 0);
+  assert.deepEqual(parsed.dropped, []);
+  assert.deepEqual([...parsed.labels.keys()].sort((a, b) => a - b), [5, 8, 10]);
+});
+
+test('one stray answer moves to the dialogue its line copies; a number that is nobody\'s dialogue is left out and named', () => {
+  const utterances = trainingFloor();
+  const reply = { voices: [
+    { id: 5, speaker: '鸣人', emotion: 'happy' },
+    // Narration's number, the second line's words: one answer is not enough to read the reply by another numbering.
+    { id: 4, speaker: '鸣人', emotion: 'excited', line: YOSHI },
+    { id: 6, speaker: '鸣人', emotion: 'proud' },
+    { id: 9, type: 'narration' },
+  ] };
+  const parsed = parseDeepAnalysis(JSON.stringify(reply), utterances);
+  assert.equal(parsed.numbering, '');
+  assert.equal(parsed.moved, 1);
+  assert.deepEqual(parsed.dropped, [6], 'a bare narration answer on narration says nothing worth naming');
+  assert.deepEqual([...parsed.labels.keys()].sort((a, b) => a - b), [5, 8]);
+  assert.equal(parsed.voices.get(8).emotion, 'excited');
+});
+
+test('a quoted title answered as narration by its paragraph\'s number stays narration', () => {
+  const utterances = splitUtterances([
+    { lineId: 1, text: '门上写着「闲人免进」。他推门进去。' },
+    { lineId: 2, text: '「有人吗？」' },
+    { lineId: 3, text: '没有人回答。屋里很暗。' },
+    { lineId: 4, text: '「我进来了。」' },
+  ]);
+  const quoted = utterances.filter(item => item.kind === 'quoted').map(item => item.id);
+  const reply = { voices: [
+    { id: 1, type: 'narration' },
+    { id: 2, speaker: '泰罗', emotion: 'nervous', line: '有人吗？' },
+    { id: 4, speaker: '泰罗', emotion: 'nervous', line: '我进来了。' },
+  ] };
+  const parsed = parseDeepAnalysis(JSON.stringify(reply), utterances);
+  assert.equal(parsed.numbering, 'line');
+  assert.deepEqual(parsed.labels.get(quoted[0]), { type: 'narration' });
+  assert.equal(parsed.labels.get(quoted[1]).speaker, '泰罗');
+  assert.equal(parsed.labels.get(quoted[2]).speaker, '泰罗');
+});
+
+test('the prompt says which number an answer goes by', () => {
+  assert.match(DEEP_PROMPT, /id 写 ⟦⟧ 里的那个数字，不是 lines 里的段号 line/);
 });

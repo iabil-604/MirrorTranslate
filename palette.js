@@ -634,6 +634,8 @@ export const MOVE_ELEMENT_HUES = Object.freeze({
   魅惑: 354.3, 爱意: 354.3, 樱花: 354.3,
   科技: 182.5, 电子: 182.5, 数据: 182.5,
   钢铁: 257.4, 剑技: 257.4, 纯物理: 257.4,
+  // 肉搏一类：preset 里没有，常夜灯 2026-09-27 定单独一个橙红，落在鲜血（27.3）与真火（41.1）之间的空档。
+  体术: 34, 拳法: 34, 格斗: 34, 武术: 34, 肉搏: 34, 拳脚: 34, 武技: 34,
   // 东方体系 (§8.4)，查不到再回落到上面的通用属性表。
   道门金光: 75.8, 符箓: 75.8, 浩然正气: 75.8, 天道: 75.8, 道: 75.8,
   佛光: 58.3, 梵音: 58.3, 金刚: 58.3, 舍利: 58.3, 佛: 58.3,
@@ -645,6 +647,19 @@ export const MOVE_ELEMENT_HUES = Object.freeze({
   // 已经是上面的键，后两个补在这里，和它们各自的类别同色——道法归入道门一类，机械归入钢铁一类。
   道法: 75.8, 机械: 257.4,
 });
+
+// One name per colour family, in the order the table lists them: what 招式表's 属性 picker offers
+// (DESIGN §17.5). Every other key above is a synonym of one of these and paints the same.
+export const MOVE_ELEMENT_CHOICES = Object.freeze((() => {
+  const seen = new Set();
+  const choices = [];
+  for (const [name, hue] of Object.entries(MOVE_ELEMENT_HUES)) {
+    if (seen.has(hue)) continue;
+    seen.add(hue);
+    choices.push(name);
+  }
+  return choices;
+})());
 
 // A small model answers in whatever shape it likes: 「火属性」「火系」「火之力」「冰魔法」 all name an
 // entry already in the table above with a descriptive suffix tacked on, and it may just as easily
@@ -676,6 +691,8 @@ const MOVE_ELEMENT_ALIASES = Object.freeze({
   tech: '科技', technology: '科技', electronic: '电子', data: '数据',
   steel: '钢铁', iron: '钢铁', metal: '钢铁', sword: '剑技', physical: '纯物理',
   machinery: '机械', machine: '机械',
+  martial: '体术', 'martial arts': '体术', 'martial art': '体术', taijutsu: '体术', melee: '肉搏',
+  fist: '拳法', fists: '拳法', punch: '拳法', kick: '体术', brawl: '格斗', fighting: '格斗',
 });
 
 // Full-width ASCII (letters, digits and the ideographic space some IMEs insert) reduced to their
@@ -742,14 +759,25 @@ export function normalizeMoveTier(value) {
  * only repaints the glyph when the inner span states its own fill colour too — writing `color` alone
  * still renders in the outer speaker's colour, with `-webkit-text-fill-color` inherited unchanged.
  */
-export function resolveMoveStyle({ element = '', name = '', tier = 1, band, vividness = 0.7 } = {}) {
+export function resolveMoveStyle({ element = '', name = '', tier = 1, band, vividness = 0.7, color = '' } = {}) {
   if (!band) return null;
   const level = normalizeMoveTier(tier);
   const key = String(element ?? '').trim();
-  const normalizedKey = normalizeMoveElementKey(key);
-  const hue = normalizedKey ? MOVE_ELEMENT_HUES[normalizedKey] : fallbackHue(name || key);
-  const seed = toHex(oklchToSrgb({ l: band.lightness ?? 0.6, c: Math.max(0.06, (band.chromaMax ?? 0.2) * 0.8), h: hue }));
-  const adapted = adaptColorToBand(seed, band, { name: name || key, vividness });
+  // A colour the reader picked in 招式表 (DESIGN §17.5) is kept exactly as picked while it still reads
+  // on this background; one that does not is moved only as far as it has to — its own hue and chroma,
+  // the lightness re-solved — never swapped for the element's colour.
+  const custom = color ? parseCssColor(color) : null;
+  let adapted;
+  if (custom) {
+    adapted = meetsContrast(custom, band.backgrounds, band.minContrast)
+      ? { hex: toHex(custom), oklch: srgbToOklch(custom) }
+      : adaptColorToBand(custom, band, { name: name || key, vividness: 0 });
+  } else {
+    const normalizedKey = normalizeMoveElementKey(key);
+    const hue = normalizedKey ? MOVE_ELEMENT_HUES[normalizedKey] : fallbackHue(name || key);
+    const seed = toHex(oklchToSrgb({ l: band.lightness ?? 0.6, c: Math.max(0.06, (band.chromaMax ?? 0.2) * 0.8), h: hue }));
+    adapted = adaptColorToBand(seed, band, { name: name || key, vividness });
+  }
   // Every tier is bold — the preset's own template wraps every level in <b> — carried as a real
   // declaration here (not a nested <b> tag) so it rides the same single inline style as the colour.
   const declarations = [`color:${adapted.hex}`, `-webkit-text-fill-color:${adapted.hex}`, 'font-weight:700'];

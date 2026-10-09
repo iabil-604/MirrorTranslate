@@ -347,6 +347,22 @@ test('every element word the annotation prompt\'s own example uses (prompts.js) 
   }
 });
 
+test('体术 and its kin have a warm hue of their own instead of a colour hashed from the move name', () => {
+  for (const element of ['体术', '拳法', '格斗', '武术', '肉搏', '拳脚', '武技']) {
+    assert.equal(MOVE_ELEMENT_HUES[normalizeMoveElementKey(element)], 34, element);
+  }
+  assert.equal(normalizeMoveElementKey('体术系'), '体术');
+  assert.equal(normalizeMoveElementKey('Martial Arts'), '体术');
+  assert.equal(normalizeMoveElementKey('melee'), '肉搏');
+  // Its own family, apart from the warm hues next to it.
+  for (const neighbour of ['鲜血', '真火', '火焰']) assert.ok(Math.abs(MOVE_ELEMENT_HUES[neighbour] - 34) >= 6, neighbour);
+  // Two different punches land on the same colour, whatever they are called.
+  const band = computeSafeBand(['#1e2530']);
+  const one = resolveMoveStyle({ element: '体术', name: '柚子升龙拳', tier: 1, band });
+  const two = resolveMoveStyle({ element: '体术', name: '旋风腿', tier: 1, band });
+  assert.equal(one.hex, two.hex);
+});
+
 test('a stacked or English descriptive suffix keeps stripping, and retries the table and the alias after each strip', () => {
   // 雷系魔法: 魔法 strips to 雷系, then 系 strips to 雷 -- a real table entry only after two strips.
   assert.equal(normalizeMoveElementKey('雷系魔法'), '雷');

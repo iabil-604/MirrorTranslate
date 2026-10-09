@@ -9,6 +9,7 @@ import {
   extractGeneratedTranslations,
   createTranslationSignature,
   hashText,
+  hashTextSync,
   interceptGenerationChat,
   mergeSettings,
   restyleBilingual,
@@ -116,6 +117,35 @@ test('a re-roll on the same floor is translated, not swallowed by the old text\'
   assert.equal(old.reason, 'cancelled', 'the stuck run was called off and says so');
 });
 
+test('a floor whose main model put one body tag inside the other is translated whole instead of stopping', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([
+        { id: 1, text: '黄昏的教室。' },
+        { id: 2, text: '同一时刻，天台上有人在哭。' },
+        { id: 3, text: '樱井笑了。' },
+      ]));
+    },
+  });
+  __testing.configureForTest({
+    settings: { apiMode: 'follow', streamingWriteback: false, retries: 0, bodyTags: ['story_scene', 'parallel_line'] },
+    initialized: true,
+  });
+  const mes = '<story_scene>\n夕暮れの教室。\n\n<parallel_line>\n同じ頃、屋上では誰かが泣いていた。\n</parallel_line>\n\n桜井は笑った。\n</story_scene>';
+  context.chat.push({ mes, swipe_id: 0, swipes: [mes], extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true });
+  assert.equal(result.skipped, false);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /同じ頃、屋上では誰かが泣いていた/, '平行线的内容跟着外层一起送去翻译');
+  assert.match(context.chat[0].mes, /同一时刻，天台上有人在哭。/);
+  assert.match(context.chat[0].mes, /<parallel_line>\n[^\n]*同じ頃[^\n]*\n[^\n]*同一时刻[^\n]*\n<\/parallel_line>/, '里面的标签留在原位，译文跟在它自己那段后面');
+  assert.equal(stripGeneratedTranslationLines(context.chat[0].mes), mes, '去掉译文后和原来一字不差');
+});
+
 test('补译 asks only for the paragraphs that have no translation yet', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });
@@ -163,6 +193,27 @@ test('streaming and whole-request paths agree on the already-translated gate', a
   // A forced run must not take the same shortcut; without a channel it fails at the request, which
   // is proof enough that it did NOT stop at the gate.
   await assert.rejects(__testing.startTranslation(0, { quiet: true, force: true }));
+});
+
+test('a translated floor stays translated when the chat is opened from another address, with or without the browser\'s own digest', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const browser = globalThis.crypto;
+  const restore = () => Object.defineProperty(globalThis, 'crypto', { value: browser, configurable: true, writable: true });
+  t.after(() => { globalThis.SillyTavern = previousHost; restore(); });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: { apiMode: 'independent', streamingWriteback: true } });
+  // Translated on localhost, opened on the computer's LAN address over http.
+  context.chat.push(await translatedFloor('雨が降っている。', [[1, '下雨了。']], settings));
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true, writable: true });
+  assert.equal((await __testing.startTranslation(0, { quiet: true, force: false })).reason, 'already-translated');
+  restore();
+  // Translated over http before v0.42.1, opened on localhost.
+  const old = await translatedFloor('風が強い。', [[1, '风很大。']], settings);
+  const inner = old.mes.slice('<story_scene>'.length, -'</story_scene>'.length);
+  old.extra[MESSAGE_META_KEY].source_hash = hashTextSync(createTranslationSignature([{ tagName: 'story_scene', segments: segmentSource(inner, settings).segments }]));
+  context.chat.push(old);
+  assert.equal((await __testing.startTranslation(1, { quiet: true, force: false })).reason, 'already-translated');
+  assert.match(context.chat[1].mes, /风很大。/);
 });
 
 test('a floor already translated under v0.36.0 or older — a <br>-joined card line and a play-time line included — reads back exactly as it did, never re-translated', async t => {
@@ -389,6 +440,37 @@ test('an SSE stream writes the floor back through the ordinary pipeline', async 
   assert.equal(message.extra[MESSAGE_META_KEY].complete, true);
 });
 
+test('a streamed re-translation stopped halfway leaves the paragraphs it had not reached with their old translation', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const context = mockHost();
+  const settings = __testing.configureForTest({ settings: streamingSettings, initialized: true });
+  context.chat.push(await translatedFloor('雨が降っている。\n\n風が強い。\n\n雪が降る。', [[1, '旧的一。'], [2, '旧的二。'], [3, '旧的三。']], settings));
+  const message = context.chat[0];
+  // The first paragraph's new translation arrives, then the stream goes quiet until it is stopped.
+  globalThis.fetch = async (_url, init) => ({
+    ok: true,
+    status: 200,
+    text: async () => '',
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: '[{"id":1,"text":"新的一。"},' } }] })}\n\n`));
+        init.signal?.addEventListener('abort', () => controller.error(new DOMException('stopped', 'AbortError')));
+      },
+    }),
+  });
+  const running = __testing.startTranslation(0, { quiet: true, force: true });
+  for (let tries = 0; tries < 300 && !message.mes.includes('新的一。'); tries += 1) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.match(message.mes, /新的一。/, 'the new translation is written as it comes');
+  __testing.stopTranslating();
+  assert.equal((await running).reason, 'cancelled');
+  assert.match(message.mes, /旧的二。/);
+  assert.match(message.mes, /旧的三。/);
+  assert.doesNotMatch(message.mes, /旧的一。/);
+  assert.equal(message.extra[MESSAGE_META_KEY].complete, true);
+});
+
 test('reasoning deltas keep the stream alive without ever reaching the floor', async t => {
   const previousHost = globalThis.SillyTavern;
   const previousFetch = globalThis.fetch;
@@ -491,6 +573,32 @@ function completionResponse(items) {
     }),
   };
 }
+
+test('a floor whose text changed under its translation keeps each speaker mark on the paragraph it was made for', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+  const message = { mes: '<story_scene>\n「何を考えてるの！」\n\n「……わからない。」\n</story_scene>', swipe_id: 0 };
+  mockHost([message]);
+  __testing.configureForTest({ settings: { ...coloringSettings, streamingWriteback: true, retries: 0 }, initialized: true });
+  globalThis.fetch = async () => {
+    // While the request is out, a script puts a line in at the top of the floor.
+    message.mes = '<story_scene>\n雨が降り出した。\n\n「何を考えてるの！」\n\n「……わからない。」\n</story_scene>';
+    return completionResponse([
+      { id: 1, text: '「你到底在想什么！」', speaker: '英梨梨', emotion: 'angry', intensity: 2 },
+      { id: 2, text: '「……我不知道。」', speaker: '诗羽', emotion: 'whisper', intensity: 1 },
+    ]);
+  };
+  const result = await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.equal(result.partial, true);
+  const meta = message.extra[MESSAGE_META_KEY];
+  // The new line waits for its translation; the two that were sent keep theirs, and their speakers.
+  assert.deepEqual(meta.missing_ids, [1]);
+  assert.equal(meta.annotations['2'].speaker, '英梨梨');
+  assert.equal(meta.annotations['3'].speaker, '诗羽');
+  assert.equal(meta.annotations['1'], undefined);
+  assert.match(message.mes, /你到底在想什么/);
+});
 
 test('a coloured run paints the floor, keeps the prompt clean and stores the labels', async t => {
   const previousHost = globalThis.SillyTavern;
@@ -1110,6 +1218,75 @@ test('only the translation is left on a finished floor, and everything that read
   assert.equal(stripGeneratedTranslationLines(message.extra[MESSAGE_META_KEY].mirror, message.extra[MESSAGE_META_KEY]), original);
 });
 
+test('a preset that writes its story with no tag around it is translated from its 「正文起点」, the chain of thought and the panels left alone', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      asked.push(JSON.stringify(prompt));
+      return Promise.resolve(JSON.stringify([{ id: 1, text: '阳光斜斜照进放学后的教室。' }, { id: 2, text: '善福寺笑了。' }]));
+    },
+  });
+  __testing.configureForTest({
+    settings: {
+      apiMode: 'follow', streamingWriteback: false, retries: 0, translationOnly: true,
+      bodyTags: ['content'], bodyStartMarkers: ['</konatan_planning~>'], excludedTags: ['tucao', 'current_event', 'advice'],
+    },
+    initialized: true,
+  });
+  // The shape the 泉此方 preset writes with its format examples off: thinking, its end, a remark, the story, panels.
+  const original = '思考：放学后的教室。\n要写善福寺。\n</konatan_planning~>\n<tucao>这次写放学后。</tucao>\n陽光が斜めに差し込む放課後。\n\n善福寺は笑った。\n<current_event>MQ.Ⅰ_放課後</current_event>\n<advice>一緒に帰る</advice>';
+  context.chat.push({ mes: original, swipe_id: 0, swipes: [original], swipe_info: [{ extra: {} }], extra: {} });
+  const message = context.chat[0];
+  const result = await __testing.startTranslation(0, { quiet: true });
+  assert.equal(result.skipped, false);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /陽光が斜めに差し込む放課後/);
+  assert.match(asked[0], /善福寺は笑った/);
+  assert.doesNotMatch(asked[0], /要写善福寺|这次写放学后|MQ\.Ⅰ|一緒に帰る/, 'only the story is sent');
+  // Only the translation is left of the story; the thinking, the remark and the panels stay where they were.
+  assert.equal(message.mes, '思考：放学后的教室。\n要写善福寺。\n</konatan_planning~>\n<tucao>这次写放学后。</tucao>\n阳光斜斜照进放学后的教室。\n\n善福寺笑了。\n<current_event>MQ.Ⅰ_放課後</current_event>\n<advice>一緒に帰る</advice>');
+  const meta = message.extra[MESSAGE_META_KEY];
+  assert.deepEqual(meta.body_start_markers, ['</konatan_planning~>']);
+  assert.equal(stripGeneratedTranslationLines(meta.mirror, meta), original);
+  // Read again, it is the same translated floor; the main model is shown the original.
+  assert.equal((await __testing.startTranslation(0, { quiet: true })).reason, 'already-translated');
+  const prompt = [{ ...message }];
+  interceptGeneration(prompt, 8192, () => {}, 'normal');
+  assert.equal(prompt[0].mes, original);
+});
+
+test('a script adding to a floor with only its translation left, outside the body, leaves it translatable and its original in the prompt', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const { context, asked, original } = translationOnlyHost([
+    [{ id: 1, text: '下雨了。' }, { id: 2, text: '风很大。' }],
+    [{ id: 1, text: '在下雨。' }, { id: 2, text: '风很猛。' }],
+  ]);
+  const message = context.chat[0];
+  await __testing.startTranslation(0, { quiet: true });
+  // An image script puts its picture's prompt after the floor.
+  const picture = '\n<pic prompt="1girl, <lora:rain:0.6>, city"/>';
+  message.mes += picture;
+  message.swipes[0] = message.mes;
+  const snapshot = await __testing.readMessageSnapshot(0);
+  assert.equal(snapshot.diverged, false);
+  assert.equal(snapshot.translated, true);
+  assert.equal((await __testing.startTranslation(0, { quiet: true })).reason, 'already-translated');
+  // The main model is shown the original, and the picture with it.
+  const prompt = [{ ...message }];
+  interceptGeneration(prompt, 8192, () => {}, 'normal');
+  assert.equal(prompt[0].mes, `${original}${picture}`);
+  // Translated again: from the original, the picture kept, and the new record is the floor's own.
+  await __testing.startTranslation(0, { quiet: true, force: true });
+  assert.match(asked[1], /雨が降っている/);
+  assert.equal(message.mes, `<story_scene>\n在下雨。\n<image>rain, city</image>\n风很猛。\n</story_scene>\n<status>HP 10</status>${picture}`);
+  const meta = message.extra[MESSAGE_META_KEY];
+  assert.equal(stripGeneratedTranslationLines(meta.mirror, meta), `${original}${picture}`);
+  assert.equal(meta.projection_hash, hashTextSync(message.mes));
+});
+
 test('a continued floor is an ordinary floor again, and a floor changed by hand is never translated again', async t => {
   const previousHost = globalThis.SillyTavern;
   t.after(() => { globalThis.SillyTavern = previousHost; });
@@ -1709,6 +1886,77 @@ test('a short katakana onomatopoeia echoed unchanged twice in a row is accepted,
   const snapshot = await __testing.readMessageSnapshot(0, settings);
   assert.equal(snapshot.translated, true);
   assert.equal(snapshot.existingTranslations.get(1), 'ドキドキ');
+});
+
+// ---------------------------------------------------------------------------------------------
+// A batch whose reply carries nothing usable is halved and asked again. Both halves have to go out:
+// the half set aside used to be dropped the moment the first half came back complete, and the floor
+// was written back with its second half missing and left for yet another 补译.
+// ---------------------------------------------------------------------------------------------
+
+function requestedIds(prompt) {
+  const bodies = (Array.isArray(prompt) ? prompt : []).filter(item => item.role === 'user')
+    .map(item => { try { return JSON.parse(item.content); } catch { return null; } })
+    .filter(Boolean);
+  return (bodies.at(-1)?.segments ?? []).map(item => item.id);
+}
+
+test('a reply with nothing usable in it halves the batch, and both halves are translated', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const ids = requestedIds(prompt);
+      asked.push(ids);
+      // The first reply comes back at once with nothing that parses as a translation.
+      if (asked.length === 1) return Promise.resolve('抱歉，这段内容暂时无法处理。');
+      return Promise.resolve(JSON.stringify(ids.map(id => ({ id, text: `第${id}段译文。` }))));
+    },
+  });
+  clearDiagnostics();
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  const lines = ['雨が降っている。', '風が強い。', '窓が鳴った。', '誰かが来る。'];
+  const source = lines.join('\n\n');
+  const segments = segmentSource(source, settings).segments;
+  assert.equal(segments.length, 4);
+  context.chat.push({ mes: `<story_scene>\n${source}\n</story_scene>`, swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  assert.deepEqual(asked, [[1, 2, 3, 4], [1, 2], [3, 4]], 'the useless reply, then each half once');
+  assert.equal(result.skipped, false);
+  assert.equal(result.partial, undefined, 'the floor is written back complete');
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.translated, true);
+  for (const segment of segments) assert.equal(snapshot.existingTranslations.get(segment.id), `第${segment.id}段译文。`);
+  const log = readDiagnostics();
+  assert.ok(log.some(entry => entry.scope === 'translation.shrink'));
+  assert.ok(log.some(entry => entry.message === '这部分译完了，接着译剩下的 2 段。'));
+  assert.equal(log.some(entry => entry.scope === 'translation.partial'), false, 'nothing is left for 补译');
+});
+
+test('a half that stays empty after its retry is left missing, and the half behind it is still asked', async t => {
+  const previousHost = globalThis.SillyTavern;
+  t.after(() => { globalThis.SillyTavern = previousHost; });
+  const asked = [];
+  const context = mockHost([], {
+    generateRaw: ({ prompt }) => {
+      const ids = requestedIds(prompt);
+      asked.push(ids);
+      // Paragraph 1 is refused every time, whatever it is sent with; everything else translates.
+      if (ids.includes(1)) return Promise.resolve('无法处理。');
+      return Promise.resolve(JSON.stringify(ids.map(id => ({ id, text: `第${id}段译文。` }))));
+    },
+  });
+  const settings = __testing.configureForTest({ settings: { apiMode: 'follow', streamingWriteback: false, retries: 1 }, initialized: true });
+  const source = ['雨が降っている。', '風が強い。', '窓が鳴った。', '誰かが来る。'].join('\n\n');
+  context.chat.push({ mes: `<story_scene>\n${source}\n</story_scene>`, swipe_id: 0, extra: {} });
+  const result = await __testing.startTranslation(0, { quiet: true, force: false });
+  // Whole batch (empty) → halves [1,2] (empty) → quarters [1] (empty, one retry) and [2], then [3,4].
+  assert.deepEqual(asked, [[1, 2, 3, 4], [1, 2], [1], [1], [2], [3, 4]]);
+  assert.equal(result.skipped, false);
+  const snapshot = await __testing.readMessageSnapshot(0, settings);
+  assert.equal(snapshot.existingTranslations.has(1), false, 'the refused paragraph stays missing');
+  for (const id of [2, 3, 4]) assert.equal(snapshot.existingTranslations.get(id), `第${id}段译文。`);
 });
 
 test('a long segment echoed unchanged twice in a row stays missing, never silently accepted', async t => {

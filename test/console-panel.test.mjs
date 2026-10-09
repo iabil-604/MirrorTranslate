@@ -78,8 +78,8 @@ function fakeElement(tag, attrs, { selectable = false } = {}) {
 }
 
 test('focusIdentity builds a tag-qualified selector from data-jy-* attributes only', () => {
-  const el = fakeElement('SELECT', { 'data-jy-tts-field': 'analysisChannelId', class: 'jy-summary-select', id: 'x' });
-  assert.equal(focusIdentity(el), 'select[data-jy-tts-field="analysisChannelId"]');
+  const el = fakeElement('SELECT', { 'data-jy-tts-field': 'deepChannelId', class: 'jy-summary-select', id: 'x' });
+  assert.equal(focusIdentity(el), 'select[data-jy-tts-field="deepChannelId"]');
 });
 
 test('focusIdentity returns null for an element with no data-jy-* attribute, or no element at all', () => {

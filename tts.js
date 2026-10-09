@@ -15,9 +15,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.41.0-beta.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.41.0-beta.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.41.0-beta.1';
+} from './core.js?v=0.44.0-beta.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.44.0-beta.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.44.0-beta.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -806,10 +806,10 @@ export function fillPrompt(template, { userName = '', references = false, lang =
  * with its id in front — ⟦4⟧「……」 — so the model sees the words around a line of dialogue and
  * answers by number, and nothing is listed twice.
  */
-export function floorTextWithMarks(utterances) {
+export function floorTextWithMarks(utterances, { all = false } = {}) {
   const lines = new Map();
   for (const utterance of Array.isArray(utterances) ? utterances : []) {
-    const text = `${utterance.kind === 'quoted' ? `⟦${utterance.id}⟧` : ''}${utterance.anchor ?? utterance.text ?? ''}`;
+    const text = `${utterance.kind === 'quoted' || all ? `⟦${utterance.id}⟧` : ''}${utterance.anchor ?? utterance.text ?? ''}`;
     lines.set(utterance.lineId, `${lines.get(utterance.lineId) ?? ''}${text}`);
   }
   return [...lines].map(([line, text]) => ({ line, text }));
@@ -1011,7 +1011,7 @@ export const FISH_TAG_LABELS = Object.freeze({
   pause: '停顿', 'long pause': '长停顿', break: '停顿', 'long-break': '长停顿',
 });
 
-const VOICE_LEVELS = new Set(['slow', 'normal', 'fast']);
+const VOICE_LEVELS = new Set(['very_slow', 'slow', 'normal', 'fast', 'very_fast']);
 const VOLUMES = new Set(['quiet', 'normal', 'loud']);
 const BREATHS = new Set(['none', 'audible', 'panting']);
 
@@ -1157,6 +1157,23 @@ export function parseVoiceAnalysis(raw, utterances, { hints = null } = {}) {
  * has fewer quoted runs on a line, the runs the read side calls narration (a sign, a title the other
  * side kept inside its sentence, 看板の「立入禁止」を) are the ones it lacks, and are passed over.
  */
+const LEADING_SCRIPT_TAGS_RE = /^\s*((?:\[[a-z][a-z '-]{0,30}\]\s*)+)/;
+const TRAILING_SCRIPT_TAGS_RE = /((?:\s*\[[a-z][a-z '-]{0,30}\])+)\s*$/;
+
+/** The tags a script opens and closes on, around another sentence; '' when it has neither. */
+export function scriptOutline(script, text) {
+  const value = String(script ?? '').trim();
+  const words = String(text ?? '').trim();
+  if (!value || !words) return '';
+  // The tags of a run, each whole and side by side: [clear throat] keeps its own space.
+  const tagsOf = run => (String(run ?? '').match(/\[[^\]]+\]/g) ?? []).join('');
+  const lead = tagsOf(value.match(LEADING_SCRIPT_TAGS_RE)?.[1]);
+  const rest = lead ? value.replace(LEADING_SCRIPT_TAGS_RE, '') : value;
+  const trail = rest.trim() ? tagsOf(rest.match(TRAILING_SCRIPT_TAGS_RE)?.[1]) : '';
+  if (!lead && !trail) return '';
+  return `${lead ? `${lead} ` : ''}${words}${trail ? ` ${trail}` : ''}`;
+}
+
 export function deriveLabelsForSide(primaryUtterances, primaryLabels, primaryVoices, otherUtterances) {
   const byLine = new Map();
   for (const utterance of Array.isArray(primaryUtterances) ? primaryUtterances : []) {
@@ -1194,9 +1211,13 @@ export function deriveLabelsForSide(primaryUtterances, primaryLabels, primaryVoi
     if (voice) {
       // pausesAnchored/stressAnchored (tts-deep.js) describe the pauses/stress arrays they ride with;
       // dropped alongside them here, not left behind to claim a field that no longer exists.
-      const { pauses, stress, shifts, sounds, pausesAnchored, stressAnchored, ...rest } = voice;
+      const { pauses, stress, shifts, sounds, pausesAnchored, stressAnchored, script, ...rest } = voice;
       const kept = (sounds ?? []).filter(sound => sound.at !== 'after');
       if (kept.length) rest.sounds = kept;
+      // 分析模式's script is the other side's words; only the tags it opens and closes on carry over,
+      // around this side's own sentence.
+      const outline = scriptOutline(script, utterance.text);
+      if (outline) rest.script = outline;
       if (Object.keys(rest).length) voices.set(utterance.id, rest);
     }
   }
@@ -1206,7 +1227,7 @@ export function deriveLabelsForSide(primaryUtterances, primaryLabels, primaryVoi
 const LEVEL_WORDS = ['弱', '中', '强'];
 const THREE_WORDS = { restraint: ['放开', '一般', '压着'], tension: ['松', '中', '紧'], rasp: ['无', '略', '重'], hesitation: ['无', '略', '重'] };
 const WORD_TABLE = {
-  speed: { slow: '慢', fast: '快' },
+  speed: { very_slow: '很慢', slow: '慢', fast: '快', very_fast: '很快' },
   volume: { quiet: '小', loud: '大' },
   breath: { audible: '带气声', panting: '喘' },
 };
@@ -1232,6 +1253,7 @@ export function voiceSummary(voice) {
   if (voice.why) lines.push(['依据', voice.why]);
   if (voice.emotion) lines.push(['情绪', `${cueLabel(voice.emotion)}${voice.intensity !== undefined && voice.intensity !== null ? `（${LEVEL_WORDS[voice.intensity]}）` : ''}${voice.secondary ? ` · ${cueLabel(voice.secondary)}` : ''}`]);
   if (voice.tone) lines.push(['语气', cueLabel(voice.tone)]);
+  if (Number.isInteger(voice.tensionLevel)) lines.push(['张力', `${voice.tensionLevel}`]);
   if (voice.subtext) lines.push(['潜台词', voice.subtext]);
   for (const key of ['restraint', 'tension']) {
     if (voice[key] !== undefined && voice[key] !== 1) lines.push([{ restraint: '克制', tension: '紧张' }[key], THREE_WORDS[key][voice[key]]]);
@@ -1804,6 +1826,57 @@ export function languageVoice(table, lang) {
   return sibling ? table[sibling] : '';
 }
 
+// The tags a script opens on, before anything is said: the manner the whole line is said in.
+function openingTags(script) {
+  const head = String(script ?? '').match(/^\s*((?:\[[^\]\n]{1,40}\]\s*)+)/u)?.[1] ?? '';
+  return [...head.matchAll(/\[([^\]\n]{1,40})\]/gu)].map(match => match[1].trim().toLowerCase());
+}
+
+// 唱: a line the reader asked Fish to sing, with S2's own [singing] — which only "tries to read the text
+// with a sense of melody"; it follows no tune. It is the reader's version of the line, and [singing] is
+// one of the tags it opens on (a mood the reader put in front of it does not unmake it).
+const SINGING_OPENING = /^(\s*(?:\[[^\]\n]{1,40}\]\s*)*?)\[singing\]\s*/iu;
+
+/** A line the reader asked to be sung: [singing] among the tags it opens on. */
+export function isSungText(text) {
+  return SINGING_OPENING.test(String(text ?? ''));
+}
+
+/** The words of a line as a sung line: [singing], then the words with every other cue taken out. */
+export function singingText(text) {
+  const words = stripCues(text);
+  return words ? `[singing] ${words}` : '';
+}
+
+/** The same line no longer sung: its opening [singing] taken off, the rest as it was. */
+export function unsungText(text) {
+  return String(text ?? '').replace(SINGING_OPENING, '$1');
+}
+
+/**
+ * The 情绪音色 a line is said in (VOICE_MOOD_CONDITIONS), found locally from what 分析模式 said about
+ * it: the first of the character's moods that fits — a line opening in a whisper or a breathy voice, one
+ * opening on a laugh, one of tension 4 and up, a line the reader set to 唱 (`segment.sung`), or any line
+ * of a floor of that tone. '' when none fits, or the floor was not analysed.
+ */
+export function moodVoiceFor(entry, segment) {
+  const moods = Array.isArray(entry?.moods) ? entry.moods : [];
+  if (!moods.length) return '';
+  const voice = segment?.voice ?? {};
+  const opening = openingTags(voice.script);
+  const fits = {
+    whisper: opening.includes('whisper') || opening.includes('breathy'),
+    laugh: opening.includes('laughter') || opening.includes('snicker'),
+    burst: Number(voice.tensionLevel) >= 4,
+    sing: segment?.sung === true,
+  };
+  for (const mood of moods) {
+    if (!mood?.voiceId) continue;
+    if (fits[mood.when] || (segment?.tone && mood.when === `tone:${segment.tone}`)) return mood.voiceId;
+  }
+  return '';
+}
+
 export function resolveSegmentVoice(segment, { voices = [], narratorVoice = '', narratorVoices = {}, dialogueVoice = '' } = {}) {
   const lang = String(segment?.lang ?? '');
   if (segment?.type === 'narration') return languageVoice(narratorVoices, lang) || narratorVoice || dialogueVoice || '';
@@ -1811,6 +1884,9 @@ export function resolveSegmentVoice(segment, { voices = [], narratorVoice = '', 
   if (entry) {
     const byLanguage = languageVoice(entry.voices, lang);
     if (byLanguage) return byLanguage;
+    // The same actor in another voice, where the line is said that way.
+    const mood = moodVoiceFor(entry, segment);
+    if (mood) return mood;
     if (entry.locked !== false && entry.voiceId) return entry.voiceId;
   }
   return dialogueVoice || narratorVoice || '';
@@ -1834,7 +1910,7 @@ export function planVoices(segments, config) {
     if (!voiceId) unvoiced.add(who);
     else if (segment.type === 'dialogue') {
       const entry = findVoiceEntry(config?.voices, segment.speaker);
-      const own = entry && (languageVoice(entry.voices, segment.lang) || (entry.locked !== false && entry.voiceId));
+      const own = entry && (languageVoice(entry.voices, segment.lang) || moodVoiceFor(entry, segment) || (entry.locked !== false && entry.voiceId));
       if (!own) defaulted.add(who);
     }
     items.push({ segment, voiceId });
@@ -2078,6 +2154,7 @@ export function compileVoiceCues(segment, { model = 's2-pro', emotionCues = true
   if (!voice) return result;
   result.speed = VOICE_LEVELS.has(voice.speed) ? voice.speed : 'normal';
   result.volume = VOLUMES.has(voice.volume) ? voice.volume : 'normal';
+  if (typeof voice.script === 'string' && voice.script.trim()) return compileScript(voice.script, result, { model, emotionCues });
   if (!emotionCues) return result;
   const s1 = model === 's1';
   if (voice.direction && !s1 && directions && !lean) return compileDirection(voice, text, result);
@@ -2139,6 +2216,38 @@ export function compileVoiceCues(segment, { model = 's2-pro', emotionCues = true
   result.text = insertAll(text, insertions).replace(/\s{2,}/g, ' ').trim();
   const tail = (voice.sounds ?? []).filter(sound => sound.at === 'end').map(sound => wrapCue(soundTagFor(sound.tag, model), model)).filter(Boolean);
   result.tail = tail.join('');
+  return result;
+}
+
+// 分析模式's script (tts-deep.js acousticScript): the sentence as it is to be said, its tags inline. The
+// S2 models read the tags as written; S1 hears the ones it has a fixed word for and loses the rest; with
+// the cues switched off (「把配音指令一起发给 Fish」) only the words go, the stutters and sounds included,
+// since those are words too.
+const SCRIPT_TAG_RE = /\s*\[([a-z][a-z '-]{0,30})\]\s*/g;
+const S1_SCRIPT_TAGS = Object.freeze({
+  whisper: 'whispering', sigh: 'sighing', gasp: 'gasping', panting: 'panting', groan: 'groaning',
+  laughter: 'laughing', snicker: 'chuckling', 'clear throat': 'clear throat', pause: 'break',
+});
+const LATIN_EDGE_RE = /[A-Za-z0-9]/;
+const CJK_EDGE_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+function compileScript(script, result, { model = 's2-pro', emotionCues = true } = {}) {
+  const text = String(script).trim();
+  // A tag taken out leaves a space beside a Latin word (Well, I guess) unless Chinese, Japanese or
+  // Korean is on either side, which close up.
+  const join = (match, offset, whole, cue) => {
+    const before = whole[offset - 1] ?? '';
+    const after = whole[offset + match.length] ?? '';
+    const gap = before && after && (LATIN_EDGE_RE.test(before) || LATIN_EDGE_RE.test(after))
+      && !CJK_EDGE_RE.test(before) && !CJK_EDGE_RE.test(after) ? ' ' : '';
+    return cue ? `${before ? ' ' : ''}${cue}${after ? ' ' : ''}` : gap;
+  };
+  let out;
+  if (!emotionCues) out = text.replace(SCRIPT_TAG_RE, (match, word, offset, whole) => join(match, offset, whole, ''));
+  else if (model === 's1') out = text.replace(SCRIPT_TAG_RE, (match, word, offset, whole) => join(match, offset, whole, wrapCue(S1_SCRIPT_TAGS[word] ?? '', 's1')));
+  else out = text;
+  result.text = out.replace(/\s{2,}/g, ' ').trim();
+  result.scripted = true;
   return result;
 }
 
@@ -2225,19 +2334,67 @@ const CONSOLE_BANDS = Object.freeze({
   ],
 });
 
+// The same sliders, said in 分析模式's own terms (tts-deep.js): it writes tags, stutters, pace and
+// tension_level rather than moods and sound fields, so a band naming those would ask for something its
+// format has no place for. The breath gate is never loosened by a slider.
+const ACOUSTIC_CONSOLE_BANDS = Object.freeze({
+  pause: [
+    '几乎不停顿：不写 [pause]。',
+    '停顿少：[pause] 只写在真正卡住、话说一半的地方，整楼两三处以内。',
+    '停顿感强：犹豫、转折、话没说完的地方多用 [pause] 和 ……。',
+    '停顿感很强：该卡住的地方尽量都用 [pause] 和 …… 卡住；一口气说完更自然的句子仍然不写。',
+  ],
+  breath: [
+    '不要呼吸声：不写 [sigh]、[gasp]、[panting]。',
+    '呼吸声少：[sigh]、[gasp] 只写在正文明写了叹气、倒吸一口气的句子上，挑最明显的写。',
+    '呼吸感明显：正文写到叹气、倒吸一口气的句子可以写 [sigh] 或 [gasp]，一句最多一个。',
+    '呼吸感很重：正文写到的叹气、抽气一处不漏，都写上 [sigh] 或 [gasp]；呼吸闸门照旧，正文没写身体证据的仍然不用 [panting]、[breathy]、[groan]。',
+  ],
+  grain: [
+    '说话顺畅利落：不加叠字，少用 ……。',
+    '口语毛边少：叠字和 …… 只在明显吞吞吐吐的地方用。',
+    '口语颗粒度高：迟疑、重复、支支吾吾的地方用叠字、…… 和 [pause] 打碎。',
+    '口语颗粒度很高：真人说话的毛边要多，迟疑处普遍用叠字和 ……，害羞、紧张的句子打碎成短碎片。',
+  ],
+  intensity: [
+    '情感强度极低：tension_level 一律 1 或 2，不用 ！！。',
+    '情感强度低：tension_level 最高 3。',
+    '情感强度高：有情绪的句子 tension_level 多给 3 和 4。',
+    '情感强度很高：有情绪的句子 tension_level 多给 4，顶点给 5，可以用 ！！ 和高张力长句的碎片写法。',
+  ],
+  range: [
+    '情绪幅度极小：整楼 tension_level 尽量一致，pace 少变。',
+    '情绪幅度小：tension_level 和 pace 少换，不跳变。',
+    '情绪幅度大：tension_level 跟着句意起伏，相邻的句子可以从 1 跳到 4。',
+    '情绪幅度很大：tension_level 和 pace 大起大落。',
+  ],
+  speed: [
+    '语速很慢：多用 slow 和 very_slow，不用 fast、very_fast。',
+    '语速偏慢：多用 slow，很少用 fast。',
+    '语速偏快：多用 fast，急的时候用 very_fast。',
+    '语速很快：多用 fast 和 very_fast，不用 slow。',
+  ],
+  expression: [
+    '不要非语言声音：不写 [snicker]、[laughter]、[sigh]、[gasp]、[clear throat]，也不加拟声字。',
+    '声音表现克制：这些标签只写在正文明写了笑、叹气、清嗓子的句子上。',
+    '声音表现外放：正文写了笑、叹气、清嗓子的地方都可以写对应的标签，贴合当下的情绪就写，不必凑数。',
+    '声音表现很外放：正文写到的笑、叹气、清嗓子一处不漏，笑用 [laughter] 或 [snicker]；正文没写的仍然不加。',
+  ],
+});
+
 /**
  * A console as rules a model can be held to. Sliders near the middle say nothing; the outer bands
  * speak, and the further out, the more they demand; the reader's own rules ride along as written.
  * The numbers themselves never go out.
  */
-export function consoleDirections(console, { keys = null, quiet = [] } = {}) {
+export function consoleDirections(console, { keys = null, quiet = [], acoustic = false } = {}) {
   if (!console || typeof console !== 'object') return [];
   const lines = [];
   // 声音表现倾向 decides whether there are non-verbal sounds at all. When it says none, 气息感 does not
   // get to invite them back: two rules about the same field in one request is how a reader ends up
   // with a moan on a line they asked to be silent.
   const silent = Number(console.expression) <= 15;
-  for (const [key, bands] of Object.entries(CONSOLE_BANDS)) {
+  for (const [key, bands] of Object.entries(acoustic ? ACOUSTIC_CONSOLE_BANDS : CONSOLE_BANDS)) {
     const value = Number(console[key]);
     if (!Number.isFinite(value)) continue;
     // A request that asks for fewer fields hears only the sliders about those fields — and still the ones
@@ -2256,8 +2413,15 @@ export function consoleDirections(console, { keys = null, quiet = [] } = {}) {
 /** The text one sentence sends: the reader's own version when there is one, else the compiled voice. */
 export function sentenceFishText(item, fish, { emotionCues = true, tamePunctuation = false, directions = true, lean = false } = {}) {
   const override = item?.override;
-  if (override && typeof override.text === 'string' && override.text.trim()) return override.text.trim();
+  if (override && typeof override.text === 'string' && override.text.trim()) {
+    const own = override.text.trim();
+    // S1 cannot sing: a line set to 唱 under S2 is read in plain words there.
+    return fish?.model === 's1' && isSungText(own) ? unsungText(own).trim() : own;
+  }
   const compiled = compileVoiceCues(item.segment, { model: fish?.model, emotionCues, directions, lean });
+  // A script already says where every mark and sound goes (！！ included), so the reader's punctuation
+  // marks and the taming of runs are not laid over it a second time.
+  if (compiled.scripted) return compiled.text;
   const head = compiled.cues.join('');
   // The reader's punctuation marks go in before the runs are tamed, so a rule for 「！！」 still sees them.
   const marked = applyPunctuationMarks(compiled.text, item?.console?.marks, fish?.model, { leading: head });
@@ -2280,7 +2444,7 @@ export function tamePunctuationMarks(text) {
   }).replace(/[～~]{2,}/g, run => run[0]);
 }
 
-const SPEED_STEPS = Object.freeze({ slow: 0.88, normal: 1, fast: 1.12 });
+const SPEED_STEPS = Object.freeze({ very_slow: 0.8, slow: 0.88, normal: 1, fast: 1.12, very_fast: 1.25 });
 const VOLUME_STEPS = Object.freeze({ quiet: -3, normal: 0, loud: 3 });
 
 /** Fish's prosody for one sentence: the reader's own numbers, else the voice's step on the settings. */
@@ -2307,6 +2471,46 @@ export function sentenceProsody(item, fish, { prosodySplit = true } = {}) {
   };
 }
 
+// 分析模式's tension_level (or the reader's own number in the 改句面板) moves Fish's temperature away from
+// the reader's own setting: a flat line steadier, a peak freer. The ceiling keeps a shy or shaking line
+// from cracking into what sounds drunk; a reader who set the temperature higher still has it. A very
+// short performed line — a stutter, a sob, a gasp and two words — is where Fish loops on one sound, so
+// it gets a stiffer repetition penalty and never a temperature above the reader's own.
+const TENSION_TEMPERATURE = Object.freeze({ 1: -0.1, 2: 0, 3: 0.05, 4: 0.1, 5: 0.15 });
+const TEMPERATURE_CEILING = 0.9;
+const SHORT_LINE_WORDS = 4;
+const SHORT_LINE_PENALTY = 1.5;
+const SHORT_LINE_SOUNDS = new Set([...'呜嗯唔啊哈呼', ...'うんあはふっぅぁウンアハフッゥァ']);
+
+function shortPerformedLine(script) {
+  const words = [...String(script ?? '').replace(/\[[^\]\n]{1,40}\]/g, '')].filter(character => /[\p{L}\p{N}]/u.test(character) && character !== 'ー');
+  return words.length <= SHORT_LINE_WORDS || words.every(character => SHORT_LINE_SOUNDS.has(character));
+}
+
+/** Fish's sampling for one sentence: its temperature, and a repetition penalty where one is needed. */
+export function sentenceSampling(item, fish, { prosodySplit = true } = {}) {
+  const set = Number(fish?.temperature);
+  const base = Number.isFinite(set) ? set : 0.7;
+  const voice = item?.segment?.voice;
+  // The reader's own number was set for this one sentence, and holds however the reading is split.
+  const own = item?.override?.tension === undefined ? NaN : Number(item.override.tension);
+  const ownSet = Object.hasOwn(TENSION_TEMPERATURE, own);
+  if (!prosodySplit && !ownSet) return { temperature: base };
+  const tension = ownSet ? own : Number(voice?.tensionLevel);
+  let temperature = base;
+  if (Object.hasOwn(TENSION_TEMPERATURE, tension)) {
+    temperature = Math.min(Math.max(TEMPERATURE_CEILING, base), Math.max(0.1, base + TENSION_TEMPERATURE[tension]));
+  }
+  const out = {};
+  // What is actually said: the reader's own words where they rewrote the line, else the reading's script.
+  const said = String(item?.override?.text || (typeof voice?.script === 'string' ? voice.script : ''));
+  if (said.trim() && shortPerformedLine(said)) {
+    temperature = Math.min(temperature, base);
+    out.repetitionPenalty = SHORT_LINE_PENALTY;
+  }
+  return { temperature: Number(temperature.toFixed(2)), ...out };
+}
+
 /** Everything the provider markup adds, removed again: what is left is what alignment reports. */
 export function stripCues(text) {
   return String(text ?? '')
@@ -2326,7 +2530,7 @@ export function stripCues(text) {
  * decides, and it counts what the request carries: every sentence as it is sent (`textOf`, its cues
  * included), the line breaks between sentences and the speaker tags.
  */
-export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosodySplit = true, wholeFloor = false, textOf = null } = {}) {
+export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosodySplit = true, wholeFloor = false, textOf = null, fish = null } = {}) {
   const multi = fishSupportsMultiSpeaker(model);
   const budget = Math.max(1, Number(maxChars) || 1500);
   const sent = typeof textOf === 'function' ? item => String(textOf(item)) : item => String(item.segment.text);
@@ -2338,7 +2542,13 @@ export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosod
   for (const item of Array.isArray(items) ? items : []) {
     const hasVoice = Boolean(item.voiceId);
     // Sent as one piece, the floor keeps one prosody: a change of speed or volume is no reason to cut it.
-    const step = wholeFloor ? '' : JSON.stringify(sentenceProsody(item, { speed: 1, volume: 0, model }, { prosodySplit }));
+    // Otherwise sentences share a request only where they would be sent alike at the reader's own
+    // speed, volume and temperature: a reader's own speed is absolute, the reading's steps are relative
+    // to theirs, and at another base the two can coincide where at the real one they do not.
+    const step = wholeFloor ? '' : JSON.stringify([
+      sentenceProsody(item, fish ? { ...fish, model } : { speed: 1, volume: 0, model }, { prosodySplit }),
+      sentenceSampling(item, fish ?? { temperature: 0.7 }, { prosodySplit }),
+    ]);
     if (run.length && ((!multi && item.voiceId !== voice) || hasVoice !== voiced || step !== prosody)) {
       runs.push(run);
       run = [];
@@ -2487,19 +2697,27 @@ export function buildFishPayload(items, fish, { emotionCues = true, prosodySplit
     currentVoice = item.voiceId;
     const sentence = sentenceFishText(item, fish, { emotionCues, tamePunctuation, directions, lean });
     text += sentence;
-    spans.push({ id: item.segment.id, text: item.override?.text ? stripCues(sentence) : item.segment.text });
+    // A reader's own text and 分析模式's script both say different words from the floor's: what is
+    // aligned is what was actually sent.
+    const rewritten = Boolean(item.override?.text) || (typeof item.segment?.voice?.script === 'string' && item.segment.voice.script.trim());
+    spans.push({ id: item.segment.id, text: rewritten ? stripCues(sentence) : item.segment.text });
   });
-  const prosody = list.length && !wholeFloor ? sentenceProsody(list[0], fish, { prosodySplit }) : flatProsody(fish);
+  // A reader's own take is one sentence by itself, even where the floor goes whole: its pace, volume and
+  // tension are its own.
+  const flat = wholeFloor && !(list.length === 1 && list[0].override?.text);
+  const prosody = list.length && !flat ? sentenceProsody(list[0], fish, { prosodySplit }) : flatProsody(fish);
+  const sampling = list.length && !flat ? sentenceSampling(list[0], fish, { prosodySplit }) : { temperature: fish.temperature };
   const body = {
     text,
     ...(voices.length ? { reference_id: multi ? voices : voices[0] } : {}),
     format: fish.format,
     latency: fish.latency,
     normalize: fish.normalize,
-    temperature: fish.temperature,
+    temperature: sampling.temperature,
     top_p: fish.topP,
     prosody,
   };
+  if (sampling.repetitionPenalty) body.repetition_penalty = sampling.repetitionPenalty;
   if (fish.format === 'mp3') body.mp3_bitrate = fish.mp3Bitrate;
   return { body, spans, voices };
 }
@@ -2561,7 +2779,9 @@ export const FISH_ADAPTER = Object.freeze({
   /** The text one sentence sends: its cues in the provider's markup ahead of the words. */
   sentenceText: (item, tts) => sentenceFishText(item, tts.fish, fishCompileOptions(tts)),
   /** The provider's prosody parameters for one sentence; a floor sent whole has the floor's. */
-  prosody: (item, tts) => (sendsWholeFloor(tts) ? flatProsody(tts.fish) : sentenceProsody(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false })),
+  prosody: (item, tts) => (sendsWholeFloor(tts) && !item?.override?.text ? flatProsody(tts.fish) : sentenceProsody(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false })),
+  /** Fish's temperature for one sentence, and a repetition penalty where one is sent. */
+  sampling: (item, tts) => (sendsWholeFloor(tts) && !item?.override?.text ? { temperature: tts.fish.temperature } : sentenceSampling(item, tts.fish, { prosodySplit: tts?.prosodySplit !== false })),
   /** A unit's items cut into requests, measured by the text each sentence is actually sent as. */
   parts: (items, tts) => planFishParts(items, {
     model: tts.fish.model,
@@ -2569,6 +2789,7 @@ export const FISH_ADAPTER = Object.freeze({
     prosodySplit: tts?.prosodySplit !== false,
     wholeFloor: sendsWholeFloor(tts),
     textOf: item => sentenceFishText(item, tts.fish, fishCompileOptions(tts)),
+    fish: tts.fish,
   }),
   /** One request's body, with the span each sentence occupies in its text. */
   payload: (items, tts) => buildFishPayload(items, tts.fish, { ...fishCompileOptions(tts), wholeFloor: sendsWholeFloor(tts) }),
@@ -2601,10 +2822,15 @@ export function registerTtsProvider(adapter) {
 /**
  * Which host page the reader is running in. TauriTavern serves the same SillyTavern frontend from a
  * Rust backend that answers only its own /api routes; the /proxy route of the Node server does not
- * exist there, so a Fish call has to go direct.
+ * exist there, so a Fish call has to go direct. A page served from Tauri's own origin (tauri://localhost,
+ * or http(s)://tauri.localhost on Windows and Android) has no Node server behind it either.
  */
 export function detectTtsHost(scope = globalThis) {
-  return scope?.__TAURITAVERN__ || scope?.__TAURITAVERN_MAIN_READY__ ? 'tauritavern' : 'sillytavern';
+  if (scope?.__TAURITAVERN__ || scope?.__TAURITAVERN_MAIN_READY__) return 'tauritavern';
+  const location = scope?.location;
+  return location?.protocol === 'tauri:' || String(location?.hostname ?? '').toLowerCase() === 'tauri.localhost'
+    ? 'tauritavern'
+    : 'sillytavern';
 }
 
 export function fishGoesDirect(fish, host = 'sillytavern') {
@@ -2657,10 +2883,20 @@ export function describeFishFailure({ status = 0, body = '', viaProxy = true, ne
   const message = typeof payload?.message === 'string' ? payload.message : text.replace(/\s+/g, ' ').slice(0, 240);
   // The host proxy rewrites 401 to 400 so the browser keeps its own Basic auth; the body still says 401.
   const upstream = Number(payload?.status) || Number(status) || 0;
+  // On TauriTavern the call went straight to the 接口地址, so a tavern's own answer came from a tavern
+  // standing there, not from the app the reader is in: TauriTavern has no proxy or config.yaml to fix.
   if (Number(status) === 404 && /CORS proxy is disabled/i.test(text)) {
+    if (host === 'tauritavern') {
+      return 'TauriTavern 里请求直接发往「接口地址」，而那里是一个没开 CORS 代理的酒馆。TauriTavern 自己没有这条代理，也没有 config.yaml 可改：在「接口地址」填一个自己的、带跨域头的转发地址（使用手册第六节有现成的 Cloudflare Worker 脚本）。';
+    }
     return '酒馆的 CORS 代理没有打开。在酒馆目录的 config.yaml 里把 enableCorsProxy 改成 true，重启酒馆后再试。';
   }
-  if (Number(status) === 403 && /csrf/i.test(text)) return '酒馆拒绝了这次代理请求（CSRF）。刷新酒馆页面后再试。';
+  if (Number(status) === 403 && /csrf/i.test(text)) {
+    if (host === 'tauritavern') {
+      return 'TauriTavern 里请求直接发往「接口地址」，那里的酒馆代理只收它自己页面发出的请求（CSRF），TauriTavern 用不了。在「接口地址」填一个自己的、带跨域头的转发地址（使用手册第六节有现成的 Cloudflare Worker 脚本）。';
+    }
+    return '酒馆拒绝了这次代理请求（CSRF）。刷新酒馆页面后再试。';
+  }
   // The tavern's own login page: its login protection (basicAuthMode) turned the request away at the
   // proxy's door, before anything reached Fish. The proxy rewrites Fish's own 401 to 400, so a 401 that
   // arrives as one, with that page, is the tavern's.
@@ -2992,7 +3228,7 @@ export function itemIdentity(item) {
   return JSON.stringify([
     segment.type ?? null, segment.text ?? '', segment.speaker ?? null, segment.lang ?? null,
     segment.emotion ?? null, segment.intensity ?? null, item?.voiceId ?? '', segment.voice ?? null,
-    override ? [override.text ?? null, override.speed ?? null, override.volume ?? null] : null,
+    override ? [override.text ?? null, override.speed ?? null, override.volume ?? null, override.tension ?? null] : null,
   ]);
 }
 
@@ -3073,9 +3309,12 @@ export function recordedLines(records, utterances = []) {
 // The text, the depth and the language side: nothing else. The cast list, the worldbook and the floors
 // before this one all change as a chat goes on, and none of them is a reason to read the same floor
 // again and pay for it; a reader who wants a fresh reading asks for one.
-export async function analysisCacheKey({ utterances, source = 'model', depth = 'light', side = '' }) {
+export async function analysisCacheKey({ utterances, source = 'model', depth = 'light', side = '', variant = '' }) {
   return `a:${await hashText(JSON.stringify({
     v: TTS_ANALYSIS_VERSION, source, depth, side,
+    // A reading asked under a different permission (分析模式's 亲密场景) is a different reading; without
+    // one the key is exactly what it always was, so readings already kept are still found.
+    ...(variant ? { variant } : {}),
     utterances: (Array.isArray(utterances) ? utterances : []).map(item => [item.id, item.kind, item.anchor]),
   }))}`;
 }

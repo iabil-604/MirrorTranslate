@@ -34,7 +34,7 @@ import {
   pathSet,
   presetDrift,
   unwrapResponseContent,
-} from './core.js?v=0.41.0-beta.1';
+} from './core.js?v=0.44.0-beta.1';
 
 // ---------------------------------------------------------------------------------------------
 // Default prompt and quick questions
@@ -120,12 +120,13 @@ export function urlHost(value) {
 // Settings summary
 // ---------------------------------------------------------------------------------------------
 
-// Kept apart from index.js's own CONNECTION_USE_LABELS (display text for the connection page's own
-// ticks) — this copy is what the context text calls each use, and the two happen to read the same.
-const CONNECTION_USE_TEXT_LABELS = Object.freeze({ translation: '翻译', analysis: '朗读分析', deep: '深度分析', helper: '小助手' });
+// Kept apart from index.js's own CONNECTION_USE_LABELS (display text for 「各功能用哪条连接」's rows) —
+// this copy is what the context text calls each use, and the two happen to read the same.
+const CONNECTION_USE_TEXT_LABELS = Object.freeze({ translation: '翻译', deep: '分析模式', helper: '小助手' });
 
 const UI_MODE_LABELS = Object.freeze({ normal: '正常模式', advanced: '高级模式' });
-const TTS_MODE_LABELS = Object.freeze({ off: '不分析', simple: '简单分析', deep: '深度分析' });
+// 分析模式 is one switch on the page (DESIGN §17.2); its two settings values read as that switch does.
+const TTS_MODE_LABELS = Object.freeze({ off: '关', deep: '开' });
 
 function boolLabel(value) {
   return value ? '开' : '关';
@@ -135,10 +136,11 @@ function channelById(settings, id) {
   return (Array.isArray(settings?.channels) ? settings.channels : []).find(channel => channel.id === id) || null;
 }
 
-/** One connection use's line: "翻译：连接名 · 模型 · host（跟随酒馆时没有模型/host）". */
+/** One connection use's line: "翻译用的连接：连接名 · 模型 · host（跟随酒馆时没有模型/host）" — named a
+ * connection, so 「分析模式用的连接」 never reads like the 分析模式 switch's own line further down. */
 function connectionUseLine(settings, use) {
   const choice = connectionUseChoice(settings, use);
-  const label = CONNECTION_USE_TEXT_LABELS[use] || use;
+  const label = `${CONNECTION_USE_TEXT_LABELS[use] || use}用的连接`;
   if (choice === 'follow') return `${label}：跟随酒馆`;
   const channel = channelById(settings, choice);
   if (!channel) return `${label}：跟随酒馆`;
@@ -159,8 +161,9 @@ export function buildSettingsSummaryLines(settings = {}) {
   if (drift.length) lines.push(`套餐已改过 ${drift.length} 项，不是原样：${drift.map(item => item.label).join('、')}`);
   for (const use of CONNECTION_USES) lines.push(connectionUseLine(settings, use));
   lines.push(`自动接续翻译：${boolLabel(settings.autoGeneration)}`);
-  lines.push(`切换滑动页时补译：${boolLabel(settings.autoSwipe)}`);
+  lines.push(`切换滑动页时补译：${boolLabel(settings.autoSwipe)}${settings.autoSwipe && !settings.autoGeneration ? '（自动接续翻译关着，这一项不生效）' : ''}`);
   lines.push(`提取标签：${(settings.bodyTags || []).join('、') || '（空）'}`);
+  lines.push(`正文起点（找不到提取标签时用）：${(settings.bodyStartMarkers || []).join('、') || '（空）'}`);
   lines.push(`替换标签：${(settings.replaceTags || []).join('、') || '（空）'}`);
   lines.push(`排除标签：${(settings.excludedTags || []).join('、') || '（空）'}`);
   lines.push(`只留译文：${boolLabel(settings.translationOnly)}`);
@@ -171,10 +174,13 @@ export function buildSettingsSummaryLines(settings = {}) {
   lines.push(`特效字：${boolLabel(coloring.effects)}`);
   lines.push(`朗读功能：${boolLabel(tts.enabled)}`);
   lines.push(`分析模式：${TTS_MODE_LABELS[tts.mode] || tts.mode || '未知'}`);
+  lines.push(`亲密场景：${({ off: '关', auto: '自动（分析模式判断）', on: '开' })[tts.intimate === true ? 'on' : tts.intimate] ?? '关'}`);
+  lines.push(`副模型提示词 › 破限词：${String(tts.prompts?.jailbreak ?? '').trim() ? '已填写' : '未填写'}`);
   lines.push(`Fish Audio › 模型：${fish.model || '未知'}`);
   lines.push(`Fish Audio API Key：${keyStatus(fish.key)}`);
   lines.push(`经酒馆 CORS 代理发送：${boolLabel(fish.viaProxy)}`);
   lines.push(`新回复自动朗读：${boolLabel(tts.autoRead)}`);
+  lines.push(`点正文跳到悬浮窗：${boolLabel(settings.segmentJump !== false)}`);
   // keyStatus/urlHost above already keep an actual secret field out of these lines; this is the same
   // generic pass buildHelperContext applies to the whole assembled text, run here too so this function
   // is safe to call — and to test — on its own, not only once it is folded into a larger context.
@@ -193,7 +199,7 @@ export function buildFloorSnapshotLines(floor) {
   const lines = [];
   lines.push(`第 ${floor.messageId} 楼 · ${floor.role || '角色'} · 滑动页 ${floor.swipeLabel || '—'}`);
   lines.push(`段落：${floor.segmentCount ?? 0} 段 · 翻译状态：${floor.translationState || '未知'}`);
-  lines.push(`正文标签：${floor.bodyTagsFound?.length ? floor.bodyTagsFound.join('、') : '未找到'}`);
+  lines.push(`正文标签：${floor.bodyTagsFound?.length ? floor.bodyTagsFound.join('、') : floor.startMarkerFound ? `未找到，按正文起点「${floor.startMarkerFound}」后面算正文` : '未找到'}`);
   lines.push(`替换标签：${floor.replaceTagsFound?.length ? floor.replaceTagsFound.join('、') : '未设置或未找到'}`);
   lines.push(`排除标签：${floor.excludedTagsFound?.length ? floor.excludedTagsFound.join('、') : '未设置或未找到'}`);
   lines.push(`只留译文（这一楼）：${floor.translationOnly ? '是' : '否'}`);
@@ -259,7 +265,7 @@ const KNOWLEDGE_LINE_CAP = 220;
 // A safety ceiling only, not the primary control any more — buildHelperContext's own overall budget
 // (joinTruncated against what is actually left of `cap`) is what trims the knowledge section for real.
 // This used to be the primary control at 40, which cut 朗读 off after 40 of its ~60 real lines —
-// dropping 深度分析 (含单次分析最长等待), 默认调音台 and 副模型提示词 — even when the overall budget had
+// dropping 分析模式 (含单次分析最长等待), 默认调音台 and 副模型提示词 — even when the overall budget had
 // room to spare (review finding helper.js:286).
 const KNOWLEDGE_LINES_PER_PAGE = 300;
 
@@ -533,6 +539,7 @@ export const HELPER_WHITELIST_FIELDS = Object.freeze([
   { field: 'tts.enabled', label: '朗读功能', path: Object.freeze(['tts', 'enabled']), kind: 'boolean' },
   { field: 'tts.mode', label: '分析模式', path: Object.freeze(['tts', 'mode']), kind: 'enum', options: TTS_MODES, valueLabels: TTS_MODE_LABELS },
   { field: 'tts.autoRead', label: '新回复自动朗读', path: Object.freeze(['tts', 'autoRead']), kind: 'boolean' },
+  { field: 'segmentJump', label: '点正文跳到悬浮窗', path: Object.freeze(['segmentJump']), kind: 'boolean' },
   { field: 'uiMode', label: '界面模式', path: Object.freeze(['uiMode']), kind: 'enum', options: UI_MODES, valueLabels: UI_MODE_LABELS },
   { field: 'preset', label: '套餐', path: Object.freeze(['preset']), kind: 'enum', options: Object.freeze([...CONSOLE_PRESET_IDS, '']), valueLabels: Object.freeze({ ...PRESET_LABELS, '': '未选套餐' }) },
 ]);
@@ -550,7 +557,7 @@ const HELPER_ACTION_BY_KEY = new Map(HELPER_WHITELIST_ACTIONS.map(action => [act
 
 /** A whitelisted field's own value domain, in the model's own suggestion-writing terms — without this
  * the model only ever sees the field's name, never what a legal `value` looks like (review finding
- * helper.js:322: it would write "简单分析" instead of "simple", and the enum ids/整数范围/标签格式 were
+ * helper.js:322: it would write a label such as "开" instead of the value "deep", and the enum ids/整数范围/标签格式 were
  * never given anywhere). */
 function helperFieldValueDomain(field) {
   if (field.kind === 'boolean') return 'true / false';

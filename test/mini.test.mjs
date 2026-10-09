@@ -137,3 +137,24 @@ test('segmentJumpHighlightPlan: normal motion animates and clears on animationen
   assert.deepEqual(__testing.segmentJumpHighlightPlan(false), { className: 'jy-mini-row-jump', clearAfterMs: null });
   assert.deepEqual(__testing.segmentJumpHighlightPlan(true), { className: 'jy-mini-row-jump-static', clearAfterMs: 2000 });
 });
+
+test('点正文跳到悬浮窗 off: a click on the chat is not even looked at', async t => {
+  const hadDocument = 'document' in globalThis;
+  const hadElement = 'Element' in globalThis;
+  globalThis.document ??= {};
+  globalThis.Element ??= class {};
+  const before = __testing.configureForTest({});
+  t.after(() => {
+    if (!hadDocument) delete globalThis.document;
+    if (!hadElement) delete globalThis.Element;
+    __testing.configureForTest({ settings: { segmentJump: before.segmentJump } });
+  });
+  const looked = [];
+  const click = { button: 0, detail: 1, get target() { looked.push('target'); return null; } };
+  __testing.configureForTest({ settings: { segmentJump: false } });
+  await __testing.handleSegmentJumpClick(click);
+  assert.deepEqual(looked, [], '关着时不看点的是哪里');
+  __testing.configureForTest({ settings: { segmentJump: true } });
+  await __testing.handleSegmentJumpClick(click);
+  assert.ok(looked.length > 0, '开着时照常往下判断');
+});

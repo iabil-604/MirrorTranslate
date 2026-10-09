@@ -52,11 +52,18 @@ await eventSource.emit(T.CHAT_CHANGED, 'gate-chat');
 const started = floor => readDiagnostics().filter(entry => entry.scope === 'translation.auto' && entry.message.startsWith(`第 ${floor} 楼生成结束，自动翻译开始`)).length;
 
 // The host's start: GENERATION_STARTED, the slash commands, then GENERATION_AFTER_COMMANDS unless a command
-// took the send over.
+// took the send over. Both name every option of Generate(), set or not.
+const hostOptions = () => ({
+  automatic_trigger: undefined, force_name2: undefined, quiet_prompt: undefined, quietToLoud: undefined,
+  skipWIAN: undefined, force_chid: undefined, signal: undefined, quietImage: undefined,
+});
 async function begin(type, { command = false } = {}) {
-  await eventSource.emit(T.GENERATION_STARTED, type, {}, false);
-  if (!command) await eventSource.emit(T.GENERATION_AFTER_COMMANDS, type, {}, false);
+  await eventSource.emit(T.GENERATION_STARTED, type, hostOptions(), false);
+  if (!command) await eventSource.emit(T.GENERATION_AFTER_COMMANDS, type, hostOptions(), false);
 }
+
+// 酒馆助手's generate() for a script's own model call: only this, and nothing ends it.
+const scriptGenerate = () => eventSource.emit(T.GENERATION_AFTER_COMMANDS, 'normal', {}, false);
 
 // A streaming 重新生成 in the host's order: STARTED, the old reply deleted, the new one streamed, then the
 // end announced before the awaited MESSAGE_RECEIVED and the typed render.
@@ -210,6 +217,20 @@ test('a regenerate without streaming, with a floor above deleted while it was wr
   chat.splice(2, 0, ...removed);
 });
 
+test('a floor a script draws with no generation behind it is logged under that floor, not the one last translated', async () => {
+  await regenerate();
+  assert.equal(started(6), 1, 'floor 6 was the last one translated');
+  clearDiagnostics();
+  chat.push({ name: '樱井', is_user: false, is_system: false, mes: '脚本写进来的一楼', swipe_id: 0, swipes: ['脚本写进来的一楼'], extra: {} });
+  await eventSource.emit(T.CHARACTER_MESSAGE_RENDERED, 7);
+  await wait(30);
+  const skipped = readDiagnostics().find(entry => entry.scope === 'translation.auto-skip' && entry.message.startsWith('第 7 楼渲染完成'));
+  assert.ok(skipped, 'the render is written down');
+  assert.equal(skipped.floor, 7);
+  assert.equal(Object.hasOwn(skipped, 'fullResponse'), false, 'no empty 「查看完整返回」 beside it');
+  chat.pop();
+});
+
 test('a reply whose body tag is missing says so on screen, once for the chat', async () => {
   // A chat of its own: the replies above were told about already.
   context.chatId = 'gate-chat-2';
@@ -325,6 +346,68 @@ test('a floor heard while it was written is read by itself again once a regenera
   await regenerate({ text });
   await wait(1400);
   assert.equal(readAloud(), 1, 'the new reply is read by itself');
+});
+
+test('turning to an untranslated alternative is translated only while 自动接续翻译 is on', async () => {
+  const swiped = floor => readDiagnostics().filter(entry => entry.scope === 'translation.auto' && entry.message.startsWith(`第 ${floor} 楼划动了，自动翻译开始`)).length;
+  const floor = chat[6];
+  const before = { swipes: floor.swipes, swipe_id: floor.swipe_id, mes: floor.mes };
+  floor.swipes = [floor.mes, 'もう一つの返事。'];
+  floor.swipe_id = 1;
+  floor.mes = 'もう一つの返事。';
+  try {
+    clearDiagnostics();
+    __testing.configureForTest({ settings: { autoGeneration: false, autoSwipe: true } });
+    await eventSource.emit(T.MESSAGE_SWIPED, 6);
+    await wait(30);
+    assert.equal(swiped(6), 0, '自动接续翻译关着，切过去也不翻');
+
+    __testing.configureForTest({ settings: { autoGeneration: true, autoSwipe: true } });
+    await eventSource.emit(T.MESSAGE_SWIPED, 6);
+    await wait(30);
+    assert.equal(swiped(6), 1, '两个都开着时照常补译');
+  } finally {
+    __testing.configureForTest({ settings: { autoGeneration: true, autoSwipe: true } });
+    Object.assign(floor, before);
+  }
+});
+
+test('a script\'s own model call does not leave the last floor locked as still being written', async () => {
+  assert.doesNotThrow(() => __testing.requireClosedFloor(6));
+  await scriptGenerate();
+  assert.doesNotThrow(() => __testing.requireClosedFloor(6), '填表、生图之后照样能读');
+  // A slash command sent before it began a generation and took it over.
+  await begin('normal', { command: true });
+  await scriptGenerate();
+  assert.doesNotThrow(() => __testing.requireClosedFloor(6), '命令之后的脚本生成也不算');
+  // The host's own reply still holds the floor until it is stopped.
+  await begin('normal');
+  assert.throws(() => __testing.requireClosedFloor(6), /还在生成/);
+  await eventSource.emit(T.GENERATION_STOPPED);
+  assert.doesNotThrow(() => __testing.requireClosedFloor(6));
+});
+
+test('a generation nobody ended stops holding the floor once the host page is idle', async () => {
+  const stop = { style: { display: 'none' } };
+  const page = globalThis.document;
+  const { getElementById, body } = page;
+  const computed = globalThis.getComputedStyle;
+  page.getElementById = id => (id === 'mes_stop' ? stop : null);
+  page.body = { dataset: {} };
+  globalThis.getComputedStyle = element => ({ display: element.style.display });
+  try {
+    __testing.configureForTest({ mainGenerationActive: true });
+    assert.doesNotThrow(() => __testing.requireClosedFloor(6), '停止键藏着、页面也没标生成中');
+    page.body.dataset.generating = 'true';
+    assert.throws(() => __testing.requireClosedFloor(6), /还在生成/);
+    delete page.body.dataset.generating;
+    stop.style.display = 'flex';
+    assert.throws(() => __testing.requireClosedFloor(6), /还在生成/);
+  } finally {
+    __testing.configureForTest({ mainGenerationActive: false });
+    Object.assign(page, { getElementById, body });
+    globalThis.getComputedStyle = computed;
+  }
 });
 
 test.after(() => onDisable());
