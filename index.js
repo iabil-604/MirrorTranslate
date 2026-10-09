@@ -5540,7 +5540,11 @@ async function makeGsvRecording({ floor, unit, items, settings, tts, provider, s
       const payload = payloads[index];
       let result;
       try {
-        result = await gsvSynthesize(payload, tts.gsv, signal, { onAttempt: () => { ttsFishTally(floor).requests += 1; } });
+        // A sentence with no words left once its tags are gone (a reader's line of nothing but tags) is a
+        // short pause; GPT-SoVITS would refuse it outright and lose the whole paragraph with it.
+        result = payload.body.text
+          ? await gsvSynthesize(payload, tts.gsv, signal, { onAttempt: () => { ttsFishTally(floor).requests += 1; } })
+          : { bytes: encodeWav([new Float32Array(9600)], 32000), duration: 0.3 };
       } catch (error) {
         if (!isAbortError(error) && !signal?.aborted) {
           ttsFishTally(floor).failed += 1;
@@ -14225,7 +14229,7 @@ function createControlCenter(rootDocument = document) {
         toast(hint ? 'warning' : 'success', `Fish 连接正常。${credit}${hint}`);
       } else if (action === 'tts-test-gsv') {
         saveSettings(collectSettings(root));
-        setText(root, '[data-jy-tts-gsv-note]', '正在连接 GPT-SoVITS…');
+        setText(root, '[data-jy-tts-gsv-note]', '正在连接 GPT-SoVITS…第一次或刚换模型时要先把模型装进显卡，可能要半分钟。');
         try {
           const result = await testGsvConnection(runtime.settings);
           const line = `GPT-SoVITS 连接正常${result.version ? `（${result.version}）` : ''}。${result.sampled ? `默认音色试读了一句（${result.seconds.toFixed(1)} 秒）。` : '默认音色还没填参考音频，填好再点一次就能听到。'}`;

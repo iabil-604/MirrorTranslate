@@ -800,6 +800,13 @@ test('GPT-SoVITS failures: its own refusal is answered once, a server that is no
   calls = mockGsv();
   await assert.rejects(__testing.ensureTtsRecording(floor, 'line:1', (await __testing.ttsItemsFor(floor, segments, bare)).items, bare), /没有能用的 GPT-SoVITS 音色/);
   assert.equal(calls.length, 0);
+
+  // A line the reader left nothing but tags in is a short pause, not a refusal.
+  __testing.configureForTest({ settings: { tts: { ...settings.tts, gsv: { refAudioPath: 'D:\\refs\\ok.wav' } } } });
+  calls = mockGsv();
+  const pause = await __testing.saveTtsOverride(0, 1, { text: '[sigh] [long pause]' });
+  assert.equal(calls.length, 0);
+  assert.equal(pause.parts[0].duration, 0.3);
 });
 
 test('the latest floor is made in the background, paragraph by paragraph in the stream, and never twice', async t => {
