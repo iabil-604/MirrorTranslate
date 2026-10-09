@@ -34,7 +34,7 @@ import {
   pathSet,
   presetDrift,
   unwrapResponseContent,
-} from './core.js?v=0.44.0-beta.1';
+} from './core.js?v=0.45.0-beta.1';
 
 // ---------------------------------------------------------------------------------------------
 // Default prompt and quick questions
@@ -176,6 +176,13 @@ export function buildSettingsSummaryLines(settings = {}) {
   lines.push(`分析模式：${TTS_MODE_LABELS[tts.mode] || tts.mode || '未知'}`);
   lines.push(`亲密场景：${({ off: '关', auto: '自动（分析模式判断）', on: '开' })[tts.intimate === true ? 'on' : tts.intimate] ?? '关'}`);
   lines.push(`副模型提示词 › 破限词：${String(tts.prompts?.jailbreak ?? '').trim() ? '已填写' : '未填写'}`);
+  lines.push(`声音来源：${tts.provider === 'gsv' ? 'GPT-SoVITS（本地）' : 'Fish Audio'}`);
+  if (tts.provider === 'gsv') {
+    const gsv = tts.gsv || {};
+    lines.push(`GPT-SoVITS › 接口地址：${urlHost(gsv.baseUrl) || '未填'}`);
+    lines.push(`GPT-SoVITS › 默认音色的参考音频：${gsv.refAudioPath ? '已填' : '未填'}`);
+    lines.push(`GPT-SoVITS 经酒馆 CORS 代理发送：${boolLabel(gsv.viaProxy)}`);
+  }
   lines.push(`Fish Audio › 模型：${fish.model || '未知'}`);
   lines.push(`Fish Audio API Key：${keyStatus(fish.key)}`);
   lines.push(`经酒馆 CORS 代理发送：${boolLabel(fish.viaProxy)}`);

@@ -15,9 +15,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.44.0-beta.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.44.0-beta.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.44.0-beta.1';
+} from './core.js?v=0.45.0-beta.1';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.45.0-beta.1';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.45.0-beta.1';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -2803,7 +2803,153 @@ export const FISH_ADAPTER = Object.freeze({
   supportsMultiSpeaker: model => fishSupportsMultiSpeaker(model),
 });
 
-const PROVIDERS = new Map([[FISH_ADAPTER.id, FISH_ADAPTER]]);
+// ---------------------------------------------------------------------------------------------
+// GPT-SoVITS, as its api_v2.py serves it on the reader's own machine.
+//
+// It hears no markup at all: a sentence goes as its words, the mood is in the reference clip (a
+// character's 情绪音色 is another clip of the same voice), speed is its speed_factor and volume is set
+// on the audio when it comes back. It reports no timings either, so every sentence is a request of its
+// own and its audio is that sentence, from the first sample to the last.
+// ---------------------------------------------------------------------------------------------
+
+const GSV_TEXT_LANGUAGES = new Set(['zh', 'ja', 'en', 'ko', 'yue']);
+
+/** The language GPT-SoVITS reads a sentence in: the one the reading named, else the script's own. */
+export function gsvTextLang(item, text = '') {
+  const named = languageBase(normalizeLanguageCode(item?.segment?.lang));
+  const lang = named || detectLanguage(text || item?.segment?.text || '');
+  return GSV_TEXT_LANGUAGES.has(lang) ? lang : 'auto';
+}
+
+/**
+ * What one sentence says through GPT-SoVITS: the words Fish would have been sent — the reader's own,
+ * or the reading's script with its doubled words and interjections — with every tag taken out. A tag
+ * between two characters of Chinese or Japanese leaves no space behind, which would be read as a pause.
+ */
+export function gsvSentenceText(item, tts) {
+  const own = item?.override?.text;
+  const sent = typeof own === 'string' && own.trim()
+    ? unsungText(own)
+    : sentenceFishText(item, { ...(tts?.fish ?? {}), model: 's2-pro' }, { emotionCues: false, directions: false, lean: true });
+  return stripCues(sent).replace(/([^\x00-\x7F])\s+(?=[^\x00-\x7F])/g, '$1').trim();
+}
+
+/** Speed and volume for one sentence: the reader's own numbers, else the reading's steps on the settings'. */
+export function gsvProsody(item, tts) {
+  const gsv = tts?.gsv ?? {};
+  const base = { speed: Number(gsv.speed) || 1, volume: Number(gsv.volume) || 0 };
+  const step = sentenceProsody(item, { speed: 1, volume: 0 }, { prosodySplit: tts?.prosodySplit !== false });
+  const ownSpeed = item?.override ? Number(item.override.speed) : NaN;
+  const ownVolume = item?.override ? Number(item.override.volume) : NaN;
+  return {
+    speed: Number(Math.min(2, Math.max(0.5, Number.isFinite(ownSpeed) ? ownSpeed : base.speed * step.speed)).toFixed(2)),
+    volume: Number(Math.min(20, Math.max(-20, Number.isFinite(ownVolume) ? ownVolume : base.volume + step.volume)).toFixed(1)),
+  };
+}
+
+/**
+ * The GPT-SoVITS voice a voice id reads in: the library entry that carries a clip for it, else the
+ * default voice of the settings; null when neither has a clip. An entry's own models win; without them
+ * it loads the default models, and without those whatever GPT-SoVITS has loaded.
+ */
+export function gsvVoiceFor(voiceId, gsv, library = []) {
+  const entry = voiceId ? (Array.isArray(library) ? library : []).find(candidate => candidate?.voiceId === voiceId && candidate.gsv?.refAudioPath) : null;
+  if (entry) {
+    return {
+      source: 'library', name: entry.name ?? '', refAudioPath: entry.gsv.refAudioPath, promptText: entry.gsv.promptText ?? '', promptLang: entry.gsv.promptLang || 'zh',
+      gptWeights: entry.gsv.gptWeights || gsv?.gptWeights || '', sovitsWeights: entry.gsv.sovitsWeights || gsv?.sovitsWeights || '',
+    };
+  }
+  if (!gsv?.refAudioPath) return null;
+  return {
+    source: 'default', name: '', refAudioPath: gsv.refAudioPath, promptText: gsv.promptText ?? '', promptLang: gsv.promptLang || 'zh',
+    gptWeights: gsv.gptWeights || '', sovitsWeights: gsv.sovitsWeights || '',
+  };
+}
+
+/**
+ * Everything of a voice that changes how it sounds, as one string: a recording keeps it per sentence
+ * (itemIdentity), so a clip or a model changed behind the same id is heard anew, and only that voice's
+ * sentences are made again.
+ */
+export function gsvVoiceTag(voiceId, gsv, library = []) {
+  const voice = gsvVoiceFor(voiceId, gsv, library);
+  return voice ? JSON.stringify(['gsv', voice.refAudioPath, voice.promptText, voice.promptLang, voice.gptWeights, voice.sovitsWeights]) : 'gsv:none';
+}
+
+/** One sentence's request: api_v2's /tts body, the voice and models it needs, and the volume to set after. */
+export function buildGsvPayload(items, tts, { library = [] } = {}) {
+  const item = (Array.isArray(items) ? items : [])[0];
+  if (!item) throw new Error('这一段没有可朗读的句子。');
+  const gsv = tts?.gsv ?? {};
+  const text = gsvSentenceText(item, tts);
+  const voice = gsvVoiceFor(item.voiceId, gsv, library);
+  const prosody = gsvProsody(item, tts);
+  const body = {
+    text,
+    text_lang: gsvTextLang(item, text),
+    ref_audio_path: voice?.refAudioPath ?? '',
+    prompt_text: voice?.promptText ?? '',
+    prompt_lang: voice?.promptLang ?? (gsv.promptLang || 'zh'),
+    top_k: gsv.topK,
+    top_p: gsv.topP,
+    temperature: gsv.temperature,
+    text_split_method: gsv.splitMethod,
+    batch_size: 1,
+    speed_factor: prosody.speed,
+    fragment_interval: 0.3,
+    seed: -1,
+    media_type: 'wav',
+    streaming_mode: false,
+    parallel_infer: true,
+    repetition_penalty: gsv.repetitionPenalty,
+  };
+  const rewritten = Boolean(item.override?.text) || (typeof item.segment?.voice?.script === 'string' && item.segment.voice.script.trim());
+  return {
+    body,
+    spans: [{ id: item.segment.id, text: rewritten ? text : item.segment.text }],
+    voice,
+    volume: prosody.volume,
+    weights: { gpt: voice?.gptWeights ?? '', sovits: voice?.sovitsWeights ?? '' },
+  };
+}
+
+/** Everything in the settings that changes how GPT-SoVITS sounds; the voices are kept per sentence. */
+export function gsvFingerprint(tts, { consoles = '' } = {}) {
+  const gsv = tts?.gsv ?? {};
+  return {
+    provider: 'gsv',
+    mode: tts?.mode ?? '',
+    consoles,
+    speed: gsv.speed,
+    volume: gsv.volume,
+    temperature: gsv.temperature,
+    topK: gsv.topK,
+    topP: gsv.topP,
+    repetitionPenalty: gsv.repetitionPenalty,
+    splitMethod: gsv.splitMethod,
+    prosodySplit: tts?.prosodySplit !== false,
+  };
+}
+
+export const GSV_ADAPTER = Object.freeze({
+  id: 'gsv',
+  label: 'GPT-SoVITS',
+  // The analysis still speaks in its own words; GPT-SoVITS hears none of them, only the script's text.
+  vocabulary: FISH_ADAPTER.vocabulary,
+  sentenceText: (item, tts) => gsvSentenceText(item, tts),
+  prosody: (item, tts) => gsvProsody(item, tts),
+  sampling: (item, tts) => ({ temperature: tts?.gsv?.temperature ?? 1 }),
+  parts: items => (Array.isArray(items) ? items : []).map(item => [item]),
+  payload: (items, tts, context = {}) => buildGsvPayload(items, tts, context),
+  fingerprint: (tts, options = {}) => gsvFingerprint(tts, options),
+  mime: () => 'audio/wav',
+  supportsMultiSpeaker: () => false,
+  /** A voice's identity beyond its id (gsvVoiceTag): what a sentence's audio is made from. */
+  voiceTag: (voiceId, tts, library = []) => gsvVoiceTag(voiceId, tts?.gsv, library),
+});
+
+const PROVIDERS = new Map([[FISH_ADAPTER.id, FISH_ADAPTER], [GSV_ADAPTER.id, GSV_ADAPTER]]);
 
 /** The adapter for a provider id; an unknown id reads through Fish, the one every setting was made for. */
 export function ttsProvider(id = 'fish') {
@@ -2909,6 +3055,65 @@ export function describeFishFailure({ status = 0, body = '', viaProxy = true, ne
   if (upstream === 404) return `Fish 接口地址不对（HTTP 404）：${message || '没有说明'}`;
   if (upstream >= 500) return `Fish 服务端暂时不可用（HTTP ${upstream}）：${message || '没有说明'}`;
   return `Fish 返回错误（HTTP ${upstream || '未知'}）：${message || '没有说明'}`;
+}
+
+export function gsvGoesDirect(gsv, host = 'sillytavern') {
+  return gsv?.viaProxy === false || host === 'tauritavern';
+}
+
+/**
+ * Where one GPT-SoVITS call goes. Through the host's proxy the target URL is the route's path, and the
+ * route reads only the path: a query string after it would be cut off before the request goes on. So
+ * the query rides inside the path, its `?` escaped; the route unescapes it once and forwards the URL whole.
+ */
+export function gsvEndpoint(gsv, path, { query = null, host = 'sillytavern' } = {}) {
+  const base = String(gsv?.baseUrl || 'http://127.0.0.1:9880').replace(/\/+$/, '');
+  const search = query && Object.keys(query).length ? new URLSearchParams(query).toString() : '';
+  if (gsvGoesDirect(gsv, host)) return `${base}${path}${search ? `?${search}` : ''}`;
+  return `/proxy/${base}${path}${search ? `%3F${encodeURIComponent(search)}` : ''}`;
+}
+
+/** Request headers for one GPT-SoVITS call: the host's own through its proxy, nothing of it direct. */
+export function gsvHeaders(gsv, hostHeaders = {}, { host = 'sillytavern' } = {}) {
+  return { ...(gsvGoesDirect(gsv, host) ? {} : { ...hostHeaders }), 'Content-Type': 'application/json' };
+}
+
+/**
+ * A failed GPT-SoVITS call in the reader's words. api_v2 answers its own failures with 400 and a JSON
+ * message (with the Python exception beside it); a 500 with no message of its own is the tavern's proxy
+ * failing to reach it at all — GPT-SoVITS is not running, or not at that address.
+ */
+export function describeGsvFailure({ status = 0, body = '', viaProxy = true, network = false, host = 'sillytavern', baseUrl = '' } = {}) {
+  const where = String(baseUrl || 'http://127.0.0.1:9880');
+  if (network) {
+    if (host === 'tauritavern') return `TauriTavern 里没有酒馆的 CORS 代理，GPT-SoVITS 又不带跨域头，网页连不上 ${where}。在「接口地址」填一个带跨域头的转发地址。`;
+    return viaProxy
+      ? '连不上酒馆的代理接口，检查酒馆是否还在运行。'
+      : `浏览器直连 ${where} 失败：GPT-SoVITS 自己不带跨域头，网页直接访问会被拦下。打开「经酒馆 CORS 代理发送」再试。`;
+  }
+  const text = String(body ?? '');
+  let payload = null;
+  try { payload = JSON.parse(text); } catch { payload = null; }
+  const message = typeof payload?.message === 'string' ? payload.message : '';
+  const exception = typeof payload?.Exception === 'string' ? payload.Exception : '';
+  const said = [message, exception].filter(Boolean).join('：').replace(/\s+/g, ' ').slice(0, 300) || text.replace(/\s+/g, ' ').slice(0, 240);
+  if (Number(status) === 404 && /CORS proxy is disabled/i.test(text)) {
+    return '酒馆的 CORS 代理没有打开。在酒馆目录的 config.yaml 里把 enableCorsProxy 改成 true，重启酒馆后再试。';
+  }
+  if (Number(status) === 403 && /csrf/i.test(text)) return '酒馆拒绝了这次代理请求（CSRF）。刷新酒馆页面后再试。';
+  if (viaProxy && Number(status) === 401 && /basicAuthUser|<title>\s*Unauthorized\s*<\/title>/i.test(text)) {
+    return '被酒馆的登录保护拦下了（config.yaml 里开着 basicAuthMode），请求没到 GPT-SoVITS。刷新页面、重新登录酒馆后再试。';
+  }
+  if (Number(status) >= 500 && !message) {
+    return `连不上 GPT-SoVITS（${where}）：它没有启动，或者地址、端口不对。先运行 GPT-SoVITS 的 api_v2.py（默认端口 9880），窗口里出现 Uvicorn running on 之后再试。`;
+  }
+  if (/is not supported in version/i.test(message)) return `GPT-SoVITS 不认识这个语言：${said}。v1 模型只能读中文、日语、英语。`;
+  if (/3~10|3-10/.test(said)) return `参考音频太长或太短：GPT-SoVITS 只收 3~10 秒的参考音频，换一段（${said}）。`;
+  if (/ref_audio_path|参考音频|No such file|FileNotFound|Error opening|找不到|Errno 2/i.test(said)) {
+    return `GPT-SoVITS 读不到参考音频：${said}。参考音频要填 GPT-SoVITS 那台电脑上的完整路径，长度 3~10 秒。`;
+  }
+  if (/weight/i.test(message)) return `GPT-SoVITS 换模型失败：${said}。检查模型路径，GPT 模型是 .ckpt，SoVITS 模型是 .pth。`;
+  return `GPT-SoVITS 返回错误（HTTP ${Number(status) || '未知'}）：${said || '没有说明'}`;
 }
 
 /**
@@ -3197,9 +3402,11 @@ export function fishFingerprint(fish, { emotionCues = true, prosodySplit = true,
 export async function recordingCacheKey({ floorId, version, unit = 'floor', maxChars, items, fingerprint }) {
   return `r:${await hashText(JSON.stringify({
     v: 2, floorId, version, unit, maxChars, fingerprint,
-    items: (Array.isArray(items) ? items : []).map(({ segment, voiceId, override }) => [
+    // A provider that keeps more of a voice than its id (GPT-SoVITS's clip and models) adds it as the
+    // voice's tag; without one the key is exactly what it always was.
+    items: (Array.isArray(items) ? items : []).map(({ segment, voiceId, override, voiceTag }) => [
       segment.id, segment.type, segment.text, segment.speaker, segment.emotion, segment.intensity, voiceId,
-      segment.voice ?? null, override ?? null, segment.lang ?? null,
+      segment.voice ?? null, override ?? null, segment.lang ?? null, ...(voiceTag ? [voiceTag] : []),
     ]),
   }))}`;
 }
@@ -3229,6 +3436,7 @@ export function itemIdentity(item) {
     segment.type ?? null, segment.text ?? '', segment.speaker ?? null, segment.lang ?? null,
     segment.emotion ?? null, segment.intensity ?? null, item?.voiceId ?? '', segment.voice ?? null,
     override ? [override.text ?? null, override.speed ?? null, override.volume ?? null, override.tension ?? null] : null,
+    ...(item?.voiceTag ? [item.voiceTag] : []),
   ]);
 }
 
@@ -3379,6 +3587,61 @@ export function encodeWav(channels, sampleRate = 44100) {
     }
   }
   return bytes;
+}
+
+/**
+ * A wav file's format and length, read from its header: what GPT-SoVITS sent back carries no timings,
+ * so its duration is the sentence's.
+ */
+export function wavInfo(bytes) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+  const layout = wavLayout(data);
+  if (!layout) return null;
+  const view = new DataView(data.buffer, data.byteOffset + layout.fmtAt, 16);
+  const format = view.getUint16(0, true);
+  const channels = view.getUint16(2, true) || 1;
+  const sampleRate = view.getUint32(4, true);
+  const byteRate = view.getUint32(8, true);
+  const bits = view.getUint16(14, true);
+  if (!sampleRate || !byteRate) return null;
+  return { format, channels, sampleRate, bits, dataAt: layout.dataAt, bytes: layout.dataLength, duration: layout.dataLength / byteRate };
+}
+
+// Where a RIFF WAVE file keeps its fmt chunk and its samples. A data chunk that claims more than the
+// file holds (a stream written before its length was known) is taken to run to the end of the file.
+function wavLayout(bytes) {
+  if (bytes.length < 12 || String.fromCharCode(...bytes.slice(0, 4)) !== 'RIFF' || String.fromCharCode(...bytes.slice(8, 12)) !== 'WAVE') return null;
+  let offset = 12;
+  let fmtAt = -1;
+  while (offset + 8 <= bytes.length) {
+    const id = String.fromCharCode(...bytes.slice(offset, offset + 4));
+    const size = readUint32(bytes, offset + 4);
+    if (id === 'fmt ' && size >= 16) fmtAt = offset + 8;
+    if (id === 'data') {
+      if (fmtAt < 0) return null;
+      return { fmtAt, dataAt: offset + 8, dataLength: Math.min(size, bytes.length - offset - 8) };
+    }
+    offset += 8 + size + (size % 2);
+  }
+  return null;
+}
+
+/**
+ * The same wav, louder or quieter by `db`. Only 16-bit PCM is touched, which is what GPT-SoVITS writes;
+ * the gain stops short of clipping the loudest sample, so a louder step never cracks.
+ */
+export function scaleWavVolume(bytes, db) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+  const info = wavInfo(data);
+  const want = 10 ** ((Number(db) || 0) / 20);
+  if (!info || info.format !== 1 || info.bits !== 16 || want === 1) return data;
+  const out = new Uint8Array(data);
+  const view = new DataView(out.buffer, out.byteOffset + info.dataAt, info.bytes - (info.bytes % 2));
+  let peak = 0;
+  for (let at = 0; at < view.byteLength; at += 2) peak = Math.max(peak, Math.abs(view.getInt16(at, true)));
+  const gain = want > 1 && peak ? Math.max(1, Math.min(want, 32112 / peak)) : want;
+  for (let at = 0; at < view.byteLength; at += 2) view.setInt16(at, Math.max(-32768, Math.min(32767, Math.round(view.getInt16(at, true) * gain))), true);
+  return out;
 }
 
 export function mergeWavBuffers(buffers) {
