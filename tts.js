@@ -15,9 +15,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.43.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.43.0';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.43.0';
+} from './core.js?v=0.44.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.44.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.44.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -1830,11 +1830,32 @@ function openingTags(script) {
   return [...head.matchAll(/\[([^\]\n]{1,40})\]/gu)].map(match => match[1].trim().toLowerCase());
 }
 
+// 唱: a line the reader asked Fish to sing, with S2's own [singing] — which only "tries to read the text
+// with a sense of melody"; it follows no tune. It is the reader's version of the line, and [singing] is
+// one of the tags it opens on (a mood the reader put in front of it does not unmake it).
+const SINGING_OPENING = /^(\s*(?:\[[^\]\n]{1,40}\]\s*)*?)\[singing\]\s*/iu;
+
+/** A line the reader asked to be sung: [singing] among the tags it opens on. */
+export function isSungText(text) {
+  return SINGING_OPENING.test(String(text ?? ''));
+}
+
+/** The words of a line as a sung line: [singing], then the words with every other cue taken out. */
+export function singingText(text) {
+  const words = stripCues(text);
+  return words ? `[singing] ${words}` : '';
+}
+
+/** The same line no longer sung: its opening [singing] taken off, the rest as it was. */
+export function unsungText(text) {
+  return String(text ?? '').replace(SINGING_OPENING, '$1');
+}
+
 /**
  * The 情绪音色 a line is said in (VOICE_MOOD_CONDITIONS), found locally from what 分析模式 said about
  * it: the first of the character's moods that fits — a line opening in a whisper or a breathy voice, one
- * opening on a laugh, one of tension 4 and up, or any line of a floor of that tone. '' when none fits, or
- * the floor was not analysed.
+ * opening on a laugh, one of tension 4 and up, a line the reader set to 唱 (`segment.sung`), or any line
+ * of a floor of that tone. '' when none fits, or the floor was not analysed.
  */
 export function moodVoiceFor(entry, segment) {
   const moods = Array.isArray(entry?.moods) ? entry.moods : [];
@@ -1845,6 +1866,7 @@ export function moodVoiceFor(entry, segment) {
     whisper: opening.includes('whisper') || opening.includes('breathy'),
     laugh: opening.includes('laughter') || opening.includes('snicker'),
     burst: Number(voice.tensionLevel) >= 4,
+    sing: segment?.sung === true,
   };
   for (const mood of moods) {
     if (!mood?.voiceId) continue;
@@ -2389,7 +2411,11 @@ export function consoleDirections(console, { keys = null, quiet = [], acoustic =
 /** The text one sentence sends: the reader's own version when there is one, else the compiled voice. */
 export function sentenceFishText(item, fish, { emotionCues = true, tamePunctuation = false, directions = true, lean = false } = {}) {
   const override = item?.override;
-  if (override && typeof override.text === 'string' && override.text.trim()) return override.text.trim();
+  if (override && typeof override.text === 'string' && override.text.trim()) {
+    const own = override.text.trim();
+    // S1 cannot sing: a line set to 唱 under S2 is read in plain words there.
+    return fish?.model === 's1' && isSungText(own) ? unsungText(own).trim() : own;
+  }
   const compiled = compileVoiceCues(item.segment, { model: fish?.model, emotionCues, directions, lean });
   // A script already says where every mark and sound goes (！！ included), so the reader's punctuation
   // marks and the taming of runs are not laid over it a second time.

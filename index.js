@@ -120,8 +120,8 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.43.0';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.43.0';
+} from './core.js?v=0.44.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.44.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -179,10 +179,13 @@ import {
   SPEECH_MOODS,
   SPEECH_TONES,
   settledSpans,
-} from './tts.js?v=0.43.0';
-import { createTtsStore } from './tts-store.js?v=0.43.0';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.43.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.43.0';
+  isSungText,
+  singingText,
+  unsungText,
+} from './tts.js?v=0.44.0';
+import { createTtsStore } from './tts-store.js?v=0.44.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.44.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.44.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -192,7 +195,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.43.0';
+} from './processing.js?v=0.44.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -210,10 +213,10 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.43.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.43.0';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.43.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.43.0';
+} from './prompts.js?v=0.44.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.44.0';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.44.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.44.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -231,8 +234,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.43.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.43.0';
+} from './palette.js?v=0.44.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.44.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -240,7 +243,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.43.0';
+} from './diagnostics.js?v=0.44.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -251,7 +254,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.43.0';
+} from './helper.js?v=0.44.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -723,7 +726,7 @@ const CONTROL_CENTER_MARKUP = `
 <p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译、分析模式、小助手各用哪条，在「模型连接」页最上面的「各功能用哪条连接」里选，分析模式用的连接在这一页「更多 → 分析模式」里也能改。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）也存在「模型连接」页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文（旁白读译文，台词按角色写的语言读原文）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoRead">新回复自动朗读（只读最新一楼，写完才读；正在读别的楼时只提醒、不打断）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">点播放后，做完直接播（关掉就只生成，再点一次才播）</label></div>
-<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不分析时直接用这些标注，不再请求副模型；打开分析模式，正文一闭合就把这一楼发给副模型分析一次，走分析模式用的连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。</p>
+<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不分析时直接用这些标注，不再请求副模型；打开分析模式，正文一闭合就把这一楼发给副模型分析一次，走分析模式用的连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页；那里点一句的「详细」再按「唱」，这句就唱出来（S2 系列模型才能唱）。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label><label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label></div>
 <p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>对白读原文：旁白读译文，每一句台词按正文里写的语言读原文——同一楼里日本人的台词读日语、英国人的台词读英语，说话人和情绪仍然取自译文的标注，句内的停顿重读带不过去。不用另外选语言配的音色：Fish 的 S2 系列按每句自己的语言发音，「音色」给角色配的「多国语言」音色也是按这句话自己的语言选的，没配就还是这个角色的默认音色。<br>不开分析模式时，以上几种读法都给每句写一句中文配音指令：谁在说、基础情绪、情绪怎么变、语气、语速、停顿重读、要不要笑声叹气喘息。S2 系列模型直接读方括号里的中文指令，句内还会插 [重读]、[停顿]、[长停顿] 和声音词，语速音量走 Fish 的参数；S1 读不懂自由文本，退回它认得的英文固定标签。台词本身不经过模型，一个字不改。<br>开着分析模式时按声学标注规则来：不写情绪词，只在字上插十个声音标签；台词可以加叠字、！！、~、……和呜、嗯、唔这类语气词，原文的字程序逐字核对，对不上的句子按原文念。语速分五档；张力 1~5 调 Fish 的 temperature，张力不同的句子分开请求；很短的语气句会加强防重复，免得卡在一个音上。分析按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮或悬浮窗的改句面板能看到分析结果和最终发给 Fish 的内容，可以改。</p>
 </div>
@@ -5351,10 +5354,18 @@ async function ttsItemsFor(floor, segments, settings, { range = null } = {}) {
   const inRange = segmentsInRange(segments, range ?? tts.range);
   const plan = planVoices(inRange, ttsVoiceConfig(settings));
   const overrides = await ttsOverrides(floor);
+  const voiceConfig = ttsVoiceConfig(settings);
   const dress = item => {
     const override = overrides.get(item.segment.id);
     const carried = { ...item, console: consoleFor(item.segment, settings) };
-    return override ? { ...carried, override: { text: override.text, speed: override.speed, volume: override.volume, tension: override.tension, speaker: override.speaker, recordKey: override.recordKey } } : carried;
+    if (!override) return carried;
+    const own = { text: override.text, speed: override.speed, volume: override.volume, tension: override.tension, speaker: override.speaker, recordKey: override.recordKey };
+    // A line set to 唱 is sung in the character's singing voice, where the row has one (情绪音色 「唱」).
+    if (isSungText(override.text)) {
+      const segment = { ...item.segment, sung: true };
+      return { ...carried, segment, voiceId: resolveSegmentVoice(segment, voiceConfig) || item.voiceId, override: own };
+    }
+    return { ...carried, override: own };
   };
   const items = plan.items.map(dress);
   const skipped = plan.skipped.map(dress);
@@ -10928,6 +10939,7 @@ const MOOD_LABELS = Object.freeze({
   whisper: '耳语、气声',
   laugh: '笑着说',
   burst: '张力 4 以上',
+  sing: '唱',
   ...Object.fromEntries(VOICE_MOOD_CONDITIONS.filter(when => when.startsWith('tone:')).map(when => [when, `基调：${when.slice(5)}`])),
 });
 
@@ -11319,7 +11331,7 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   addMood.className = 'jy-button jy-tts-lang-button';
   addMood.dataset.jyAction = 'tts-add-mood';
   addMood.textContent = '＋ 情绪音色';
-  addMood.title = '同一个声优分别克隆的几种声音（耳语、怒吼……）：按分析模式的结果，耳语、笑、张力高或某种基调的句子换成另一个 Voice ID。要开分析模式才会换。';
+  addMood.title = '同一个声优分别克隆的几种声音（耳语、怒吼、唱歌……）：按分析模式的结果，耳语、笑、张力高或某种基调的句子换成另一个 Voice ID，要开分析模式才会换；「唱」是你在悬浮窗里设成唱的句子，不用开分析模式。';
   tools.append(addLang, addMood, unbind, remove);
   const langs = doc.createElement('div');
   langs.className = 'jy-tts-lang-list';
@@ -15821,6 +15833,14 @@ async function openMiniWindow() {
     option.textContent = `${cueLabel(word)} (${word})`;
     emotionPicker.appendChild(option);
   }
+  // 唱 comes first and stays pressed while the text opens on [singing]; the other chips only drop a cue in.
+  const singChip = document.createElement('button');
+  singChip.type = 'button';
+  singChip.className = 'jy-mini-chip';
+  singChip.dataset.jyTtsSing = '';
+  singChip.textContent = '唱';
+  singChip.setAttribute('aria-pressed', 'false');
+  tagBox.appendChild(singChip);
   tagBox.appendChild(emotionPicker);
   // The chips insert Fish's own words, the ones its app writes; the S1 models get their brackets and pause names.
   for (const [label, tag] of [['停顿', 'pause'], ['长停顿', 'long pause'], ['重读', 'emphasis'], ['耳语', 'whispering'], ['轻声', 'soft tone'], ['喊', 'shouting'], ['急促', 'in a hurry tone'], ...FISH_SOUNDS.map(sound => [cueLabel(sound), sound])]) {
@@ -15851,12 +15871,31 @@ async function openMiniWindow() {
     fishInput.focus();
     fishInput.setSelectionRange(caret, caret);
     markDirty();
+    syncSing();
+  };
+  // 唱 follows the text: pressed while it opens on [singing]. S1 cannot sing, so there it is off.
+  const syncSing = () => {
+    const s1 = ttsSettings().fish.model === 's1';
+    singChip.disabled = s1;
+    singChip.title = s1
+      ? 's1 不能唱。换成 S2 系列模型（s2-pro、s2.1-pro 等）才能用'
+      : '整句用 Fish 的 [singing] 唱出来：带旋律感地念，不会照某首歌的曲调唱。按下时去掉这句的其他标签，再按一次取消';
+    singChip.setAttribute('aria-pressed', !s1 && isSungText(fishInput.value) ? 'true' : 'false');
+  };
+  const toggleSing = () => {
+    fishInput.value = isSungText(fishInput.value) ? unsungText(fishInput.value) : singingText(fishInput.value);
+    syncSing();
+    markDirty();
   };
   // Keeping focus in the textarea across a chip tap is what makes the caret position survive.
   const onTagPointerDown = event => {
     if (event.target.closest('[data-jy-tts-tag]')) event.preventDefault();
   };
   const onTagClick = event => {
+    if (event.target.closest('[data-jy-tts-sing]')) {
+      toggleSing();
+      return;
+    }
     const chip = event.target.closest('[data-jy-tts-tag]');
     if (chip) insertCue(chip.dataset.jyTtsTag);
   };
@@ -15864,7 +15903,10 @@ async function openMiniWindow() {
     if (emotionPicker.value) insertCue(emotionPicker.value);
     emotionPicker.value = '';
   };
-  const onFishInput = () => markDirty();
+  const onFishInput = () => {
+    markDirty();
+    syncSing();
+  };
   // A phone keyboard takes half the screen: the window shrinks to what is left and the field being
   // typed into scrolls into view, so the text and the buttons under it stay reachable.
   const onViewport = () => {
@@ -15955,17 +15997,21 @@ async function openMiniWindow() {
     speedInput.value = data.override?.speed ?? data.prosody.speed;
     volumeInput.value = data.override?.volume ?? data.prosody.volume;
     tensionInput.value = data.override?.tension ?? data.tension ?? '';
+    syncSing();
     const reset = win.querySelector('[data-jy-action="tts-reset"]');
     if (reset) reset.hidden = !data.override;
     const apply = win.querySelector('[data-jy-action="tts-apply"]');
     if (apply) apply.hidden = true;
-    setText(win, '[data-jy-tts-note]', data.edited
-      ? `这句现在用的是你改过的版本${data.manualSpeaker ? `，说话人也是你定的（${data.manualSpeaker}）` : ''}；「恢复自动」回到程序的判断和副模型的分析。`
-      : data.manualSpeaker
-        ? `说话人是你定的（${data.manualSpeaker}）；上面的下拉框改回「交回自动判断」就恢复。`
-        : data.inRange
-          ? '改上面的内容、语速、张力或音量，「重新生成并播放」只重做这一句，整楼朗读时也用这个版本。上面的下拉框可以直接改说话人，改了就按那个人的音色重做，不重新分析。'
-          : '这句不在当前的朗读范围里，改了也不会读。');
+    const sung = isSungText(data.override?.text);
+    setText(win, '[data-jy-tts-note]', sung
+      ? `这句会唱出来${data.manualSpeaker ? `（说话人是你定的：${data.manualSpeaker}）` : ''}：Fish 带旋律感地念，不会照某首歌的曲调唱；角色有「唱」的情绪音色时用那个音色。唱完接着正常读，「恢复自动」回到程序的判断和副模型的分析。${ttsSettings().fish.model === 's1' ? '现在选的是 s1，不能唱，这句先照常念。' : ''}`
+      : data.edited
+        ? `这句现在用的是你改过的版本${data.manualSpeaker ? `，说话人也是你定的（${data.manualSpeaker}）` : ''}；「恢复自动」回到程序的判断和副模型的分析。`
+        : data.manualSpeaker
+          ? `说话人是你定的（${data.manualSpeaker}）；上面的下拉框改回「交回自动判断」就恢复。`
+          : data.inRange
+            ? '改上面的内容、语速、张力或音量，「重新生成并播放」只重做这一句，整楼朗读时也用这个版本。上面的下拉框可以直接改说话人，改了就按那个人的音色重做，不重新分析。点「唱」整句改成唱的。'
+            : '这句不在当前的朗读范围里，改了也不会读。');
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
   };
   const closeInspector = () => {
@@ -16120,7 +16166,7 @@ async function openMiniWindow() {
       if (item.override?.text) {
         const edited = document.createElement('span');
         edited.className = 'jy-mini-pill jy-mini-pill-edited';
-        edited.textContent = '改过';
+        edited.textContent = isSungText(item.override.text) ? '唱' : '改过';
         tags.appendChild(edited);
       }
       if (muted) {

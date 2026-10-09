@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  analysisCacheKey, buildFishPayload, buildSegments, consoleDirections, deriveLabelsForSide, floorTextWithMarks,
-  moodVoiceFor, planFishParts, planVoices, resolveSegmentVoice, scriptOutline, sentenceFishText, sentenceProsody, sentenceSampling, splitUtterances,
+  analysisCacheKey, buildFishPayload, buildSegments, consoleDirections, deriveLabelsForSide, floorTextWithMarks, isSungText,
+  moodVoiceFor, planFishParts, planVoices, resolveSegmentVoice, scriptOutline, sentenceFishText, sentenceProsody, sentenceSampling, singingText,
+  splitUtterances, unsungText,
 } from '../tts.js';
 import {
   ACOUSTIC_INTIMATE_AUTO, ACOUSTIC_INTIMATE_ON, ACOUSTIC_TONE_RULES, DEEP_PROMPT, acousticCurrentItem, acousticScript, buildDeepAnalysisMessages,
@@ -411,4 +412,29 @@ test('a character\'s 情绪音色 is picked locally from what the analysis found
   const plan = planVoices([line({ script: '[whisper] 嗯。' }), line({ script: '嗯。' })], { voices: [bare], dialogueVoice: 'default' });
   assert.deepEqual(plan.items.map(item => item.voiceId), ['soft', 'default']);
   assert.deepEqual(plan.defaulted, ['樱井'], 'the line without a mood falls back to the default, and says so');
+});
+
+test('唱: a line the reader set to sing opens on [singing], is read plainly by S1, and takes the 「唱」 情绪音色', () => {
+  // Turning it on keeps the words and drops every other cue; turning it off takes only [singing] away.
+  assert.equal(singingText('[whisper][gasp] 我、我不是 [pause] 故意的'), '[singing] 我、我不是 故意的');
+  assert.equal(singingText('[pause]'), '', 'a line with no words has nothing to sing');
+  assert.equal(unsungText('[singing] 晚风轻轻吹过窗'), '晚风轻轻吹过窗');
+  assert.equal(unsungText('[sad] [singing] 晚风'), '[sad] 晚风', 'a mood put in front of it stays');
+  assert.ok(isSungText('  [Singing] 啦啦啦'));
+  assert.ok(isSungText('[sad] [singing] 晚风'), '[singing] among the opening tags still sings');
+  assert.ok(!isSungText('晚风 [singing] 轻轻'), 'only the tags a line opens on count');
+  assert.ok(!isSungText(undefined));
+  // The reader's version goes to S2 as written; S1 cannot sing and hears the words alone.
+  const item = { segment: { id: 1, type: 'dialogue', text: '晚风轻轻吹过窗' }, voiceId: 'v', override: { text: '[singing] 晚风轻轻吹过窗' } };
+  assert.equal(sentenceFishText(item, { model: 's2-pro' }), '[singing] 晚风轻轻吹过窗');
+  assert.equal(sentenceFishText(item, { model: 's2.1-pro-free' }), '[singing] 晚风轻轻吹过窗');
+  assert.equal(sentenceFishText(item, { model: 's1' }), '晚风轻轻吹过窗');
+  // The condition is kept like the others, and a sung line finds it before the character's own voice.
+  const [row] = normalizeVoiceList([{ name: '初华', voiceId: 'speak', moods: [{ when: 'sing', voiceId: 'sing-voice' }, { when: 'whisper', voiceId: 'soft' }] }]);
+  assert.deepEqual(row.moods.map(mood => mood.when), ['sing', 'whisper']);
+  const sung = { type: 'dialogue', speaker: '初华', sung: true, voice: { script: '[whisper] 啦啦啦' } };
+  assert.equal(moodVoiceFor(row, sung), 'sing-voice', 'the first condition that fits, in the row\'s order');
+  assert.equal(resolveSegmentVoice(sung, { voices: [row] }), 'sing-voice');
+  assert.equal(resolveSegmentVoice({ ...sung, sung: false, voice: undefined }, { voices: [row] }), 'speak');
+  assert.equal(resolveSegmentVoice({ ...sung, lang: 'ja' }, { voices: [{ ...row, voices: { ja: 'ja-voice' } }] }), 'ja-voice', 'a voice for the language still comes first');
 });

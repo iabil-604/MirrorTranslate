@@ -588,6 +588,48 @@ test('the reader\'s own version of a sentence is recorded as written and preferr
   assert.equal(plain.recorded, false, 'the edited take does not stand in for the plain sentence');
 });
 
+test('唱: a sentence set to sing goes to Fish as [singing] in the character\'s singing voice, and S1 reads its words', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-sing');
+  const settings = __testing.configureForTest({
+    settings: {
+      tts: { enabled: true, mode: 'floor', analysis: 'annotations', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro', moods: [{ when: 'sing', voiceId: 'voice-taro-sing' }] }] },
+    },
+  });
+  context.chat.push(await translatedFloor('風。\n\n「暑い！」', [[1, '风停了。'], [2, '「好热！」']], settings, { 2: { speaker: '泰罗', emotion: 'happy' } }));
+  const calls = mockFish();
+  const made = await __testing.saveTtsOverride(0, 2, { text: '[singing] 好热！' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, '[singing] 好热！');
+  assert.equal(calls[0].body.reference_id, 'voice-taro-sing', 'sung in the singing voice the row has');
+  assert.equal(made.unit, 'sentence:2');
+
+  // The floor read as a whole keeps the sung take where it is; the narration around it is untouched.
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.equal(items[1].voiceId, 'voice-taro-sing');
+  assert.equal(items[1].segment.sung, true);
+  assert.equal(items[0].voiceId, 'voice-narrator');
+  assert.equal((await __testing.resolveTtsEntry(floor, items, items[1], settings)).cached, true);
+  const inspected = await __testing.ttsInspect(0, 2);
+  assert.equal(inspected.override.text, '[singing] 好热！');
+  assert.equal(inspected.voiceId, 'voice-taro-sing');
+
+  // A row without a singing voice sings in the character's own voice.
+  const plain = __testing.configureForTest({ settings: { ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro' }] } } });
+  const again = await __testing.collectTtsFloor(0, plain);
+  const own = await __testing.ttsItemsFor(again, (await __testing.prepareTtsSegments(again, plain)).segments, plain);
+  assert.equal(own.items[1].voiceId, 'voice-taro');
+
+  // S1 cannot sing: the same sentence is asked for in its words alone.
+  const s1 = __testing.configureForTest({ settings: { tts: { ...plain.tts, fish: { ...FISH, model: 's1' } } } });
+  await __testing.saveTtsOverride(0, 2, { text: '[singing] 好热！' });
+  assert.equal(calls.at(-1).body.text, '好热！');
+  assert.equal(s1.tts.fish.model, 's1');
+});
+
 test('the latest floor is made in the background, paragraph by paragraph in the stream, and never twice', async t => {
   restoreGlobals(t);
   const { context } = mockHost('tts-pregen');

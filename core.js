@@ -8,19 +8,19 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.43.0';
+} from './prompts.js?v=0.44.0';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.43.0';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.44.0';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.43.0';
+import { resolveMoveStyle } from './palette.js?v=0.44.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.43.0';
+export const APP_VERSION = '0.44.0';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -767,9 +767,9 @@ export function normalizeIntimateMode(value) {
 }
 
 // 情绪音色: when a character's line is said in another of their voices — the same actor cloned whispering,
-// roaring… — by what 分析模式 found in the line: its opening whisper or breathy voice, its laugh, its
-// tension of 4 and up, or the floor's tone.
-export const VOICE_MOOD_CONDITIONS = Object.freeze(['whisper', 'laugh', 'burst', ...STORY_TONES.map(tone => `tone:${tone}`)]);
+// roaring, singing… — by what 分析模式 found in the line: its opening whisper or breathy voice, its laugh,
+// its tension of 4 and up, or the floor's tone; and by the reader setting the line to 唱 (`sing`).
+export const VOICE_MOOD_CONDITIONS = Object.freeze(['whisper', 'laugh', 'burst', 'sing', ...STORY_TONES.map(tone => `tone:${tone}`)]);
 // What a play does on a plain floor nobody has analysed: ask, analyse it without asking, or read the plain text.
 export const TTS_ASK_MODES = Object.freeze(['ask', 'analyze', 'plain']);
 // Punctuation the reader pairs with a tag: the Chinese word shown, Fish's own tag sent, and where the tag

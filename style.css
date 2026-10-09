@@ -1069,7 +1069,7 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-mini-inspect-actions .jy-button[hidden], .jy-mini-inspect-actions .jy-text-button[hidden] { display: none; }
 .jy-mini-log-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .jy-mini-log-filters[hidden] { display: none; }
-.jy-mini-log-filters .jy-mini-chip[aria-pressed="true"] { background: var(--jy-accent); border-color: var(--jy-accent); color: var(--jy-on-accent); }
+.jy-mini-chip[aria-pressed="true"] { background: var(--jy-accent); border-color: var(--jy-accent); color: var(--jy-on-accent); }
 .jy-mini-chip-error { color: var(--jy-error); }
 .jy-mini-log-filters .jy-text-button { margin-left: auto; font-size: 11.5px; }
 .jy-mini-log-item { display: flex; flex-direction: column; gap: 2px; padding: 7px 6px; border-top: 1px solid var(--jy-line-soft); border-radius: 6px; cursor: pointer; }
