@@ -8,19 +8,20 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.46.0';
+} from './prompts.js?v=0.46.0-beta.2';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.46.0';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.46.0-beta.2';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.46.0';
+import { resolveMoveStyle } from './palette.js?v=0.46.0-beta.2';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.46.0-beta.2';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.46.0';
+export const APP_VERSION = '0.46.0-beta.2';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -969,6 +970,34 @@ export const DEFAULT_FISH = Object.freeze({
   concurrency: 2,
 });
 
+// 豆包语音 (Volcengine) for what is read while written. The key is the new console's API Key; an App ID
+// makes it the old console's Access Token instead. Its key headers are refused across origins, so it
+// goes through the host's proxy like Fish.
+export const DEFAULT_DOUBAO = Object.freeze({
+  key: '',
+  appId: '',
+  resourceId: 'seed-tts-2.0',
+  voice: 'zh_female_vv_uranus_bigtts',
+  // 「名字=音色ID」 per line; 旁白 for narration.
+  voiceMap: '',
+  baseUrl: 'https://openspeech.bytedance.com',
+  viaProxy: true,
+  speed: 0,
+  volume: 0,
+});
+
+// MiniMax for what is read while written; it answers the browser directly.
+export const DEFAULT_MINIMAX = Object.freeze({
+  key: '',
+  baseUrl: 'https://api.minimax.cn',
+  model: 'speech-2.8-turbo',
+  voice: 'female-shaonv',
+  voiceMap: '',
+  speed: 1,
+});
+
+export const STREAM_VOICES = Object.freeze(['fish', 'gsv', 'doubao', 'minimax']);
+
 export const DEFAULT_GSV = Object.freeze({
   // Where GPT-SoVITS's api_v2.py listens unless told otherwise. It sends no CORS headers, so the browser
   // reaches it through the host's /proxy/ route, as it reaches Fish.
@@ -1058,6 +1087,22 @@ export const DEFAULT_TTS = Object.freeze({
   speechMarks: false,
   // A new reply is read aloud by itself once its text is final.
   autoRead: false,
+  // The reply is read while the main model is still writing it, a stretch at a time.
+  readWhileWriting: false,
+  // 边收边放: what is read while written (a reply, a call) is played as Fish sends it, not once a whole
+  // sentence has come back.
+  liveAudio: true,
+  // Whose voice reads what is read while written: Fish or GPT-SoVITS (each with the floors' own card), 豆包 or MiniMax.
+  streamVoice: 'fish',
+  // 实时通话（测试版）: the connection a caller's streamed requests go to ('' = the analysis one), and
+  // how speech becomes text — the browser's recogniser, or a recording sent to a transcription API.
+  callChannelId: '',
+  sttProvider: 'cloud',
+  sttPreset: 'siliconflow',
+  sttUrl: 'https://api.siliconflow.cn/v1/audio/transcriptions',
+  sttApiKey: '',
+  sttModel: 'FunAudioLLM/SenseVoiceSmall',
+  sttLang: 'zh',
   // 亲密场景 (TTS_INTIMATE_MODES): 分析模式 may let an intimate scene climb (moans included) where the
   // narration shows it — never, as it judges the floor, or by the reader's leave.
   intimate: 'off',
@@ -1065,6 +1110,8 @@ export const DEFAULT_TTS = Object.freeze({
   // says what an id sounds like on each provider.
   provider: 'fish',
   fish: DEFAULT_FISH,
+  doubao: DEFAULT_DOUBAO,
+  minimax: DEFAULT_MINIMAX,
   gsv: DEFAULT_GSV,
 });
 
@@ -1883,6 +1930,42 @@ export function normalizeFishSettings(value) {
   };
 }
 
+function httpUrlOr(value, fallback) {
+  const text = String(value ?? fallback).trim().replace(/\/+$/, '');
+  try {
+    return ['http:', 'https:'].includes(new URL(text).protocol) ? text : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function normalizeDoubaoSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    key: String(source.key ?? '').trim().slice(0, 400),
+    appId: String(source.appId ?? '').trim().slice(0, 80),
+    resourceId: DOUBAO_RESOURCES.includes(source.resourceId) ? source.resourceId : DEFAULT_DOUBAO.resourceId,
+    voice: String(source.voice ?? '').trim().slice(0, 200) || DEFAULT_DOUBAO.voice,
+    voiceMap: String(source.voiceMap ?? '').slice(0, 4000),
+    baseUrl: httpUrlOr(source.baseUrl, DEFAULT_DOUBAO.baseUrl),
+    viaProxy: source.viaProxy === undefined ? DEFAULT_DOUBAO.viaProxy : source.viaProxy !== false,
+    speed: clampInteger(source.speed, -50, 100, DEFAULT_DOUBAO.speed),
+    volume: clampInteger(source.volume, -50, 100, DEFAULT_DOUBAO.volume),
+  };
+}
+
+export function normalizeMinimaxSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    key: String(source.key ?? '').trim().slice(0, 1000),
+    baseUrl: MINIMAX_HOSTS.includes(source.baseUrl) ? source.baseUrl : DEFAULT_MINIMAX.baseUrl,
+    model: MINIMAX_MODELS.includes(source.model) ? source.model : DEFAULT_MINIMAX.model,
+    voice: String(source.voice ?? '').trim().slice(0, 200) || DEFAULT_MINIMAX.voice,
+    voiceMap: String(source.voiceMap ?? '').slice(0, 4000),
+    speed: clampNumber(source.speed, 0.5, 2, DEFAULT_MINIMAX.speed),
+  };
+}
+
 /**
  * A path on the machine GPT-SoVITS runs on, as typed or pasted. Explorer's 「复制文件地址」 wraps it in
  * quotes, which are not part of it; a line break never is.
@@ -2134,10 +2217,22 @@ export function normalizeTts(value) {
     dialogueFallback: TTS_DIALOGUE_FALLBACKS.includes(source.dialogueFallback) ? source.dialogueFallback : DEFAULT_TTS.dialogueFallback,
     speechMarks: source.speechMarks === true,
     autoRead: source.autoRead === true,
+    readWhileWriting: source.readWhileWriting === true,
+    liveAudio: source.liveAudio !== false,
+    streamVoice: STREAM_VOICES.includes(source.streamVoice) ? source.streamVoice : DEFAULT_TTS.streamVoice,
+    callChannelId: String(source.callChannelId ?? '').trim().slice(0, 80),
+    sttProvider: ['cloud', 'browser'].includes(source.sttProvider) ? source.sttProvider : DEFAULT_TTS.sttProvider,
+    sttPreset: ['siliconflow', 'groq', 'openai', 'custom'].includes(source.sttPreset) ? source.sttPreset : DEFAULT_TTS.sttPreset,
+    sttUrl: String(source.sttUrl ?? DEFAULT_TTS.sttUrl).trim().slice(0, 400),
+    sttApiKey: String(source.sttApiKey ?? '').trim().slice(0, 400),
+    sttModel: String(source.sttModel ?? DEFAULT_TTS.sttModel).trim().slice(0, 120),
+    sttLang: String(source.sttLang ?? DEFAULT_TTS.sttLang).trim().slice(0, 20),
     intimate: normalizeIntimateMode(source.intimate),
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     provider: TTS_PROVIDERS.includes(source.provider) ? source.provider : DEFAULT_TTS.provider,
     fish: normalizeFishSettings(source.fish),
+    doubao: normalizeDoubaoSettings(source.doubao),
+    minimax: normalizeMinimaxSettings(source.minimax),
     gsv: normalizeGsvSettings(source.gsv),
   };
 }
@@ -2305,6 +2400,9 @@ export function mergeSettings(value = {}) {
     ? merged.tts.deepChannelId
     : '';
   merged.tts.deepChannelId = resolveFeatureChannel(ownDeepChannel || legacyAnalysisChannel, merged);
+  if (merged.tts.callChannelId && merged.tts.callChannelId !== 'follow' && !merged.channels.some(channel => channel.id === merged.tts.callChannelId)) {
+    merged.tts.callChannelId = '';
+  }
   // 小助手 is a shelf entry too (DESIGN §16.3): its own choice, resolved the same way 分析模式's is —
   // 'follow' stays 'follow', a deleted or never-set connection falls back to whatever the translation
   // uses right now.
@@ -2393,7 +2491,25 @@ export function normalizeOpenAiBaseUrl(value) {
   return url.toString().replace(/\/$/, '');
 }
 
-export function createIndependentRequest(settings, messages) {
+/**
+ * What turns a model's own thinking off, by its name: the fields SillyTavern itself sends DeepSeek, Zhipu
+ * and Moonshot for it, Qwen3's switch, the lowest effort OpenAI and Gemini Flash take. A name not
+ * recognised gets nothing — a field a provider does not know can make it refuse the whole request.
+ * `noThink` asks for Qwen3's /no_think written into the conversation as well.
+ */
+export function thinkingOffFor(model) {
+  const name = String(model ?? '').toLowerCase();
+  if (!name) return null;
+  if (/deepseek/.test(name)) return { label: 'DeepSeek', body: { thinking: { type: 'disabled' } } };
+  if (/glm-?[45z]|zai-org\//.test(name)) return { label: 'GLM', body: { thinking: { type: 'disabled' } } };
+  if (/kimi|moonshot/.test(name)) return { label: 'Kimi', body: { thinking: { type: 'disabled' } } };
+  if (/qwen-?3|qwq/.test(name)) return { label: 'Qwen', body: { enable_thinking: false }, noThink: true };
+  if (/gemini-[\d.]+-flash|gemini-flash/.test(name) && !/thinking/.test(name)) return { label: 'Gemini Flash', body: { reasoning_effort: 'none' } };
+  if (/(^|\/)gpt-5/.test(name) && !/chat/.test(name)) return { label: 'GPT-5', body: { reasoning_effort: 'minimal' } };
+  return null;
+}
+
+export function createIndependentRequest(settings, messages, { thinkingOff = false } = {}) {
   const channel = Array.isArray(settings?.channels)
     ? getActiveChannel(settings)
     : normalizeChannel(settings);
@@ -2417,9 +2533,22 @@ export function createIndependentRequest(settings, messages) {
   };
   // Sent only when the channel picks one; stays excludable like the numeric knobs above.
   if (channel.reasoningEffort) payload.reasoning_effort = channel.reasoningEffort;
-  const protectedFields = new Set(['stream', 'messages', 'model', 'chat_completion_source', 'reverse_proxy', 'proxy_password']);
+  const protectedFields = new Set(['stream', 'messages', 'model', 'chat_completion_source', 'reverse_proxy', 'proxy_password', 'custom_url', 'custom_include_body', 'custom_include_headers']);
   for (const parameter of channel.excludeParams) {
     if (!protectedFields.has(parameter)) delete payload[parameter];
+  }
+  const off = thinkingOff ? thinkingOffFor(model) : null;
+  if (off) {
+    // The custom source is the one that passes extra fields on. Its key would be the host's own stored
+    // one; the connection's key (or none) is written over it, so no other secret goes to this address.
+    payload.chat_completion_source = 'custom';
+    payload.custom_url = payload.reverse_proxy;
+    payload.custom_include_headers = JSON.stringify({ Authorization: payload.proxy_password ? `Bearer ${payload.proxy_password}` : '' });
+    payload.custom_include_body = JSON.stringify(off.body);
+    delete payload.reverse_proxy;
+    delete payload.proxy_password;
+    delete payload.reasoning_effort;
+    Object.defineProperty(payload, 'thinkingOff', { value: off, enumerable: false });
   }
   return payload;
 }

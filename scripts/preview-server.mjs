@@ -62,7 +62,8 @@ function spokenChunks(text) {
   return chunks;
 }
 
-function synthesizeChunks(chunks) {
+function synthesizeChunks(chunks, rate = SAMPLE_RATE) {
+  const SAMPLE_RATE = rate;
   const samples = [];
   const alignments = [];
   for (const chunk of chunks) {
@@ -100,7 +101,7 @@ function synthesizeChunks(chunks) {
   header.writeUInt16LE(16, 34);
   header.write('data', 36);
   header.writeUInt32LE(data.length, 40);
-  return { wav: Buffer.concat([header, data]), alignments };
+  return { wav: Buffer.concat([header, data]), pcm: data, alignments };
 }
 
 // The host proxy turns 401 into 400 and keeps the body, and so does this. Like Fish, the key is taken
@@ -136,7 +137,11 @@ async function handleFishMock(request, response, target) {
     return;
   }
   const body = await readBody(request);
-  const { wav, alignments } = synthesizeChunks(spokenChunks(body.text));
+  // Raw PCM when asked for it, at the rate asked for, as Fish sends it; a WAV otherwise.
+  const raw = body.format === 'pcm';
+  const synthesized = synthesizeChunks(spokenChunks(body.text), raw ? Number(body.sample_rate) || 44100 : SAMPLE_RATE);
+  const { alignments } = synthesized;
+  const wav = raw ? synthesized.pcm : synthesized.wav;
   if (!alignments.length) alignments.push({ offset: 0, duration: 0, segments: [], content: '' });
   if (request.method === 'POST' && target === '/v1/tts') {
     // Like the real proxy: the audio comes back without a content type.
@@ -188,8 +193,80 @@ async function handleFishMock(request, response, target) {
   response.end(JSON.stringify({ status: 404, message: 'no route' }));
 }
 
+// 豆包: JSON objects one per line, base64 audio, code 20000000 at the end; a missing key is refused.
+async function handleDoubaoMock(request, response) {
+  const body = await readBody(request);
+  if (!request.headers['x-api-key'] && !request.headers['x-api-access-key']) {
+    response.writeHead(401, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ code: 45000000, message: 'unauthorized' }));
+    return;
+  }
+  const params = body.req_params ?? {};
+  if (!params.speaker) {
+    response.writeHead(400, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ code: 45002000, message: 'TTS invalid speaker' }));
+    return;
+  }
+  const audio = params.audio_params ?? {};
+  const raw = audio.format === 'pcm';
+  const made = synthesizeChunks(spokenChunks(params.text), raw ? Number(audio.sample_rate) || 24000 : SAMPLE_RATE);
+  const bytes = raw ? made.pcm : made.wav;
+  response.writeHead(200, { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' });
+  let at = 0;
+  const timer = setInterval(() => {
+    if (at >= bytes.length) {
+      clearInterval(timer);
+      response.end(`${JSON.stringify({ code: 20000000, message: 'ok', data: null })}\n`);
+      return;
+    }
+    response.write(`${JSON.stringify({ code: 0, message: '', data: bytes.subarray(at, at + 12000).toString('base64') })}\n`);
+    at += 12000;
+  }, 100);
+  request.on('close', () => clearInterval(timer));
+}
+
+// MiniMax: server-sent events with hex audio; a bad key is refused with HTTP 200, as MiniMax does.
+async function handleMinimaxMock(request, response) {
+  const body = await readBody(request);
+  if (!/^Bearer\s+\S/.test(String(request.headers.authorization ?? ''))) {
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    response.end(JSON.stringify({ base_resp: { status_code: 1004, status_msg: 'login fail' } }));
+    return;
+  }
+  const setting = body.audio_setting ?? {};
+  const raw = setting.format === 'pcm';
+  const made = synthesizeChunks(spokenChunks(body.text), raw ? Number(setting.sample_rate) || 24000 : SAMPLE_RATE);
+  const bytes = raw ? made.pcm : made.wav;
+  response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Access-Control-Allow-Origin': '*' });
+  let at = 0;
+  const timer = setInterval(() => {
+    if (at >= bytes.length) {
+      clearInterval(timer);
+      const whole = body.stream_options?.exclude_aggregated_audio ? '' : bytes.toString('hex');
+      response.end(`data: ${JSON.stringify({ data: { audio: whole, status: 2 }, extra_info: { audio_length: 0 }, base_resp: { status_code: 0, status_msg: 'success' } })}\n\n`);
+      return;
+    }
+    response.write(`data: ${JSON.stringify({ data: { audio: bytes.subarray(at, at + 12000).toString('hex'), status: 1 }, base_resp: { status_code: 0, status_msg: '' } })}\n\n`);
+    at += 12000;
+  }, 100);
+  request.on('close', () => clearInterval(timer));
+}
+
 http.createServer(async (request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
+  if (/^\/proxy\/https?:\/+openspeech\.bytedance\.com\/api\/v3\/tts\/unidirectional$/.test(pathname)) {
+    void handleDoubaoMock(request, response);
+    return;
+  }
+  if (pathname === '/mock-minimax/v1/t2a_v2') {
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' });
+      response.end();
+      return;
+    }
+    void handleMinimaxMock(request, response);
+    return;
+  }
   const proxied = pathname.match(/^\/proxy\/https?:\/+api\.fish\.audio(\/.*)$/);
   if (proxied) {
     void handleFishMock(request, response, proxied[1]);

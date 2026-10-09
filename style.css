@@ -1256,6 +1256,15 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-ask-chips button:hover { color: inherit; border-color: var(--jy-accent, #2f6b4f); }
 .jy-mini-inspect-head select { min-height: 24px; padding: 1px 6px; font-size: 11px; max-width: 44%; margin-left: auto; }
 .jy-mini-inspect-head select[hidden] { display: none; }
+/* 通话测试（测试版）：这一页只用现有组件，这里只放它们在这一页的排布。 */
+.jy-mini-call .jy-mini-sentence { cursor: default; }
+.jy-mini-call .jy-mini-sentence-text { display: block; overflow: visible; -webkit-line-clamp: unset; }
+.jy-mini-call [data-jy-call-note] { margin: 0; white-space: pre-line; }
+.jy-mini-call [data-jy-call-typing] { margin-bottom: 8px; }
+.jy-mini-call [data-jy-call-typing][hidden] { display: none; }
+.jy-mini-call-talk { grid-column: span 2; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.jy-mini-call [data-jy-call-typing] .jy-button { flex: 0 0 auto; white-space: nowrap; }
+.jy-mini[data-touch="true"] .jy-mini-call [data-jy-call-input], .jy-mini[data-touch="true"] .jy-mini-call [data-jy-call-typing] .jy-button { min-height: 44px; }
 
 /* DESIGN §17.3 小助手聊天框：页头、快捷问题、聊天框、输入区自上而下，整页不滚，聊天框自己滚；
    输入区沿用 .jy-footer 的吸底与安全区。只重排布局，不新增颜色、字号、圆角或动效 token。 */

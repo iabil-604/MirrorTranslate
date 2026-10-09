@@ -31,7 +31,7 @@ const T = {
   GENERATION_STARTED: 'generation_started', GENERATION_AFTER_COMMANDS: 'GENERATION_AFTER_COMMANDS', GENERATION_ENDED: 'generation_ended', GENERATION_STOPPED: 'generation_stopped',
   CHARACTER_MESSAGE_RENDERED: 'character_message_rendered', MESSAGE_RECEIVED: 'message_received', MESSAGE_DELETED: 'message_deleted',
   MESSAGE_SWIPED: 'message_swiped', MESSAGE_EDITED: 'message_edited', MESSAGE_UPDATED: 'message_updated', CHAT_CHANGED: 'chat_id_changed',
-  MESSAGE_SWIPE_DELETED: 'message_swipe_deleted', MORE_MESSAGES_LOADED: 'more_messages_loaded',
+  MESSAGE_SWIPE_DELETED: 'message_swipe_deleted', MORE_MESSAGES_LOADED: 'more_messages_loaded', STREAM_TOKEN_RECEIVED: 'stream_token_received',
 };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const eventSource = new Emitter();
@@ -67,7 +67,7 @@ const scriptGenerate = () => eventSource.emit(T.GENERATION_AFTER_COMMANDS, 'norm
 
 // A streaming 重新生成 in the host's order: STARTED, the old reply deleted, the new one streamed, then the
 // end announced before the awaited MESSAGE_RECEIVED and the typed render.
-async function regenerate({ onDeleted = null, slowReceivedMs = 0, midStream = null, midStreamEnded = 0, beforeReceived = null, after = null } = {}) {
+async function regenerate({ text = null, onDeleted = null, slowReceivedMs = 0, midStream = null, midStreamEnded = 0, beforeReceived = null, after = null } = {}) {
   const extra = [];
   const listen = (event, listener) => { eventSource.on(event, listener); extra.push([event, listener]); };
   if (onDeleted) listen(T.MESSAGE_DELETED, onDeleted);
@@ -75,7 +75,7 @@ async function regenerate({ onDeleted = null, slowReceivedMs = 0, midStream = nu
   await begin('regenerate');
   const old = chat.pop();
   await eventSource.emit(T.MESSAGE_DELETED, chat.length);
-  chat.push({ ...old, mes: `新的回复 ${chat.length}-${started(6)}` });
+  chat.push({ ...old, mes: text ?? `新的回复 ${chat.length}-${started(6)}` });
   context.streamingProcessor = { isFinished: false, isStopped: false, messageId: chat.length - 1 };
   let finalEnded = true;
   if (midStream) await midStream();
@@ -243,6 +243,109 @@ test('a reply whose body tag is missing says so on screen, once for the chat', a
   const told = toasts.filter(([kind, message]) => kind === 'warning' && message.includes('正文标签'));
   assert.equal(told.length, 1);
   assert.match(told[0][1], /正文处理/);
+});
+
+test('a reply read while it is written ends with the host\'s own stream, and stops only for the reader\'s stop', async t => {
+  const otherFetch = globalThis.fetch;
+  globalThis.fetch = () => new Promise(() => {});
+  const before = __testing.configureForTest().tts;
+  __testing.configureForTest({ settings: { tts: { ...before, enabled: true, readWhileWriting: true, liveAudio: false, fish: { ...before?.fish, key: 'k' } } } });
+  t.after(() => {
+    globalThis.fetch = otherFetch;
+    __testing.configureForTest({ settings: { tts: before } });
+  });
+  const calls = [];
+  const watch = () => {
+    const session = __testing.ttsStream();
+    for (const name of ['end', 'cancel']) {
+      const own = session[name];
+      session[name] = (...args) => {
+        calls.push(name);
+        return own.apply(session, args);
+      };
+    }
+    return session;
+  };
+
+  await begin('normal', { command: true });
+  await eventSource.emit(T.STREAM_TOKEN_RECEIVED, '你好');
+  assert.equal(__testing.ttsStream(), null, 'a slash command writes no reply to read');
+
+  await begin('normal');
+  context.streamingProcessor = { isFinished: false, isStopped: false, messageId: chat.length - 1 };
+  await eventSource.emit(T.STREAM_TOKEN_RECEIVED, '你好');
+  const session = watch();
+  assert.equal(session.kind, 'reply');
+  // 酒馆助手's generate() ending mid-stream: its stop carries an id and its end comes early.
+  await eventSource.emit(T.GENERATION_STOPPED, 'th-gen-1');
+  void eventSource.emit(T.GENERATION_ENDED, chat.length);
+  await wait(50);
+  assert.deepEqual(calls, [], 'the host is still writing the reply');
+  context.streamingProcessor.isFinished = true;
+  await wait(700);
+  assert.deepEqual(calls, ['end'], 'what was written is read to its end once the host stops writing');
+  context.streamingProcessor = null;
+
+  calls.length = 0;
+  await begin('normal', { command: true });
+  assert.deepEqual(calls, [], 'a slash command does not end the reading before it');
+  await eventSource.emit(T.GENERATION_AFTER_COMMANDS, 'normal', {}, false);
+  assert.deepEqual(calls, ['end'], 'a new reply does');
+  await eventSource.emit(T.GENERATION_STOPPED);
+  assert.deepEqual(calls, ['end', 'cancel'], 'the reader\'s stop wants quiet');
+});
+
+test('a call goes on while its chat is only announced again, and ends with the chat', async t => {
+  const otherFetch = globalThis.fetch;
+  globalThis.fetch = () => new Promise(() => {});
+  const before = __testing.configureForTest().tts;
+  __testing.configureForTest({ initialized: true, settings: { tts: { ...before, enabled: true, fish: { ...before?.fish, key: 'k' } } } });
+  t.after(() => {
+    globalThis.fetch = otherFetch;
+    __testing.configureForTest({ initialized: false, settings: { tts: before } });
+  });
+  const call = __testing.callController();
+  assert.equal(await call.dial(), true);
+  await eventSource.emit(T.CHAT_CHANGED, context.chatId);
+  assert.notEqual(call.phase, 'idle', 'a redraw of the same chat is no reason to hang up');
+  context.chatId = 'gate-chat-3';
+  await eventSource.emit(T.CHAT_CHANGED, 'gate-chat-3');
+  assert.equal(call.phase, 'idle');
+});
+
+test('a floor heard while it was written is read by itself again once a regenerate writes it anew', async t => {
+  const otherFetch = globalThis.fetch;
+  // Fish never answers; a request called off says so.
+  globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('stopped', 'AbortError'))));
+  const { tts: before, autoGeneration } = __testing.configureForTest();
+  const tts = { ...before, enabled: true, side: 'source', mode: 'off', autoRead: true, readWhileWriting: true, liveAudio: false, fish: { ...before?.fish, key: 'k' } };
+  __testing.configureForTest({ settings: { tts, autoGeneration: false } });
+  t.after(() => {
+    __testing.stopTts();
+    globalThis.fetch = otherFetch;
+    __testing.configureForTest({ settings: { tts: before, autoGeneration } });
+  });
+  const text = '<story_scene>「今晚别走。」她说。</story_scene>';
+  const readAloud = () => readDiagnostics().filter(entry => entry.scope === 'tts.auto-read' && entry.message === '第 6 楼自动朗读原文。').length;
+
+  clearDiagnostics();
+  await regenerate({
+    text,
+    midStream: async () => {
+      await eventSource.emit(T.STREAM_TOKEN_RECEIVED, text);
+      assert.equal(__testing.ttsStream()?.kind, 'reply', 'read as it is written');
+    },
+  });
+  await wait(1400);
+  assert.equal(readAloud(), 0, 'heard as it was written');
+  __testing.stopTts();
+
+  // Written again at the same place, and this time not read as it was written.
+  __testing.configureForTest({ settings: { tts: { ...tts, readWhileWriting: false } } });
+  clearDiagnostics();
+  await regenerate({ text });
+  await wait(1400);
+  assert.equal(readAloud(), 1, 'the new reply is read by itself');
 });
 
 test('turning to an untranslated alternative is translated only while 自动接续翻译 is on', async () => {
