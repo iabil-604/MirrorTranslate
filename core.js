@@ -8,19 +8,19 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.44.0';
+} from './prompts.js?v=0.45.0';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.44.0';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.45.0';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.44.0';
+import { resolveMoveStyle } from './palette.js?v=0.45.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.44.0';
+export const APP_VERSION = '0.45.0';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -819,6 +819,14 @@ export const TTS_STREAM_UNITS = Object.freeze(['line', 'sentence']);
 // paragraph at a time (the default: the first paragraph plays while the rest are made), or one
 // sentence at a time.
 export const TTS_REQUEST_UNITS = Object.freeze(['floor', 'line', 'sentence']);
+// Who makes the sound: Fish Audio over the network, or a GPT-SoVITS server the reader runs on their own
+// machine (its api_v2.py), which costs nothing per character.
+export const TTS_PROVIDERS = Object.freeze(['fish', 'gsv']);
+// GPT-SoVITS's own language codes, for a reference clip: zh, ja, ko and yue each read mixed with English,
+// auto lets it find the language itself.
+export const GSV_LANGUAGES = Object.freeze(['zh', 'ja', 'en', 'ko', 'yue', 'auto']);
+// How GPT-SoVITS cuts the text of one request before reading it (its text_split_method).
+export const GSV_SPLIT_METHODS = Object.freeze(['cut0', 'cut1', 'cut2', 'cut3', 'cut4', 'cut5']);
 // 'auto' reads deeply for a whole floor and lightly for a stream; the rest pin one depth.
 export const TTS_ANALYSIS_MODES = Object.freeze(['auto', 'deep', 'light', 'annotations']);
 
@@ -961,6 +969,32 @@ export const DEFAULT_FISH = Object.freeze({
   concurrency: 2,
 });
 
+export const DEFAULT_GSV = Object.freeze({
+  // Where GPT-SoVITS's api_v2.py listens unless told otherwise. It sends no CORS headers, so the browser
+  // reaches it through the host's /proxy/ route, as it reaches Fish.
+  baseUrl: 'http://127.0.0.1:9880',
+  viaProxy: true,
+  // The voice anything without a GPT-SoVITS voice of its own in the voice library reads in: a clip of
+  // 3–10 seconds on the machine GPT-SoVITS runs on, the words said in it and their language. The model
+  // paths are optional; empty keeps whatever GPT-SoVITS has loaded.
+  refAudioPath: '',
+  promptText: '',
+  promptLang: 'zh',
+  gptWeights: '',
+  sovitsWeights: '',
+  speed: 1,
+  volume: 0,
+  temperature: 1,
+  topK: 15,
+  topP: 1,
+  repetitionPenalty: 1.35,
+  splitMethod: 'cut5',
+  // The first request after GPT-SoVITS starts, or after a model is switched, loads it onto the graphics
+  // card and takes a while.
+  timeoutSec: 180,
+  retries: 1,
+});
+
 export const DEFAULT_TTS = Object.freeze({
   // The whole feature. Off is the ordinary translate-only mode: no 朗读 page, no floor buttons, nothing
   // listening in the background and no audio store opened.
@@ -1027,7 +1061,11 @@ export const DEFAULT_TTS = Object.freeze({
   // 亲密场景 (TTS_INTIMATE_MODES): 分析模式 may let an intimate scene climb (moans included) where the
   // narration shows it — never, as it judges the floor, or by the reader's leave.
   intimate: 'off',
+  // TTS_PROVIDERS: who reads. Every voice binding names a voice by its id either way; the voice library
+  // says what an id sounds like on each provider.
+  provider: 'fish',
   fish: DEFAULT_FISH,
+  gsv: DEFAULT_GSV,
 });
 
 // DESIGN §16 小助手: a read-only helper the reader can ask about the current settings/floor/run log.
@@ -1189,6 +1227,11 @@ export function quoteSymbolFoldSummary(tts = {}) {
 /** "mp3 · 语速 1.0 · 同时生成 2 段" — Fish 参数 fold's summary. */
 export function fishParamsFoldSummary(fish = {}) {
   return `${fish.format} · 语速 ${fish.speed} · 同时生成 ${fish.concurrency} 段`;
+}
+
+/** "语速 1 · temperature 1 · top_k 15" — 「GPT-SoVITS 参数」 fold's summary. */
+export function gsvParamsFoldSummary(gsv = {}) {
+  return `语速 ${gsv.speed ?? DEFAULT_GSV.speed} · temperature ${gsv.temperature ?? DEFAULT_GSV.temperature} · top_k ${gsv.topK ?? DEFAULT_GSV.topK}`;
 }
 
 /** "AI 判断 · 标点情绪标签 3 条" (or "N 项已设定" once a slider leaves the middle) — 默认调音台 fold's summary. */
@@ -1837,6 +1880,105 @@ export function normalizeFishSettings(value) {
   };
 }
 
+/**
+ * A path on the machine GPT-SoVITS runs on, as typed or pasted. Explorer's 「复制文件地址」 wraps it in
+ * quotes, which are not part of it; a line break never is.
+ */
+export function normalizeGsvPath(value) {
+  return String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim().slice(0, 500);
+}
+
+/** A language as GPT-SoVITS names it (GSV_LANGUAGES); its all_ codes and regional tags count as theirs. */
+export function normalizeGsvLanguage(value, fallback = DEFAULT_GSV.promptLang) {
+  const raw = String(value ?? '').trim().toLowerCase().replace(/^all_/, '');
+  if (GSV_LANGUAGES.includes(raw)) return raw;
+  const base = languageBase(normalizeLanguageCode(raw));
+  if (base === 'zh' && /yue|hk|mo/i.test(raw)) return 'yue';
+  return GSV_LANGUAGES.includes(base) ? base : fallback;
+}
+
+/**
+ * The words said in a reference clip: one line, as GPT-SoVITS takes them. A line broken between two
+ * characters of Chinese or Japanese closes up; anywhere else the break is a space.
+ */
+function normalizeGsvPromptText(value) {
+  return String(value ?? '')
+    .replace(/([^\x00-\x7F])[^\S\r\n]*[\r\n]+\s*(?=[^\x00-\x7F])/g, '$1')
+    .replace(/\s*[\r\n]+\s*/g, ' ')
+    .trim()
+    .slice(0, 300);
+}
+
+export function normalizeGsvSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  let baseUrl = String(source.baseUrl ?? DEFAULT_GSV.baseUrl).trim().replace(/\/+$/, '');
+  try {
+    const url = new URL(baseUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) baseUrl = DEFAULT_GSV.baseUrl;
+  } catch {
+    baseUrl = DEFAULT_GSV.baseUrl;
+  }
+  return {
+    baseUrl,
+    viaProxy: source.viaProxy === undefined ? DEFAULT_GSV.viaProxy : source.viaProxy !== false,
+    refAudioPath: normalizeGsvPath(source.refAudioPath),
+    promptText: normalizeGsvPromptText(source.promptText),
+    promptLang: normalizeGsvLanguage(source.promptLang),
+    gptWeights: normalizeGsvPath(source.gptWeights),
+    sovitsWeights: normalizeGsvPath(source.sovitsWeights),
+    speed: clampNumber(source.speed, 0.6, 1.65, DEFAULT_GSV.speed),
+    volume: clampNumber(source.volume, -20, 20, DEFAULT_GSV.volume),
+    temperature: clampNumber(source.temperature, 0.05, 1, DEFAULT_GSV.temperature),
+    topK: clampInteger(source.topK, 1, 100, DEFAULT_GSV.topK),
+    topP: clampNumber(source.topP, 0.05, 1, DEFAULT_GSV.topP),
+    repetitionPenalty: clampNumber(source.repetitionPenalty, 1, 2, DEFAULT_GSV.repetitionPenalty),
+    splitMethod: GSV_SPLIT_METHODS.includes(source.splitMethod) ? source.splitMethod : DEFAULT_GSV.splitMethod,
+    timeoutSec: clampInteger(source.timeoutSec, 10, 600, DEFAULT_GSV.timeoutSec),
+    retries: clampInteger(source.retries, 0, 5, DEFAULT_GSV.retries),
+  };
+}
+
+/**
+ * What one voice library entry sounds like through GPT-SoVITS: a reference clip, the words said in it
+ * and their language, and optionally the models to load for it. Null when nothing of it was filled in.
+ */
+export function normalizeGsvVoice(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const voice = {
+    refAudioPath: normalizeGsvPath(source.refAudioPath),
+    promptText: normalizeGsvPromptText(source.promptText),
+    promptLang: normalizeGsvLanguage(source.promptLang),
+    gptWeights: normalizeGsvPath(source.gptWeights),
+    sovitsWeights: normalizeGsvPath(source.sovitsWeights),
+  };
+  return voice.refAudioPath || voice.promptText || voice.gptWeights || voice.sovitsWeights ? voice : null;
+}
+
+/**
+ * The id a voice library entry heard only through GPT-SoVITS is bound by: it has no Fish id, and every
+ * binding (a character row, the narrator, a language, a mood) names a voice by an id. Made from the
+ * entry's own handle, so it stays the same however often the entry is saved.
+ */
+export function gsvVoiceId(entryId) {
+  const handle = String(entryId ?? '');
+  const slug = handle.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 60);
+  if (slug) return `gsv-${slug}`;
+  let hash = 5381;
+  for (const character of handle) hash = ((hash * 33) ^ character.codePointAt(0)) >>> 0;
+  return `gsv-${hash.toString(36)}`;
+}
+
+/** A reference clip by its file name alone, for an entry nobody named. */
+export function gsvClipName(path) {
+  const file = String(path ?? '').split(/[\\/]/).pop().replace(/\.[A-Za-z0-9]{1,5}$/, '').trim();
+  return (file || 'GPT-SoVITS').slice(0, 60);
+}
+
+/** Whether a voice id names a GPT-SoVITS-only library entry, which Fish has never heard of. */
+export function isGsvVoiceId(id) {
+  return /^gsv-/.test(String(id ?? ''));
+}
+
 // Voices saved by name, independent of any character card. `id` is a local handle for the rows on the
 // settings page; `voiceId` is what the provider knows.
 /** Consoles saved by name. The console itself is normalised the same way as any other. */
@@ -1863,11 +2005,16 @@ export function normalizeVoiceLibrary(value) {
   return (Array.isArray(value) ? value : [])
     .map((item, index) => {
       if (!item || typeof item !== 'object') return null;
-      const voiceId = normalizeVoiceId(item.voiceId);
-      if (!voiceId) return null;
-      const name = String(item.name ?? '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 60) || voiceId.slice(0, 8);
       const id = String(item.id ?? '').trim().slice(0, 40) || `voice-${index + 1}`;
-      return { id, name, voiceId, lang: normalizeLanguageCode(item.lang), title: normalizeVoiceTitle(item.title) };
+      const gsv = normalizeGsvVoice(item.gsv);
+      // An entry with only a GPT-SoVITS voice is bound by an id of its own (gsvVoiceId); one whose
+      // GPT-SoVITS voice was emptied again has nothing left to be heard by.
+      let voiceId = normalizeVoiceId(item.voiceId);
+      if (isGsvVoiceId(voiceId) && !gsv) return null;
+      if (!voiceId && gsv) voiceId = gsvVoiceId(id);
+      if (!voiceId) return null;
+      const name = String(item.name ?? '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 60) || (isGsvVoiceId(voiceId) ? gsvClipName(gsv.refAudioPath) : voiceId.slice(0, 8));
+      return { id, name, voiceId, lang: normalizeLanguageCode(item.lang), title: normalizeVoiceTitle(item.title), ...(gsv ? { gsv } : {}) };
     })
     .filter(item => {
       if (!item || seen.has(item.id)) return false;
@@ -1907,7 +2054,9 @@ export function followVoiceLibrary(previousLibrary, settings) {
     ? rows.map(row => {
       if (!row || typeof row !== 'object') return row;
       const voiceId = follow(row.voiceId);
-      return { ...row, voiceId, voices: followTable(row.voices), ...(voiceId !== row.voiceId ? { title: '' } : {}) };
+      // A 情绪音色 names its voice by id too: a mood bound to the entry moves with it.
+      const moods = Array.isArray(row.moods) ? row.moods.map(mood => (mood && typeof mood === 'object' ? { ...mood, voiceId: follow(mood.voiceId) } : mood)) : row.moods;
+      return { ...row, voiceId, voices: followTable(row.voices), moods, ...(voiceId !== row.voiceId ? { title: '' } : {}) };
     })
     : rows]));
   return { ...settings, tts: nextTts, ttsVoices };
@@ -1984,7 +2133,9 @@ export function normalizeTts(value) {
     autoRead: source.autoRead === true,
     intimate: normalizeIntimateMode(source.intimate),
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
+    provider: TTS_PROVIDERS.includes(source.provider) ? source.provider : DEFAULT_TTS.provider,
     fish: normalizeFishSettings(source.fish),
+    gsv: normalizeGsvSettings(source.gsv),
   };
 }
 

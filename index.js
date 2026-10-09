@@ -120,8 +120,13 @@ import {
   channelRequestFoldSummary,
   channelPostscriptFoldSummary,
   helperPromptFoldSummary,
-} from './core.js?v=0.44.0';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.44.0';
+  gsvParamsFoldSummary,
+  GSV_LANGUAGES,
+  isGsvVoiceId,
+  languageBase,
+  normalizeGsvVoice,
+} from './core.js?v=0.45.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.45.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -182,10 +187,17 @@ import {
   isSungText,
   singingText,
   unsungText,
-} from './tts.js?v=0.44.0';
-import { createTtsStore } from './tts-store.js?v=0.44.0';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.44.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.44.0';
+  describeGsvFailure,
+  gsvEndpoint,
+  gsvGoesDirect,
+  gsvHeaders,
+  gsvVoiceFor,
+  scaleWavVolume,
+  wavInfo,
+} from './tts.js?v=0.45.0';
+import { createTtsStore } from './tts-store.js?v=0.45.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.45.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.45.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -195,7 +207,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.44.0';
+} from './processing.js?v=0.45.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -213,10 +225,10 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.44.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.44.0';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.44.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.44.0';
+} from './prompts.js?v=0.45.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.45.0';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.45.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.45.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -234,8 +246,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.44.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.44.0';
+} from './palette.js?v=0.45.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.45.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -243,7 +255,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.44.0';
+} from './diagnostics.js?v=0.45.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -254,7 +266,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.44.0';
+} from './helper.js?v=0.45.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -528,7 +540,7 @@ const CONTROL_CENTER_MARKUP = `
  <div class="jy-card-row jy-card-row-end"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="restore-originals">恢复本聊天的原文</button></div>
 </section>
 <section class="jy-card" data-jy-tts-desk>
- <div class="jy-card-row"><div class="jy-card-row-text"><h3>朗读（有声小说）</h3><p class="jy-muted">把译文或原文念出来，细节在朗读页。关着就是只翻译，楼层里不加任何东西。需要 Fish Audio 的 API Key。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
+ <div class="jy-card-row"><div class="jy-card-row-text"><h3>朗读（有声小说）</h3><p class="jy-muted">把译文或原文念出来，细节在朗读页。关着就是只翻译，楼层里不加任何东西。需要 Fish Audio 的 API Key，或者在自己电脑上运行 GPT-SoVITS。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
  <div class="jy-card-row jy-card-row-end"><button type="button" class="jy-text-button" data-jy-action="open-tts" hidden>朗读设置 →</button></div>
 </section>
 </div>
@@ -692,11 +704,22 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每个自然段后面会出现「播放」和「重新生成」两个按钮，楼层开头有一个小的「朗读」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
 
 <div class="jy-processing-columns">
-<div class="jy-text-scope"><h2>Fish Audio</h2>
+<div class="jy-text-scope" data-jy-tts-provider-card="fish"><h2>Fish Audio</h2>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">声音来源</span><select data-jy-tts-field="provider"><option value="fish">Fish Audio</option><option value="gsv">GPT-SoVITS（本地）</option></select></label></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">API Key</span><input type="password" data-jy-tts-fish="key" placeholder="sk-…" autocomplete="new-password" spellcheck="false"></label><label><span class="jy-label">模型</span><select data-jy-tts-fish="model"><option value="s2-pro">s2-pro</option><option value="s2.1-pro">s2.1-pro</option><option value="s2.1-pro-free">s2.1-pro-free（免费开发者档）</option><option value="drama-3-preview">drama-3-preview（预览版）</option><option value="s1">s1（旧版，不能一次用多个音色）</option></select></label></div>
 <div class="jy-actions"><button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button><span class="jy-muted" data-jy-tts-save-note></span></div>
 <label class="jy-check"><input type="checkbox" data-jy-tts-fish="viaProxy">经酒馆 CORS 代理发送</label>
 <p class="jy-muted" data-jy-tts-proxy-help></p>
+</div>
+<div class="jy-text-scope" data-jy-tts-provider-card="gsv" hidden><h2>GPT-SoVITS</h2>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">声音来源</span><select data-jy-tts-field="provider"><option value="fish">Fish Audio</option><option value="gsv">GPT-SoVITS（本地）</option></select></label><label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-gsv="baseUrl" placeholder="http://127.0.0.1:9880" spellcheck="false"></label></div>
+<div class="jy-actions"><button type="button" class="jy-button" data-jy-action="tts-test-gsv">测试连接</button><span class="jy-muted" data-jy-tts-gsv-note></span></div>
+<label class="jy-check"><input type="checkbox" data-jy-tts-gsv="viaProxy">经酒馆 CORS 代理发送</label>
+<p class="jy-muted" data-jy-tts-gsv-proxy-help></p>
+<div class="jy-tts-lang-block"><h3>默认音色</h3><p class="jy-muted">音色库里没配 GPT-SoVITS 的音色、没绑音色的角色，都用这个读。</p>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">参考音频</span><input type="text" data-jy-tts-gsv="refAudioPath" placeholder="D:\\GPT-SoVITS\\参考音频\\旁白.wav" spellcheck="false"></label><label><span class="jy-label">参考音频的文字</span><input type="text" data-jy-tts-gsv="promptText" placeholder="参考音频里说的话，一字不差" spellcheck="false"></label><label><span class="jy-label">参考音频语言</span><select data-jy-tts-gsv="promptLang"><option value="zh">中文</option><option value="ja">日语</option><option value="en">英语</option><option value="ko">韩语</option><option value="yue">粤语</option><option value="auto">自动</option></select></label><label><span class="jy-label">GPT 模型（.ckpt，可不填）</span><input type="text" data-jy-tts-gsv="gptWeights" placeholder="不填用 GPT-SoVITS 当前加载的" spellcheck="false"></label><label><span class="jy-label">SoVITS 模型（.pth，可不填）</span><input type="text" data-jy-tts-gsv="sovitsWeights" placeholder="不填用 GPT-SoVITS 当前加载的" spellcheck="false"></label></div>
+</div>
+<p class="jy-muted">GPT-SoVITS 在你自己的电脑上生成声音，不花钱、不限字数，需要 N 卡。先启动它的 api_v2.py（整合包目录里运行 <code>runtime\\python.exe api_v2.py</code>），窗口里出现 Uvicorn running on http://127.0.0.1:9880 之后点「测试连接」；默认音色填好了，测试时会用它读一句。路径都填 GPT-SoVITS 那台电脑上的完整路径：在文件上按住 Shift 点右键，「复制文件地址」，直接粘贴。参考音频要 3~10 秒，「参考音频的文字」要和音频里说的一字不差。给角色单独配，在「音色」卡的「音色库」里每个音色填自己的参考音频和模型。</p>
 </div>
 <div class="jy-text-scope"><h2>音色</h2>
 <div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button></div>
@@ -712,11 +735,11 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-processing-toolbar jy-processing-toolbar-end"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="tts-clear-voices">清空角色表</button></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="speechMarks">让主模型给台词标上说话人和情绪</label></div>
 <p class="jy-muted">打开后，主模型每写一次回复，请求的最末尾（深度 0，系统消息）都会带上一段格式要求，让它把每句台词写成 <code>&lt;say who="名字" mood="情绪"&gt;「……」&lt;/say&gt;</code>。不分析模式靠这个分角色、带情绪读，不请求任何副模型。标记在楼层里自动隐藏，翻译时自动去掉；台词的引号没配对（比如「……"）时，显示和朗读都会补成一对。名单用下面角色表里的名字，引号用这个故事最近在用的那种，每次生成时现取。只在朗读功能打开时发送，总结、代写这类旁路生成不带；关掉就不再发送。以前点按钮写进世界书的「镜译 · 说话人与情绪标记」条目请自己删掉或关掉——它还在的话，关掉这里主模型也会照样写标记。</p>
-<p class="jy-muted">角色表跟着当前角色卡保存。「从角色卡和世界书识别角色」让副模型读一遍角色卡和世界书条目（连同最近几楼正文，好按故事里的写法给名字），把人物名单列出来，你勾选后再导进来（需要副模型能连上，模型没回应就什么都不加）；世界书里没有、只是模型编的名字，群体和身份称呼，还有你自己扮演的角色，都会被程序挡掉，关掉的世界书条目也不读；导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「＋ 多国语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色。</p>
+<p class="jy-muted">角色表跟着当前角色卡保存。「从角色卡和世界书识别角色」让副模型读一遍角色卡和世界书条目（连同最近几楼正文，好按故事里的写法给名字），把人物名单列出来，你勾选后再导进来（需要副模型能连上，模型没回应就什么都不加）；世界书里没有、只是模型编的名字，群体和身份称呼，还有你自己扮演的角色，都会被程序挡掉，关掉的世界书条目也不读；导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「＋ 多国语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色（声音来源是 GPT-SoVITS 时，用它那张卡里的默认音色）。</p>
 <details class="jy-fold" data-jy-fold="tts-library"><summary><h2>音色库</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-add-library">添加音色</button></div>
 <div class="jy-tts-library" data-jy-tts-library></div>
-<p class="jy-muted">给常用的 Fish 音色起个自己的名字存起来，全部角色卡共用。之后旁白、对白默认音色、每个角色、每门语言的音色都可以直接从库里选，不用再去翻 32 位的 ID。Voice ID 在 fish.audio 音色页面的地址栏里。</p>
+<p class="jy-muted">给常用的 Fish 音色起个自己的名字存起来，全部角色卡共用。之后旁白、对白默认音色、每个角色、每门语言的音色都可以直接从库里选，不用再去翻 32 位的 ID。Voice ID 在 fish.audio 音色页面的地址栏里。GPT-SoVITS 的音色也存在这里：展开一个音色，在「GPT-SoVITS」那几格填它的参考音频、参考音频的文字和模型，点「试听」听一句；只用 GPT-SoVITS 的音色不用填 Voice ID。同一个音色可以两边都填，换声音来源时角色绑的还是这个音色。</p>
 </div></details>
 </div>
 <div class="jy-text-scope"><h2>读法</h2>
@@ -737,7 +760,19 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
 <p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
 </div></details>
-<details class="jy-fold" data-jy-fold="tts-fish"><summary><h2>Fish 参数</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
+<details class="jy-fold" data-jy-fold="tts-gsv" data-jy-tts-provider-card="gsv" hidden><summary><h2>GPT-SoVITS 参数</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-tts-gsv="timeoutSec" min="10" max="600" step="10"></label><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-tts-gsv="retries" min="0" max="5" step="1"></label></div>
+<p class="jy-muted">每句发一次请求，GPT-SoVITS 一句做完再做下一句；音色用的模型不一样时，先把同一套模型的句子做完再换模型（换一次要几秒）。超时和重试只管请求怎么发，改了不会重做音频；第一次读、刚换模型时要先把模型装进显卡，超时别调得太短。</p>
+<div class="jy-form-grid">
+<label><span class="jy-label">语速（0.6–1.65）</span><input type="number" data-jy-tts-gsv="speed" min="0.6" max="1.65" step="0.05"></label><label><span class="jy-label">音量调整 / dB</span><input type="number" data-jy-tts-gsv="volume" min="-20" max="20" step="1"></label>
+<label><span class="jy-label">temperature</span><input type="number" data-jy-tts-gsv="temperature" min="0.05" max="1" step="0.05"></label><label><span class="jy-label">top_p</span><input type="number" data-jy-tts-gsv="topP" min="0.05" max="1" step="0.05"></label>
+<label><span class="jy-label">top_k</span><input type="number" data-jy-tts-gsv="topK" min="1" max="100" step="1"></label><label><span class="jy-label">重复惩罚</span><input type="number" data-jy-tts-gsv="repetitionPenalty" min="1" max="2" step="0.05"></label>
+<label><span class="jy-label">切句方式</span><select data-jy-tts-gsv="splitMethod"><option value="cut5">按标点切（默认）</option><option value="cut0">不切</option><option value="cut1">凑四句一切</option><option value="cut2">凑 50 字一切</option><option value="cut3">按中文句号切</option><option value="cut4">按英文句号切</option></select></label>
+</div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 GPT-SoVITS 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量读（每句各自生效）</label></div>
+<p class="jy-muted">GPT-SoVITS 听不懂情绪、停顿、笑声这些标签，发出去的只有字：分析模式加的叠字、语气词照样读，标签不读。情绪靠参考音频——同一个角色录一段开心的、一段低落的，存成两个音色，在角色的「情绪音色」里按条件换。temperature、top_k、top_p 越低越稳、越高起伏越大；重复惩罚防止卡在一个音上；切句方式是 GPT-SoVITS 在一句里面再按标点切开，中间停一下。改了语速、音量和这几项，已经做好的音频会按新参数重做。</p>
+</div></details>
+<details class="jy-fold" data-jy-fold="tts-fish" data-jy-tts-provider-card="fish"><summary><h2>Fish 参数</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-fish="baseUrl" placeholder="https://api.fish.audio" spellcheck="false"></label>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-tts-fish="timeoutSec" min="10" max="600" step="10"></label><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-tts-fish="retries" min="0" max="5" step="1"></label><label title="整楼拆成几段请求时，几段同时发。越大等得越短，Fish 提示限流（429）就调回 1。"><span class="jy-label">同时生成几段</span><select data-jy-tts-fish="concurrency"><option value="1">1（一段一段来，最稳）</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label></div>
 <p class="jy-muted">超时、重试和并发是这条连接怎么发请求，不影响声音。重试只在超时、断线和 Fish 自己出错（5xx）时发生；Key 不对、余额不足、限流（429）这些一次就停，重试也没用。</p>
@@ -4069,7 +4104,30 @@ function ttsVoicesOwned(settings = runtime.settings) {
 
 function ttsVoiceConfig(settings = runtime.settings) {
   const tts = ttsSettings(settings);
-  return { voices: ttsVoicesFor(settings), narratorVoice: tts.narratorVoice, narratorVoices: tts.narratorVoices, dialogueVoice: tts.dialogueVoice, dialogueFallback: tts.dialogueFallback };
+  const config = { voices: ttsVoicesFor(settings), narratorVoice: tts.narratorVoice, narratorVoices: tts.narratorVoices, dialogueVoice: tts.dialogueVoice, dialogueFallback: tts.dialogueFallback };
+  return tts.provider === 'fish' ? withoutGsvOnlyVoices(config) : config;
+}
+
+/**
+ * The bindings as Fish hears them: a voice that exists only as a GPT-SoVITS clip is no voice to Fish,
+ * so whoever is bound to one reads the way an unbound name does — the dialogue default, then Fish's
+ * own — rather than sending Fish an id it has never heard of and losing the whole paragraph.
+ */
+function withoutGsvOnlyVoices(config) {
+  const keep = id => (isGsvVoiceId(id) ? '' : id);
+  const keepTable = table => Object.fromEntries(Object.entries(table ?? {}).filter(([, id]) => !isGsvVoiceId(id)));
+  return {
+    ...config,
+    narratorVoice: keep(config.narratorVoice),
+    narratorVoices: keepTable(config.narratorVoices),
+    dialogueVoice: keep(config.dialogueVoice),
+    voices: config.voices.map(row => ({
+      ...row,
+      voiceId: keep(row.voiceId),
+      voices: keepTable(row.voices),
+      moods: (row.moods ?? []).filter(mood => !isGsvVoiceId(mood.voiceId)),
+    })),
+  };
 }
 
 // Everyone this cast is known by: voiced characters first, then the colour palette and the names the
@@ -4132,9 +4190,49 @@ async function ttsManualSpeakers(floor) {
   return manual;
 }
 
-/** The provider adapter the reading sends through. Fish is the only one today; the settings name it. */
+/** The provider adapter the reading sends through: Fish, or GPT-SoVITS on the reader's own machine. */
 function ttsProviderFor(settings = runtime.settings) {
   return ttsProvider(ttsSettings(settings).provider ?? 'fish');
+}
+
+/** The provider's name, for the lines the reader sees. */
+function ttsProviderName(tts) {
+  return tts?.provider === 'gsv' ? 'GPT-SoVITS' : 'Fish';
+}
+
+/** What must be set before anything is asked of the provider: Fish's key; GPT-SoVITS needs none. */
+function requireTtsReady(tts) {
+  if (tts.provider !== 'gsv') requireFishKey(tts);
+}
+
+/**
+ * How many units go to the provider at once. GPT-SoVITS makes one sentence at a time whatever is
+ * asked of it, so a second paragraph sent alongside the first only interleaves with it and holds the
+ * first one up.
+ */
+function ttsLanes(tts) {
+  return tts.provider === 'gsv' ? 1 : Math.max(1, Number(tts.fish.concurrency) || 1);
+}
+
+/**
+ * The unit a request carries. GPT-SoVITS has no whole-floor take (every sentence is its own request
+ * either way) and nothing of a floor plays before the last of it is made, so a floor is made a
+ * paragraph at a time there, the first one playing while the rest are made.
+ */
+function ttsRequestUnit(tts) {
+  return tts?.provider === 'gsv' && tts.requestUnit === 'floor' ? 'line' : tts?.requestUnit;
+}
+
+/** What a part the browser could not play is said as: mp3 helps Fish; GPT-SoVITS only makes wav. */
+function ttsPlaybackFailure(tts) {
+  return tts?.provider === 'gsv'
+    ? '浏览器播放这段音频失败。点这一句的「重新生成」，让 GPT-SoVITS 再做一次。'
+    : '浏览器播放这段音频失败。换成 mp3 格式通常能解决。';
+}
+
+/** The format recordings are made in: what Fish was asked for, or GPT-SoVITS's wav. */
+function ttsAudioFormat(tts) {
+  return tts?.provider === 'gsv' ? 'wav' : tts.fish.format;
 }
 
 function ttsUtterances(floor, settings = runtime.settings) {
@@ -5153,8 +5251,9 @@ function requireFishKey(tts) {
   if (!tts.fish.key) throw new Error('还没有填写 Fish API Key。在控制中心的「朗读」页填好后再试。');
 }
 
-// A bounded wait. `renew` turns it into an idle timer for a stream that keeps delivering.
-async function withTtsTimeout(signal, seconds, task) {
+// A bounded wait. `renew` turns it into an idle timer for a stream that keeps delivering. `who` is the
+// provider the wait is for, named in the message a timeout leaves.
+async function withTtsTimeout(signal, seconds, task, { who = 'fish' } = {}) {
   const controller = new AbortController();
   let timedOut = false;
   let timer = null;
@@ -5175,7 +5274,11 @@ async function withTtsTimeout(signal, seconds, task) {
       if (!timedOut) arm();
     });
   } catch (error) {
-    if (timedOut) throw new Error(`Fish 超过 ${seconds} 秒没有响应。可以在「朗读」页的声音参数里调大超时。`);
+    if (timedOut) {
+      throw new Error(who === 'gsv'
+        ? `GPT-SoVITS 超过 ${seconds} 秒没有响应。第一次读、刚换模型时它要先把模型装进显卡，可以在「GPT-SoVITS 参数」里调大超时。`
+        : `Fish 超过 ${seconds} 秒没有响应。可以在「朗读」页的声音参数里调大超时。`);
+    }
     throw error;
   } finally {
     if (timer !== null) globalThis.clearTimeout(timer);
@@ -5306,6 +5409,176 @@ async function streamFishTimestampsOnce(body, fish, signal, onProgress = null) {
   });
 }
 
+// ---------------------------------------------------------------------------------------------
+// GPT-SoVITS: one server on the reader's own machine with one pair of models loaded at a time. Every
+// job waits for the one before it, so a model switched for one voice never lands in the middle of a
+// sentence of another, and a paragraph is made whole before the next one starts.
+// ---------------------------------------------------------------------------------------------
+
+/** One call to GPT-SoVITS; a failure comes back in the reader's words, with its status and body kept. */
+async function gsvRequestOnce(path, gsv, { method = 'POST', body, query = null, signal } = {}) {
+  const host = detectTtsHost();
+  const viaProxy = !gsvGoesDirect(gsv, host);
+  let response;
+  try {
+    response = await fetch(gsvEndpoint(gsv, path, { query, host }), {
+      method,
+      headers: gsvHeaders(gsv, viaProxy ? requestHeaders() : {}, { host }),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal,
+      cache: 'no-store',
+    });
+  } catch (error) {
+    if (isAbortError(error) || signal?.aborted) throw error;
+    const failure = new Error(describeGsvFailure({ network: true, viaProxy, host, baseUrl: gsv.baseUrl }));
+    failure.cause = error;
+    throw failure;
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    const failure = new Error(describeGsvFailure({ status: response.status, body: text, viaProxy, host, baseUrl: gsv.baseUrl }));
+    failure.status = response.status;
+    failure.body = text.slice(0, 2000);
+    throw failure;
+  }
+  return response;
+}
+
+/** Runs `task` once every GPT-SoVITS job queued before it has finished, however that one ended. */
+function gsvExclusive(task) {
+  const previous = runtime.tts.gsvChain ?? Promise.resolve();
+  const run = previous.then(task, task);
+  runtime.tts.gsvChain = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Loads the models a voice needs, unless they are the ones this page loaded last. What is loaded is
+ * only known for what was loaded from here: a server restarted behind the page's back keeps its own
+ * until a failed call clears the record (gsvSynthesize) or the reader tests the connection.
+ */
+async function gsvLoadWeights(weights, gsv, signal) {
+  const loaded = runtime.tts.gsvLoaded?.base === gsv.baseUrl ? runtime.tts.gsvLoaded : (runtime.tts.gsvLoaded = { base: gsv.baseUrl, gpt: '', sovits: '' });
+  for (const [kind, path, route] of [['gpt', weights?.gpt, '/set_gpt_weights'], ['sovits', weights?.sovits, '/set_sovits_weights']]) {
+    if (!path || loaded[kind] === path) continue;
+    loaded[kind] = '';
+    const started = Date.now();
+    await withTtsTimeout(signal, gsv.timeoutSec, requestSignal => gsvRequestOnce(route, gsv, { method: 'GET', query: { weights_path: path }, signal: requestSignal }), { who: 'gsv' });
+    loaded[kind] = path;
+    recordDiagnostic('info', 'tts.gsv-weights', `GPT-SoVITS 换上了${kind === 'gpt' ? ' GPT ' : ' SoVITS '}模型：${path.split(/[\\/]/).pop()}（${((Date.now() - started) / 1000).toFixed(1)} 秒）。`, { kind, path });
+  }
+}
+
+/**
+ * One sentence from GPT-SoVITS: its wav, the volume set, and how long it lasts. Asked again when the
+ * call never came back or the tavern could not reach GPT-SoVITS (no status, or 5xx); GPT-SoVITS's own
+ * refusal (a 400 with its reason) is answered once — asking again would get the same reason.
+ */
+async function gsvSynthesize(payload, gsv, signal, { onAttempt = null } = {}) {
+  const attempts = Math.max(0, Number(gsv.retries) || 0) + 1;
+  let failure = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    onAttempt?.(attempt);
+    try {
+      await gsvLoadWeights(payload.weights, gsv, signal);
+      return await withTtsTimeout(signal, gsv.timeoutSec, async requestSignal => {
+        const response = await gsvRequestOnce('/tts', gsv, { body: payload.body, signal: requestSignal });
+        const raw = new Uint8Array(await response.arrayBuffer());
+        const info = wavInfo(raw);
+        if (!info?.bytes) {
+          const error = new Error('GPT-SoVITS 送回来的不是能播放的 wav，完整记录见运行记录。');
+          error.body = new TextDecoder().decode(raw.slice(0, 400));
+          throw error;
+        }
+        return { bytes: payload.volume ? scaleWavVolume(raw, payload.volume) : raw, duration: info.duration, sampleRate: info.sampleRate };
+      }, { who: 'gsv' });
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted || attempt === attempts - 1) throw error;
+      const status = Number(error.status) || 0;
+      if (status !== 0 && status < 500) throw error;
+      failure = error;
+      // A server that went away may come back with other models loaded.
+      runtime.tts.gsvLoaded = null;
+      recordDiagnostic('info', 'tts.retry', `GPT-SoVITS 这一句没生成，第 ${attempt + 1} 次重试（共 ${attempts - 1} 次）：${safeError(error)}`, {
+        status: status || null, attempt: attempt + 1, attempts, timeoutSec: gsv.timeoutSec,
+      });
+    }
+  }
+  throw failure;
+}
+
+/**
+ * A unit's audio from GPT-SoVITS: every sentence a request of its own and a part of the recording,
+ * spanning its whole part. The sentences are made in the order that switches models least — those of
+ * one model together — and the recording is put back in reading order afterwards.
+ */
+async function makeGsvRecording({ floor, unit, items, settings, tts, provider, signal, onStatus, onStep, stepId, label }) {
+  const library = normalizeVoiceLibrary(settings?.voiceLibrary);
+  const parts = provider.parts(items, tts);
+  const payloads = parts.map(part => provider.payload(part, tts, { library }));
+  const missing = payloads.findIndex(payload => !payload.body.ref_audio_path);
+  if (missing >= 0) {
+    const item = parts[missing][0];
+    const who = item.segment.type === 'narration' ? '旁白' : (item.segment.speaker || '对白');
+    throw new Error(`${who}没有能用的 GPT-SoVITS 音色：在音色库里给它绑的音色填上参考音频，或者在「朗读」页 GPT-SoVITS 卡里填默认音色的参考音频。`);
+  }
+  const modelKey = index => `${payloads[index].weights.gpt}\n${payloads[index].weights.sovits}`;
+  const firstSeen = new Map();
+  payloads.forEach((payload, index) => { if (!firstSeen.has(modelKey(index))) firstSeen.set(modelKey(index), index); });
+  const order = parts.map((part, index) => index).sort((left, right) => firstSeen.get(modelKey(left)) - firstSeen.get(modelKey(right)) || left - right);
+  const made = new Array(parts.length);
+  let finished = 0;
+  const report = () => {
+    if (parts.length > 1) onStep?.(stepId, { state: 'active', detail: `${finished}/${parts.length} 句已完成` });
+    onStatus?.(parts.length > 1 ? `正在用 GPT-SoVITS 生成${label}音频（${finished}/${parts.length} 句）…` : `正在用 GPT-SoVITS 生成${label}音频…`);
+  };
+  onStep?.(stepId, { state: 'active', label: ttsUnitLabel(unit), detail: `${items.length} 句，GPT-SoVITS 一句一句做` });
+  report();
+  await gsvExclusive(async () => {
+    for (const index of order) {
+      if (signal?.aborted) throw new DOMException('stopped', 'AbortError');
+      const payload = payloads[index];
+      let result;
+      try {
+        result = await gsvSynthesize(payload, tts.gsv, signal, { onAttempt: () => { ttsFishTally(floor).requests += 1; } });
+      } catch (error) {
+        if (!isAbortError(error) && !signal?.aborted) {
+          ttsFishTally(floor).failed += 1;
+          recordDiagnostic('error', 'tts.request-failed', safeError(error), {
+            floor: floor.floorId, unit, part: index + 1, parts: parts.length, provider: 'gsv', viaProxy: tts.gsv.viaProxy, host: detectTtsHost(), status: error.status ?? null,
+            voice: payload.voice?.name || (payload.voice?.source === 'default' ? '默认音色' : ''), refAudioPath: payload.body.ref_audio_path,
+          }, { status: error.status ?? null, body: error.body ?? '' }, { fullRequest: { ...payload.body, weights: payload.weights }, floor: floor.messageId });
+          onStep?.(stepId, { state: 'error', detail: safeError(error) });
+        }
+        throw error;
+      }
+      const blob = new Blob([result.bytes], { type: 'audio/wav' });
+      const duration = Number(result.duration.toFixed(3));
+      made[index] = { part: parts[index], blob, duration, aligned: payload.spans.map(span => ({ id: span.id, start: 0, end: duration, coverage: 1 })) };
+      finished += 1;
+      report();
+    }
+  });
+  return made;
+}
+
+/** A finished recording, kept: its parts in order and every sentence's place in them. */
+async function storeTtsRecording(floor, { key, unit, items, fingerprintId, made, provider = 'fish' }) {
+  const storedParts = [];
+  const timeline = [];
+  made.forEach((result, index) => {
+    for (const entry of recordCovers(result.part, result.aligned)) timeline.push({ ...entry, part: index });
+    storedParts.push({ blob: result.blob, mime: result.blob.type, duration: result.duration });
+  });
+  const stored = await ttsStore().putAudio({
+    key, kind: 'recording', unit, floorId: floor.floorId, chatId: floor.chatId, version: floor.version, fingerprint: fingerprintId,
+    provider, side: floor.side, parts: storedParts, timeline,
+    overrideText: unit.startsWith('sentence:') ? (items[0].override?.text ?? '') : '',
+  });
+  rememberRecording(floor, stored);
+  return stored;
+}
+
 /** What this floor has cost Fish so far: requests actually sent, paragraphs reused, failures. */
 function ttsFishTally(floor) {
   const key = floor.floorId;
@@ -5320,7 +5593,7 @@ function reportTtsFish(floor) {
   const tally = runtime.tts.fish.get(floor.floorId);
   if (!tally || !(tally.requests || tally.reused)) return;
   runtime.tts.fish.delete(floor.floorId);
-  recordDiagnostic(tally.failed ? 'warn' : 'info', 'tts.recording', `第 ${floor.messageId} 楼${floor.side === 'source' ? '原文' : floor.side === 'dialogue_source' ? '对白读原文' : '译文'}这次朗读向 Fish 发了 ${tally.requests} 次请求，${tally.reused} 段直接用了已有音频${tally.failed ? `，${tally.failed} 段没生成成功` : ''}。`, {
+  recordDiagnostic(tally.failed ? 'warn' : 'info', 'tts.recording', `第 ${floor.messageId} 楼${floor.side === 'source' ? '原文' : floor.side === 'dialogue_source' ? '对白读原文' : '译文'}这次朗读向 ${ttsProviderName(ttsSettings())} 发了 ${tally.requests} 次请求，${tally.reused} 段直接用了已有音频${tally.failed ? `，${tally.failed} 段没生成成功` : ''}。`, {
     floor: floor.floorId, requests: tally.requests, reused: tally.reused, failed: tally.failed,
   }, '', { floor: floor.messageId });
 }
@@ -5342,6 +5615,18 @@ async function ttsOverrides(floor) {
     runtime.tts.overrides.set(key, new Map(records.map(record => [record.segmentId, record])));
   }
   return runtime.tts.overrides.get(key);
+}
+
+/**
+ * Items as the provider keeps them. GPT-SoVITS tags each with the clip and models its voice reads in
+ * (gsvVoiceTag), so a recording made before a clip was changed behind the same id is not heard for it.
+ */
+function tagTtsVoices(items, settings) {
+  const provider = ttsProviderFor(settings);
+  if (typeof provider.voiceTag !== 'function') return items;
+  const tts = ttsSettings(settings);
+  const library = normalizeVoiceLibrary(settings?.voiceLibrary);
+  return items.map(item => ({ ...item, voiceTag: provider.voiceTag(item.voiceId, tts, library) }));
 }
 
 /**
@@ -5367,13 +5652,13 @@ async function ttsItemsFor(floor, segments, settings, { range = null } = {}) {
     }
     return { ...carried, override: own };
   };
-  const items = plan.items.map(dress);
-  const skipped = plan.skipped.map(dress);
+  const items = tagTtsVoices(plan.items.map(dress), settings);
+  const skipped = tagTtsVoices(plan.skipped.map(dress), settings);
   const warnKey = `${ttsLabelKey(floor)}|voices`;
   if ((plan.unvoiced.length || plan.defaulted.length || plan.muted.length) && !runtime.tts.anchorWarned.has(warnKey)) {
     runtime.tts.anchorWarned.add(warnKey);
     recordDiagnostic('info', 'tts.voices', [
-      plan.unvoiced.length ? `${plan.unvoiced.join('、')}没有任何音色，用 Fish 的默认音色读。` : '',
+      plan.unvoiced.length ? `${plan.unvoiced.join('、')}没有任何音色，${ttsSettings(settings).provider === 'gsv' ? '用 GPT-SoVITS 卡里的默认音色读' : '用 Fish 的默认音色读'}。` : '',
       plan.defaulted.length ? `${plan.defaulted.join('、')}没有登记专属音色，用对白默认音色读。` : '',
       plan.muted.length ? `${plan.muted.join('、')}的对白按设置跳过，共 ${skipped.length} 句不朗读。` : '',
     ].filter(Boolean).join(' '), { floor: floor.floorId, unvoiced: plan.unvoiced, defaulted: plan.defaulted, muted: plan.muted, skipped: skipped.length }, '', { floor: floor.messageId });
@@ -5402,7 +5687,12 @@ function rememberRecording(floor, record) {
 async function findTtsEntry(floor, item, settings) {
   const { key: fingerprint } = await ttsFingerprint(settings);
   const records = await ttsRecordings(floor);
-  const preferred = item.override?.recordKey ? records.find(record => record.key === item.override.recordKey) : null;
+  // A take of the reader's own is heard only from the provider that made it: switched to GPT-SoVITS,
+  // a sentence rewritten under Fish is made again in its GPT-SoVITS voice rather than heard in Fish's.
+  const provider = ttsSettings(settings).provider;
+  const preferred = item.override?.recordKey
+    ? records.find(record => record.key === item.override.recordKey && (record.provider ?? 'fish') === provider)
+    : null;
   if (preferred) {
     const index = preferred.timeline.findIndex(entry => entry.id === item.segment.id);
     if (index >= 0) return { record: preferred, index };
@@ -5454,11 +5744,18 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
   }
   // Replaced under the same key: the urls made from the old take must not play in place of the new one.
   if (stale) dropTtsObjectUrls(key);
-  requireFishKey(tts);
+  requireTtsReady(tts);
   const record = await dedupeTtsJob(key, floor.messageId, async (signal, notify) => {
     const provider = ttsProviderFor(settings);
-    const parts = provider.parts(items, tts);
     const label = unit.startsWith('line:') ? '这一段' : unit.startsWith('sentence:') ? '这一句' : unit.startsWith('chunk:') ? `第 ${unit.slice(6)} 批` : '整楼';
+    if (provider.id === 'gsv') {
+      const made = await makeGsvRecording({ floor, unit, items, settings, tts, provider, signal, onStatus, onStep, stepId, label });
+      const stored = await storeTtsRecording(floor, { key, unit, items, fingerprintId, made, provider: provider.id });
+      onStep?.(stepId, { state: 'done', detail: `${items.length} 句 · ${made.reduce((sum, part) => sum + (Number(part.duration) || 0), 0).toFixed(1)} 秒` });
+      notifyTtsPanels();
+      return stored;
+    }
+    const parts = provider.parts(items, tts);
     // What Fish has sent of each part so far, where a player can reach it. Only for a floor sent whole,
     // the one wait long enough to matter, and only in mp3, where every stretch from the start plays.
     const live = unit.startsWith('floor:') && tts.fish.format === 'mp3'
@@ -5562,20 +5859,9 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
     } finally {
       signal?.removeEventListener('abort', onAbort);
     }
-    const storedParts = [];
-    const timeline = [];
-    made.forEach((result, index) => {
-      for (const entry of recordCovers(result.part, result.aligned)) timeline.push({ ...entry, part: index });
-      storedParts.push({ blob: result.blob, mime: result.blob.type, duration: result.duration });
-    });
-    const stored = await ttsStore().putAudio({
-      key, kind: 'recording', unit, floorId: floor.floorId, chatId: floor.chatId, version: floor.version, fingerprint: fingerprintId,
-      side: floor.side, parts: storedParts, timeline,
-      overrideText: unit.startsWith('sentence:') ? (items[0].override?.text ?? '') : '',
-    });
-    rememberRecording(floor, stored);
+    const stored = await storeTtsRecording(floor, { key, unit, items, fingerprintId, made, provider: provider.id });
     if (live) dropLiveTtsUrls(key);
-    onStep?.(stepId, { state: 'done', detail: `${items.length} 句 · ${storedParts.reduce((sum, part) => sum + (Number(part.duration) || 0), 0).toFixed(1)} 秒` });
+    onStep?.(stepId, { state: 'done', detail: `${items.length} 句 · ${stored.parts.reduce((sum, part) => sum + (Number(part.duration) || 0), 0).toFixed(1)} 秒` });
     notifyTtsPanels();
     return stored;
   }, { onPrefix: onLive });
@@ -5662,8 +5948,8 @@ function dropLiveTtsUrls(recordKey) {
  * reading order; `single` is kept for the callers that name it.
  */
 function ttsUnitFor(tts, items, item, { single = false } = {}) {
-  if (tts?.requestUnit === 'floor') return { unit: 'floor:all', items };
-  if (tts?.requestUnit === 'sentence') return { unit: `sentence:${item.segment.id}`, items: [item] };
+  if (ttsRequestUnit(tts) === 'floor') return { unit: 'floor:all', items };
+  if (ttsRequestUnit(tts) === 'sentence') return { unit: `sentence:${item.segment.id}`, items: [item] };
   const lineId = item.segment.lineId;
   return { unit: `line:${lineId}`, items: items.filter(candidate => candidate.segment.lineId === lineId) };
 }
@@ -5671,8 +5957,8 @@ function ttsUnitFor(tts, items, item, { single = false } = {}) {
 // Every unit a floor is made of, in reading order, for making the whole floor ahead of time.
 function ttsUnitsOf(tts, items) {
   if (!items.length) return [];
-  if (tts?.requestUnit === 'floor') return [{ unit: 'floor:all', items }];
-  if (tts?.requestUnit === 'sentence') return items.map(item => ({ unit: `sentence:${item.segment.id}`, items: [item] }));
+  if (ttsRequestUnit(tts) === 'floor') return [{ unit: 'floor:all', items }];
+  if (ttsRequestUnit(tts) === 'sentence') return items.map(item => ({ unit: `sentence:${item.segment.id}`, items: [item] }));
   return groupSegmentsByLine(items.map(item => item.segment)).map(line => ({ unit: `line:${line.lineId}`, items: items.filter(item => item.segment.lineId === line.lineId) }));
 }
 
@@ -5689,13 +5975,13 @@ function scheduleTtsAhead(transport) {
   const { floor, settings } = transport;
   const tts = ttsSettings(settings);
   // A floor sent whole is made by the first turn in one piece; there is nothing ahead to make.
-  if (tts.requestUnit === 'floor') return;
-  const lanes = Math.max(1, Number(tts.fish.concurrency) || 1);
+  if (ttsRequestUnit(tts) === 'floor') return;
+  const lanes = ttsLanes(tts);
   // The unit being played is made whole by the turn itself; only the ones after it are made here, so
   // its tail is never asked for a second time as a unit of its own.
   const current = transport.items[transport.index];
   const rest = transport.items.slice(transport.index + 1);
-  const units = ttsUnitsOf(tts, tts.requestUnit === 'sentence' ? rest : rest.filter(item => item.segment.lineId !== current?.segment.lineId));
+  const units = ttsUnitsOf(tts, ttsRequestUnit(tts) === 'sentence' ? rest : rest.filter(item => item.segment.lineId !== current?.segment.lineId));
   if (!units.length) return;
   void runInLanes(units, lanes, async target => {
     if (!isTtsTransport(transport)) return;
@@ -5771,7 +6057,7 @@ async function resolveTtsEntry(floor, items, item, settings, onStatus = null, on
     ? { unit: `sentence:${item.segment.id}`, items: [item] }
     : unit ? { unit, items: unitItems ?? items } : ttsUnitFor(tts, items, item, { single });
   let making;
-  if (live && target.unit.startsWith('floor:') && tts.fish.format === 'mp3') {
+  if (live && target.unit.startsWith('floor:') && ttsAudioFormat(tts) === 'mp3') {
     let latest = null;
     let wake = null;
     let finished = false;
@@ -6404,7 +6690,7 @@ async function askTtsSave({ messageId, lineIndex = null, lineText = '' }) {
   const what = choice === 'current' ? `${where}「${miniShort(lineText, 18)}」` : `第 ${messageId} 楼全篇`;
   const confirmed = await ttsAskBox({
     title: '确认缓存',
-    text: `是否缓存${what}？还没生成的句子会先向 Fish 要一次，然后交给浏览器下载。`,
+    text: `是否缓存${what}？还没生成的句子会先向 ${ttsProviderName(ttsSettings())} 要一次，然后交给浏览器下载。`,
     actions: [{ value: 'yes', label: `确认缓存${choice === 'current' ? '当前对白' : '全篇'}`, primary: true }, { value: 'cancel', label: '再想想' }],
   }, { label: '确认缓存' });
   return confirmed === 'yes' ? choice : 'cancel';
@@ -6456,7 +6742,7 @@ async function createTtsTransport(messageId, { single = false, paragraph = false
   // Whole-floor reading: the first batch of a long reading is enough to start on; the rest keeps
   // arriving while it plays, each batch made and heard as a recording of its own. Not when the floor
   // goes to Fish in one request: that request needs every line of the floor, so it waits for them all.
-  const progressive = !single && fromUtterance === null && tts.requestUnit !== 'floor';
+  const progressive = !single && fromUtterance === null && ttsRequestUnit(tts) !== 'floor';
   let firstBatch = null;
   const firstReady = new Promise(resolve => { firstBatch = resolve; });
   let chain = Promise.resolve();
@@ -6688,7 +6974,7 @@ async function runTtsTransport(transport) {
         toast('info', '浏览器要先点一下才肯出声：点播放键就从这里开始读。');
         return;
       }
-      if (outcome === 'error') throw new Error('浏览器播放这段音频失败。换成 mp3 格式通常能解决。');
+      if (outcome === 'error') throw new Error(ttsPlaybackFailure(ttsSettings(settings)));
       if (outcome === 'stopped') return;
       transport.index = lastOffset + 1;
       if (transport.single) break;
@@ -6771,7 +7057,7 @@ async function saveTtsPicked(messageId, side) {
   if (!lineIds.length) throw new Error('先勾选要缓存的段落。');
   const answer = await ttsAskBox({
     title: `缓存第 ${messageId} 楼选中的 ${lineIds.length} 段`,
-    text: '还没生成的句子会先向 Fish 要一次，然后拼成一个文件交给你保存。',
+    text: `还没生成的句子会先向 ${ttsProviderName(ttsSettings())} 要一次，然后拼成一个文件交给你保存。`,
     actions: [{ value: 'yes', label: `确认缓存这 ${lineIds.length} 段`, primary: true }, { value: 'cancel', label: '再想想' }],
   }, { label: '缓存选中的段落' });
   if (answer !== 'yes') return;
@@ -7087,7 +7373,7 @@ async function pregenerateTtsBody(floor, messageId, settings, tts, quiet) {
     await announceTtsUnits(floor, items, settings, tts);
     let made = 0;
     // As many paragraphs at once as Fish allows; each one already recorded in any unit is skipped.
-    await runInLanes(units, Math.max(1, Number(tts.fish.concurrency) || 1), async (target, index) => {
+    await runInLanes(units, ttsLanes(tts), async (target, index) => {
       const covered = await Promise.all(target.items.map(item => findTtsEntry(floor, item, settings)));
       if (covered.every(Boolean)) {
         ttsStep(floor, `record:${target.unit}`, { state: 'done', detail: '已有音频' });
@@ -7105,7 +7391,7 @@ async function pregenerateTtsBody(floor, messageId, settings, tts, quiet) {
     }
     if (made) {
       recordDiagnostic('info', 'tts.recording', `第 ${messageId} 楼${floor.side === 'source' ? '原文' : floor.side === 'dialogue_source' ? '对白读原文' : '译文'}的音频已生成：${units.length} 段里新做了 ${made} 段，${items.length} 句。`, {
-        floor: floor.floorId, made, units: units.length, sentences: items.length, model: tts.fish.model, format: tts.fish.format,
+        floor: floor.floorId, made, units: units.length, sentences: items.length, provider: tts.provider, model: tts.provider === 'gsv' ? null : tts.fish.model, format: ttsAudioFormat(tts),
       }, '', { floor: messageId });
     }
     if (!quiet && made) toast('success', `第 ${messageId} 楼的音频已生成，${made} 段。`);
@@ -7385,7 +7671,7 @@ async function downloadTtsSentence(messageId, utteranceId, side = null) {
   // A take made for this sentence alone already is the file; anything else is cut out of its paragraph.
   const alone = record.unit === `sentence:${item.segment.id}` && record.parts.length === 1;
   const blob = alone ? part.blob : await sliceAudioToWav(part.blob, line.start, line.end);
-  const format = tts.fish.format === 'opus' ? 'ogg' : tts.fish.format;
+  const format = ttsAudioFormat(tts) === 'opus' ? 'ogg' : ttsAudioFormat(tts);
   const who = item.segment.type === 'narration' ? '旁白' : (item.segment.speaker || '对白');
   const name = `镜译-第${messageId}楼-${who}-第${item.segment.id}句.${alone ? format : 'wav'}`;
   return { blob, name, bytes: blob.size, cut: !alone };
@@ -7458,8 +7744,8 @@ async function downloadTtsAudio(options = null) {
   // are cut and joined in reading order, as wav. Otherwise whole recordings follow one another as
   // they are, in the format they were made in.
   const spliced = downloadNeedsSplice(entries);
-  const blob = spliced ? await ttsSplicedWav(entries) : await ttsDownloadBlob(records, tts.fish.format);
-  const extension = spliced ? 'wav' : (tts.fish.format === 'opus' ? 'ogg' : tts.fish.format);
+  const blob = spliced ? await ttsSplicedWav(entries) : await ttsDownloadBlob(records, ttsAudioFormat(tts));
+  const extension = spliced ? 'wav' : (ttsAudioFormat(tts) === 'opus' ? 'ogg' : ttsAudioFormat(tts));
   const part = picked ? `-选中${picked.size}段` : wanted === 'current' ? `-第${(lineIndex >= 0 ? lineIndex : 0) + 1}段` : '';
   const name = `镜译-第${source.messageId}楼${part}.${extension}`;
   return { blob, name, bytes: blob.size, records: records.length, spliced };
@@ -7625,7 +7911,7 @@ async function ttsInspect(messageId, utteranceId, side = null) {
   const segment = prepared.segments.find(item => item.id === utteranceId);
   if (!segment) throw new Error('这一句已经变了，等楼层重新渲染后再看。');
   const item = prepared.items.find(candidate => candidate.segment.id === utteranceId)
-    ?? { segment, voiceId: resolveSegmentVoice(segment, ttsVoiceConfig(prepared.settings)) };
+    ?? tagTtsVoices([{ segment, voiceId: resolveSegmentVoice(segment, ttsVoiceConfig(prepared.settings)) }], prepared.settings)[0];
   const analysis = runtime.tts.analysis.get(ttsLabelKey(prepared.floor));
   const automatic = { ...item, override: undefined };
   const entry = await findTtsEntry(prepared.floor, item, prepared.settings);
@@ -7774,7 +8060,7 @@ async function remakeTtsLines(messageId, side, heard) {
   const units = ttsUnitsOf(tts, prepared.items).filter(target => target.items.some(item => heard.has(item.segment.lineId)));
   if (!units.length) return summary;
   for (const target of units) ttsStep(floor, `record:${target.unit}`, { state: 'pending', label: ttsUnitLabel(target.unit) });
-  await runInLanes(units, Math.max(1, Number(tts.fish.concurrency) || 1), async (target, index) => {
+  await runInLanes(units, ttsLanes(tts), async (target, index) => {
     const covered = await Promise.all(target.items.map(item => findTtsEntry(floor, item, settings)));
     if (covered.every(Boolean)) {
       summary.kept += 1;
@@ -8168,7 +8454,7 @@ async function saveTtsOverride(messageId, utteranceId, { text, speed, volume, te
   const segment = prepared.segments.find(item => item.id === utteranceId);
   if (!segment) throw new Error('这一句已经变了。');
   const cleaned = String(text ?? '').trim();
-  if (!cleaned) throw new Error('发给 Fish 的内容不能为空。');
+  if (!cleaned) throw new Error(`发给 ${ttsProviderName(ttsSettings())} 的内容不能为空。`);
   const speedValue = Number(speed);
   const volumeValue = Number(volume);
   // Left empty, the tension is the analysis's own; a number is the reader's, 1 to 5.
@@ -8186,7 +8472,7 @@ async function saveTtsOverride(messageId, utteranceId, { text, speed, volume, te
   forgetTtsItems(messageId);
   const fresh = await ttsPrepared(messageId, prepared.floor.side, { fresh: true });
   const item = fresh.items.find(candidate => candidate.segment.id === utteranceId)
-    ?? { segment, voiceId: resolveSegmentVoice(segment, ttsVoiceConfig(fresh.settings)), override: { text: cleaned, speed: record.speed, volume: record.volume, tension: record.tension } };
+    ?? tagTtsVoices([{ segment, voiceId: resolveSegmentVoice(segment, ttsVoiceConfig(fresh.settings)), override: { text: cleaned, speed: record.speed, volume: record.volume, tension: record.tension } }], fresh.settings)[0];
   const { record: made } = await ensureTtsRecording(fresh.floor, `sentence:${utteranceId}`, [item], fresh.settings,
     text => setTtsStatus(messageId, text, 'busy'), (id, patch) => ttsStep(fresh.floor, id, patch));
   await ttsStore().putOverride({ ...record, recordKey: made.key });
@@ -8311,7 +8597,7 @@ function makeTtsEditButton(messageId, segment, side) {
   button.dataset.jyTtsUtt = String(segment.id);
   button.dataset.jyTtsSide = side;
   button.setAttribute('contenteditable', 'false');
-  const label = '查看这句的情绪分析，可修改发给 Fish 的内容';
+  const label = `查看这句的情绪分析，可修改发给 ${ttsProviderName(ttsSettings())} 的内容`;
   button.setAttribute('aria-label', label);
   button.title = label;
   button.innerHTML = TTS_ICON_EDIT;
@@ -8353,7 +8639,7 @@ function makeTtsLineTools(messageId, line, side) {
     }),
     makeTtsLineButton(messageId, line, side, {
       action: 'regen-line', className: 'jy-tts-line-regen', icon: TTS_ICON_REDO, text: '重新生成',
-      label: `丢掉${which}的音频，再向 Fish 要一次${suffix}`,
+      label: `丢掉${which}的音频，再向 ${ttsProviderName(ttsSettings())} 要一次${suffix}`,
     }),
   );
   return box;
@@ -8974,6 +9260,74 @@ async function testFishConnection(settings = runtime.settings) {
     credit: Number.isFinite(credit) ? credit : null,
   });
   return { credit: Number.isFinite(credit) ? credit : null, freeCredit: data?.has_free_credit === true };
+}
+
+// What 「试听」 and 「测试连接」 have a voice say, in the language it is for.
+const GSV_SAMPLE_LINES = Object.freeze({
+  zh: '你好，这是镜译的试听。今天也请多多关照。',
+  ja: 'こんにちは、鏡訳の試し読みです。今日もよろしくお願いします。',
+  en: 'Hello, this is a voice preview from Jingyi. Nice to meet you.',
+  ko: '안녕하세요, 경역의 미리 듣기입니다. 잘 부탁드립니다.',
+  yue: '你好，呢個係鏡譯嘅試聽，請多多指教。',
+});
+
+/** A short line in one GPT-SoVITS voice, made at once (after whatever is queued) and played. */
+async function auditionGsvVoice(voice, settings = runtime.settings, { lang = '' } = {}) {
+  if (!voice?.refAudioPath) throw new Error('先填参考音频的完整路径，再试听。');
+  const tts = ttsSettings(settings);
+  const wanted = languageBase(normalizeLanguageCode(lang));
+  const textLang = GSV_SAMPLE_LINES[wanted] ? wanted : (GSV_SAMPLE_LINES[voice.promptLang] ? voice.promptLang : 'zh');
+  const item = { segment: { id: 0, type: 'narration', text: GSV_SAMPLE_LINES[textLang], lang: textLang }, voiceId: '' };
+  // The voice heard is the one being tried, standing in for the default for this one line.
+  const trial = { ...tts, gsv: { ...tts.gsv, ...voice, gptWeights: voice.gptWeights || tts.gsv.gptWeights, sovitsWeights: voice.sovitsWeights || tts.gsv.sovitsWeights } };
+  const payload = ttsProvider('gsv').payload([item], trial, { library: [] });
+  const result = await gsvExclusive(() => gsvSynthesize(payload, tts.gsv, undefined));
+  await playAuditionBlob(new Blob([result.bytes], { type: 'audio/wav' }));
+  return result;
+}
+
+/** One audition at a time, its url let go when it has played. */
+function playAuditionBlob(blob) {
+  runtime.tts.audition?.pause?.();
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  runtime.tts.audition = audio;
+  const release = () => {
+    URL.revokeObjectURL(url);
+    if (runtime.tts.audition === audio) runtime.tts.audition = null;
+  };
+  audio.addEventListener('ended', release, { once: true });
+  audio.addEventListener('error', release, { once: true });
+  return audio.play().catch(error => {
+    release();
+    throw new Error(`浏览器没让播放（${safeError(error)}），点一下页面再试。`);
+  });
+}
+
+/**
+ * Whether GPT-SoVITS answers at its address, and which version it runs: asked for a language no
+ * version has, it refuses with its version in the reason. With a default voice filled in, one line is
+ * made in it and played, so the reader hears the voice as well as the connection.
+ */
+async function testGsvConnection(settings = runtime.settings) {
+  const tts = ttsSettings(settings);
+  const gsv = tts.gsv;
+  // A test starts from what the server actually has loaded.
+  runtime.tts.gsvLoaded = null;
+  let version = '';
+  try {
+    await withTtsTimeout(undefined, Math.min(gsv.timeoutSec, 60), signal => gsvRequestOnce('/tts', gsv, {
+      body: { text: '测', text_lang: 'xx', ref_audio_path: 'x', prompt_lang: 'zh', media_type: 'wav' }, signal,
+    }), { who: 'gsv' });
+  } catch (error) {
+    if (Number(error.status) !== 400) throw error;
+    version = String(error.body ?? '').match(/in version\s+([A-Za-z0-9.]+)/)?.[1] ?? '';
+  }
+  recordDiagnostic('info', 'tts.test', `GPT-SoVITS 连接测试成功${version ? `（${version}）` : ''}。`, { viaProxy: gsv.viaProxy, host: detectTtsHost(), baseUrl: gsv.baseUrl, version: version || null });
+  if (!gsv.refAudioPath) return { version, sampled: false, seconds: 0 };
+  const voice = { refAudioPath: gsv.refAudioPath, promptText: gsv.promptText, promptLang: gsv.promptLang, gptWeights: gsv.gptWeights, sovitsWeights: gsv.sovitsWeights };
+  const result = await auditionGsvVoice(voice, settings, { lang: gsv.promptLang });
+  return { version, sampled: true, seconds: result.duration };
 }
 
 async function lookupFishVoiceTitle(voiceId, settings = runtime.settings) {
@@ -9938,7 +10292,8 @@ function syncDeskFields(root, settings, { rebuildList = true } = {}) {
   setText(root, '[data-jy-desk-glossary-summary]', glossaryCount ? `已登记 ${glossaryCount} 条` : '空');
 
   const tts = ttsSettings(settings);
-  const fishMissing = tts.enabled && !tts.fish.key.trim();
+  // A reader on GPT-SoVITS needs no Fish key, so nothing is missing from this card for them.
+  const fishMissing = tts.enabled && tts.provider !== 'gsv' && !tts.fish.key.trim();
   const missingPill = root.querySelector('[data-jy-desk-fish-missing]');
   if (missingPill) missingPill.hidden = !fishMissing;
   const needNote = root.querySelector('[data-jy-desk-fish-need]');
@@ -10868,6 +11223,7 @@ async function runThemeProbe(root) {
 // ---------------------------------------------------------------------------------------------
 
 const TTS_NUMERIC_FISH_FIELDS = new Set(['speed', 'volume', 'temperature', 'topP', 'maxChars', 'timeoutSec', 'mp3Bitrate', 'concurrency', 'retries']);
+const TTS_NUMERIC_GSV_FIELDS = new Set(['speed', 'volume', 'temperature', 'topK', 'topP', 'repetitionPenalty', 'timeoutSec', 'retries']);
 
 // A picker of the saved voices, placed after a voice id field; choosing one fills the field.
 function ttsLibraryPicker(doc, settings = runtime.settings) {
@@ -11477,6 +11833,7 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
     'tts-library': voiceLibraryFoldSummary(settings?.voiceLibrary),
     'tts-quotes': quoteSymbolFoldSummary(tts),
     'tts-fish': fishParamsFoldSummary(tts.fish),
+    'tts-gsv': gsvParamsFoldSummary(tts.gsv),
     'tts-deep': DEEP_STATUS.available ? `走 ${channelLabel(settings, connectionUseChoice(settings, 'deep'), { short: true })}` : DEEP_STATUS.note,
     'tts-console': consoleFoldSummary(tts.console),
     // These two had no summary at all before (review finding style.css:822).
@@ -11492,10 +11849,65 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
 }
 
 // What a folded 音色库 row says: the voice by its fetched title, else the head of its id, and the language.
+// An entry heard only through GPT-SoVITS says so instead of an id nobody typed.
 function ttsLibraryRowMeta(voice) {
   const id = String(voice.voiceId ?? '');
-  const heard = voice.title || (id ? `${id.slice(0, 8)}…` : '没填 Voice ID');
-  return voice.lang ? `${heard} · ${languageLabel(voice.lang)}` : heard;
+  const gsv = Boolean(voice.gsv?.refAudioPath);
+  const heard = voice.title || (id && !isGsvVoiceId(id) ? `${id.slice(0, 8)}…` : gsv ? '' : '没填 Voice ID');
+  const parts = [heard, gsv ? 'GPT-SoVITS' : '', voice.lang ? languageLabel(voice.lang) : ''].filter(Boolean);
+  return parts.join(' · ');
+}
+
+// GPT-SoVITS's languages for a reference clip, in the reader's words.
+const GSV_LANGUAGE_LABELS = Object.freeze({ zh: '中文', ja: '日语', en: '英语', ko: '韩语', yue: '粤语', auto: '自动' });
+
+/** One 音色库 entry's GPT-SoVITS voice: its clip, the words in it, their language, its models, 试听. */
+function ttsLibraryGsvElement(doc, gsv = null) {
+  const block = doc.createElement('div');
+  block.className = 'jy-tts-library-gsv';
+  const head = doc.createElement('span');
+  head.className = 'jy-label jy-tts-library-gsv-head';
+  head.textContent = 'GPT-SoVITS';
+  const field = (key, placeholder) => {
+    const input = doc.createElement('input');
+    input.type = 'text';
+    input.spellcheck = false;
+    input.placeholder = placeholder;
+    input.dataset.jyTtsLibraryGsv = key;
+    input.value = gsv?.[key] ?? '';
+    return input;
+  };
+  const lang = doc.createElement('select');
+  lang.dataset.jyTtsLibraryGsv = 'promptLang';
+  lang.setAttribute('aria-label', '参考音频语言');
+  for (const code of GSV_LANGUAGES) {
+    const option = doc.createElement('option');
+    option.value = code;
+    option.textContent = GSV_LANGUAGE_LABELS[code] ?? code;
+    lang.appendChild(option);
+  }
+  lang.value = gsv?.promptLang || 'zh';
+  const audition = doc.createElement('button');
+  audition.type = 'button';
+  audition.className = 'jy-button';
+  audition.dataset.jyAction = 'tts-gsv-audition';
+  audition.textContent = '试听';
+  block.append(
+    head,
+    field('refAudioPath', '参考音频的完整路径（3~10 秒）'),
+    field('promptText', '参考音频的文字，一字不差'),
+    lang,
+    field('gptWeights', 'GPT 模型 .ckpt（可不填）'),
+    field('sovitsWeights', 'SoVITS 模型 .pth（可不填）'),
+    audition,
+  );
+  return block;
+}
+
+/** What a 音色库 row's GPT-SoVITS fields hold, as the settings keep it. */
+function readLibraryGsv(row) {
+  const value = key => row?.querySelector(`[data-jy-tts-library-gsv="${key}"]`)?.value ?? '';
+  return { refAudioPath: value('refAudioPath'), promptText: value('promptText'), promptLang: value('promptLang'), gptWeights: value('gptWeights'), sovitsWeights: value('sovitsWeights') };
 }
 
 /**
@@ -11536,10 +11948,11 @@ function ttsLibraryRowElement(doc, voice, { open = false } = {}) {
   name.value = voice.name ?? '';
   const id = doc.createElement('input');
   id.type = 'text';
-  id.placeholder = 'Fish Voice ID';
+  id.placeholder = 'Fish Voice ID（只用 GPT-SoVITS 可以不填）';
   id.spellcheck = false;
   id.dataset.jyTtsLibraryId = '';
-  id.value = voice.voiceId ?? '';
+  // The id an entry heard only through GPT-SoVITS is bound by is the extension's own, not one to type.
+  id.value = isGsvVoiceId(voice.voiceId) ? '' : (voice.voiceId ?? '');
   const lang = ttsLanguageSelect(doc, voice.lang || 'zh');
   lang.dataset.jyTtsLibraryLang = '';
   delete lang.dataset.jyTtsLangCode;
@@ -11553,7 +11966,7 @@ function ttsLibraryRowElement(doc, voice, { open = false } = {}) {
   remove.textContent = '移除';
   const body = doc.createElement('div');
   body.className = 'jy-tts-library-body';
-  body.append(name, id, lang, title, remove);
+  body.append(name, id, lang, title, remove, ttsLibraryGsvElement(doc, voice.gsv));
   row.append(summary, body);
   return row;
 }
@@ -11595,6 +12008,7 @@ function syncTtsPickers(root, settings = runtime.settings) {
 }
 
 function updateTtsProxyHelp(root) {
+  updateGsvProxyHelp(root);
   const proxy = root.querySelector('[data-jy-tts-fish="viaProxy"]');
   const help = root.querySelector('[data-jy-tts-proxy-help]');
   if (!help) return;
@@ -11607,6 +12021,22 @@ function updateTtsProxyHelp(root) {
   help.textContent = proxy?.checked !== false
     ? 'api.fish.audio 不允许浏览器直接访问，请求要经酒馆服务端转发。第一次用之前，在酒馆目录的 config.yaml 里把 enableCorsProxy 改成 true，然后重启酒馆。Key 只发给你自己的酒馆和 Fish。'
     : '直连只适合允许跨域访问的中转地址或本地 fish-speech 服务。填官方地址直连会被浏览器拦下。';
+}
+
+// The same line for GPT-SoVITS, which sends no CORS headers either.
+function updateGsvProxyHelp(root) {
+  const proxy = root.querySelector('[data-jy-tts-gsv="viaProxy"]');
+  const help = root.querySelector('[data-jy-tts-gsv-proxy-help]');
+  if (!help) return;
+  if (detectTtsHost() === 'tauritavern') {
+    if (proxy) proxy.disabled = true;
+    help.textContent = '你在 TauriTavern 里：它没有酒馆那条 CORS 代理，这个开关不起作用，请求会直接发出去。GPT-SoVITS 自己不带跨域头，「接口地址」要填一个带跨域头的转发地址。';
+    return;
+  }
+  if (proxy) proxy.disabled = false;
+  help.textContent = proxy?.checked !== false
+    ? 'GPT-SoVITS 不带跨域头，请求经酒馆服务端转发，和 Fish 一样要在酒馆目录的 config.yaml 里把 enableCorsProxy 改成 true（已经为 Fish 改过就不用再改）。'
+    : '直连只适合你自己给 GPT-SoVITS 加了跨域头，或者填的是带跨域头的转发地址；否则会被浏览器拦下。';
 }
 
 function formatBytes(bytes) {
@@ -11667,6 +12097,13 @@ function syncTtsFields(root, settings = runtime.settings, { renderLists = true }
     if (element.type === 'checkbox') element.checked = value === true;
     else element.value = value ?? '';
   }
+  for (const element of root.querySelectorAll('[data-jy-tts-gsv]')) {
+    const value = tts.gsv[element.dataset.jyTtsGsv];
+    if (element.type === 'checkbox') element.checked = value === true;
+    else element.value = value ?? '';
+  }
+  // 声音来源: only the chosen provider's card and parameters are on the page.
+  for (const card of root.querySelectorAll('[data-jy-tts-provider-card]')) card.hidden = card.dataset.jyTtsProviderCard !== tts.provider;
   for (const element of root.querySelectorAll('[data-jy-tts-context]')) {
     const value = tts.context[element.dataset.jyTtsContext];
     if (element.type === 'checkbox') element.checked = value === true;
@@ -11764,7 +12201,7 @@ function syncTtsFeatureVisibility(root, settings = runtime.settings) {
 function collectTtsFields(root, current) {
   if (!root.querySelector('[data-jy-page="tts"]')) return;
   const previous = ttsSettings(current);
-  const next = { ...previous, fish: { ...previous.fish } };
+  const next = { ...previous, fish: { ...previous.fish }, gsv: { ...previous.gsv } };
   for (const element of root.querySelectorAll('[data-jy-tts-field]')) {
     const key = element.dataset.jyTtsField;
     if (key === 'mode' && element.type === 'checkbox') {
@@ -11787,6 +12224,12 @@ function collectTtsFields(root, current) {
     else if (TTS_NUMERIC_FISH_FIELDS.has(key)) next.fish[key] = Number(element.value);
     else next.fish[key] = element.value.trim();
   }
+  for (const element of root.querySelectorAll('[data-jy-tts-gsv]')) {
+    const key = element.dataset.jyTtsGsv;
+    if (element.type === 'checkbox') next.gsv[key] = element.checked;
+    else if (TTS_NUMERIC_GSV_FIELDS.has(key)) next.gsv[key] = Number(element.value);
+    else next.gsv[key] = element.value.trim();
+  }
   next.context = { ...previous.context };
   for (const element of root.querySelectorAll('[data-jy-tts-context]')) {
     const key = element.dataset.jyTtsContext;
@@ -11804,12 +12247,16 @@ function collectTtsFields(root, current) {
   current.tts = normalizeTts(next);
   const libraryRows = [...root.querySelectorAll('[data-jy-tts-library-row]')].map(row => {
     const voiceId = row.querySelector('[data-jy-tts-library-id]')?.value.trim() ?? '';
+    // A new row keeps the handle it is first saved under: an entry heard only through GPT-SoVITS is
+    // bound by an id made from it, and a row saved again while still open must not get another.
+    if (!row.dataset.id) row.dataset.id = `voice-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     return {
-      id: row.dataset.id || `voice-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      id: row.dataset.id,
       name: row.querySelector('[data-jy-tts-library-name]')?.value ?? '',
       voiceId,
       lang: row.querySelector('[data-jy-tts-library-lang]')?.value ?? '',
       title: voiceId === row.dataset.voiceId ? row.dataset.title : '',
+      gsv: readLibraryGsv(row),
     };
   });
   if (root.querySelector('[data-jy-tts-library]')) current.voiceLibrary = normalizeVoiceLibrary(libraryRows);
@@ -13776,6 +14223,29 @@ function createControlCenter(rootDocument = document) {
         const hint = result.credit === 0 && ttsSettings().fish.model !== 's2.1-pro-free' ? '余额为 0，除了 s2.1-pro-free 以外的模型会返回余额不足。' : '';
         setText(root, '[data-jy-tts-save-note]', `Fish 连接正常。${credit}${hint}`);
         toast(hint ? 'warning' : 'success', `Fish 连接正常。${credit}${hint}`);
+      } else if (action === 'tts-test-gsv') {
+        saveSettings(collectSettings(root));
+        setText(root, '[data-jy-tts-gsv-note]', '正在连接 GPT-SoVITS…');
+        try {
+          const result = await testGsvConnection(runtime.settings);
+          const line = `GPT-SoVITS 连接正常${result.version ? `（${result.version}）` : ''}。${result.sampled ? `默认音色试读了一句（${result.seconds.toFixed(1)} 秒）。` : '默认音色还没填参考音频，填好再点一次就能听到。'}`;
+          setText(root, '[data-jy-tts-gsv-note]', line);
+          toast('success', line);
+        } catch (error) {
+          setText(root, '[data-jy-tts-gsv-note]', safeError(error));
+          throw error;
+        }
+      } else if (action === 'tts-gsv-audition') {
+        saveSettings(collectSettings(root));
+        const row = button.closest('[data-jy-tts-library-row]');
+        const voice = normalizeGsvVoice(readLibraryGsv(row));
+        const label = button.textContent;
+        button.textContent = '生成中…';
+        try {
+          await auditionGsvVoice(voice, runtime.settings, { lang: row?.querySelector('[data-jy-tts-library-lang]')?.value ?? '' });
+        } finally {
+          button.textContent = label;
+        }
       } else if (action === 'tts-add-mark') {
         const list = button.closest('.jy-tts-marks-fold')?.querySelector('[data-jy-marks]');
         if (list) list.appendChild(markRowElement(list.ownerDocument)).querySelector('[data-jy-mark-punct]')?.focus();
@@ -14047,8 +14517,9 @@ function createControlCenter(rootDocument = document) {
           tts.narratorVoice, tts.dialogueVoice, ...Object.values(tts.narratorVoices),
           ...ttsVoicesFor(snapshot).flatMap(item => [item.voiceId, ...Object.values(item.voices ?? {})]),
           ...normalizeVoiceLibrary(snapshot.voiceLibrary).map(item => item.voiceId),
-        ].filter(Boolean))];
-        if (!ids.length) throw new Error('还没有填任何 Voice ID。');
+        // GPT-SoVITS-only voices have no Fish page to name them; their library name is their name.
+        ].filter(id => id && !isGsvVoiceId(id)))];
+        if (!ids.length) throw new Error('还没有填任何 Fish 的 Voice ID。');
         const titles = new Map();
         const failures = [];
         for (const id of ids) {
@@ -14467,7 +14938,7 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="intimate"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="intimate"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"], [data-jy-tts-field="provider"], [data-jy-tts-gsv="viaProxy"]')) {
       // twinField() above already carried the new value onto every other copy of this same field
       // (deepChannelId/mode/enabled all live on 微调 or 翻译台 too, DESIGN §15.2/§15.3).
       try {
@@ -14540,12 +15011,12 @@ function createControlCenter(rootDocument = document) {
       const label = event.target.closest('[data-jy-tts-library-row]')?.querySelector('[data-jy-tts-library-summary-name]');
       if (label) label.textContent = event.target.value.trim() || '（未命名）';
     }
-    if (event.target.matches('[data-jy-tts-library-id], [data-jy-tts-library-lang]')) {
+    if (event.target.matches('[data-jy-tts-library-id], [data-jy-tts-library-lang], [data-jy-tts-library-gsv="refAudioPath"]')) {
       const row = event.target.closest('[data-jy-tts-library-row]');
       const meta = row?.querySelector('.jy-tts-voice-summary-meta');
       const voiceId = row?.querySelector('[data-jy-tts-library-id]')?.value.trim() ?? '';
       // The fetched title belongs to the id it was fetched for.
-      if (meta) meta.textContent = ttsLibraryRowMeta({ voiceId, title: voiceId === row.dataset.voiceId ? row.dataset.title : '', lang: row.querySelector('[data-jy-tts-library-lang]')?.value ?? '' });
+      if (meta) meta.textContent = ttsLibraryRowMeta({ voiceId, title: voiceId === row.dataset.voiceId ? row.dataset.title : '', lang: row.querySelector('[data-jy-tts-library-lang]')?.value ?? '', gsv: readLibraryGsv(row) });
     }
     if (event.target.matches('[data-jy-field="coloringVividness"]')) {
       const percent = Number(event.target.value);
@@ -15875,12 +16346,16 @@ async function openMiniWindow() {
   };
   // 唱 follows the text: pressed while it opens on [singing]. S1 cannot sing, so there it is off.
   const syncSing = () => {
-    const s1 = ttsSettings().fish.model === 's1';
-    singChip.disabled = s1;
-    singChip.title = s1
-      ? 's1 不能唱。换成 S2 系列模型（s2-pro、s2.1-pro 等）才能用'
-      : '整句用 Fish 的 [singing] 唱出来：带旋律感地念，不会照某首歌的曲调唱。按下时去掉这句的其他标签，再按一次取消';
-    singChip.setAttribute('aria-pressed', !s1 && isSungText(fishInput.value) ? 'true' : 'false');
+    const tts = ttsSettings();
+    const gsv = tts.provider === 'gsv';
+    const s1 = !gsv && tts.fish.model === 's1';
+    singChip.disabled = s1 || gsv;
+    singChip.title = gsv
+      ? 'GPT-SoVITS 不能唱，只有 Fish 的 S2 系列模型能唱'
+      : s1
+        ? 's1 不能唱。换成 S2 系列模型（s2-pro、s2.1-pro 等）才能用'
+        : '整句用 Fish 的 [singing] 唱出来：带旋律感地念，不会照某首歌的曲调唱。按下时去掉这句的其他标签，再按一次取消';
+    singChip.setAttribute('aria-pressed', !s1 && !gsv && isSungText(fishInput.value) ? 'true' : 'false');
   };
   const toggleSing = () => {
     fishInput.value = isSungText(fishInput.value) ? unsungText(fishInput.value) : singingText(fishInput.value);
@@ -15994,6 +16469,13 @@ async function openMiniWindow() {
     }
     summary.hidden = !lines.length;
     fishInput.value = data.override?.text ?? data.text;
+    // What the box holds is what the provider hears: GPT-SoVITS gets the words alone.
+    const fieldLabel = fishInput.closest('.jy-mini-inspect-field')?.querySelector('.jy-label');
+    if (fieldLabel) {
+      fieldLabel.textContent = ttsSettings().provider === 'gsv'
+        ? '发给 GPT-SoVITS 的内容（它只读字，方括号里的标签会被去掉）'
+        : '发给 Fish 的内容（方括号里是情绪、停顿、强调标签，可以直接改、直接插）';
+    }
     speedInput.value = data.override?.speed ?? data.prosody.speed;
     volumeInput.value = data.override?.volume ?? data.prosody.volume;
     tensionInput.value = data.override?.tension ?? data.tension ?? '';
@@ -16181,7 +16663,7 @@ async function openMiniWindow() {
       tools.className = 'jy-mini-sentence-tools';
       const actions = muted
         ? [['sentence-edit', '详细', '看这一句为什么不读']]
-        : [['sentence-play', '播放', '从这句读'], ['sentence-regen', '重新生成', '丢掉这句的音频，再向 Fish 要一次'], ['tts-save-pick', '缓存', '缓存这一段或者整篇到本地'], ['sentence-edit', '详细', '看这句发给 Fish 的内容，改了再生成']];
+        : [['sentence-play', '播放', '从这句读'], ['sentence-regen', '重新生成', `丢掉这句的音频，再向 ${ttsProviderName(ttsSettings())} 要一次`], ['tts-save-pick', '缓存', '缓存这一段或者整篇到本地'], ['sentence-edit', '详细', `看这句发给 ${ttsProviderName(ttsSettings())} 的内容，改了再生成`]];
       for (const [action, label, title] of actions) {
         const tool = document.createElement('button');
         tool.type = 'button';
@@ -18275,7 +18757,7 @@ function apiTtsSettings() {
   const tts = ttsSettings(settings);
   if (!runtime.initialized) throw new Error('镜译还没启动完，稍后再试。');
   if (!tts.enabled) throw new Error('用户没有打开镜译的朗读功能。');
-  if (!tts.fish.key) throw new Error('用户还没有在镜译里填 Fish Audio 的 API Key。');
+  if (tts.provider !== 'gsv' && !tts.fish.key) throw new Error('用户还没有在镜译里填 Fish Audio 的 API Key。');
   return { settings, tts };
 }
 
@@ -18372,7 +18854,7 @@ function apiSession(floor, items, settings, { play, signal, speaker = '' }) {
           },
         });
         if (outcome === 'blocked') throw new Error('浏览器要先点一下页面才肯出声。');
-        if (outcome === 'error') throw new Error('浏览器播放这段音频失败。换成 mp3 格式通常能解决。');
+        if (outcome === 'error') throw new Error(ttsPlaybackFailure(ttsSettings(settings)));
         if (outcome === 'stopped' || state.stopped) break;
         index = ahead + 1;
       }
@@ -18398,16 +18880,16 @@ function apiSession(floor, items, settings, { play, signal, speaker = '' }) {
     get index() { return state.index; },
     get total() { return state.total; },
     get cached() { return state.cached; },
-    get format() { return ttsSettings(settings).fish.format; },
+    get format() { return ttsAudioFormat(ttsSettings(settings)); },
     done,
     /** Everything this reading said, as one audio file. Await `done` first, or you get what is ready. */
     async blob() {
       if (!records.length) throw new Error('还没有生成好的音频。');
-      return ttsDownloadBlob(records, ttsSettings(settings).fish.format);
+      return ttsDownloadBlob(records, ttsAudioFormat(ttsSettings(settings)));
     },
     /** The same file, handed to the browser as a download. One line, no plumbing. */
     async download(name = '') {
-      const format = ttsSettings(settings).fish.format;
+      const format = ttsAudioFormat(ttsSettings(settings));
       const extension = format === 'opus' ? 'ogg' : format;
       const blob = await this.blob();
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
@@ -18494,9 +18976,10 @@ function installPublicApi() {
         const tts = ttsSettings();
         return {
           enabled: tts.enabled === true,
-          provider: 'fish',
-          hasKey: Boolean(tts.fish.key),
-          model: tts.fish.model,
+          provider: tts.provider,
+          // GPT-SoVITS runs on the reader's machine and needs no key; ready means as much as Fish's key does.
+          hasKey: tts.provider === 'gsv' ? true : Boolean(tts.fish.key),
+          model: tts.provider === 'gsv' ? 'gpt-sovits' : tts.fish.model,
           voices: ttsVoicesFor().filter(row => row.voiceId).length,
           busy: Boolean(runtime.tts.transport && runtime.tts.transport.state !== 'idle'),
         };
@@ -18691,6 +19174,7 @@ export const __testing = Object.freeze({
   ensureTtsRecording,
   resolveTtsEntry,
   findTtsEntry,
+  testGsvConnection,
   pregenerateTtsFloor,
   ttsInspect,
   saveTtsOverride,

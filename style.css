@@ -741,13 +741,22 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-tts-lang-block .jy-row-between { align-items: center; margin-bottom: 4px; }
 .jy-tts-lang-block .jy-label { margin: 0; }
 .jy-tts-library { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
-.jy-tts-library-body { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr) 92px auto; grid-template-areas: "name id lang remove" "title title title title"; gap: 6px; align-items: center; padding: 2px 0 12px 14px; }
+.jy-tts-library-body { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr) 92px auto; grid-template-areas: "name id lang remove" "title title title title" "gsv gsv gsv gsv"; gap: 6px; align-items: center; padding: 2px 0 12px 14px; }
 .jy-tts-library-body [data-jy-tts-library-name] { grid-area: name; }
 .jy-tts-library-body [data-jy-tts-library-id] { grid-area: id; font-family: Consolas, ui-monospace, monospace; }
 .jy-tts-library-body [data-jy-tts-library-lang] { grid-area: lang; }
 .jy-tts-library-body .jy-tts-title { grid-area: title; font-size: 11.5px; }
 .jy-tts-library-body .jy-tts-title:empty { display: none; }
 .jy-tts-library-body [data-jy-action="tts-remove-library"] { grid-area: remove; }
+/* DESIGN §17.14: an entry's GPT-SoVITS voice, under its Fish id: clip, words and language, then the two models and 试听. */
+.jy-tts-library-gsv { grid-area: gsv; display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr) 92px; grid-template-areas: "head head head" "ref text lang" "gpt sovits audition"; gap: 6px; align-items: center; padding-top: 6px; border-top: 1px solid var(--jy-line-soft); }
+.jy-tts-library-gsv-head { grid-area: head; margin: 0; }
+.jy-tts-library-gsv [data-jy-tts-library-gsv="refAudioPath"] { grid-area: ref; }
+.jy-tts-library-gsv [data-jy-tts-library-gsv="promptText"] { grid-area: text; }
+.jy-tts-library-gsv [data-jy-tts-library-gsv="promptLang"] { grid-area: lang; }
+.jy-tts-library-gsv [data-jy-tts-library-gsv="gptWeights"] { grid-area: gpt; }
+.jy-tts-library-gsv [data-jy-tts-library-gsv="sovitsWeights"] { grid-area: sovits; }
+.jy-tts-library-gsv [data-jy-action="tts-gsv-audition"] { grid-area: audition; }
 .jy-behaviors .jy-inline-field input[type="number"] { width: 64px; }
 .jy-behaviors > .jy-label { margin: 0; align-self: center; }
 @media (max-width: 640px) {
@@ -755,7 +764,8 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
   .jy-tts-voice-row .jy-tts-lock { justify-self: start; }
   .jy-tts-lang-row { grid-template-columns: 78px minmax(0,1fr) auto; }
   .jy-tts-lang-row.jy-tts-mood-row { grid-template-columns: 96px minmax(0,1fr) auto; }
-  .jy-tts-library-body { grid-template-columns: minmax(0,1fr) 92px; grid-template-areas: "name lang" "id id" "title remove"; }
+  .jy-tts-library-body { grid-template-columns: minmax(0,1fr) 92px; grid-template-areas: "name lang" "id id" "title remove" "gsv gsv"; }
+  .jy-tts-library-gsv { grid-template-columns: minmax(0,1fr) 92px; grid-template-areas: "head head" "ref ref" "text lang" "gpt gpt" "sovits audition"; }
   .jy-tts-pick select { width: 44%; }
 }
 

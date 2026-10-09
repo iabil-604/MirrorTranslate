@@ -12,6 +12,7 @@ import {
   withoutSpeechMarks,
 } from '../core.js';
 import { __testing, interceptGeneration } from '../index.js';
+import { encodeWav } from '../tts.js';
 
 // One answer in one SSE frame: how the host's generate endpoint replies to a streamed request.
 function sseAnswer(text) {
@@ -628,6 +629,177 @@ test('唱: a sentence set to sing goes to Fish as [singing] in the character\'s 
   await __testing.saveTtsOverride(0, 2, { text: '[singing] 好热！' });
   assert.equal(calls.at(-1).body.text, '好热！');
   assert.equal(s1.tts.fish.model, 's1');
+});
+
+// A GPT-SoVITS stand-in, as its api_v2.py answers: /tts with a wav that lasts a tenth of a second per
+// character (a language no version has is refused with the version in the reason), the model routes with
+// success. Every call is kept, its url as sent and its body. `fail` may answer a call instead.
+function mockGsv({ fail = null } = {}) {
+  const calls = [];
+  const toSubModel = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('chat-completions/generate') && toSubModel) return toSubModel(url, init);
+    const body = init?.body ? JSON.parse(init.body) : null;
+    calls.push({ url: String(url), init, body });
+    const failure = fail?.(String(url), body, calls.length);
+    if (failure) return new Response(failure.body ?? '', { status: failure.status });
+    if (/set_(gpt|sovits)_weights/.test(String(url))) return new Response('{"message":"success"}', { status: 200 });
+    if (body?.text_lang === 'xx') return new Response(JSON.stringify({ message: 'text_lang: xx is not supported in version v2' }), { status: 400 });
+    const seconds = Math.max(1, [...String(body?.text ?? '')].length) * 0.1;
+    return new Response(encodeWav([new Float32Array(Math.round(32000 * seconds)).fill(0.25)], 32000), { status: 200 });
+  };
+  return calls;
+}
+
+// The page's <audio>, for the one line 「测试连接」 and 「试听」 play.
+function stubAudio(t) {
+  const before = globalThis.Audio;
+  const played = [];
+  globalThis.Audio = class {
+    constructor(src) { this.src = src; }
+    addEventListener() {}
+    pause() {}
+    play() { played.push(this.src); return Promise.resolve(); }
+  };
+  t.after(() => { globalThis.Audio = before; });
+  return played;
+}
+
+const weightsOf = call => new URL(decodeURIComponent(call.url.slice('/proxy/'.length))).searchParams.get('weights_path');
+
+test('GPT-SoVITS: a sentence per request in the voice bound to it, the models switched only when they change, and Fish never asked', async t => {
+  restoreGlobals(t);
+  const played = stubAudio(t);
+  const { context } = mockHost('tts-gsv');
+  const gsv = { refAudioPath: 'D:\\refs\\narrator.wav', promptText: '旁白的参考音频。', promptLang: 'zh', gptWeights: 'D:\\base.ckpt', sovitsWeights: 'D:\\base.pth' };
+  const taro = { id: 'voice-taro', name: '泰罗', voiceId: '', gsv: { refAudioPath: 'D:\\refs\\taro.wav', promptText: 'なんで来た？', promptLang: 'ja', gptWeights: 'D:\\taro.ckpt', sovitsWeights: 'D:\\taro.pth' } };
+  const settings = __testing.configureForTest({
+    settings: {
+      tts: { enabled: true, mode: 'off', provider: 'gsv', narratorVoice: '0123456789abcdef0123456789abcdef', dialogueVoice: '', fish: { key: '' }, gsv },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'gsv-voice-taro' }] },
+      voiceLibrary: [taro],
+    },
+  });
+  context.chat.push(await translatedFloor(
+    '青い空。\n\n「なんで来た？」\n\n泰羅はカップを置いた。',
+    [[1, '蓝蓝的天空。'], [2, '「你怎么来了？」'], [3, '泰罗放下了杯子。']],
+    settings,
+    { 2: { speaker: '泰罗', emotion: '惊讶', intensity: 1 } },
+  ));
+  const calls = mockGsv();
+
+  // 测试连接: the version from the refusal, then one line in the default voice, its models loaded first.
+  const tested = await __testing.testGsvConnection(settings);
+  assert.equal(tested.version, 'v2');
+  assert.equal(tested.sampled, true);
+  assert.equal(played.length, 1);
+  assert.equal(calls[0].url, '/proxy/http://127.0.0.1:9880/tts');
+  assert.equal(calls[0].init.headers['X-CSRF-Token'], 'host-token', 'through the proxy the host\'s token goes along');
+  assert.deepEqual(calls.slice(1, 3).map(weightsOf), ['D:\\base.ckpt', 'D:\\base.pth']);
+  assert.ok(calls[1].url.startsWith('/proxy/http://127.0.0.1:9880/set_gpt_weights%3F'));
+  assert.equal(calls[3].body.ref_audio_path, 'D:\\refs\\narrator.wav');
+  calls.length = 0;
+
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.deepEqual(items.map(item => item.voiceId), ['0123456789abcdef0123456789abcdef', 'gsv-voice-taro', '0123456789abcdef0123456789abcdef']);
+  assert.ok(items.every(item => typeof item.voiceTag === 'string'));
+
+  // One recording of the whole floor: the narrator's two sentences first (their models are loaded),
+  // then 泰罗's, after his models; the recording itself in reading order.
+  const { record, cached } = await __testing.ensureTtsRecording(floor, 'floor:all', items, settings);
+  assert.equal(cached, false);
+  assert.ok(calls.every(call => !call.url.includes('fish.audio')), 'no key, no Fish');
+  const said = calls.filter(call => call.url.endsWith('/tts')).map(call => call.body.text);
+  assert.deepEqual(said, ['蓝蓝的天空。', '泰罗放下了杯子。', '你怎么来了？']);
+  assert.deepEqual(calls.filter(call => call.url.includes('weights')).map(weightsOf), ['D:\\taro.ckpt', 'D:\\taro.pth']);
+  const spoken = calls.find(call => call.body?.text === '你怎么来了？').body;
+  assert.equal(spoken.ref_audio_path, 'D:\\refs\\taro.wav');
+  assert.equal(spoken.prompt_text, 'なんで来た？');
+  assert.equal(spoken.prompt_lang, 'ja');
+  assert.equal(spoken.text_lang, 'zh');
+  assert.equal(record.parts.length, 3);
+  assert.ok(record.parts.every(part => part.blob.type === 'audio/wav'));
+  assert.deepEqual(record.timeline.map(entry => [entry.id, entry.part, entry.start]), [[1, 0, 0], [2, 1, 0], [3, 2, 0]]);
+  assert.equal(record.timeline[1].end, record.parts[1].duration);
+  assert.equal(record.parts[1].duration, 0.6, '「你怎么来了？」: six characters, a tenth of a second each');
+
+  // Found again rather than made again; a clip changed behind 泰罗's id is his alone to make anew.
+  assert.equal((await __testing.resolveTtsEntry(floor, items, items[1], settings)).cached, true);
+  const angry = __testing.configureForTest({ settings: { voiceLibrary: [{ ...taro, gsv: { ...taro.gsv, refAudioPath: 'D:\\refs\\taro-angry.wav' } }] } });
+  const again = (await __testing.ttsItemsFor(floor, segments, angry)).items;
+  assert.equal(await __testing.findTtsEntry(floor, again[1], angry), null);
+  assert.ok(await __testing.findTtsEntry(floor, again[0], angry));
+  __testing.configureForTest({ settings: { voiceLibrary: [taro] } });
+
+  // Saved as one wav: the parts' samples under one header.
+  const saved = await __testing.downloadTtsAudio({ messageId: 0, scope: 'floor' });
+  assert.match(saved.name, /\.wav$/);
+  assert.equal(saved.blob.type, 'audio/wav');
+
+  // Fish, with 泰罗 bound only to a clip: he reads in the dialogue default, never as an id Fish has not heard of.
+  const fish = __testing.configureForTest({ settings: { tts: { ...settings.tts, provider: 'fish', dialogueVoice: 'voice-default', fish: { key: 'sk-test' } } } });
+  const fishItems = (await __testing.ttsItemsFor(floor, segments, fish)).items;
+  assert.equal(fishItems[1].voiceId, 'voice-default');
+  assert.equal(fishItems[1].voiceTag, undefined);
+  __testing.configureForTest({ settings: { tts: settings.tts } });
+});
+
+test('a sentence rewritten under Fish is made again in its GPT-SoVITS voice once the reading switches, and kept for Fish', async t => {
+  restoreGlobals(t);
+  stubAudio(t);
+  const { context } = mockHost('tts-gsv-override');
+  const settings = __testing.configureForTest({
+    settings: {
+      tts: { enabled: true, mode: 'off', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH, gsv: { refAudioPath: 'D:\\refs\\narrator.wav', promptLang: 'zh' } },
+      ttsVoices: {}, voiceLibrary: [],
+    },
+  });
+  context.chat.push(await translatedFloor('風。\n\n「暑い！」', [[1, '风停了。'], [2, '「好热！」']], settings, { 2: { speaker: '泰罗', emotion: 'happy' } }));
+  const fishCalls = mockFish();
+  await __testing.saveTtsOverride(0, 2, { text: '[sad] 好热……' });
+  assert.equal(fishCalls.length, 1);
+
+  const gsv = __testing.configureForTest({ settings: { tts: { ...settings.tts, provider: 'gsv' } } });
+  const calls = mockGsv();
+  const floor = await __testing.collectTtsFloor(0, gsv);
+  const { segments } = await __testing.prepareTtsSegments(floor, gsv);
+  const { items } = await __testing.ttsItemsFor(floor, segments, gsv);
+  assert.equal(await __testing.findTtsEntry(floor, items[1], gsv), null, 'Fish\'s take is not this voice');
+  const made = await __testing.resolveTtsEntry(floor, items, items[1], gsv);
+  assert.equal(made.cached, false);
+  assert.equal(calls.find(call => call.url.endsWith('/tts')).body.text, '好热……', 'the reader\'s words, without the tag');
+
+  const back = __testing.configureForTest({ settings: { tts: { ...settings.tts, provider: 'fish' } } });
+  const fishItems = (await __testing.ttsItemsFor(floor, segments, back)).items;
+  assert.ok(await __testing.findTtsEntry(floor, fishItems[1], back), 'back on Fish, its own take is still there');
+});
+
+test('GPT-SoVITS failures: its own refusal is answered once, a server that is not there is asked again, and nothing reads without a clip', async t => {
+  restoreGlobals(t);
+  stubAudio(t);
+  const { context } = mockHost('tts-gsv-errors');
+  const settings = __testing.configureForTest({
+    settings: { tts: { enabled: true, mode: 'off', provider: 'gsv', narratorVoice: '', dialogueVoice: '', gsv: { refAudioPath: 'D:\\refs\\missing.wav', retries: 1 } }, ttsVoices: {}, voiceLibrary: [] },
+  });
+  context.chat.push(await translatedFloor('風。', [[1, '风停了。']], settings));
+  const floor = await __testing.collectTtsFloor(0, settings);
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+
+  let calls = mockGsv({ fail: url => (url.endsWith('/tts') ? { status: 400, body: JSON.stringify({ message: 'tts failed', Exception: "Error opening 'D:\\\\refs\\\\missing.wav': System error." }) } : null) });
+  await assert.rejects(__testing.ensureTtsRecording(floor, 'line:1', items, settings), /读不到参考音频/);
+  assert.equal(calls.filter(call => call.url.endsWith('/tts')).length, 1, 'GPT-SoVITS said why; asking again would hear the same');
+
+  calls = mockGsv({ fail: () => ({ status: 500, body: 'Internal Server Error' }) });
+  await assert.rejects(__testing.ensureTtsRecording(floor, 'line:1', items, settings), /连不上 GPT-SoVITS/);
+  assert.equal(calls.filter(call => call.url.endsWith('/tts')).length, 2, 'asked once more, as the settings allow');
+
+  const bare = __testing.configureForTest({ settings: { tts: { ...settings.tts, gsv: { refAudioPath: '' } } } });
+  calls = mockGsv();
+  await assert.rejects(__testing.ensureTtsRecording(floor, 'line:1', (await __testing.ttsItemsFor(floor, segments, bare)).items, bare), /没有能用的 GPT-SoVITS 音色/);
+  assert.equal(calls.length, 0);
 });
 
 test('the latest floor is made in the background, paragraph by paragraph in the stream, and never twice', async t => {
