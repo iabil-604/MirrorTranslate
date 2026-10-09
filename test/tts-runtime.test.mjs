@@ -3515,6 +3515,43 @@ test('with GPT-SoVITS reading the floors, tts.stream still reads in the voice ch
   assert.deepEqual(calls.map(call => call.body.reference_id), ['voice-sakurai', 'voice-default']);
 });
 
+test('tts.stop leaves a floor being read alone; with all: true everything 镜译 is saying stops', async t => {
+  restoreGlobals(t);
+  const { context } = mockHost('tts-api-stop-all');
+  const settings = __testing.configureForTest({
+    initialized: true,
+    settings: { tts: { enabled: true, mode: 'off', narratorVoice: 'voice-narrator', fish: FISH } },
+  });
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  context.chat.push(await translatedFloor('一つの文。', [[1, '第一段中文。']], settings));
+  mockFish();
+  const audio = mockAudioHeld();
+  t.after(audio.restore);
+  const createUrl = URL.createObjectURL;
+  let urls = 0;
+  URL.createObjectURL = () => `blob:take-${urls += 1}`;
+  t.after(() => { URL.createObjectURL = createUrl; });
+  __testing.installPublicApi();
+  t.after(() => { delete globalThis.__JINGYI__; });
+  const api = globalThis.__JINGYI__;
+
+  const transport = await __testing.createTtsTransport(0, { single: false });
+  void __testing.runTtsTransport(transport);
+  assert.ok(await waitFor(() => transport.state === 'playing'), 'the floor is being read');
+
+  // An app stopping what it said itself does not cut the reader's floor off.
+  assert.equal(api.tts.stop(), false);
+  assert.equal(__testing.ttsTransport(), transport);
+  assert.equal(transport.state, 'playing');
+  assert.equal(audio.pauses.count, 0, 'the shared player was left to the floor');
+
+  // An app about to speak on its own asks for silence: the floor stops.
+  assert.equal(api.tts.stop({ all: true }), true);
+  assert.equal(__testing.ttsTransport(), null);
+  assert.ok(audio.pauses.count > 0, 'the floor went quiet');
+  assert.equal(api.tts.stop({ all: true }), false, 'nothing left to stop');
+});
+
 // A stand-in AudioContext for the live (边收边放) player: every buffer it is handed is kept, and each
 // source ends on the next turn, as if it had been heard at once.
 function liveAudioContext() {
