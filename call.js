@@ -1,4 +1,4 @@
-// 通话测试（测试版）: a phone call with the current character.
+// 通话测试: a phone call with the current character.
 //
 // The reader dials, the character answers first, and from then on the reader holds a button to talk (or
 // types, when speech input is not set up). Each answer is asked of a model as a stream and handed to the
@@ -545,7 +545,7 @@ export function createCall({ describe, ask, speak, listen, history, now = () => 
 }
 
 // ---------------------------------------------------------------------------------------------
-// 已连接的应用（测试版）. Another extension — the 小手机 — says who it is, which characters it may call and
+// 已连接的应用. Another extension — the 小手机 — says who it is, which characters it may call and
 // which interfaces it will use (call.connect), and is told what is still missing for that: each item
 // what it is, why it matters and where it is set. What each app said is kept while the page is open,
 // together with the speakers its own readings turned out to have.
@@ -559,7 +559,7 @@ export const CALL_NEEDS = Object.freeze(['tts.stream', 'stt', 'llm.stream']);
 const CALL_APP_NAME_MAX = 40;
 const CALL_NAME_MAX = 60;
 const CALL_NAMES_MAX = 60;
-const CALL_SETTINGS = '镜译 → 朗读 → 更多 → 实时通话（测试版）';
+const CALL_SETTINGS = '镜译 → 朗读 → 更多 → 实时通话';
 const CALL_KEY_TITLES = Object.freeze({ fish: 'Fish Audio API Key', gsv: 'GPT-SoVITS 接口地址', doubao: '豆包 API Key', minimax: 'MiniMax API Key' });
 const CALL_KEY_MISSING = Object.freeze({ fish: '还没填 Fish Audio 的 API Key', gsv: '还没填 GPT-SoVITS 的接口地址', doubao: '还没填豆包语音的 Key', minimax: '还没填 MiniMax 的 Key' });
 

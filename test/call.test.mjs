@@ -431,21 +431,21 @@ test('each missing item says what is missing, what it does to a call, and where 
   const [hidden] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'fish', keyMissing: true, fishCardHidden: true } });
   assert.match(hidden.reason, /声音来源是 GPT-SoVITS/);
   assert.match(hidden.reason, /把通话用的声音也换成 GPT-SoVITS/);
-  assert.equal(hidden.where, '镜译 → 朗读 → 更多 → 实时通话（测试版） → 边写边读和通话用的声音');
+  assert.equal(hidden.where, '镜译 → 朗读 → 更多 → 实时通话 → 边写边读和通话用的声音');
 
   // The call on GPT-SoVITS needs no key, only somewhere to send to.
   const [gsv] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'gsv', keyMissing: true } });
   assert.deepEqual([gsv.id, gsv.title, gsv.reason, gsv.where], ['key', 'GPT-SoVITS 接口地址', '还没填 GPT-SoVITS 的接口地址，镜译读不了通话里的话。', '镜译 → 朗读 →「GPT-SoVITS」→ 接口地址']);
 
   const [doubao] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'doubao', keyMissing: true } });
-  assert.deepEqual([doubao.title, doubao.reason, doubao.where], ['豆包 API Key', '还没填豆包语音的 Key，镜译读不了通话里的话。', '镜译 → 朗读 → 更多 → 实时通话（测试版）']);
+  assert.deepEqual([doubao.title, doubao.reason, doubao.where], ['豆包 API Key', '还没填豆包语音的 Key，镜译读不了通话里的话。', '镜译 → 朗读 → 更多 → 实时通话']);
   const [minimax] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'minimax', keyMissing: true } });
   assert.deepEqual([minimax.title, minimax.reason], ['MiniMax API Key', '还没填 MiniMax 的 Key，镜译读不了通话里的话。']);
 
   const stt = problem => callMissing(['stt'], { stt: { available: false, problem } })[0];
   assert.match(stt('secure').reason, /https/);
   assert.equal(stt('secure').where, '用 https 或本机地址（localhost、127.0.0.1）打开酒馆');
-  assert.equal(stt('url').where, '镜译 → 朗读 → 更多 → 实时通话（测试版） → 转写地址');
+  assert.equal(stt('url').where, '镜译 → 朗读 → 更多 → 实时通话 → 转写地址');
   assert.equal(stt('key').reason, '还没填转写 Key，语音输入用不了。');
   assert.match(stt('browser').where, /按住说话，云端转写/);
   assert.equal(stt('whatever').reason, '这个浏览器不能录音，语音输入用不了。');
@@ -453,7 +453,7 @@ test('each missing item says what is missing, what it does to a call, and where 
   const llm = facts => callMissing(['llm.stream'], { llm: facts })[0];
   assert.equal(llm({ problem: 'follow', sameAsAnalysis: false }).reason, '通话用的连接是「跟随酒馆」：要等整段回复写完才开始读，通话会慢。');
   assert.match(llm({ problem: 'follow', sameAsAnalysis: true }).reason, /^通话用的连接留空，和分析模式用同一条，现在是「跟随酒馆」/);
-  assert.equal(llm({ problem: 'follow' }).where, '镜译 → 朗读 → 更多 → 实时通话（测试版） → 通话用的连接：选一条存好的连接');
+  assert.equal(llm({ problem: 'follow' }).where, '镜译 → 朗读 → 更多 → 实时通话 → 通话用的连接：选一条存好的连接');
   const incomplete = llm({ problem: 'incomplete', connection: '中转' });
   assert.deepEqual([incomplete.reason, incomplete.where], ['通话用的连接「中转」还没填好地址或模型，请求不出去。', '镜译 → 模型连接']);
 });
@@ -475,7 +475,7 @@ test('characters without a voice are named, grouped by what the call does with t
   // 豆包 and MiniMax look for a voice in their own 「角色音色」; muting is still the character table's.
   const [cloud] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'minimax' }, voices: voices.slice(0, 2) });
   assert.equal(cloud.reason, '老胡在「角色音色」里还没配音色，通话里用默认音色读。');
-  assert.equal(cloud.where, '镜译 → 朗读 → 更多 → 实时通话（测试版） → 角色音色');
+  assert.equal(cloud.where, '镜译 → 朗读 → 更多 → 实时通话 → 角色音色');
   const [muted] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'doubao' }, voices: [{ name: '路人', status: 'muted' }] });
   assert.equal(muted.where, '镜译 → 朗读 → 音色 → 角色表');
 
@@ -493,5 +493,5 @@ test('what an app is told in one line and in the reminder', () => {
   assert.equal(callAppSummary([]), '都设好了');
   const missing = callMissing([...CALL_NEEDS], { tts: { enabled: true, voice: 'fish', keyMissing: true }, stt: { available: false, problem: 'url' } });
   assert.equal(callAppSummary(missing), '还缺 2 项');
-  assert.equal(callReminder('小手机', missing), '小手机连上了镜译，还缺 2 项：Fish Audio API Key、语音输入。到「朗读 → 更多 → 实时通话（测试版）」看怎么补。');
+  assert.equal(callReminder('小手机', missing), '小手机连上了镜译，还缺 2 项：Fish Audio API Key、语音输入。到「朗读 → 更多 → 实时通话」看怎么补。');
 });

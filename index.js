@@ -128,8 +128,8 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.46.0-beta.2';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.46.0-beta.2';
+} from './core.js?v=0.47.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.47.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -202,10 +202,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.46.0-beta.2';
-import { createTtsStore } from './tts-store.js?v=0.46.0-beta.2';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.46.0-beta.2';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.46.0-beta.2';
+} from './tts.js?v=0.47.0';
+import { createTtsStore } from './tts-store.js?v=0.47.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.47.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.47.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -215,7 +215,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.46.0-beta.2';
+} from './processing.js?v=0.47.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -233,14 +233,14 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.46.0-beta.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.46.0-beta.2';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.46.0-beta.2';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.46.0-beta.2';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.46.0-beta.2';
-import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.46.0-beta.2';
-import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.46.0-beta.2';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.46.0-beta.2';
+} from './prompts.js?v=0.47.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.47.0';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.47.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.47.0';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.47.0';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.47.0';
+import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.47.0';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.47.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -258,8 +258,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.46.0-beta.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.46.0-beta.2';
+} from './palette.js?v=0.47.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.47.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -267,7 +267,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.46.0-beta.2';
+} from './diagnostics.js?v=0.47.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -278,7 +278,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.46.0-beta.2';
+} from './helper.js?v=0.47.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -362,7 +362,7 @@ const runtime = {
   diagnosticSubscribers: new Set(),
   // Other extensions told whenever a translation writes a floor's scene (the public interface's scene.onChange).
   sceneListeners: new Set(),
-  // 已连接的应用（测试版）: what each app said through call.connect, for as long as the page is open (call.js).
+  // 已连接的应用: what each app said through call.connect, for as long as the page is open (call.js).
   callApps: null,
   update: { status: 'idle', installType: null, details: null },
   inflight: new Map(),
@@ -828,11 +828,11 @@ const CONTROL_CENTER_MARKUP = `
 <details class="jy-fold" data-jy-fold="tts-cache"><summary><h2>缓存</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-row-between"><p class="jy-muted" data-jy-tts-usage>正在读取…</p><div class="jy-processing-toolbar"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="tts-clear-chat">清空本聊天的朗读缓存</button><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="tts-clear-all">清空全部</button></div></div>
 </div></details>
-<details class="jy-fold" data-jy-fold="tts-call"><summary><h2>实时通话（测试版）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
+<details class="jy-fold" data-jy-fold="tts-call"><summary><h2>实时通话</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div data-jy-call-apps hidden></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="readWhileWriting">边写边读（主模型一边写，一边一句一句读出来；读模型写出的原文，不等翻译）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="liveAudio">边收边放（边写边读和实时通话时，生成一点就播一点，不等一整句做完；Fish 的延迟模式是 normal 时会换成 balanced）</label></div>
 <p class="jy-muted">勾了「边写边读」，主模型一边写，镜译一边按句请求下面选的声音、按顺序读出来：读的是模型写出的原文，不等翻译，需要酒馆开着流式输出；运行记录里每一楼会记下首字、首句、出声各用了多久。再勾「边收边放」，生成出一小块就开始播，不等一整句做完，出声更早（Fish 延迟模式选的是 normal 时，这里会换成 balanced，否则没东西可以提前播；GPT-SoVITS 用它出声最快的流式档，先攒半秒再播；楼层朗读不受影响）。</p>
-<p class="jy-muted">给小手机这类插件打电话用的接口：边写边读（tts.stream）、语音输入（stt）、流式请求模型（llm.stream），都挂在 <code>window.__JINGYI__</code> 上，插件接上这三个就能边说边听。悬浮窗的「通话测试」页用的也是这三个，可以直接打给当前角色试效果。这一栏和通话测试页只在测试版里有。</p>
+<p class="jy-muted">给小手机这类插件打电话用的接口：边写边读（tts.stream）、语音输入（stt）、流式请求模型（llm.stream），都挂在 <code>window.__JINGYI__</code> 上，插件接上这三个就能边说边听。悬浮窗的「通话测试」页用的也是这三个，可以直接打给当前角色试效果。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">边写边读和通话用的声音</span><select data-jy-tts-field="streamVoice"><option value="fish">Fish Audio（和楼层朗读同一套）</option><option value="gsv">GPT-SoVITS（和楼层朗读同一套）</option><option value="doubao">豆包语音（火山引擎）</option><option value="minimax">MiniMax</option></select></label></div>
 <p class="jy-muted" data-jy-stream-voice="gsv" hidden>用「GPT-SoVITS」卡里的接口地址和默认音色，角色按角色表绑的音色读（音色库里填了 GPT-SoVITS 参考音频的那些）；那张卡在「声音来源」选 GPT-SoVITS 时才显示。一句一句生成；每个角色单独训练的模型，换人时要等模型换好，第一句会慢一些。</p>
 <div data-jy-stream-voice="doubao" hidden>
@@ -5439,7 +5439,7 @@ function requireStreamKey(tts) {
     requireFishKey(tts);
     return;
   }
-  if (!tts[tts.streamVoice]?.key) throw new Error(spacedLatin(`还没有填写${CLOUD_VOICE_LABELS[tts.streamVoice]}的 Key：在「朗读 → 更多 → 实时通话（测试版）」里填好后再试。`));
+  if (!tts[tts.streamVoice]?.key) throw new Error(spacedLatin(`还没有填写${CLOUD_VOICE_LABELS[tts.streamVoice]}的 Key：在「朗读 → 更多 → 实时通话」里填好后再试。`));
 }
 
 function newRequestId() {
@@ -12533,7 +12533,7 @@ function fillTtsChannelPickers(root, settings) {
   const tts = ttsSettings(settings);
   for (const deepSelect of root.querySelectorAll('[data-jy-tts-field="deepChannelId"]')) fillChannelPicker(deepSelect, settings, connectionUseChoice(settings, 'deep'));
   renderConnectionUses(root, settings);
-  // 实时通话（测试版）的通话连接: left empty, a call is answered on the 分析模式 connection.
+  // 实时通话的通话连接: left empty, a call is answered on the 分析模式 connection.
   for (const callSelect of root.querySelectorAll('[data-jy-tts-field="callChannelId"]')) fillChannelPicker(callSelect, settings, tts.callChannelId || '', { lead: { value: '', text: `和分析模式用同一条：${channelLabel(settings, connectionUseChoice(settings, 'deep'), { short: true })}` } });
 }
 
@@ -17870,7 +17870,7 @@ async function openMiniWindow() {
   // -------------------------------------------------------------------------------------------
   let closed = false;
   // -------------------------------------------------------------------------------------------
-  // 通话测试（测试版）: the call page. What it shows is the call's own snapshot; the talk button is
+  // 通话测试: the call page. What it shows is the call's own snapshot; the talk button is
   // held, not clicked.
   // -------------------------------------------------------------------------------------------
   const callPage = pages.call;
@@ -20353,7 +20353,7 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
 }
 
 // ---------------------------------------------------------------------------------------------
-// 语音输入（测试版）. Speech to text for a caller that holds a talk button: the browser's own recogniser,
+// 语音输入. Speech to text for a caller that holds a talk button: the browser's own recogniser,
 // or a recording sent to the OpenAI-compatible transcription endpoint the reader chose. Either way the
 // caller starts it, then stops it and gets the words.
 // ---------------------------------------------------------------------------------------------
@@ -20377,8 +20377,8 @@ function sttAvailability(tts = ttsSettings()) {
     return Recognition ? { available: true, problem: '', reason: '' } : { available: false, problem: 'browser', reason: '这个浏览器没有自带语音识别，换成「按住说话，云端转写」。' };
   }
   if (!globalThis.navigator?.mediaDevices?.getUserMedia || typeof globalThis.MediaRecorder !== 'function') return { available: false, problem: 'recorder', reason: '这个浏览器不能录音。' };
-  if (!tts.sttUrl) return { available: false, problem: 'url', reason: '还没填转写地址（朗读 → 更多 → 实时通话（测试版））。' };
-  if (!tts.sttApiKey) return { available: false, problem: 'key', reason: '还没填转写 Key（朗读 → 更多 → 实时通话（测试版））。' };
+  if (!tts.sttUrl) return { available: false, problem: 'url', reason: '还没填转写地址（朗读 → 更多 → 实时通话）。' };
+  if (!tts.sttApiKey) return { available: false, problem: 'key', reason: '还没填转写 Key（朗读 → 更多 → 实时通话）。' };
   return { available: true, problem: '', reason: '' };
 }
 
@@ -20587,7 +20587,7 @@ async function transcribeSpeech(blob, lang, tts, signal) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 通话请求（测试版）. A caller's own prompt, sent on the connection chosen for calls and streamed back as
+// 通话请求. A caller's own prompt, sent on the connection chosen for calls and streamed back as
 // it is written, so the reading can start before the answer is finished.
 // ---------------------------------------------------------------------------------------------
 
@@ -20671,7 +20671,7 @@ function withNoThink(messages) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 通话测试（测试版）. The floating window's call page: the current character on the phone, through the
+// 通话测试. The floating window's call page: the current character on the phone, through the
 // same interfaces a phone plugin gets (llm.stream, tts.stream, stt). The call itself is call.js.
 // ---------------------------------------------------------------------------------------------
 
@@ -20768,9 +20768,9 @@ async function openCallSettings() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 已连接的应用（测试版）. call.connect: an app (the 小手机) says which characters it may call and which
+// 已连接的应用. call.connect: an app (the 小手机) says which characters it may call and which
 // interfaces it will use, and is told what is still missing for that (call.js callMissing), read off the
-// settings exactly as a call would meet them. Kept for this page only; the 「实时通话（测试版）」 fold lists
+// settings exactly as a call would meet them. Kept for this page only; the 「实时通话」 fold lists
 // every app with what it lacks, each item with 「去设置」, and the first connect of an app that lacks
 // something says so once.
 // ---------------------------------------------------------------------------------------------
@@ -20877,7 +20877,7 @@ function noteCallSpeakers(names) {
 const callAppsShown = new WeakMap();
 
 /**
- * The connected apps on the 「实时通话（测试版）」 fold: each app's name with 「都设好了」 or how many items
+ * The connected apps on the 「实时通话」 fold: each app's name with 「都设好了」 or how many items
  * are missing, and under it each missing item — its setting's name, what is missing, 「去设置」. Drawn
  * again only when what it says changed, so a click on 「去设置」 is never lost to a redraw.
  */
@@ -21059,7 +21059,7 @@ function apiTtsReason({ stream = false } = {}) {
   const voice = stream ? tts.streamVoice : tts.provider;
   if (voice === 'gsv') return '';
   if (voice === 'fish' && !tts.fish.key) return '镜译还没填 Fish Audio 的 API Key：镜译 → 朗读 →「Fish Audio」。';
-  if (voice !== 'fish' && !tts[voice]?.key) return spacedLatin(`镜译还没填${CLOUD_VOICE_LABELS[voice]}的 Key：镜译 → 朗读 → 更多 → 实时通话（测试版）。`);
+  if (voice !== 'fish' && !tts[voice]?.key) return spacedLatin(`镜译还没填${CLOUD_VOICE_LABELS[voice]}的 Key：镜译 → 朗读 → 更多 → 实时通话。`);
   return '';
 }
 
@@ -21348,7 +21348,7 @@ function installPublicApi() {
         stopTtsPlayback();
       },
     }),
-    // 实时通话（测试版）.
+    // 实时通话.
     stt: Object.freeze({
       /** Whether speech can be taken now; `reason` says what to fix when it cannot. */
       status() {
@@ -21380,6 +21380,8 @@ function installPublicApi() {
       connect: options => apiCallConnect(options ?? {}),
     }),
     features: Object.freeze(['tts.speak', 'tts.stream', 'stt', 'llm.stream', 'call.connect']),
+    // Still true: apps written while these interfaces were in the test release check it beside `features`,
+    // and the stable release has the same interfaces. New code goes by `features` alone.
     beta: true,
     /**
      * Each translated floor's scene, written by the translation as it went: tone (one of `tones`),

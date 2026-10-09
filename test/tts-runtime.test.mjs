@@ -3688,7 +3688,7 @@ test('call.connect tells an app what is still missing for what it asked for, and
   assert.equal(voices.reason, '老胡还没绑音色，通话里用对白默认音色读；路人在角色表里设成了不朗读，通话里不出声。');
   assert.match(first.missing.find(item => item.id === 'llm').reason, /^通话用的连接留空，和分析模式用同一条，现在是「跟随酒馆」/);
   assert.equal(first.missing.find(item => item.id === 'stt').reason, '这个浏览器不能录音，语音输入用不了。');
-  assert.deepEqual(toasts, [['warning', '小手机连上了镜译，还缺 5 项：朗读功能、Fish Audio API Key、角色音色、语音输入、通话用的连接。到「朗读 → 更多 → 实时通话（测试版）」看怎么补。']]);
+  assert.deepEqual(toasts, [['warning', '小手机连上了镜译，还缺 5 项：朗读功能、Fish Audio API Key、角色音色、语音输入、通话用的连接。到「朗读 → 更多 → 实时通话」看怎么补。']]);
 
   // Asked again: what the app said is replaced, and the reminder is not said twice.
   const reading = api.call.connect({ app: '小手机', characters: ['樱井'], needs: ['tts.stream'] });
@@ -3701,7 +3701,7 @@ test('call.connect tells an app what is still missing for what it asked for, and
   // Another app has a reminder of its own.
   api.call.connect({ app: 'tokimemo', needs: ['stt'] });
   assert.equal(toasts.length, 2);
-  assert.deepEqual(toasts[1], ['warning', 'tokimemo连上了镜译，还缺 1 项：语音输入。到「朗读 → 更多 → 实时通话（测试版）」看怎么补。']);
+  assert.deepEqual(toasts[1], ['warning', 'tokimemo连上了镜译，还缺 1 项：语音输入。到「朗读 → 更多 → 实时通话」看怎么补。']);
 
   // Before 镜译 has started there is nothing to say yet.
   __testing.configureForTest({ initialized: false });
