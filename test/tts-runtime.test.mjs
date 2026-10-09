@@ -3456,6 +3456,185 @@ test('with GPT-SoVITS reading the floors, tts.stream still reads in the voice ch
   assert.deepEqual(calls.map(call => call.body.reference_id), ['voice-sakurai', 'voice-default']);
 });
 
+// A box for the 「已连接的应用」 rows, with just enough of a document for renderCallApps.
+function fakeCallAppsBox() {
+  const doc = {
+    createElement(tag) {
+      const element = {
+        tagName: tag.toUpperCase(), children: [], dataset: {}, attributes: {}, hidden: false, textContent: '', className: '', type: '', ownerDocument: doc,
+        append(...nodes) { element.children.push(...nodes); },
+        appendChild(node) { element.children.push(node); return node; },
+        replaceChildren(...nodes) { element.children = [...nodes]; },
+        setAttribute(name, value) { element.attributes[name] = String(value); },
+      };
+      return element;
+    },
+  };
+  const box = doc.createElement('div');
+  box.hidden = true;
+  const root = { querySelector: selector => (selector === '[data-jy-call-apps]' ? box : null) };
+  // Each row as [indented, mark, title, line, 「去设置」's item or null].
+  const rows = () => box.children.map(row => {
+    const [mark, copy, button] = row.children;
+    return [row.className.includes('jy-summary-row-sub'), mark.textContent, copy.children[0].textContent, copy.children[1].textContent, button ? `${button.textContent}:${button.dataset.jyCallFix}` : null];
+  });
+  return { root, box, rows };
+}
+
+test('call.connect tells an app what is still missing for what it asked for, and reminds once per app', async t => {
+  restoreGlobals(t);
+  const { toasts } = mockHost('call-connect');
+  __testing.resetCallApps();
+  t.after(() => __testing.resetCallApps());
+  __testing.configureForTest({
+    initialized: true,
+    settings: {
+      tts: { enabled: false, fish: { ...FISH, key: '' } },
+      ttsVoices: { 'taro.png': [{ name: '樱井', aliases: ['小樱'], voiceId: 'voice-sakurai' }, { name: '路人', aliases: [], voiceId: 'voice-x', mute: true }] },
+    },
+  });
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  __testing.installPublicApi();
+  t.after(() => { delete globalThis.__JINGYI__; });
+  const api = globalThis.__JINGYI__;
+  assert.ok(api.features.includes('call.connect'));
+  assert.throws(() => api.call.connect({ characters: ['樱井'] }), /app/);
+
+  const first = api.call.connect({ app: '小手机', characters: ['樱井', '小樱', '老胡', '路人'], needs: ['tts.stream', 'stt', 'llm.stream'] });
+  assert.deepEqual([first.app, first.needs], ['小手机', ['tts.stream', 'stt', 'llm.stream']]);
+  assert.deepEqual(first.missing.map(item => item.id), ['tts', 'key', 'voices', 'stt', 'llm']);
+  const voices = first.missing.find(item => item.id === 'voices');
+  assert.deepEqual(voices.names, ['老胡', '路人'], '小樱 is 樱井 by another name, and 樱井 has a voice');
+  assert.equal(voices.reason, '老胡还没绑音色，通话里用对白默认音色读；路人在角色表里设成了不朗读，通话里不出声。');
+  assert.match(first.missing.find(item => item.id === 'llm').reason, /^通话用的连接留空，和分析模式用同一条，现在是「跟随酒馆」/);
+  assert.equal(first.missing.find(item => item.id === 'stt').reason, '这个浏览器不能录音，语音输入用不了。');
+  assert.deepEqual(toasts, [['warning', '小手机连上了镜译，还缺 5 项：朗读功能、Fish Audio API Key、角色音色、语音输入、通话用的连接。到「朗读 → 更多 → 实时通话（测试版）」看怎么补。']]);
+
+  // Asked again: what the app said is replaced, and the reminder is not said twice.
+  const reading = api.call.connect({ app: '小手机', characters: ['樱井'], needs: ['tts.stream'] });
+  assert.deepEqual(reading.missing.map(item => item.id), ['tts', 'key'], 'an app that only reads hears nothing about speech input or the connection');
+  assert.equal(toasts.length, 1);
+
+  // Set up: nothing missing, nothing said.
+  __testing.configureForTest({ settings: { tts: { enabled: true, fish: FISH } } });
+  assert.deepEqual(api.call.connect({ app: '小手机', characters: ['樱井'], needs: ['tts.stream'] }).missing, []);
+  // Another app has a reminder of its own.
+  api.call.connect({ app: 'tokimemo', needs: ['stt'] });
+  assert.equal(toasts.length, 2);
+  assert.deepEqual(toasts[1], ['warning', 'tokimemo连上了镜译，还缺 1 项：语音输入。到「朗读 → 更多 → 实时通话（测试版）」看怎么补。']);
+
+  // Before 镜译 has started there is nothing to say yet.
+  __testing.configureForTest({ initialized: false });
+  assert.throws(() => api.call.connect({ app: '小手机' }), /还没启动完/);
+});
+
+test('the speakers an app\'s own readings turn out to have are checked too, and the fold says so as they come', async t => {
+  restoreGlobals(t);
+  mockHost('call-connect-heard');
+  __testing.resetCallApps();
+  t.after(() => __testing.resetCallApps());
+  __testing.configureForTest({
+    initialized: true,
+    settings: {
+      tts: { enabled: true, liveAudio: false, dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '樱井', aliases: [], voiceId: 'voice-sakurai' }] },
+    },
+  });
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  __testing.installPublicApi();
+  t.after(() => { delete globalThis.__JINGYI__; });
+  const api = globalThis.__JINGYI__;
+  const { root, box, rows } = fakeCallAppsBox();
+  __testing.renderCallApps(root);
+  assert.equal(box.hidden, true, 'no app, no rows');
+
+  assert.deepEqual(api.call.connect({ app: '小手机', characters: ['樱井'], needs: ['tts.stream'] }).missing, []);
+  __testing.renderCallApps(root);
+  assert.equal(box.hidden, false);
+  assert.deepEqual(rows(), [[false, '✓', '已连接的应用：小手机', '都设好了', null]]);
+
+  const audio = mockAudio();
+  t.after(() => audio.restore());
+  mockFish();
+  const call = api.tts.stream({ speaker: '樱井' });
+  call.push('今天也来了啊。\n<say who="老胡">走开。');
+  call.end();
+  await call.done;
+  __testing.renderCallApps(root);
+  assert.deepEqual(rows(), [
+    [false, '·', '已连接的应用：小手机', '还缺 1 项', null],
+    [true, '·', '角色音色', '老胡还没绑音色，通话里用对白默认音色读。', '去设置:voices'],
+  ]);
+
+  // The 通话测试 page's own calls are 镜译's, not the app's: nobody it hears is added.
+  const own = __testing.apiStream({ speaker: '阿星' });
+  own.push('喂？');
+  own.end();
+  await own.done;
+  __testing.renderCallApps(root);
+  assert.equal(rows().length, 2);
+
+  // The voice bound, the item goes.
+  __testing.configureForTest({ settings: { ttsVoices: { 'taro.png': [{ name: '樱井', aliases: [], voiceId: 'voice-sakurai' }, { name: '老胡', aliases: [], voiceId: 'voice-hu' }] } } });
+  __testing.renderCallApps(root);
+  assert.deepEqual(rows(), [[false, '✓', '已连接的应用：小手机', '都设好了', null]]);
+});
+
+test('a character\'s voice in a call is judged the way the call will meet it', t => {
+  restoreGlobals(t);
+  mockHost('call-connect-voices');
+  const library = [{ id: 'lib-hailing', name: '海铃', gsv: { refAudioPath: 'D:\\refs\\hailing.wav', promptText: 'こんにちは', promptLang: 'ja' } }];
+  const rows = [
+    { name: '樱井', aliases: ['小樱'], voiceId: 'voice-sakurai' },
+    { name: '海铃', aliases: [], voiceId: gsvVoiceId('lib-hailing') },
+    { name: '路人', aliases: [], voiceId: 'voice-x', mute: true },
+  ];
+  const status = (tts, names = ['小樱', '海铃', '路人', '老胡']) => {
+    __testing.configureForTest({ initialized: true, settings: { tts: { enabled: true, fish: FISH, ...tts }, ttsVoices: { 'taro.png': rows }, voiceLibrary: library } });
+    return __testing.callVoiceStatuses(names).map(item => `${item.name}:${item.status}`);
+  };
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  // Floors read by GPT-SoVITS, the call by Fish: a GPT-SoVITS-only voice is no voice to Fish.
+  assert.deepEqual(status({ provider: 'gsv' }), ['小樱:own', '海铃:gsv', '路人:muted', '老胡:default']);
+  assert.deepEqual(status({ dialogueFallback: 'skip' }), ['小樱:own', '海铃:skipped', '路人:muted', '老胡:skipped']);
+  // 豆包 and MiniMax find voices in their own list, by the name as said (the character table's aliases
+  // are not theirs); muting stays the character table's.
+  assert.deepEqual(status({ streamVoice: 'minimax', minimax: { key: 'k', voiceMap: '樱井=female-a\n老胡=male-b' } }), ['小樱:default', '海铃:default', '路人:muted', '老胡:own']);
+  assert.deepEqual(status({ streamVoice: 'minimax', minimax: { key: 'k', voiceMap: '樱井=female-a' } }, ['樱井']), ['樱井:own']);
+  // The same person twice is listed once.
+  assert.deepEqual(status({}, ['樱井', '小樱']), ['樱井:own']);
+});
+
+test('「去设置」 goes where the missing item is set, as the settings stand', t => {
+  restoreGlobals(t);
+  mockHost('call-connect-fix');
+  __testing.resetCallApps();
+  t.after(() => __testing.resetCallApps());
+  const at = (settings, id, app = '') => {
+    __testing.configureForTest({ initialized: true, settings });
+    return __testing.callFixTarget(id, app);
+  };
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  assert.deepEqual(at({ tts: { enabled: true, fish: { key: '' } } }, 'key'), { page: 'tts', selector: '[data-jy-tts-provider-card="fish"] [data-jy-tts-fish="key"]' });
+  assert.deepEqual(at({ tts: { enabled: true, provider: 'gsv', fish: { key: '' } } }, 'key'), { page: 'tts', fold: 'tts-call', selector: '[data-jy-tts-field="streamVoice"]' });
+  assert.deepEqual(at({ tts: { enabled: true, streamVoice: 'doubao' } }, 'key'), { page: 'tts', fold: 'tts-call', selector: '[data-jy-tts-doubao="key"]' });
+  assert.equal(at({ tts: { enabled: true, sttUrl: '' } }, 'stt').selector, '[data-jy-tts-field="sttProvider"]', 'no recorder in this test host: the input choice');
+  assert.deepEqual(at({ tts: { enabled: true }, apiMode: 'follow' }, 'llm'), { page: 'tts', fold: 'tts-call', selector: '[data-jy-tts-field="callChannelId"]' });
+  const relay = normalizeChannel({ id: 'c9', name: '中转', url: 'https://relay.example/v1', key: 'k', model: '' });
+  assert.deepEqual(at({ channels: [relay], tts: { enabled: true, callChannelId: 'c9' } }, 'llm'), { page: 'settings', channelId: 'c9', selector: '[data-jy-channel-field="model"]' });
+
+  __testing.configureForTest({
+    initialized: true,
+    settings: { tts: { enabled: true, fish: FISH }, ttsVoices: { 'taro.png': [{ name: '老胡', aliases: [], voiceId: '' }] } },
+  });
+  __testing.installPublicApi();
+  t.after(() => { delete globalThis.__JINGYI__; });
+  globalThis.__JINGYI__.call.connect({ app: '小手机', characters: ['老胡', '阿星'], needs: ['tts.stream'] });
+  assert.deepEqual(__testing.callFixTarget('voices', '小手机'), { page: 'tts', row: '老胡', selector: '[data-jy-tts-voice-id]' }, 'his row, opened at the voice');
+  globalThis.__JINGYI__.call.connect({ app: '小手机', characters: ['阿星'], needs: ['tts.stream'] });
+  assert.deepEqual(__testing.callFixTarget('voices', '小手机'), { page: 'tts', selector: '[data-jy-action="tts-add-voice"]' }, 'no row yet: 添加角色');
+});
+
 test('a caller\'s line with several marks is read mark by mark, and a broken or unknown mark never costs the line', async t => {
   restoreGlobals(t);
   mockHost('tts-api-marks', { async processRequest() { return { content: '{"voices":[]}' }; } });

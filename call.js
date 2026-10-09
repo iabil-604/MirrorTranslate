@@ -543,3 +543,188 @@ export function createCall({ describe, ask, speak, listen, history, now = () => 
     },
   };
 }
+
+// ---------------------------------------------------------------------------------------------
+// 已连接的应用（测试版）. Another extension — the 小手机 — says who it is, which characters it may call and
+// which interfaces it will use (call.connect), and is told what is still missing for that: each item
+// what it is, why it matters and where it is set. What each app said is kept while the page is open,
+// together with the speakers its own readings turned out to have.
+//
+// Only the facts are handed in (index.js reads them off the settings); everything said about them is here.
+// ---------------------------------------------------------------------------------------------
+
+/** What an app may ask to have checked: the interfaces a call is made of. */
+export const CALL_NEEDS = Object.freeze(['tts.stream', 'stt', 'llm.stream']);
+
+const CALL_APP_NAME_MAX = 40;
+const CALL_NAME_MAX = 60;
+const CALL_NAMES_MAX = 60;
+const CALL_SETTINGS = '镜译 → 朗读 → 更多 → 实时通话（测试版）';
+const CALL_KEY_TITLES = Object.freeze({ fish: 'Fish Audio API Key', doubao: '豆包 API Key', minimax: 'MiniMax API Key' });
+const CALL_KEY_MISSING = Object.freeze({ fish: '还没填 Fish Audio 的 API Key', doubao: '还没填豆包语音的 Key', minimax: '还没填 MiniMax 的 Key' });
+
+function callName(value, max = CALL_NAME_MAX) {
+  if (typeof value !== 'string' && typeof value !== 'number') return '';
+  return String(value).replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function callNames(values) {
+  const list = typeof values === 'string' ? [values] : Array.isArray(values) ? values : [];
+  return [...new Set(list.map(value => callName(value)).filter(Boolean))].slice(0, CALL_NAMES_MAX);
+}
+
+/**
+ * What an app said when it connected, cleaned: its name (required), the characters it may call, and the
+ * needs it named that are known here, in their usual order. Needs left out mean all of them; a need
+ * nobody knows is not checked, which the `needs` handed back shows.
+ */
+export function normalizeCallApp({ app, characters, needs } = {}) {
+  const name = callName(app, CALL_APP_NAME_MAX);
+  if (!name) throw new Error('call.connect 要写上应用名 app，比如「小手机」。');
+  const asked = typeof needs === 'string' ? [needs] : Array.isArray(needs) && needs.length ? needs : CALL_NEEDS;
+  const named = asked.map(need => String(need ?? '').trim());
+  return { app: name, characters: callNames(characters), needs: CALL_NEEDS.filter(need => named.includes(need)) };
+}
+
+/**
+ * The apps connected on this page, in the order they first connected. A second connect from the same
+ * app replaces what it said before, and forgets the speakers heard for it. `hear` adds speakers that
+ * readings turned out to have to every app that reads through tts.stream, and names the apps that
+ * learnt someone new. `remind` is true only the first time it is asked about an app.
+ */
+export function createCallApps() {
+  const apps = new Map();
+  const reminded = new Set();
+  const copy = entry => ({ ...entry, characters: [...entry.characters], needs: [...entry.needs], seen: [...entry.seen] });
+  return {
+    connect(options) {
+      const entry = { ...normalizeCallApp(options), seen: [] };
+      apps.set(entry.app, entry);
+      return copy(entry);
+    },
+    hear(names) {
+      const heard = callNames(names);
+      const changed = [];
+      for (const entry of apps.values()) {
+        if (!entry.needs.includes('tts.stream')) continue;
+        const fresh = heard.filter(name => !entry.characters.includes(name) && !entry.seen.includes(name));
+        const room = CALL_NAMES_MAX - entry.seen.length;
+        if (!fresh.length || room <= 0) continue;
+        entry.seen.push(...fresh.slice(0, room));
+        changed.push(entry.app);
+      }
+      return changed;
+    },
+    list() {
+      return [...apps.values()].map(copy);
+    },
+    remind(app) {
+      if (reminded.has(app)) return false;
+      reminded.add(app);
+      return true;
+    },
+  };
+}
+
+/**
+ * The names an app's character voices are checked for: its own, then the speakers heard since, each once.
+ */
+export function callAppNames(entry) {
+  return [...new Set([...(entry?.characters ?? []), ...(entry?.seen ?? [])])];
+}
+
+function voicesItem(tts, voices) {
+  const cloud = tts.voice === 'doubao' || tts.voice === 'minimax';
+  const pick = status => voices.filter(item => item.status === status).map(item => item.name);
+  const unbound = pick('default');
+  const gsvOnly = pick('gsv');
+  const muted = pick('muted');
+  const skipped = pick('skipped');
+  const names = voices.filter(item => item.status !== 'own').map(item => item.name);
+  if (!names.length) return null;
+  const list = items => items.join('、');
+  const parts = [];
+  if (unbound.length || gsvOnly.length) {
+    const why = [
+      unbound.length ? `${list(unbound)}${cloud ? '在「角色音色」里还没配音色' : '还没绑音色'}` : '',
+      gsvOnly.length ? `${list(gsvOnly)}只绑了 GPT-SoVITS 的音色，通话用的 Fish Audio 用不了` : '',
+    ].filter(Boolean).join('，');
+    parts.push(`${why}，通话里${cloud ? '用默认音色' : '用对白默认音色'}读`);
+  }
+  if (muted.length) parts.push(`${list(muted)}在角色表里设成了不朗读，通话里不出声`);
+  if (skipped.length) parts.push(`${list(skipped)}没有专属音色，「对白默认音色」又设成了跳过，通话里不出声`);
+  // Where the first of them is fixed: a voice that is missing where the call's voice looks for it.
+  const where = (unbound.length || gsvOnly.length) && cloud ? `${CALL_SETTINGS} → 角色音色` : '镜译 → 朗读 → 音色 → 角色表';
+  return { id: 'voices', need: 'tts.stream', title: '角色音色', reason: `${parts.join('；')}。`, where, names };
+}
+
+const STT_ITEMS = Object.freeze({
+  secure: { reason: '酒馆不是用 https 或本机地址打开的，浏览器不给开麦克风，语音输入用不了。', where: '用 https 或本机地址（localhost、127.0.0.1）打开酒馆' },
+  browser: { reason: '这个浏览器没有自带语音识别，语音输入用不了。', where: `${CALL_SETTINGS} → 语音输入：换成「按住说话，云端转写」` },
+  recorder: { reason: '这个浏览器不能录音，语音输入用不了。', where: `${CALL_SETTINGS} → 语音输入` },
+  url: { reason: '还没填转写地址，语音输入用不了。', where: `${CALL_SETTINGS} → 转写地址` },
+  key: { reason: '还没填转写 Key，语音输入用不了。', where: `${CALL_SETTINGS} → 转写 Key` },
+});
+
+/**
+ * What is still missing for the needs an app named, item by item, in the order they are best fixed. Each
+ * item: `id` (tts / key / voices / stt / llm), the `need` it is about, a short `title` (the setting's name
+ * on the page), `reason` (what is missing and what that does to a call, to show the reader as it is) and
+ * `where` it is set; the voices item also lists the `names` concerned.
+ *
+ * `facts`, read off the settings by index.js:
+ *   tts:    { enabled, voice: 'fish' | 'doubao' | 'minimax', keyMissing, fishCardHidden }
+ *   voices: [{ name, status }], status own / default / gsv (bound to a GPT-SoVITS voice only) / muted / skipped
+ *   stt:    { available, problem: secure / browser / recorder / url / key }
+ *   llm:    { problem: '' / follow / incomplete, connection, sameAsAnalysis }
+ */
+export function callMissing(needs, facts = {}) {
+  const wanted = need => Array.isArray(needs) && needs.includes(need);
+  const items = [];
+  if (wanted('tts.stream')) {
+    const tts = facts.tts ?? {};
+    const voice = CALL_KEY_TITLES[tts.voice] ? tts.voice : 'fish';
+    if (!tts.enabled) {
+      items.push({ id: 'tts', need: 'tts.stream', title: '朗读功能', reason: '朗读功能没打开，镜译读不了通话里的话。', where: '镜译 → 朗读 → 打开朗读' });
+    }
+    if (tts.keyMissing) {
+      const hidden = voice === 'fish' && tts.fishCardHidden === true;
+      items.push({
+        id: 'key',
+        need: 'tts.stream',
+        title: CALL_KEY_TITLES[voice],
+        reason: `${CALL_KEY_MISSING[voice]}，镜译读不了通话里的话。${hidden ? '声音来源是 GPT-SoVITS 时「Fish Audio」卡不显示：把声音来源换成 Fish Audio 填好 Key 再换回来，或者把通话用的声音换成豆包语音或 MiniMax。' : ''}`,
+        where: voice !== 'fish' ? CALL_SETTINGS : hidden ? `${CALL_SETTINGS} → 边写边读和通话用的声音` : '镜译 → 朗读 →「Fish Audio」',
+      });
+    }
+    const voices = voicesItem({ voice }, Array.isArray(facts.voices) ? facts.voices : []);
+    if (voices) items.push(voices);
+  }
+  if (wanted('stt') && facts.stt && facts.stt.available === false) {
+    const known = STT_ITEMS[facts.stt.problem] ?? STT_ITEMS.recorder;
+    items.push({ id: 'stt', need: 'stt', title: '语音输入', ...known });
+  }
+  if (wanted('llm.stream') && facts.llm?.problem) {
+    const { problem, connection = '', sameAsAnalysis = false } = facts.llm;
+    items.push(problem === 'incomplete'
+      ? { id: 'llm', need: 'llm.stream', title: '通话用的连接', reason: `通话用的连接「${connection}」还没填好地址或模型，请求不出去。`, where: '镜译 → 模型连接' }
+      : {
+        id: 'llm',
+        need: 'llm.stream',
+        title: '通话用的连接',
+        reason: `${sameAsAnalysis ? '通话用的连接留空，和分析模式用同一条，现在是「跟随酒馆」' : '通话用的连接是「跟随酒馆」'}：要等整段回复写完才开始读，通话会慢。`,
+        where: `${CALL_SETTINGS} → 通话用的连接：选一条存好的连接`,
+      });
+  }
+  return items;
+}
+
+/** The one line under an app's name: everything set, or how many items are still missing. */
+export function callAppSummary(missing) {
+  return missing?.length ? `还缺 ${missing.length} 项` : '都设好了';
+}
+
+/** The reminder an app's first connect with something missing gets, once per page. */
+export function callReminder(app, missing) {
+  return `${app}连上了镜译，还缺 ${missing.length} 项：${missing.map(item => item.title).join('、')}。到「${CALL_SETTINGS.replace(/^镜译 → /, '')}」看怎么补。`;
+}

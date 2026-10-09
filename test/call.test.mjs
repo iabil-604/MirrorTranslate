@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CALL_OPENING, callMessages, callSystemPrompt, createCall, createCallHistory, spokenText } from '../call.js';
+import {
+  CALL_NEEDS, CALL_OPENING, callAppNames, callAppSummary, callMessages, callMissing, callReminder, callSystemPrompt, createCall, createCallApps, createCallHistory,
+  normalizeCallApp, spokenText,
+} from '../call.js';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const settle = async () => { for (let i = 0; i < 6; i += 1) await tick(); };
@@ -349,4 +352,134 @@ test('a voice paused or stopped from somewhere else: a pause is resumed, a stop 
   line.voices[1].finish();
   await settle();
   assert.deepEqual(line.call.snapshot.turns.at(-1), { from: 'char', text: '没事。', live: false });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 已连接的应用: call.connect's pure half.
+// ---------------------------------------------------------------------------------------------
+
+test('an app connecting is cleaned: a name it must give, its characters once each, and only the needs known here', () => {
+  assert.throws(() => normalizeCallApp({}), /app/);
+  assert.throws(() => normalizeCallApp({ app: '   ' }), /app/);
+  assert.deepEqual(normalizeCallApp({ app: ' 小手机 ', characters: [' 樱井 ', '樱井', '', null, { name: '对象' }, 7, '老胡'] }), {
+    app: '小手机', characters: ['樱井', '7', '老胡'], needs: [...CALL_NEEDS],
+  });
+  // Needs come back in their usual order; one nobody knows is not checked, and nothing named means all.
+  assert.deepEqual(normalizeCallApp({ app: 'a', needs: ['llm.stream', 'tts.steam', 'tts.stream'] }).needs, ['tts.stream', 'llm.stream']);
+  assert.deepEqual(normalizeCallApp({ app: 'a', needs: 'stt' }).needs, ['stt']);
+  assert.deepEqual(normalizeCallApp({ app: 'a', needs: [] }).needs, [...CALL_NEEDS]);
+  assert.deepEqual(normalizeCallApp({ app: 'a', characters: '樱井' }).characters, ['樱井']);
+  assert.equal(normalizeCallApp({ app: 'x'.repeat(80) }).app.length, 40);
+  assert.equal(normalizeCallApp({ app: 'a', characters: Array.from({ length: 90 }, (_, index) => `角色${index}`) }).characters.length, 60);
+});
+
+test('apps on the page: a second connect replaces the first, speakers heard are kept for apps that read, and the reminder comes once', () => {
+  const apps = createCallApps();
+  apps.connect({ app: '小手机', characters: ['樱井'] });
+  apps.connect({ app: '只听', needs: ['stt'] });
+  assert.deepEqual(apps.hear(['老胡', '樱井', '老胡', '']), ['小手机'], 'only an app that reads through tts.stream hears anyone');
+  assert.deepEqual(apps.list().map(entry => [entry.app, entry.seen]), [['小手机', ['老胡']], ['只听', []]]);
+  assert.deepEqual(apps.hear(['老胡']), [], 'nobody new');
+  assert.deepEqual(callAppNames(apps.list()[0]), ['樱井', '老胡']);
+
+  const again = apps.connect({ app: '小手机', characters: ['阿星'], needs: ['tts.stream'] });
+  assert.deepEqual([again.characters, again.seen, again.needs], [['阿星'], [], ['tts.stream']], 'replaced, and what was heard for it before is gone');
+  assert.deepEqual(apps.list().map(entry => entry.app), ['小手机', '只听'], 'it keeps its place');
+  apps.list()[0].seen.push('改不到');
+  assert.deepEqual(apps.list()[0].seen, [], 'what list hands out is a copy');
+
+  assert.equal(apps.remind('小手机'), true);
+  assert.equal(apps.remind('小手机'), false);
+  assert.equal(apps.remind('只听'), true);
+});
+
+const READY = Object.freeze({
+  tts: { enabled: true, voice: 'fish', keyMissing: false, fishCardHidden: false },
+  voices: [{ name: '樱井', status: 'own' }],
+  stt: { available: true, problem: '' },
+  llm: { problem: '', connection: 'DeepSeek · deepseek-chat', sameAsAnalysis: false },
+});
+
+test('nothing missing says nothing, and only the needs an app named are looked at', () => {
+  assert.deepEqual(callMissing([...CALL_NEEDS], READY), []);
+  const broken = {
+    tts: { enabled: false, voice: 'fish', keyMissing: true },
+    voices: [{ name: '老胡', status: 'default' }],
+    stt: { available: false, problem: 'key' },
+    llm: { problem: 'follow', connection: '跟随酒馆', sameAsAnalysis: true },
+  };
+  assert.deepEqual(callMissing([...CALL_NEEDS], broken).map(item => [item.id, item.need, item.title]), [
+    ['tts', 'tts.stream', '朗读功能'],
+    ['key', 'tts.stream', 'Fish Audio API Key'],
+    ['voices', 'tts.stream', '角色音色'],
+    ['stt', 'stt', '语音输入'],
+    ['llm', 'llm.stream', '通话用的连接'],
+  ]);
+  assert.deepEqual(callMissing(['tts.stream'], broken).map(item => item.id), ['tts', 'key', 'voices'], 'an app that only reads is not told about speech input');
+  assert.deepEqual(callMissing(['stt'], broken).map(item => item.id), ['stt']);
+  assert.deepEqual(callMissing([], broken), []);
+});
+
+test('each missing item says what is missing, what it does to a call, and where it is set', () => {
+  const [off, key] = callMissing(['tts.stream'], { tts: { enabled: false, voice: 'fish', keyMissing: true } });
+  assert.equal(off.reason, '朗读功能没打开，镜译读不了通话里的话。');
+  assert.equal(off.where, '镜译 → 朗读 → 打开朗读');
+  assert.equal(key.reason, '还没填 Fish Audio 的 API Key，镜译读不了通话里的话。');
+  assert.equal(key.where, '镜译 → 朗读 →「Fish Audio」');
+
+  // The floors read by GPT-SoVITS: the Fish card is not on the page, and the reason says what to do.
+  const [hidden] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'fish', keyMissing: true, fishCardHidden: true } });
+  assert.match(hidden.reason, /声音来源是 GPT-SoVITS/);
+  assert.equal(hidden.where, '镜译 → 朗读 → 更多 → 实时通话（测试版） → 边写边读和通话用的声音');
+
+  const [doubao] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'doubao', keyMissing: true } });
+  assert.deepEqual([doubao.title, doubao.reason, doubao.where], ['豆包 API Key', '还没填豆包语音的 Key，镜译读不了通话里的话。', '镜译 → 朗读 → 更多 → 实时通话（测试版）']);
+  const [minimax] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'minimax', keyMissing: true } });
+  assert.deepEqual([minimax.title, minimax.reason], ['MiniMax API Key', '还没填 MiniMax 的 Key，镜译读不了通话里的话。']);
+
+  const stt = problem => callMissing(['stt'], { stt: { available: false, problem } })[0];
+  assert.match(stt('secure').reason, /https/);
+  assert.equal(stt('secure').where, '用 https 或本机地址（localhost、127.0.0.1）打开酒馆');
+  assert.equal(stt('url').where, '镜译 → 朗读 → 更多 → 实时通话（测试版） → 转写地址');
+  assert.equal(stt('key').reason, '还没填转写 Key，语音输入用不了。');
+  assert.match(stt('browser').where, /按住说话，云端转写/);
+  assert.equal(stt('whatever').reason, '这个浏览器不能录音，语音输入用不了。');
+
+  const llm = facts => callMissing(['llm.stream'], { llm: facts })[0];
+  assert.equal(llm({ problem: 'follow', sameAsAnalysis: false }).reason, '通话用的连接是「跟随酒馆」：要等整段回复写完才开始读，通话会慢。');
+  assert.match(llm({ problem: 'follow', sameAsAnalysis: true }).reason, /^通话用的连接留空，和分析模式用同一条，现在是「跟随酒馆」/);
+  assert.equal(llm({ problem: 'follow' }).where, '镜译 → 朗读 → 更多 → 实时通话（测试版） → 通话用的连接：选一条存好的连接');
+  const incomplete = llm({ problem: 'incomplete', connection: '中转' });
+  assert.deepEqual([incomplete.reason, incomplete.where], ['通话用的连接「中转」还没填好地址或模型，请求不出去。', '镜译 → 模型连接']);
+});
+
+test('characters without a voice are named, grouped by what the call does with them', () => {
+  const voices = [
+    { name: '樱井', status: 'own' },
+    { name: '老胡', status: 'default' },
+    { name: '阿星', status: 'default' },
+    { name: '海铃', status: 'gsv' },
+    { name: '路人', status: 'muted' },
+    { name: '店长', status: 'skipped' },
+  ];
+  const [item] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'fish' }, voices });
+  assert.deepEqual(item.names, ['老胡', '阿星', '海铃', '路人', '店长']);
+  assert.equal(item.reason, '老胡、阿星还没绑音色，海铃只绑了 GPT-SoVITS 的音色，通话用的 Fish Audio 用不了，通话里用对白默认音色读；路人在角色表里设成了不朗读，通话里不出声；店长没有专属音色，「对白默认音色」又设成了跳过，通话里不出声。');
+  assert.equal(item.where, '镜译 → 朗读 → 音色 → 角色表');
+
+  // 豆包 and MiniMax look for a voice in their own 「角色音色」; muting is still the character table's.
+  const [cloud] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'minimax' }, voices: voices.slice(0, 2) });
+  assert.equal(cloud.reason, '老胡在「角色音色」里还没配音色，通话里用默认音色读。');
+  assert.equal(cloud.where, '镜译 → 朗读 → 更多 → 实时通话（测试版） → 角色音色');
+  const [muted] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'doubao' }, voices: [{ name: '路人', status: 'muted' }] });
+  assert.equal(muted.where, '镜译 → 朗读 → 音色 → 角色表');
+
+  assert.deepEqual(callMissing(['tts.stream'], { tts: { enabled: true, voice: 'fish' }, voices: [{ name: '樱井', status: 'own' }] }), []);
+});
+
+test('what an app is told in one line and in the reminder', () => {
+  assert.equal(callAppSummary([]), '都设好了');
+  const missing = callMissing([...CALL_NEEDS], { tts: { enabled: true, voice: 'fish', keyMissing: true }, stt: { available: false, problem: 'url' } });
+  assert.equal(callAppSummary(missing), '还缺 2 项');
+  assert.equal(callReminder('小手机', missing), '小手机连上了镜译，还缺 2 项：Fish Audio API Key、语音输入。到「朗读 → 更多 → 实时通话（测试版）」看怎么补。');
 });

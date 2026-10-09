@@ -192,6 +192,7 @@ import {
   unsungText,
   fishLivePayload,
   speechMood,
+  findVoiceEntry,
   describeGsvFailure,
   gsvEndpoint,
   gsvGoesDirect,
@@ -235,9 +236,9 @@ import { buildTranslationMessages, collectTranslationContext } from './workflow.
 import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.45.0-beta.1';
 import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.45.0-beta.1';
 import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.45.0-beta.1';
-import { createCall, createCallHistory } from './call.js?v=0.45.0-beta.1';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.45.0-beta.1';
 import { createPcmPlayer } from './pcm-player.js?v=0.45.0-beta.1';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest } from './tts-cloud.js?v=0.45.0-beta.1';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.45.0-beta.1';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -359,6 +360,8 @@ const runtime = {
   diagnosticSubscribers: new Set(),
   // Other extensions told whenever a translation writes a floor's scene (the public interface's scene.onChange).
   sceneListeners: new Set(),
+  // 已连接的应用（测试版）: what each app said through call.connect, for as long as the page is open (call.js).
+  callApps: null,
   update: { status: 'idle', installType: null, details: null },
   inflight: new Map(),
   // `${chatId}|${messageId}|${swipeId}` → the hash of the plain original 「清除这一楼的译文」 left there,
@@ -824,6 +827,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-row-between"><p class="jy-muted" data-jy-tts-usage>正在读取…</p><div class="jy-processing-toolbar"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="tts-clear-chat">清空本聊天的朗读缓存</button><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="tts-clear-all">清空全部</button></div></div>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-call"><summary><h2>实时通话（测试版）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
+<div data-jy-call-apps hidden></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="readWhileWriting">边写边读（主模型一边写，一边一句一句读出来；读模型写出的原文，不等翻译）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="liveAudio">边收边放（边写边读和实时通话时，Fish 生成一点就播一点，不等一整句做完；延迟模式是 normal 时会换成 balanced）</label></div>
 <p class="jy-muted">勾了「边写边读」，主模型一边写，镜译一边按句请求 Fish、按顺序读出来：读的是模型写出的原文，不等翻译，需要酒馆开着流式输出；运行记录里每一楼会记下首字、首句、出声各用了多久。再勾「边收边放」，Fish 生成出一小块就开始播，不等一整句做完，出声更早（Fish 延迟模式选的是 normal 时，这里会换成 balanced，否则没东西可以提前播；楼层朗读不受影响）。</p>
 <p class="jy-muted">给小手机这类插件打电话用的接口：边写边读（tts.stream）、语音输入（stt）、流式请求模型（llm.stream），都挂在 <code>window.__JINGYI__</code> 上，插件接上这三个就能边说边听。悬浮窗的「通话测试」页用的也是这三个，可以直接打给当前角色试效果。这一栏和通话测试页只在测试版里有。</p>
@@ -1226,6 +1230,8 @@ function saveSettings(next) {
     runtime.mini.syncQuickPickers?.();
     runtime.mini.refreshCall?.();
   }
+  // What a connected app still lacks follows every change of settings, wherever it was made.
+  refreshCallApps();
   const floating = typeof document === 'undefined' ? null : document.getElementById(FLOATING_ID);
   if (floating) floating.dataset.theme = runtime.settings.theme || 'day';
   // Anything the floor buttons depend on — the switch, the mode, the range — redraws them; switching
@@ -12063,6 +12069,11 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
       tts.readWhileWriting ? '边写边读' : '',
       tts.liveAudio ? '边收边放' : '',
       tts.streamVoice === 'fish' ? '' : (CLOUD_VOICE_LABELS[tts.streamVoice] ?? tts.streamVoice),
+      // 已连接的应用: an app that still lacks something says so while the fold is closed.
+      ...(runtime.callApps?.list() ?? []).map(entry => {
+        const missing = callAppMissing(entry, settings);
+        return missing.length ? `${entry.app}还缺 ${missing.length} 项` : `${entry.app}已连接`;
+      }),
     ].filter(Boolean).join(' · ') || '关闭',
   };
   for (const [id, text] of Object.entries(summaries)) setText(root, `[data-jy-fold="${id}"] [data-jy-fold-summary]`, text);
@@ -12355,6 +12366,7 @@ function syncTtsFields(root, settings = runtime.settings, { renderLists = true }
   fillTtsChannelPickers(root, settings);
   const cloud = root.querySelector('[data-jy-stt-cloud]');
   if (cloud) cloud.hidden = tts.sttProvider !== 'cloud';
+  renderCallApps(root, settings);
   setText(root, '[data-jy-tts-title="narrator"]', tts.narratorTitle ? `· ${tts.narratorTitle}` : '');
   setText(root, '[data-jy-tts-title="dialogue"]', tts.dialogueTitle ? `· ${tts.dialogueTitle}` : '');
   syncTtsPickers(root, settings);
@@ -14441,6 +14453,30 @@ function createControlCenter(rootDocument = document) {
           fold.open = true;
           fold.scrollIntoView?.({ block: 'nearest' });
         }
+      } else if (action === 'call-fix') {
+        // 已连接的应用's 「去设置」: to the field the missing item is set in, focused.
+        const target = callFixTarget(button.dataset.jyCallFix, button.dataset.jyCallApp);
+        if (target.channelId) {
+          runtime.editingChannelId = target.channelId;
+          syncFields(root, runtime.settings);
+        }
+        if (target.page !== 'tts') selectTab(target.page);
+        const page = root.querySelector(`[data-jy-page="${target.page}"]`);
+        if (target.fold) {
+          const fold = page?.querySelector(`details[data-jy-fold="${target.fold}"]`);
+          if (fold) fold.open = true;
+        }
+        let scope = page;
+        if (target.row) {
+          const row = [...(page?.querySelectorAll('[data-jy-tts-voice-row]') ?? [])].find(item => item.querySelector('[data-jy-tts-voice-name]')?.value.trim() === target.row);
+          if (row) {
+            row.open = true;
+            scope = row;
+          }
+        }
+        const field = scope?.querySelector(target.selector);
+        field?.scrollIntoView?.({ block: 'center' });
+        field?.focus?.({ preventScroll: true });
       } else if (action === 'move-reset') {
         resetMoveRow(root, button.closest('[data-jy-move-row]'));
       } else if (action === 'preset-restore') {
@@ -19546,11 +19582,12 @@ function streamTimingText(times) {
 
 /**
  * One reading of text still being written. `toLines` turns the text so far into lines; `speaker`, when
- * a caller names one, speaks all of it in that character's voice. The session object: `set` (the whole
- * text so far), `push` (the whole so far, or what came next), `end`, `cancel`, `pause`, `resume`,
- * `on('state')`, `state`, `done`, and `finished` (a promise).
+ * a caller names one, speaks all of it in that character's voice; `onSpeakers` hears who each stretch
+ * turned out to be said by. The session object: `set` (the whole text so far), `push` (the whole so
+ * far, or what came next), `end`, `cancel`, `pause`, `resume`, `on('state')`, `state`, `done`, and
+ * `finished` (a promise).
  */
-function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang = '', emotion = '', startedAt = null }) {
+function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang = '', emotion = '', startedAt = null, onSpeakers = null }) {
   const settings = streamReadingSettings(runtime.settings);
   const tts = ttsSettings(settings);
   requireStreamKey(tts);
@@ -19640,6 +19677,14 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
       : who
       ? buildSegments(own, apiLabels(own, { speaker: who, lang }), { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: apiMoodVoices(own, mood), evidence: callerEvidence(floor, mood) })
       : streamSegments(floor, utterances, settings, { mood }).filter(segment => segment.lineId === lineId);
+    if (onSpeakers) {
+      const said = segments.filter(segment => segment.type === 'dialogue' && segment.speaker).map(segment => segment.speaker);
+      try {
+        if (said.length) onSpeakers(said);
+      } catch {
+        // Who was heard is only noted; the reading goes on whatever became of the note.
+      }
+    }
     // A caller's text (a call, a plugin, the 试听 button) is read whole, as tts.speak reads it; the
     // reader's 朗读范围 is about their chat, and applies to a reply read while it is written.
     const { items } = await ttsItemsFor(floor, segments, settings, speaker || kind === 'api' ? { range: 'all' } : {});
@@ -20031,17 +20076,20 @@ const STT_PRESETS = Object.freeze({
 // What the browser's recogniser expects for the short language names the reader writes.
 const STT_BROWSER_LANGS = Object.freeze({ zh: 'zh-CN', ja: 'ja-JP', en: 'en-US', ko: 'ko-KR', yue: 'zh-HK' });
 
-/** Whether speech can be taken now, and in words the reader can act on when it cannot. */
+/**
+ * Whether speech can be taken now, and in words the reader can act on when it cannot. `problem` names
+ * what is in the way (secure / browser / recorder / url / key), for what call.connect says about it.
+ */
 function sttAvailability(tts = ttsSettings()) {
-  if (globalThis.isSecureContext === false) return { available: false, reason: '麦克风只能在 https 或本机地址（localhost、127.0.0.1）下打开。' };
+  if (globalThis.isSecureContext === false) return { available: false, problem: 'secure', reason: '麦克风只能在 https 或本机地址（localhost、127.0.0.1）下打开。' };
   if (tts.sttProvider === 'browser') {
     const Recognition = globalThis.SpeechRecognition ?? globalThis.webkitSpeechRecognition;
-    return Recognition ? { available: true, reason: '' } : { available: false, reason: '这个浏览器没有自带语音识别，换成「按住说话，云端转写」。' };
+    return Recognition ? { available: true, problem: '', reason: '' } : { available: false, problem: 'browser', reason: '这个浏览器没有自带语音识别，换成「按住说话，云端转写」。' };
   }
-  if (!globalThis.navigator?.mediaDevices?.getUserMedia || typeof globalThis.MediaRecorder !== 'function') return { available: false, reason: '这个浏览器不能录音。' };
-  if (!tts.sttUrl) return { available: false, reason: '还没填转写地址（朗读 → 更多 → 实时通话（测试版））。' };
-  if (!tts.sttApiKey) return { available: false, reason: '还没填转写 Key（朗读 → 更多 → 实时通话（测试版））。' };
-  return { available: true, reason: '' };
+  if (!globalThis.navigator?.mediaDevices?.getUserMedia || typeof globalThis.MediaRecorder !== 'function') return { available: false, problem: 'recorder', reason: '这个浏览器不能录音。' };
+  if (!tts.sttUrl) return { available: false, problem: 'url', reason: '还没填转写地址（朗读 → 更多 → 实时通话（测试版））。' };
+  if (!tts.sttApiKey) return { available: false, problem: 'key', reason: '还没填转写 Key（朗读 → 更多 → 实时通话（测试版））。' };
+  return { available: true, problem: '', reason: '' };
 }
 
 /** Starts listening; resolves once the microphone is open, with stop() for the words and cancel(). */
@@ -20429,6 +20477,202 @@ async function openCallSettings() {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// 已连接的应用（测试版）. call.connect: an app (the 小手机) says which characters it may call and which
+// interfaces it will use, and is told what is still missing for that (call.js callMissing), read off the
+// settings exactly as a call would meet them. Kept for this page only; the 「实时通话（测试版）」 fold lists
+// every app with what it lacks, each item with 「去设置」, and the first connect of an app that lacks
+// something says so once.
+// ---------------------------------------------------------------------------------------------
+
+function callApps() {
+  runtime.callApps ??= createCallApps();
+  return runtime.callApps;
+}
+
+/**
+ * How each name sounds in what is read while written, the way createTtsStream will meet it: the name
+ * unified with the cast as buildSegments unifies it, looked up in the character table as Fish hears it
+ * (a GPT-SoVITS-only voice is no voice there), muted or skipped as segmentMuted decides — for 豆包 and
+ * MiniMax too — and otherwise heard in a voice of its own or the default one. A name that is another
+ * spelling of someone already listed is listed once.
+ */
+function callVoiceStatuses(names, settings = runtime.settings) {
+  const stream = streamReadingSettings(settings);
+  const tts = ttsSettings(stream);
+  const config = ttsVoiceConfig(stream);
+  const table = ttsVoicesFor(stream);
+  const spelled = unifySpeakerNames(names, ttsKnownNames(stream));
+  const cloud = tts.streamVoice === 'fish' ? null : parseVoiceMap(tts[tts.streamVoice]?.voiceMap);
+  const listed = new Set();
+  const statuses = [];
+  for (const name of names) {
+    const speaker = spelled.get(name) ?? name;
+    const entry = findVoiceEntry(config.voices, speaker);
+    const key = entry?.name ?? speaker;
+    if (listed.has(key)) continue;
+    listed.add(key);
+    const own = Boolean(entry && (Object.keys(entry.voices ?? {}).length || (entry.locked !== false && entry.voiceId)));
+    let status = 'own';
+    if (entry?.mute === true) status = 'muted';
+    else if (config.dialogueFallback === 'skip' && !own) status = 'skipped';
+    else if (cloud) status = cloud.has(speaker.toLowerCase()) ? 'own' : 'default';
+    else if (!own) {
+      const bound = findVoiceEntry(table, speaker);
+      status = bound && [bound.voiceId, ...Object.values(bound.voices ?? {})].some(isGsvVoiceId) ? 'gsv' : 'default';
+    }
+    statuses.push({ name, status });
+  }
+  return statuses;
+}
+
+/** What call.js needs to know about the settings to say what an app still lacks. */
+function callAppFacts(names, settings = runtime.settings) {
+  const tts = ttsSettings(settings);
+  const stt = sttAvailability(tts);
+  const request = callRequestSettings(settings);
+  const streams = request.apiMode === 'independent';
+  const channel = streams ? getActiveChannel(request) : null;
+  return {
+    tts: {
+      enabled: tts.enabled,
+      voice: tts.streamVoice,
+      keyMissing: tts.streamVoice === 'fish' ? !tts.fish.key : !tts[tts.streamVoice]?.key,
+      fishCardHidden: tts.provider !== 'fish',
+    },
+    voices: callVoiceStatuses(names, settings),
+    stt: { available: stt.available, problem: stt.problem },
+    llm: {
+      problem: !streams ? 'follow' : !channel?.url || !channel?.model ? 'incomplete' : '',
+      connection: channelLabel(settings, streams ? request.selectedChannelId : 'follow', { short: true }),
+      sameAsAnalysis: !tts.callChannelId,
+    },
+  };
+}
+
+/** What one connected app still lacks, as the settings stand now. */
+function callAppMissing(entry, settings = runtime.settings) {
+  return callMissing(entry.needs, callAppFacts(callAppNames(entry), settings));
+}
+
+/** call.connect: the app's own words in, what is still missing out. */
+function apiCallConnect(options = {}) {
+  if (!runtime.initialized) throw new Error('镜译还没启动完，稍后再试。');
+  const entry = callApps().connect(options);
+  const missing = callAppMissing(entry);
+  recordDiagnostic(missing.length ? 'warn' : 'info', 'call', `${entry.app}连上了镜译（要用 ${entry.needs.join('、') || '—'}）：${missing.length ? `还缺 ${missing.map(item => item.title).join('、')}` : '都设好了'}。`, {
+    app: entry.app, characters: entry.characters, needs: entry.needs, missing: missing.map(item => item.id),
+  });
+  if (missing.length && callApps().remind(entry.app)) toast('warning', callReminder(entry.app, missing));
+  refreshCallApps();
+  return { app: entry.app, needs: [...entry.needs], missing };
+}
+
+/** Speakers an app's own reading turned out to have: checked from now on, like the ones it named. */
+function noteCallSpeakers(names) {
+  if (!runtime.callApps) return;
+  if (callApps().hear(names).length) refreshCallApps();
+}
+
+// What each fold's box last showed, so an unchanged list is not drawn again.
+const callAppsShown = new WeakMap();
+
+/**
+ * The connected apps on the 「实时通话（测试版）」 fold: each app's name with 「都设好了」 or how many items
+ * are missing, and under it each missing item — its setting's name, what is missing, 「去设置」. Drawn
+ * again only when what it says changed, so a click on 「去设置」 is never lost to a redraw.
+ */
+function renderCallApps(root, settings = runtime.settings) {
+  const box = root?.querySelector?.('[data-jy-call-apps]');
+  if (!box) return;
+  const apps = runtime.callApps?.list() ?? [];
+  const shown = apps.map(entry => ({ entry, missing: callAppMissing(entry, settings) }));
+  const signature = JSON.stringify(shown.map(({ entry, missing }) => [entry.app, missing.map(item => [item.id, item.title, item.reason])]));
+  if (callAppsShown.get(box) === signature) return;
+  callAppsShown.set(box, signature);
+  box.hidden = !shown.length;
+  const doc = box.ownerDocument;
+  const row = ({ sub = false, done = false, title, text, app = '', fix = '' }) => {
+    const element = doc.createElement('div');
+    element.className = sub ? 'jy-summary-row jy-summary-row-sub' : 'jy-summary-row';
+    const mark = doc.createElement('span');
+    mark.className = 'jy-state-mark';
+    mark.dataset.state = done ? 'done' : 'idle';
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = done ? '✓' : '·';
+    const copy = doc.createElement('div');
+    copy.className = 'jy-summary-copy';
+    const heading = doc.createElement('h3');
+    heading.textContent = title;
+    const line = doc.createElement('p');
+    line.textContent = text;
+    copy.append(heading, line);
+    element.append(mark, copy);
+    if (fix) {
+      const button = doc.createElement('button');
+      button.type = 'button';
+      button.className = 'jy-text-button';
+      button.dataset.jyAction = 'call-fix';
+      button.dataset.jyCallFix = fix;
+      button.dataset.jyCallApp = app;
+      button.textContent = '去设置';
+      element.appendChild(button);
+    }
+    return element;
+  };
+  box.replaceChildren(...shown.flatMap(({ entry, missing }) => [
+    row({ done: !missing.length, title: `已连接的应用：${entry.app}`, text: callAppSummary(missing) }),
+    ...missing.map(item => row({ sub: true, title: item.title, text: item.reason, app: entry.app, fix: item.id })),
+  ]));
+}
+
+/** The open control centre's fold and its summary, after an app connected or a call heard someone new. */
+function refreshCallApps() {
+  const root = runtime.panel?.controller?.root;
+  if (!root || !runtime.callApps) return;
+  renderCallApps(root);
+  syncTtsFoldSummaries(root);
+}
+
+/**
+ * Where 「去设置」 goes for one missing item, as the settings stand: the field itself where it is on the
+ * page — the Fish key on the 「Fish Audio」 card, a 豆包 or MiniMax key, the transcription and call
+ * connection fields in this fold — or the character table, or the connection on 「模型连接」.
+ */
+function callFixTarget(id, app = '', settings = runtime.settings) {
+  const tts = ttsSettings(settings);
+  const fold = 'tts-call';
+  if (id === 'tts') return { page: 'tts', selector: '[data-jy-tts-master] [data-jy-tts-field="enabled"]' };
+  if (id === 'key') {
+    if (tts.streamVoice !== 'fish') return { page: 'tts', fold, selector: `[data-jy-tts-${tts.streamVoice}="key"]` };
+    return tts.provider === 'fish'
+      ? { page: 'tts', selector: '[data-jy-tts-provider-card="fish"] [data-jy-tts-fish="key"]' }
+      : { page: 'tts', fold, selector: '[data-jy-tts-field="streamVoice"]' };
+  }
+  if (id === 'stt') {
+    const problem = sttAvailability(tts).problem;
+    return { page: 'tts', fold, selector: problem === 'url' ? '[data-jy-tts-field="sttUrl"]' : problem === 'key' ? '[data-jy-tts-field="sttApiKey"]' : '[data-jy-tts-field="sttProvider"]' };
+  }
+  if (id === 'llm') {
+    const request = callRequestSettings(settings);
+    return request.apiMode === 'independent'
+      ? { page: 'settings', channelId: request.selectedChannelId, selector: getActiveChannel(request).url ? '[data-jy-channel-field="model"]' : '[data-jy-channel-field="url"]' }
+      : { page: 'tts', fold, selector: '[data-jy-tts-field="callChannelId"]' };
+  }
+  // voices: where the call's voice looks for the first name missing one — 豆包's or MiniMax's 「角色音色」,
+  // or that character's row in the table (opened), or 「添加角色」 when there is no row yet.
+  const entry = runtime.callApps?.list().find(item => item.app === app);
+  const statuses = entry ? callVoiceStatuses(callAppNames(entry), settings) : [];
+  const first = statuses.find(item => item.status !== 'own');
+  if (tts.streamVoice !== 'fish' && statuses.some(item => item.status === 'default')) {
+    return { page: 'tts', fold, selector: `[data-jy-tts-${tts.streamVoice}="voiceMap"]` };
+  }
+  const row = first ? findVoiceEntry(ttsVoicesFor(settings), unifySpeakerNames([first.name], ttsKnownNames(settings)).get(first.name) ?? first.name) : null;
+  return row
+    ? { page: 'tts', row: row.name, selector: first.status === 'muted' ? '[data-jy-tts-voice-mute]' : '[data-jy-tts-voice-id]' }
+    : { page: 'tts', selector: '[data-jy-action="tts-add-voice"]' };
+}
+
 /** 边写边读 for the main model's reply: the first streamed text of a generation opens a reading of that floor. */
 function onReplyStreaming(text) {
   if (!runtime.mainGenerationActive) return;
@@ -20732,13 +20976,15 @@ function notifySceneListeners(messageId, scene) {
  * audio settings, Fish key and quota; nothing is written to the chat. `on('state', fn)` hears
  * 'buffering' / 'speaking' / 'paused' / 'idle'; `done` settles when the last stretch has been heard.
  */
-function apiStream({ speaker = '', lang = '', emotion = '', signal = null } = {}) {
+function apiStream({ speaker = '', lang = '', emotion = '', signal = null } = {}, { fromApp = false } = {}) {
   const { tts } = apiTtsSettings({ stream: true });
   stopTts();
   runtime.tts.liveWanted = true;
   // Called from a tap (a send button), the sound is allowed now, in the tap: iOS allows it nowhere else.
   if (tts.liveAudio) livePlayer()?.unlock();
-  const session = createTtsStream({ kind: 'api', toLines: streamPlainLines, speaker, lang, emotion: String(emotion ?? '') });
+  // What another extension reads (not the 通话测试 page's own calls): who it turned out to be said by is
+  // checked for the apps connected through call.connect.
+  const session = createTtsStream({ kind: 'api', toLines: streamPlainLines, speaker, lang, emotion: String(emotion ?? ''), onSpeakers: fromApp ? noteCallSpeakers : null });
   if (signal?.aborted) session.cancel();
   else signal?.addEventListener?.('abort', () => session.cancel(), { once: true });
   return Object.freeze({
@@ -20790,7 +21036,7 @@ function installPublicApi() {
       speak: options => apiSpeak(options ?? {}),
       read: options => apiSpeak(options ?? {}),
       /** Text still being written, read a stretch at a time as it grows. See apiStream. */
-      stream: options => apiStream(options ?? {}),
+      stream: options => apiStream(options ?? {}, { fromApp: true }),
       /** Whatever this interface is saying, stopped. A floor being read is left alone. */
       stop() {
         if (runtime.tts.stream?.kind === 'api' && !runtime.tts.stream.done) runtime.tts.stream.cancel();
@@ -20820,7 +21066,15 @@ function installPublicApi() {
       /** { messages, signal, onText(textSoFar) } → the whole answer. */
       stream: options => apiLlmStream(options ?? {}),
     }),
-    features: Object.freeze(['tts.speak', 'tts.stream', 'stt', 'llm.stream']),
+    /**
+     * An app connecting: { app, characters, needs } → { app, needs, missing }. `missing` says what is
+     * still not set for the needs it named — each item's id, need, title, reason, where (and names, for
+     * characters without a voice). Asking again replaces what the app said before.
+     */
+    call: Object.freeze({
+      connect: options => apiCallConnect(options ?? {}),
+    }),
+    features: Object.freeze(['tts.speak', 'tts.stream', 'stt', 'llm.stream', 'call.connect']),
     beta: true,
     /**
      * Each translated floor's scene, written by the translation as it went: tone (one of `tones`),
@@ -21060,6 +21314,11 @@ export const __testing = Object.freeze({
   apiTtsReason,
   streamPlainLines,
   installPublicApi,
+  apiCallConnect,
+  callVoiceStatuses,
+  callFixTarget,
+  renderCallApps,
+  resetCallApps: () => { runtime.callApps = null; },
   translateMessage,
   createTtsTransport,
   ttsRequestSettings,
