@@ -8,19 +8,19 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.45.0';
+} from './prompts.js?v=0.46.0';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.45.0';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.46.0';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.45.0';
+import { resolveMoveStyle } from './palette.js?v=0.46.0';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.45.0';
+export const APP_VERSION = '0.46.0';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -1133,6 +1133,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // The 「音乐卡片」 rule group (processing.js PROCESSING_FIELDS carries it alongside the other
   // per-profile fields above): off by default, a reader turns it on by hand. See splitCardRows.
   musicCardRules: false,
+  // 「朗读时唱出来」 (DESIGN §17.15): the reading sings 歌词行 in their own words. Off, they are out of
+  // the reading, as they were before v0.46.0.
+  lyricSing: true,
   segmentPrefix: '',
   segmentSuffix: '',
   translationPrefix: '{',
@@ -2331,6 +2334,7 @@ export function mergeSettings(value = {}) {
     : (FLOOR_BUTTON_LEGACY[merged.floorButtons] ?? DEFAULT_SETTINGS.floorButtons);
   merged.leftHanded = merged.leftHanded === true;
   merged.segmentJump = merged.segmentJump !== false;
+  merged.lyricSing = merged.lyricSing !== false;
   for (const key of [
     'profileId',
     'apiUrl',

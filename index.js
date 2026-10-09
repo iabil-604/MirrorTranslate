@@ -125,8 +125,8 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.45.0';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.45.0';
+} from './core.js?v=0.46.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.46.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -187,6 +187,8 @@ import {
   isSungText,
   singingText,
   unsungText,
+  singingBlockedReason,
+  stripCues,
   describeGsvFailure,
   gsvEndpoint,
   gsvGoesDirect,
@@ -194,10 +196,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.45.0';
-import { createTtsStore } from './tts-store.js?v=0.45.0';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.45.0';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.45.0';
+} from './tts.js?v=0.46.0';
+import { createTtsStore } from './tts-store.js?v=0.46.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.46.0';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.46.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -207,7 +209,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.45.0';
+} from './processing.js?v=0.46.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -225,10 +227,10 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.45.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.45.0';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.45.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.45.0';
+} from './prompts.js?v=0.46.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.46.0';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.46.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.46.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -246,8 +248,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.45.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.45.0';
+} from './palette.js?v=0.46.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.46.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -255,7 +257,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.45.0';
+} from './diagnostics.js?v=0.46.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -266,7 +268,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.45.0';
+} from './helper.js?v=0.46.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -684,7 +686,7 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <div class="jy-text-scope"><h2>保留与歌词</h2>
 <details class="jy-fold" data-jy-fold="processing-preserve"><summary><h2>原样保留白名单</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 只要这一行里有匹配就算（要整行匹配请写 ^…$）。纯边框、纯符号、标签行和只有图片的行自动保留。</p></div></details>
-<details class="jy-fold" data-jy-fold="processing-lyrics"><summary><h2>歌词行</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="lyricLineRules" spellcheck="false" placeholder="星が降る夜に&#10;/^もう一度/"></textarea></label><p class="jy-muted">写法和上面的保留白名单一样（文字、prefix:、/正则/），写的是歌词本身的文字或规律，不是「作词」「作曲」这类署名行。命中的行按歌词单独翻译：一行进一行出，不跟前后的正文并成一段；双语、只留译文和替换模式下都原位排成「原文 (译文)」；已经是中文的歌词行不翻译。默认不朗读。</p></div></details>
+<details class="jy-fold" data-jy-fold="processing-lyrics"><summary><h2>歌词行</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="lyricLineRules" spellcheck="false" placeholder="星が降る夜に&#10;/^もう一度/"></textarea></label><p class="jy-muted">写法和上面的保留白名单一样（文字、prefix:、/正则/），写的是歌词本身的文字或规律，不是「作词」「作曲」这类署名行。命中的行按歌词单独翻译：一行进一行出，不跟前后的正文并成一段；双语、只留译文和替换模式下都原位排成「原文 (译文)」；已经是中文的歌词行不翻译。</p><div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="lyricSing">朗读时唱出来</label></div><p class="jy-muted">勾上时（默认），朗读读到歌词行就唱出来：唱原文，读译文时也唱原文；默认用旁白的音色，悬浮窗改句面板里可以改成某个角色唱。楼层里一段歌词的末尾有「唱」「重新生成」，唱完这一段就停。只有 Fish 的 S2 系列模型能唱；用 GPT-SoVITS 或 s1 时歌词不读，「唱」按钮变淡，点一下会说原因。不勾，歌词行不朗读。</p></div></details>
 <label class="jy-check"><input type="checkbox" data-jy-field="musicCardRules">音乐卡片</label>
 <p class="jy-muted">手动开启，默认关闭。开启后，正文里以 <code>&lt;br&gt;</code> 分隔的一组行，只要其中出现 NOW PLAYING 这类固定文案、已经写成「原文 (中文)」的行、或命中上面的歌词规则，才会被当成卡片：这一组里已经是这三种样子的行自动保留，其余 <code>&lt;br&gt;</code> 行按歌词处理；没有出现这三种迹象的 <code>&lt;br&gt;</code> 分隔文字，仍按普通正文整体翻译。只按这一种卡片的样子写的，遇到别的卡片格式效果不对时，把歌名、歌手这类行加进「原样保留白名单」。</p>
 </div>
@@ -749,7 +751,7 @@ const CONTROL_CENTER_MARKUP = `
 <p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译、分析模式、小助手各用哪条，在「模型连接」页最上面的「各功能用哪条连接」里选，分析模式用的连接在这一页「更多 → 分析模式」里也能改。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）也存在「模型连接」页。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文（旁白读译文，台词按角色写的语言读原文）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoRead">新回复自动朗读（只读最新一楼，写完才读；正在读别的楼时只提醒、不打断）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">点播放后，做完直接播（关掉就只生成，再点一次才播）</label></div>
-<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不分析时直接用这些标注，不再请求副模型；打开分析模式，正文一闭合就把这一楼发给副模型分析一次，走分析模式用的连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页；那里点一句的「详细」再按「唱」，这句就唱出来（S2 系列模型才能唱）。</p>
+<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不分析时直接用这些标注，不再请求副模型；打开分析模式，正文一闭合就把这一楼发给副模型分析一次，走分析模式用的连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。想让一句唱出来，在朗读页点这一句，再点「唱」（S2 系列模型才能唱）；歌词行默认就唱，楼层里一段歌词的末尾有「唱」按钮，开关在「正文处理 → 歌词行」。</p>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label><label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label></div>
 <p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>对白读原文：旁白读译文，每一句台词按正文里写的语言读原文——同一楼里日本人的台词读日语、英国人的台词读英语，说话人和情绪仍然取自译文的标注，句内的停顿重读带不过去。不用另外选语言配的音色：Fish 的 S2 系列按每句自己的语言发音，「音色」给角色配的「多国语言」音色也是按这句话自己的语言选的，没配就还是这个角色的默认音色。<br>不开分析模式时，以上几种读法都给每句写一句中文配音指令：谁在说、基础情绪、情绪怎么变、语气、语速、停顿重读、要不要笑声叹气喘息。S2 系列模型直接读方括号里的中文指令，句内还会插 [重读]、[停顿]、[长停顿] 和声音词，语速音量走 Fish 的参数；S1 读不懂自由文本，退回它认得的英文固定标签。台词本身不经过模型，一个字不改。<br>开着分析模式时按声学标注规则来：不写情绪词，只在字上插十个声音标签；台词可以加叠字、！！、~、……和呜、嗯、唔这类语气词，原文的字程序逐字核对，对不上的句子按原文念。语速分五档；张力 1~5 调 Fish 的 temperature，张力不同的句子分开请求；很短的语气句会加强防重复，免得卡在一个音上。分析按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮或悬浮窗的改句面板能看到分析结果和最终发给 Fish 的内容，可以改。</p>
 </div>
@@ -1195,8 +1197,9 @@ function saveSettings(next) {
   if (ttsSettings(previous).intimate !== ttsSettings(runtime.settings).intimate) {
     for (const [key, entry] of [...runtime.tts.analysis]) if (entry?.depth === 'deep' || entry?.derived) runtime.tts.analysis.delete(key);
   }
-  const ttsBefore = JSON.stringify([previous.tts, previous.ttsVoices, previous.voiceLibrary]);
-  if (runtime.initialized && ttsBefore !== JSON.stringify([runtime.settings.tts, runtime.settings.ttsVoices, runtime.settings.voiceLibrary])) {
+  // 「朗读时唱出来」 lives on 正文处理 but decides what the floors read, so it redraws them too.
+  const ttsBefore = JSON.stringify([previous.tts, previous.ttsVoices, previous.voiceLibrary, previous.lyricSing !== false]);
+  if (runtime.initialized && ttsBefore !== JSON.stringify([runtime.settings.tts, runtime.settings.ttsVoices, runtime.settings.voiceLibrary, runtime.settings.lyricSing !== false])) {
     // Prepared floors were built on the old settings; the next look rebuilds them.
     runtime.tts.floors.clear();
     if (!ttsSettings(runtime.settings).enabled) {
@@ -4055,6 +4058,8 @@ const TTS_ICON_PLAY = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="fa
 const TTS_ICON_STOP = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2"/></svg>';
 const TTS_ICON_PAUSE = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="4" y="3.6" width="2.9" height="8.8" rx="0.9"/><rect x="9.1" y="3.6" width="2.9" height="8.8" rx="0.9"/></svg>';
 const TTS_ICON_REDO = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M13 8a5 5 0 1 1-1.6-3.7" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/><path d="M12.9 2.6v2.9h-2.9z"/></svg>';
+// 唱: two joined quavers, drawn like the play triangle — filled heads, a stroked beam.
+const TTS_ICON_SING = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.4 11.8V4.4l6.2-1.7v7.6" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/><ellipse cx="4.7" cy="12" rx="1.9" ry="1.5"/><ellipse cx="10.9" cy="10.3" rx="1.9" ry="1.5"/></svg>';
 const TTS_ICON_EDIT = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 4.6h10M3 8h10M3 11.4h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/><circle cx="6.2" cy="4.6" r="1.5"/><circle cx="10.4" cy="8" r="1.5"/><circle cx="7.6" cy="11.4" r="1.5"/></svg>';
 const TTS_RANGE_LABELS = Object.freeze({ all: '旁白 + 对白', dialogue: '只读对白', narration: '只读旁白' });
 const TTS_MODE_LABELS = Object.freeze({ off: '不分析', deep: '分析模式' });
@@ -4345,13 +4350,22 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
         const read = readSpeechLine(marked, { quotePairs });
         return read.spans.length ? { lineId: segment.id, text: read.text, speech: read.spans } : { lineId: segment.id, text: read.text };
       };
-      // 歌词行 default out of the reading (design §2 「朗读怎么处理」): each keeps its own id, so it is
-      // dropped here rather than never having become a segment, the way a preserved line already is.
+      // 歌词行 (design §17.15): sung in their own words whichever side is read, the translation staying
+      // in its brackets on the page; with 「朗读时唱出来」 off they are out of the reading as they once were.
+      // Each keeps its own id, so it is placed or dropped here rather than never having become a segment.
       const lyricIds = snapshot.lyricIds;
+      const singsLyrics = settings.lyricSing !== false;
+      // `shown` is the line as the page shows it, 「原文 (译文)」 once translated: where its buttons go after.
+      const lyricLine = segment => {
+        const text = plainLineText(snapshot.reading?.get(segment.id) ?? segment.text);
+        const translated = plainLineText(snapshot.existingTranslations?.get(segment.id) ?? '');
+        return { lineId: segment.id, text, sung: true, ...(translated ? { shown: `${text} (${translated})` } : {}) };
+      };
+      const withLyrics = (segment, read) => (lyricIds?.has(segment.id) ? (singsLyrics ? lyricLine(segment) : null) : read(segment));
       if (side === 'source') {
         lines = snapshot.segments
-          .filter(segment => !lyricIds?.has(segment.id))
-          .map(originalLine).filter(line => line.text);
+          .map(segment => withLyrics(segment, originalLine))
+          .filter(line => line?.text);
         references = new Map([...snapshot.existingTranslations].map(([lineId, text]) => [lineId, plainLineText(text)]));
         source = 'source';
         offPage = snapshot.stripped === true;
@@ -4363,8 +4377,8 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
         // the same path 'both' already uses for its secondary side) — nothing extra is stored here.
         const mismatchedLines = [];
         lines = snapshot.segments
-          .filter(segment => snapshot.existingTranslations.has(segment.id) && !lyricIds?.has(segment.id))
-          .map(segment => {
+          .filter(segment => lyricIds?.has(segment.id) || snapshot.existingTranslations.has(segment.id))
+          .map(segment => withLyrics(segment, () => {
             const rawTranslation = plainLineText(snapshot.existingTranslations.get(segment.id));
             if (!rawTranslation) return null;
             // 特效字 layer 3: dropped the same way the plain 读译文 branch below drops it, so a struck-
@@ -4378,8 +4392,8 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
               onMismatch: () => mismatchedLines.push(segment.id),
             });
             return mixed ? { lineId: segment.id, text: mixed } : null;
-          })
-          .filter(Boolean);
+          }))
+          .filter(line => line?.text);
         if (mismatchedLines.length) {
           recordDiagnostic('warn', 'tts.dialogue-source-mismatch', '对白读原文：以下段落原文与译文的引号段数量不一致，这些段落按译文整句朗读。', { messageId: id, lineIds: mismatchedLines });
         }
@@ -4387,8 +4401,8 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
         source = 'dialogue_source';
       } else {
         lines = snapshot.segments
-          .filter(segment => snapshot.existingTranslations.has(segment.id) && !lyricIds?.has(segment.id))
-          .map(segment => {
+          .filter(segment => lyricIds?.has(segment.id) || snapshot.existingTranslations.has(segment.id))
+          .map(segment => withLyrics(segment, () => {
             const text = plainLineText(snapshot.existingTranslations.get(segment.id));
             // 特效字 layer 3: a struck-through or painted-invisible run of the original (design §2 「朗读
             // 怎么处理」) is dropped from what Fish hears — display keeps it, same as the original's own
@@ -4397,8 +4411,8 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
             const fragments = snapshot.fragmentsById?.get(segment.id);
             const runs = annotations.get(segment.id)?.runs;
             return { lineId: segment.id, text: stripHiddenRuns(text, fragments, runs) };
-          })
-          .filter(line => line.text);
+          }))
+          .filter(line => line?.text);
         sources = new Map(snapshot.segments.map(segment => [segment.id, plainLineText(segment.text)]));
         source = 'translation';
         // The translation carries no marks of its own; the original's are carried over to it, line by
@@ -4566,7 +4580,10 @@ function intimateVariant(mode) {
   return ({ on: 'intimate', auto: 'intimate-auto' })[mode] ?? '';
 }
 
-async function analyzeTtsFloor(floor, utterances, settings, depth, { force = false, onRequest = null, onPrefix = null, speakers = null, cacheOnly = false } = {}) {
+async function analyzeTtsFloor(floor, allUtterances, settings, depth, { force = false, onRequest = null, onPrefix = null, speakers = null, cacheOnly = false } = {}) {
+  // 歌词行 are sung as written: no analysis is asked about them, and none waits on them.
+  const utterances = (Array.isArray(allUtterances) ? allUtterances : []).filter(item => item.kind !== 'sung');
+  if (!utterances.length) return cacheOnly ? null : { labels: new Map(), voices: new Map(), depth };
   const roster = ttsKnownNames(settings);
   const tts = ttsSettings(settings);
   // 分析模式 in its own format (the reader's 声学标注规则) unless the reader's own prompt is written for
@@ -4823,6 +4840,8 @@ function settledPrefix(utterances, partial, undecided) {
 async function prepareTtsSegments(floor, settings, { onStatus = null, force = false, onStep = null, onPartial = null, passive = false, analyze = null, quiet = false } = {}) {
   const tts = ttsSettings(settings);
   const utterances = ttsUtterances(floor, settings);
+  // What an analysis is asked about: every sentence but the 歌词行, which are sung as written.
+  const spoken = utterances.filter(item => item.kind !== 'sung');
   // What the translation already said about every quoted run: who, in what mood, in Fish's own words.
   const reading = annotationReading(utterances, floor.annotations);
   const annotated = reading.labels.size > 0;
@@ -4865,6 +4884,27 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   // The reader's word on who speaks holds in every reading. The text's own reading of it belongs to
   // the plain reading alone; the analysed readings name their speakers themselves.
   const manual = await ttsManualSpeakers(floor);
+  // Who sings a 歌词行: the reader's pick from the inspector, else the narrator. Nothing an analysis or
+  // a mark said reaches it.
+  const sungLabels = labels => {
+    if (spoken.length === utterances.length) return labels;
+    const out = new Map(labels);
+    for (const item of utterances) {
+      if (item.kind !== 'sung') continue;
+      const name = manual.get(item.id);
+      if (name) out.set(item.id, { type: 'dialogue', speaker: name, speakerSource: 'manual', speakerEvidence: [SPEAKER_SOURCE_LABELS.manual] });
+      else out.delete(item.id);
+    }
+    return out;
+  };
+  // 歌词行 wait on no analysis: each is ready once every analysed sentence before it is.
+  const readyWithSung = readyIds => {
+    if (spoken.length === utterances.length) return readyIds;
+    const firstUnready = spoken.find(item => !readyIds.has(item.id))?.id ?? Infinity;
+    const ready = new Set(readyIds);
+    for (const item of utterances) if (item.kind === 'sung' && item.id < firstUnready) ready.add(item.id);
+    return ready;
+  };
   const host = getContext();
   const protagonists = { character: host.name2 ?? '', user: host.name1 ?? '' };
   let resolved = resolveSpeakers(utterances, { cast, manual, tagged: tagSpeakers, infer: false });
@@ -4902,7 +4942,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   // marks — only a reading asked for on this very floor outranks it: the store is keyed by the words
   // alone, and a greeting read in one chat must not decide how the same greeting reads in another.
   const stored = async (wanted, { thisFloor = false } = {}) => {
-    if (force || !utterances.length) return null;
+    if (force || !spoken.length) return null;
     const found = await analyzeTtsFloor(floor, utterances, settings, wanted, { cacheOnly: true }).catch(() => null);
     if (!found?.labels?.size || (thisFloor && found.floorId !== floor.floorId)) return null;
     const entry = { ...found, ...adopt(found), depth: wanted };
@@ -4963,7 +5003,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
     if (tagged.voices.size) voices = new Map(tagged.voices);
     resolved = resolveSpeakers(utterances, { cast, hints: speakerHints(reading.labels), manual, tagged: tagSpeakers, protagonists });
     onStep?.('analysis', { state: 'done', label: '不分析', detail: tagged.labels.size ? `按正文里的说话人标记读，${tagged.labels.size} 句带标记` : '直接读正文' });
-  } else if (depth !== 'annotations' && utterances.length) {
+  } else if (depth !== 'annotations' && spoken.length) {
     const key = floorKey;
     let known = force ? null : runtime.tts.analysis.get(key);
     // The store is looked in wherever the rest of this branch would not look: a look at the floor.
@@ -4989,8 +5029,9 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
             const partialLabels = new Map(reading.labels);
             for (const [id, label] of partial.labels) partialLabels.set(id, label);
             const undecided = [];
-            const segments = buildSegments(utterances, pinSpeakers(partialLabels, resolved, { fallback: 'model' }), { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: mergeVoiceMaps(reading.voices, partial.voices), evidence: ttsEvidence(floor), ready: partial.readyIds, undecided });
-            const { readyIds, ready } = settledPrefix(utterances, partial, undecided);
+            const partialReady = readyWithSung(partial.readyIds);
+            const segments = buildSegments(utterances, sungLabels(pinSpeakers(partialLabels, resolved, { fallback: 'model' })), { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: mergeVoiceMaps(reading.voices, partial.voices), evidence: ttsEvidence(floor), ready: partialReady, undecided });
+            const { readyIds, ready } = settledPrefix(utterances, { ...partial, readyIds: partialReady }, undecided);
             onStep?.('analysis', { state: 'active', label: `分析模式（${utterances.length} 句）`, detail: `已回 ${ready}/${partial.total} 段，先读这些` });
             onPartial({ segments, readyIds, ready, total: partial.total });
           } : null,
@@ -5031,7 +5072,7 @@ async function prepareTtsSegments(floor, settings, { onStatus = null, force = fa
   }
   // The reader's word, and the plain reading's own naming, are written over whatever the labels say;
   // the labels' own speakers stand where nobody else named one.
-  const pinned = pinSpeakers(labels, resolved, { fallback });
+  const pinned = sungLabels(pinSpeakers(labels, resolved, { fallback }));
   const dropped = [];
   const segments = buildSegments(utterances, pinned, { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices, evidence: ttsEvidence(floor), dropped });
   if (tone) for (const segment of segments) segment.tone = tone;
@@ -5640,7 +5681,9 @@ function tagTtsVoices(items, settings) {
  */
 async function ttsItemsFor(floor, segments, settings, { range = null } = {}) {
   const tts = ttsSettings(settings);
-  const inRange = segmentsInRange(segments, range ?? tts.range);
+  // 歌词行 are only heard where they can be sung; with GPT-SoVITS or s1 their buttons say why not.
+  const singable = !singingBlockedReason(tts);
+  const inRange = segmentsInRange(segments, range ?? tts.range).filter(segment => singable || segment.lyric !== true);
   const plan = planVoices(inRange, ttsVoiceConfig(settings));
   const overrides = await ttsOverrides(floor);
   const voiceConfig = ttsVoiceConfig(settings);
@@ -5649,9 +5692,11 @@ async function ttsItemsFor(floor, segments, settings, { range = null } = {}) {
     const carried = { ...item, console: consoleFor(item.segment, settings) };
     if (!override) return carried;
     const own = { text: override.text, speed: override.speed, volume: override.volume, tension: override.tension, speaker: override.speaker, recordKey: override.recordKey };
-    // A line set to 唱 is sung in the character's singing voice, where the row has one (情绪音色 「唱」).
-    if (isSungText(override.text)) {
-      const segment = { ...item.segment, sung: true };
+    // A line set to 唱 is sung in the character's singing voice, where the row has one (情绪音色 「唱」);
+    // a 歌词行 the reader rewrote in plain words is said in the speaking one.
+    const sung = override.text ? isSungText(override.text) : item.segment.sung === true;
+    if (sung !== (item.segment.sung === true)) {
+      const segment = { ...item.segment, sung };
       return { ...carried, segment, voiceId: resolveSegmentVoice(segment, voiceConfig) || item.voiceId, override: own };
     }
     return { ...carried, override: own };
@@ -6369,7 +6414,7 @@ async function firstPlainAnalysis(floor, settings = runtime.settings) {
   if (tts.mode !== 'off' || tts.autoGenerate) return false;
   const key = ttsLabelKey(floor);
   if (runtime.tts.plainFloors.has(key) || runtime.tts.analysis.has(key)) return false;
-  const utterances = ttsUtterances(floor, settings);
+  const utterances = ttsUtterances(floor, settings).filter(item => item.kind !== 'sung');
   if (!utterances.length || annotationReading(utterances, floor.annotations).labels.size) return false;
   const stored = await ttsStore().getAnalysis(await analysisCacheKey({ utterances, source: 'model', depth: 'simple', side: floor.side })).catch(() => null);
   if (Array.isArray(stored?.labels) && stored.labels.length) {
@@ -8247,7 +8292,10 @@ async function refineTtsAnalysis(messageId, { side = null, utteranceId = null, f
   const which = side ?? primaryTtsSide(settings);
   const prepared = await ttsPrepared(messageId, which);
   const { floor } = prepared;
-  const utterances = ttsUtterances(floor, settings);
+  const every = ttsUtterances(floor, settings);
+  if (utteranceId !== null && every.some(item => item.id === Number(utteranceId) && item.kind === 'sung')) throw new Error('歌词行直接唱，不经过分析。');
+  // 歌词行 are sung as written and never analysed, so a correction is not asked about them either.
+  const utterances = every.filter(item => item.kind !== 'sung');
   const base = currentTtsLabels(prepared);
   const scope = utteranceId === null ? utterances : utterances.filter(item => item.id === Number(utteranceId));
   if (!scope.length) throw new Error('这一句不在当前的朗读范围里。');
@@ -8516,6 +8564,38 @@ async function saveTtsSpeaker(messageId, utteranceId, speaker, side = null) {
   return name;
 }
 
+/**
+ * 唱 from the sentence list (design §17.15): the sentence becomes sung, or stops being sung, and is made
+ * and played again. A 歌词行 is sung by itself, so turning it off keeps its plain words as the reader's
+ * own version; any other sentence goes back to the reading's own version when it stops being sung.
+ */
+async function toggleTtsSing(messageId, utteranceId, side = null, { play = true } = {}) {
+  const blocked = singingBlockedReason(ttsSettings());
+  if (blocked) {
+    toast('info', blocked);
+    return false;
+  }
+  const data = await ttsInspect(messageId, utteranceId, side);
+  const own = data.override?.text ?? '';
+  const sung = own ? isSungText(own) : data.segment.sung === true;
+  const lyric = data.segment.lyric === true;
+  // data.text is the sentence as the reading makes it by itself: sung for a 歌词行, plain for any other.
+  const next = sung
+    ? (lyric ? stripCues(own || data.text) : data.text)
+    : (lyric ? data.text : singingText(own || data.text));
+  const kept = data.override ?? {};
+  const keepsPace = kept.speed !== undefined || kept.volume !== undefined || kept.tension !== undefined;
+  if (next === data.text && !keepsPace) {
+    // The reading's own version again; a name the reader picked for the line stays with it.
+    await clearTtsOverride(messageId, utteranceId, side);
+    if (kept.speaker) await saveTtsSpeaker(messageId, utteranceId, kept.speaker, side);
+  } else {
+    await saveTtsOverride(messageId, utteranceId, { text: next, speed: kept.speed, volume: kept.volume, tension: kept.tension }, side);
+  }
+  if (play) void playTtsUtterance(messageId, utteranceId, side);
+  return !sung;
+}
+
 async function clearTtsOverride(messageId, utteranceId, side = null) {
   const prepared = await ttsPrepared(messageId, side);
   await ttsStore().deleteOverride(prepared.floor.floorId, prepared.floor.version, utteranceId);
@@ -8635,6 +8715,26 @@ function makeTtsLineTools(messageId, line, side) {
   if (block) tick.dataset.jyTtsPickLines = line.lines.join(' ');
   tick.dataset.jyTtsSide = side;
   pick.appendChild(tick);
+  // A run of 歌词行 (design §17.15): 「唱」 sings the run and stops, 「重新生成」 makes it again. With a voice
+  // that cannot sing, 「唱」 stands alone, faded, and says why when pressed.
+  if (line.lyric) {
+    box.dataset.jyTtsLyric = '';
+    const blocked = singingBlockedReason(ttsSettings());
+    const sing = makeTtsLineButton(messageId, line, side, {
+      action: 'play-line', className: 'jy-tts-line-play', icon: TTS_ICON_SING, text: '唱',
+      label: blocked || `唱这段歌词（${line.ids.length} 句）`,
+    });
+    if (blocked) {
+      sing.setAttribute('aria-disabled', 'true');
+      box.append(sing);
+      return box;
+    }
+    box.append(pick, sing, makeTtsLineButton(messageId, line, side, {
+      action: 'regen-line', className: 'jy-tts-line-regen', icon: TTS_ICON_REDO, text: '重新生成',
+      label: `丢掉这段歌词的音频，再向 ${ttsProviderName(ttsSettings())} 要一次`,
+    }));
+    return box;
+  }
   box.append(
     pick,
     makeTtsLineButton(messageId, line, side, {
@@ -8683,6 +8783,29 @@ function planTtsLineButtons(segments) {
     else lines.set(segment.lineId, { lineId: segment.lineId, ids: [segment.id] });
   }
   return [...lines.values()];
+}
+
+/**
+ * A floor's 歌词行 in runs: lines of a song with nothing else between them share one 「唱」 pair, the
+ * way a folded original's paragraphs share theirs. `heard` is what the reading would play (the range
+ * and the muted rows applied); anything else between two lyric lines ends the run.
+ */
+function planLyricRuns(segments, heard) {
+  const runs = [];
+  let run = null;
+  for (const segment of Array.isArray(segments) ? segments : []) {
+    if (segment.lyric !== true || !heard.has(segment.id)) {
+      run = null;
+      continue;
+    }
+    if (!run) {
+      run = { lineId: segment.lineId, ids: [], lines: [], lyric: true };
+      runs.push(run);
+    }
+    run.ids.push(segment.id);
+    if (!run.lines.includes(segment.lineId)) run.lines.push(segment.lineId);
+  }
+  return runs;
 }
 
 /**
@@ -8870,7 +8993,9 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   }
   // The same text, the same settings and a bar still in place: nothing to do, and no snapshot taken.
   const muteKey = `${tts.dialogueFallback}|${ttsVoicesFor(settings).filter(row => row.mute).map(row => row.name).join(',')}`;
-  const cheapKey = `${Number(message?.swipe_id ?? 0)}|${ttsSides(settings).join('+')}|${tts.mode}|${tts.range}|${tts.quotePairs.join('')}|${tts.skipPairs.join('')}|${floorButtonMode(settings)}|${muteKey}`;
+  // 歌词行 are on the floor or not by their own switch, and sung or only explained by the voice chosen.
+  const singable = !singingBlockedReason(tts);
+  const cheapKey = `${Number(message?.swipe_id ?? 0)}|${ttsSides(settings).join('+')}|${tts.mode}|${tts.range}|${tts.quotePairs.join('')}|${tts.skipPairs.join('')}|${floorButtonMode(settings)}|${muteKey}|${settings.lyricSing !== false ? 'lyrics' : ''}${singable ? '' : '-mute'}`;
   const seen = runtime.tts.mesSeen.get(messageId);
   if (!force && seen && seen.mes === message?.mes && seen.key === cheapKey && root.dataset.jyTts && root.querySelector(':scope > .jy-tts-bar')) return;
   const floors = [];
@@ -8929,21 +9054,41 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   floors.forEach((floor, index) => {
     const utterances = ttsUtterances(floor, settings);
     const visible = audible[index];
-    visibleTotal += visible.length;
+    // A 歌词行 counts where it is sung; otherwise its button only says why it cannot be.
+    visibleTotal += visible.filter(segment => singable || segment.lyric !== true).length;
     // Nothing of it is on the page to hang a button on; the reading is started from the bar.
     if (floor.offPage) return;
     const found = floor.side === 'dialogue_source'
       ? locateDialogueSourceAnchors(sideTexts, floor, utterances)
       : locateAnchors(floor.side === 'source' ? sideTexts.source : sideTexts.translation, floor.lines, utterances.map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor })));
-    for (const utterance of utterances) {
-      const hit = found.get(utterance.id);
-      if (!hit) continue;
+    // 歌词行 are sung in their own words whichever side is read; those words are looked for anywhere
+    // on the page, the original's block included. A run's buttons go after its last line as the page
+    // shows it, the translation in brackets after the sung words (「原文 (译文)」) included.
+    const lyricLines = floor.lines.filter(line => line.sung);
+    const shownHits = new Map();
+    if (lyricLines.length) {
+      const anchors = utterances.filter(item => item.kind === 'sung').map(item => ({ id: item.id, lineId: item.lineId, text: item.anchor }));
+      for (const [id, hit] of locateAnchors(nodeTexts, lyricLines, anchors)) if (hit) found.set(id, hit);
+      const whole = lyricLines.map(line => ({ lineId: line.lineId, text: line.shown ?? line.text }));
+      for (const [lineId, hit] of locateAnchors(nodeTexts, whole, whole.map(line => ({ id: line.lineId, lineId: line.lineId, text: line.text })))) {
+        if (hit) shownHits.set(lineId, hit);
+      }
+    }
+    const toRange = hit => {
       const range = document.createRange();
       range.setStart(nodes[hit.start.node], hit.start.offset);
       range.setEnd(nodes[hit.end.node], hit.end.offset);
-      ranges.set(`${floor.side}:${utterance.id}`, range);
+      return range;
+    };
+    for (const utterance of utterances) {
+      const hit = found.get(utterance.id);
+      if (!hit) continue;
+      ranges.set(`${floor.side}:${utterance.id}`, toRange(hit));
     }
+    const shownRanges = new Map([...shownHits].map(([lineId, hit]) => [lineId, toRange(hit)]));
     for (const segment of visible) {
+      // A run of 歌词行 has one pair of buttons for the lot (planLyricRuns below), none per line.
+      if (segment.lyric === true) continue;
       const range = ranges.get(`${floor.side}:${segment.id}`);
       if (range) buttons.push({ range, segment, side: floor.side });
       else unplaced.push({ side: floor.side, id: segment.id, text: segment.text.slice(0, 24) });
@@ -8956,7 +9101,7 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
     // — the narration utterances of the line — never chasing a quoted run onto the original's block.
     // See dialogueSourceLineAnchorIds for why those narration utterances come from the full
     // `utterances` list above, not from `visible`.
-    for (const line of planTtsLineButtons(visible)) {
+    for (const line of planTtsLineButtons(visible.filter(segment => segment.lyric !== true))) {
       let last = null;
       const ids = floor.side === 'dialogue_source' ? dialogueSourceLineAnchorIds(line, utterances) : line.ids;
       for (const id of ids) {
@@ -8965,6 +9110,15 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
       }
       if (last) lineButtons.push({ range: last, line, side: floor.side });
       else unplacedLines.push({ side: floor.side, lineId: line.lineId });
+    }
+    for (const run of planLyricRuns(readings[index].segments, new Set(visible.map(segment => segment.id)))) {
+      let last = null;
+      const candidates = [...run.lines.map(lineId => shownRanges.get(lineId)), ...run.ids.map(id => ranges.get(`${floor.side}:${id}`))];
+      for (const range of candidates) {
+        if (range && (!last || range.compareBoundaryPoints(Range.END_TO_END, last) > 0)) last = range;
+      }
+      if (last) lineButtons.push({ range: last, line: run, side: floor.side });
+      else unplacedLines.push({ side: floor.side, lineId: run.lineId });
     }
   });
   // Later ranges first, so an insertion never sits between an earlier range and its own end. Where a
@@ -8975,7 +9129,8 @@ async function decorateTtsMessage(messageId, { force = false } = {}) {
   const folded = new Map();
   for (const entry of lineButtons) {
     const fold = foldedOriginalOf(entry.range, root);
-    if (!fold) {
+    // A run of 歌词行 keeps its own pair even inside a folded original: it is sung, not read with the rest.
+    if (!fold || entry.line.lyric) {
       lineTools.push(entry);
       continue;
     }
@@ -9170,6 +9325,11 @@ function bindTtsDom() {
         if (target.dataset.state === 'playing' && transport?.messageId === messageId && transport.state === 'playing') pauseTts();
         else void playTtsUtterance(messageId, utteranceId, side);
       } else if (action === 'play-line') {
+        // A run of 歌词行 with a voice that cannot sing: the button only says why.
+        if (target.getAttribute('aria-disabled') === 'true') {
+          toast('info', singingBlockedReason(ttsSettings()) || '现在不能唱。');
+          return;
+        }
         const lineId = Number(target.dataset.jyTtsLine);
         const lines = ttsButtonLines(target);
         const transport = runtime.tts.transport;
@@ -10629,6 +10789,7 @@ function collectSettings(root) {
     'includeCharacterCard',
     'includeRecentContext',
     'musicCardRules',
+    'lyricSing',
   ]) {
     const element = root.querySelector(`[data-jy-field="${name}"]`);
     if (element) current[name] = element.checked;
@@ -16348,20 +16509,20 @@ async function openMiniWindow() {
     markDirty();
     syncSing();
   };
-  // 唱 follows the text: pressed while it opens on [singing]. S1 cannot sing, so there it is off.
+  // 唱 follows the text: pressed while it opens on [singing]. With a voice that cannot sing (s1,
+  // GPT-SoVITS) it is faded rather than disabled, so a tap on a phone, where no tooltip shows, still says why.
   const syncSing = () => {
-    const tts = ttsSettings();
-    const gsv = tts.provider === 'gsv';
-    const s1 = !gsv && tts.fish.model === 's1';
-    singChip.disabled = s1 || gsv;
-    singChip.title = gsv
-      ? 'GPT-SoVITS 不能唱，只有 Fish 的 S2 系列模型能唱'
-      : s1
-        ? 's1 不能唱。换成 S2 系列模型（s2-pro、s2.1-pro 等）才能用'
-        : '整句用 Fish 的 [singing] 唱出来：带旋律感地念，不会照某首歌的曲调唱。按下时去掉这句的其他标签，再按一次取消';
-    singChip.setAttribute('aria-pressed', !s1 && !gsv && isSungText(fishInput.value) ? 'true' : 'false');
+    const blocked = singingBlockedReason(ttsSettings());
+    singChip.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+    singChip.title = blocked || '整句用 Fish 的 [singing] 唱出来：带旋律感地念，不会照某首歌的曲调唱。按下时去掉这句的其他标签，再按一次取消';
+    singChip.setAttribute('aria-pressed', !blocked && isSungText(fishInput.value) ? 'true' : 'false');
   };
   const toggleSing = () => {
+    const blocked = singingBlockedReason(ttsSettings());
+    if (blocked) {
+      toast('info', blocked);
+      return;
+    }
     fishInput.value = isSungText(fishInput.value) ? unsungText(fishInput.value) : singingText(fishInput.value);
     syncSing();
     markDirty();
@@ -16433,7 +16594,8 @@ async function openMiniWindow() {
     setText(win, '[data-jy-tts-depth]', `第 ${messageId} 楼${which === 'source' ? '（原文）' : ''} · 第 ${utteranceId} 句 · ${data.depth === 'deep' ? '分析模式' : data.depth === 'simple' ? '分析过' : data.depth === 'pending' ? '还没分析' : data.depth === 'off' ? '不分析' : ttsSettings().mode === 'deep' ? '翻译骨架（还没分析）' : '翻译骨架'}${data.derived ? '（由译文推出）' : ''}${voiceName ? ` · 音色 ${voiceName}` : ' · Fish 默认音色'}${data.recorded ? ' · 已有音频' : ''}`);
     // Who says it, and how that was decided; the reader can name someone else from the list.
     if (speakerSelect) {
-      const dialogue = segment.type === 'dialogue';
+      // A 歌词行 is the narrator's to sing until the reader gives it to somebody here.
+      const dialogue = segment.type === 'dialogue' || segment.lyric === true;
       speakerSelect.hidden = !dialogue;
       if (dialogue) {
         const names = [...new Set([...(data.cast ?? []), ...(segment.speaker ? [segment.speaker] : [])])];
@@ -16488,16 +16650,23 @@ async function openMiniWindow() {
     if (reset) reset.hidden = !data.override;
     const apply = win.querySelector('[data-jy-action="tts-apply"]');
     if (apply) apply.hidden = true;
-    const sung = isSungText(data.override?.text);
-    setText(win, '[data-jy-tts-note]', sung
-      ? `这句会唱出来${data.manualSpeaker ? `（说话人是你定的：${data.manualSpeaker}）` : ''}：Fish 带旋律感地念，不会照某首歌的曲调唱；角色有「唱」的情绪音色时用那个音色。唱完接着正常读，「恢复自动」回到程序的判断和副模型的分析。${ttsSettings().fish.model === 's1' ? '现在选的是 s1，不能唱，这句先照常念。' : ''}`
+    // 唱: a 歌词行 by itself, or a line the reader set to it. A voice that cannot sing says so here too,
+    // where a phone shows no tooltip.
+    const sung = data.override?.text ? isSungText(data.override.text) : data.segment?.sung === true;
+    const singBlocked = singingBlockedReason(ttsSettings());
+    const lyricOwn = data.segment?.lyric === true && !data.override?.text;
+    const note = sung && singBlocked
+      ? `这句${lyricOwn ? '是歌词行' : '设成了唱'}，但${singBlocked}${lyricOwn ? '歌词行先不读。' : '这句先照常念。'}`
+      : sung
+      ? `这句${lyricOwn ? '是歌词行，' : ''}会唱出来${data.manualSpeaker ? `（${lyricOwn ? '唱的人' : '说话人'}是你定的：${data.manualSpeaker}）` : ''}：Fish 带旋律感地念，不会照某首歌的曲调唱；角色有「唱」的情绪音色时用那个音色。唱完接着正常读，${lyricOwn ? '点上面的「唱」再「重新生成并播放」，就改成照常念。' : '「恢复自动」回到程序的判断和副模型的分析。'}`
       : data.edited
         ? `这句现在用的是你改过的版本${data.manualSpeaker ? `，说话人也是你定的（${data.manualSpeaker}）` : ''}；「恢复自动」回到程序的判断和副模型的分析。`
         : data.manualSpeaker
           ? `说话人是你定的（${data.manualSpeaker}）；上面的下拉框改回「交回自动判断」就恢复。`
           : data.inRange
             ? '改上面的内容、语速、张力或音量，「重新生成并播放」只重做这一句，整楼朗读时也用这个版本。上面的下拉框可以直接改说话人，改了就按那个人的音色重做，不重新分析。点「唱」整句改成唱的。'
-            : '这句不在当前的朗读范围里，改了也不会读。');
+            : '这句不在当前的朗读范围里，改了也不会读。';
+    setText(win, '[data-jy-tts-note]', !sung && singBlocked ? `${note}「唱」现在用不了：${singBlocked}` : note);
     globalThis.requestAnimationFrame?.(() => { if (win.isConnected) reanchor(); });
   };
   const closeInspector = () => {
@@ -16578,7 +16747,9 @@ async function openMiniWindow() {
       return;
     }
     const progress = ttsProgressFor(messageId, side);
-    const signature = `${messageId}|${side}|${progress?.steps.filter(step => step.state === 'done').length ?? 0}|${transport?.state ?? ''}|${runtime.tts.recordings.get(`${messageId}`)?.length ?? ''}`;
+    // The voice chosen and the lyric switch decide which lines are listed and what their buttons say.
+    const voice = `${ttsSettings().provider}|${ttsSettings().fish?.model ?? ''}|${runtime.settings.lyricSing !== false}`;
+    const signature = `${messageId}|${side}|${progress?.steps.filter(step => step.state === 'done').length ?? 0}|${transport?.state ?? ''}|${runtime.tts.recordings.get(`${messageId}`)?.length ?? ''}|${voice}`;
     if (!force && signature === sentencesSignature) {
       markCurrentSentence();
       return;
@@ -16649,10 +16820,12 @@ async function openMiniWindow() {
         mood.textContent = cueLabel(segment.emotion);
         tags.appendChild(mood);
       }
-      if (item.override?.text) {
+      // 唱: a 歌词行 by itself, or a line the reader set to it; 改过: any other version of the reader's.
+      const sungNow = item.override?.text ? isSungText(item.override.text) : segment.sung === true;
+      if (item.override?.text || sungNow) {
         const edited = document.createElement('span');
         edited.className = 'jy-mini-pill jy-mini-pill-edited';
-        edited.textContent = isSungText(item.override.text) ? '唱' : '改过';
+        edited.textContent = sungNow ? '唱' : '改过';
         tags.appendChild(edited);
       }
       if (muted) {
@@ -16665,9 +16838,12 @@ async function openMiniWindow() {
       body.appendChild(tags);
       const tools = document.createElement('div');
       tools.className = 'jy-mini-sentence-tools';
+      // 唱 sits right after 播放 (design §17.15); with a voice that cannot sing it is faded and says why.
+      const singBlocked = singingBlockedReason(ttsSettings());
+      const sing = ['sentence-sing', sungNow ? '取消唱' : '唱', singBlocked || (sungNow ? '这句不唱了，重新生成并播放' : '这句改成唱，重新生成并播放')];
       const actions = muted
         ? [['sentence-edit', '详细', '看这一句为什么不读']]
-        : [['sentence-play', '播放', '从这句读'], ['sentence-regen', '重新生成', `丢掉这句的音频，再向 ${ttsProviderName(ttsSettings())} 要一次`], ['tts-save-pick', '缓存', '缓存这一段或者整篇到本地'], ['sentence-edit', '详细', `看这句发给 ${ttsProviderName(ttsSettings())} 的内容，改了再生成`]];
+        : [['sentence-play', '播放', '从这句读'], sing, ['sentence-regen', '重新生成', `丢掉这句的音频，再向 ${ttsProviderName(ttsSettings())} 要一次`], ['tts-save-pick', '缓存', '缓存这一段或者整篇到本地'], ['sentence-edit', '详细', `看这句发给 ${ttsProviderName(ttsSettings())} 的内容，改了再生成`]];
       for (const [action, label, title] of actions) {
         const tool = document.createElement('button');
         tool.type = 'button';
@@ -16676,6 +16852,7 @@ async function openMiniWindow() {
         tool.dataset.id = String(segment.id);
         tool.textContent = label;
         tool.title = title;
+        if (action === 'sentence-sing' && singBlocked) tool.setAttribute('aria-disabled', 'true');
         tools.appendChild(tool);
       }
       row.append(mark, body, tools);
@@ -17470,6 +17647,13 @@ async function openMiniWindow() {
       if (!inspecting) throw new Error('先打开一句的详细页，再保存它。');
       const built = await downloadTtsSentence(inspecting.messageId, inspecting.utteranceId, inspecting.side);
       await ttsOfferFile(built.blob, built.name, { note: built.cut ? '从这一段的音频里剪出来的，wav' : '' });
+      return;
+    }
+    if (action === 'sentence-sing') {
+      const row = button.closest('.jy-mini-sentence');
+      if (!row) return;
+      if (button.getAttribute('aria-disabled') !== 'true') button.textContent = '生成中…';
+      toggleTtsSing(Number(row.dataset.messageId), Number(row.dataset.id), row.dataset.side).catch(error => { if (!isAbortError(error)) toast('error', safeError(error)); });
       return;
     }
     if (action === 'sentence-play' || action === 'sentence-regen') {
@@ -19182,6 +19366,8 @@ export const __testing = Object.freeze({
   pregenerateTtsFloor,
   ttsInspect,
   saveTtsOverride,
+  toggleTtsSing,
+  planLyricRuns,
   clearTtsOverride,
   saveTtsSpeaker,
   reanalyzeTtsFloor,

@@ -15,9 +15,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.45.0';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.45.0';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.45.0';
+} from './core.js?v=0.46.0';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.46.0';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.46.0';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -226,6 +226,12 @@ export function splitUtterances(lines, { quotePairs = DEFAULT_QUOTE_PAIRS, skipP
   const utterances = [];
   for (const line of Array.isArray(lines) ? lines : []) {
     const lineText = String(line?.text ?? '');
+    // A 歌词行 is sung whole, as the line it is: no quotes looked for in it, no sentences cut out of it.
+    if (line?.sung === true) {
+      const text = lineText.replace(EDGE_PUNCTUATION_RE, '').trim();
+      if (SPEAKABLE_RE.test(text)) utterances.push({ id: utterances.length + 1, lineId: line.lineId, kind: 'sung', anchor: lineText.trim(), text });
+      continue;
+    }
     // A quote set off inside a sentence is part of that sentence, read as narration with it.
     for (const part of foldEmbeddedQuotes(splitByPairs(lineText, { quotePairs: quotes, skipPairs }), run => unquote(run, quotes))) {
       if (part.kind === 'skipped') continue;
@@ -1726,6 +1732,8 @@ export function buildSegments(utterances, labels = new Map(), { knownNames = [],
       if (!groundVoice(under, { text: utterance.text, evidence: near.evidence, sources: [] }).changed) voice = { ...under, ...(voice ?? {}) };
     }
     const base = { id: utterance.id, lineId: utterance.lineId, type, text: utterance.text, anchor: utterance.anchor, lang, voice };
+    // A 歌词行 is sung, the narrator's voice unless the reader gave it to somebody (情绪音色 「唱」 applies).
+    if (utterance.kind === 'sung') Object.assign(base, { sung: true, lyric: true });
     // When the reading this sentence goes by was asked for: audio from before then is not its audio.
     if (Number(label.at) > 0) base.analyzedAt = Number(label.at);
     if (type === 'narration') {
@@ -1766,8 +1774,9 @@ export function audibleSegments(segments, range = 'all', config = null) {
 
 export function segmentsInRange(segments, range = 'all') {
   const list = Array.isArray(segments) ? segments : [];
-  if (range === 'dialogue') return list.filter(segment => segment.type === 'dialogue');
-  if (range === 'narration') return list.filter(segment => segment.type === 'narration');
+  // 歌词行 have a switch of their own (「朗读时唱出来」); the reading range is about dialogue and narration.
+  if (range === 'dialogue') return list.filter(segment => segment.type === 'dialogue' || segment.lyric === true);
+  if (range === 'narration') return list.filter(segment => segment.type === 'narration' || segment.lyric === true);
   return list;
 }
 
@@ -1849,6 +1858,16 @@ export function singingText(text) {
 /** The same line no longer sung: its opening [singing] taken off, the rest as it was. */
 export function unsungText(text) {
   return String(text ?? '').replace(SINGING_OPENING, '$1');
+}
+
+/**
+ * Why nothing can be sung with the voice now chosen, in the reader's words; '' when it can. Only Fish's
+ * S2 models sing: s1 has no [singing], and GPT-SoVITS hears no tags at all.
+ */
+export function singingBlockedReason(tts) {
+  if (tts?.provider === 'gsv') return 'GPT-SoVITS 不能唱，换成 Fish 的 S2 系列才能唱。';
+  if (tts?.fish?.model === 's1') return 's1 不能唱，换成 Fish 的 S2 系列才能唱。';
+  return '';
 }
 
 /**
@@ -2416,6 +2435,11 @@ export function sentenceFishText(item, fish, { emotionCues = true, tamePunctuati
     // S1 cannot sing: a line set to 唱 under S2 is read in plain words there.
     return fish?.model === 's1' && isSungText(own) ? unsungText(own).trim() : own;
   }
+  // A 歌词行 sings its words and nothing else; S1 cannot sing and reads them.
+  if (item?.segment?.lyric === true) {
+    const words = stripCues(item.segment.text);
+    return fish?.model === 's1' ? words : `[singing] ${words}`;
+  }
   const compiled = compileVoiceCues(item.segment, { model: fish?.model, emotionCues, directions, lean });
   // A script already says where every mark and sound goes (！！ included), so the reader's punctuation
   // marks and the taming of runs are not laid over it a second time.
@@ -2537,8 +2561,11 @@ export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosod
   let voice = null;
   let voiced = null;
   let prosody = null;
+  let singing = null;
   for (const item of Array.isArray(items) ? items : []) {
     const hasVoice = Boolean(item.voiceId);
+    // What is sung goes in requests of its own: a [singing] opening leaves the lines after it sing-song.
+    const sung = item.segment?.sung === true;
     // Sent as one piece, the floor keeps one prosody: a change of speed or volume is no reason to cut it.
     // Otherwise sentences share a request only where they would be sent alike at the reader's own
     // speed, volume and temperature: a reader's own speed is absolute, the reading's steps are relative
@@ -2547,7 +2574,7 @@ export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosod
       sentenceProsody(item, fish ? { ...fish, model } : { speed: 1, volume: 0, model }, { prosodySplit }),
       sentenceSampling(item, fish ?? { temperature: 0.7 }, { prosodySplit }),
     ]);
-    if (run.length && ((!multi && item.voiceId !== voice) || hasVoice !== voiced || step !== prosody)) {
+    if (run.length && ((!multi && item.voiceId !== voice) || hasVoice !== voiced || step !== prosody || sung !== singing)) {
       runs.push(run);
       run = [];
     }
@@ -2555,6 +2582,7 @@ export function planFishParts(items, { model = 's2-pro', maxChars = 1500, prosod
     voice = item.voiceId;
     voiced = hasVoice;
     prosody = step;
+    singing = sung;
   }
   if (run.length) runs.push(run);
   return runs.flatMap(each => cutToBudget(each, { budget, multi, sent }));
@@ -3511,7 +3539,8 @@ export async function analysisCacheKey({ utterances, source = 'model', depth = '
     // A reading asked under a different permission (分析模式's 亲密场景) is a different reading; without
     // one the key is exactly what it always was, so readings already kept are still found.
     ...(variant ? { variant } : {}),
-    utterances: (Array.isArray(utterances) ? utterances : []).map(item => [item.id, item.kind, item.anchor]),
+    // 歌词行 are never analysed: a floor's reading is keyed by what the analysis is asked about.
+    utterances: (Array.isArray(utterances) ? utterances : []).filter(item => item.kind !== 'sung').map(item => [item.id, item.kind, item.anchor]),
   }))}`;
 }
 

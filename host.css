@@ -1,4 +1,4 @@
-@import url('./reading.css?v=0.45.0');
+@import url('./reading.css?v=0.46.0');
 
 #jingyi-translator-settings .jingyi-entry-row {
   display: flex;
@@ -553,6 +553,17 @@
 #chat .jy-tts-play.jy-tts-line-play[data-state="playing"],
 #chat .jy-tts-play.jy-tts-line-regen[data-state="busy"] {
   transform: none;
+}
+/* 唱 with a voice that cannot sing (DESIGN §17.15): the disabled fade (.48) of what the button shows at
+   rest and on hover, still pressable so a phone, which shows no tooltip, can say why. */
+#chat .jy-tts-play[aria-disabled="true"] {
+  opacity: 0.24;
+  cursor: default;
+}
+#chat .jy-tts-play[aria-disabled="true"]:hover,
+#chat .jy-tts-play[aria-disabled="true"]:focus-visible {
+  opacity: 0.48;
+  background: color-mix(in srgb, currentColor 7%, transparent);
 }
 
 /* 手机：两个按钮都要够大，够得着。 */

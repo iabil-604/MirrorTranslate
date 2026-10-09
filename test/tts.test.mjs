@@ -49,6 +49,7 @@ import {
   segmentsInRange,
   sentenceFishText,
   sentenceProsody,
+  singingBlockedReason,
   settledSpans,
   splitByPairs,
   splitNarrationSentences,
@@ -1692,4 +1693,51 @@ test('the translation hears the sliders about what it writes, and every slider t
   assert.equal(hushed.some(line => /^几乎不停顿/.test(line)), false);
   // Everything else still hears the whole console.
   assert.equal(consoleDirections({ pause: 90, speed: 90 }).length, 2);
+});
+
+// ---------------------------------------------------------------------------------------------
+// 歌词行 sung (DESIGN §17.15). Every lyric below is invented text, never a real song's.
+// ---------------------------------------------------------------------------------------------
+
+test("a 歌词行 is one sung utterance, the narrator's sung sentence unless given to somebody, whatever the range", () => {
+  const lines = [{ lineId: 1, text: '风停了。「走吧。」' }, { lineId: 2, text: 'そらにひびけ、とおくまで', sung: true }, { lineId: 3, text: '他点头。' }];
+  const utterances = splitUtterances(lines);
+  assert.deepEqual(utterances.map(item => [item.id, item.lineId, item.kind]), [[1, 1, 'narration'], [2, 1, 'quoted'], [3, 2, 'sung'], [4, 3, 'narration']]);
+  assert.equal(utterances[2].text, 'そらにひびけ、とおくまで', 'no quote looked for in it and no sentence cut out of it');
+  const segments = buildSegments(utterances);
+  assert.equal(segments[2].type, 'narration');
+  assert.equal(segments[2].speaker, NARRATOR);
+  assert.equal(segments[2].sung, true);
+  assert.equal(segments[2].lyric, true);
+  assert.equal(segments.filter(segment => segment.sung).length, 1, 'nothing else is sung');
+  const given = buildSegments(utterances, new Map([[3, { type: 'dialogue', speaker: '泰罗' }]]));
+  assert.equal(given[2].type, 'dialogue');
+  assert.equal(given[2].speaker, '泰罗');
+  assert.equal(given[2].sung, true);
+  // The reading range is about dialogue and narration; a lyric line has a switch of its own.
+  assert.deepEqual(segmentsInRange(segments, 'dialogue').map(segment => segment.id), [2, 3]);
+  assert.deepEqual(segmentsInRange(segments, 'narration').map(segment => segment.id), [1, 3, 4]);
+});
+
+test('a 歌词行 sings its words on a request of its own, s1 reads them, and the analysis is keyed without it', async () => {
+  const lyric = { segment: { id: 2, lineId: 2, type: 'narration', text: 'そらにひびけ', lang: 'ja', sung: true, lyric: true }, voiceId: 'v-n' };
+  assert.equal(sentenceFishText(lyric, { model: 's2-pro' }), '[singing] そらにひびけ');
+  assert.equal(sentenceFishText(lyric, { model: 's1' }), 'そらにひびけ');
+  assert.equal(sentenceFishText({ ...lyric, override: { text: 'そらにひびけ' } }, { model: 's2-pro' }), 'そらにひびけ', "the reader's own plain version wins");
+  const said = id => ({ segment: { id, lineId: id, type: 'narration', text: '一'.repeat(6), lang: 'zh' }, voiceId: 'v-n' });
+  const sung = id => ({ ...lyric, segment: { ...lyric.segment, id, lineId: id } });
+  assert.deepEqual(planFishParts([said(1), sung(2), sung(3), said(4)], { model: 's2-pro', wholeFloor: true }).map(part => part.map(entry => entry.segment.id)), [[1], [2, 3], [4]],
+    'a [singing] opening would leave the lines after it sing-song');
+  const spoken = [{ id: 1, lineId: 1, kind: 'narration', anchor: '风停了。' }];
+  assert.equal(
+    await analysisCacheKey({ utterances: [...spoken, { id: 2, lineId: 2, kind: 'sung', anchor: 'そらにひびけ' }], depth: 'deep' }),
+    await analysisCacheKey({ utterances: spoken, depth: 'deep' }),
+  );
+});
+
+test("only Fish's S2 models can sing; the reason is said in the reader's words", () => {
+  assert.equal(singingBlockedReason({ provider: 'fish', fish: { model: 's2-pro' } }), '');
+  assert.equal(singingBlockedReason({ provider: 'fish', fish: { model: 's2.1-pro-free' } }), '');
+  assert.match(singingBlockedReason({ provider: 'gsv', fish: { model: 's2-pro' } }), /^GPT-SoVITS 不能唱/);
+  assert.match(singingBlockedReason({ provider: 'fish', fish: { model: 's1' } }), /^s1 不能唱/);
 });
