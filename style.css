@@ -110,6 +110,10 @@ label { min-width: 0; }
 .jy-button-primary:hover { background: var(--jy-accent); color: var(--jy-on-accent); filter: brightness(.94); }
 .jy-text-button { border: 0; background: transparent; color: var(--jy-accent); padding: 8px 4px; font-size: 12px; text-align: left; }
 .jy-text-button:hover { text-decoration: underline; }
+/* Faded but pressable (DESIGN §17.15): §9.1's disabled look on a control that still says why when tapped. */
+.jy-text-button[aria-disabled="true"], .jy-mini-chip[aria-disabled="true"] { opacity: .48; cursor: default; }
+.jy-text-button[aria-disabled="true"]:hover { text-decoration: none; }
+.jy-mini-chip[aria-disabled="true"]:hover { background: var(--jy-surface); }
 /* 危险操作的文字按钮：无边框沿用 .jy-text-button，字色换成 --jy-error（DESIGN.md §9.1/§15.4）。 */
 .jy-text-button-danger { color: var(--jy-error); }
 .jy-icon-button { display: inline-grid; place-items: center; height: 30px; min-width: 30px; border: 1px solid var(--jy-line); border-radius: var(--jy-radius-sm); color: var(--jy-accent); background: transparent; font-size: 16px; transition: background var(--jy-hover), border-color var(--jy-hover); }

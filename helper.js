@@ -34,7 +34,7 @@ import {
   pathSet,
   presetDrift,
   unwrapResponseContent,
-} from './core.js?v=0.45.0-beta.1';
+} from './core.js?v=0.46.0-beta.1';
 
 // ---------------------------------------------------------------------------------------------
 // Default prompt and quick questions
@@ -187,6 +187,7 @@ export function buildSettingsSummaryLines(settings = {}) {
   lines.push(`Fish Audio API Key：${keyStatus(fish.key)}`);
   lines.push(`经酒馆 CORS 代理发送：${boolLabel(fish.viaProxy)}`);
   lines.push(`新回复自动朗读：${boolLabel(tts.autoRead)}`);
+  lines.push(`歌词行 › 朗读时唱出来：${boolLabel(settings.lyricSing !== false)}`);
   lines.push(`点正文跳到悬浮窗：${boolLabel(settings.segmentJump !== false)}`);
   // keyStatus/urlHost above already keep an actual secret field out of these lines; this is the same
   // generic pass buildHelperContext applies to the whole assembled text, run here too so this function
@@ -546,6 +547,7 @@ export const HELPER_WHITELIST_FIELDS = Object.freeze([
   { field: 'tts.enabled', label: '朗读功能', path: Object.freeze(['tts', 'enabled']), kind: 'boolean' },
   { field: 'tts.mode', label: '分析模式', path: Object.freeze(['tts', 'mode']), kind: 'enum', options: TTS_MODES, valueLabels: TTS_MODE_LABELS },
   { field: 'tts.autoRead', label: '新回复自动朗读', path: Object.freeze(['tts', 'autoRead']), kind: 'boolean' },
+  { field: 'lyricSing', label: '歌词行 › 朗读时唱出来', path: Object.freeze(['lyricSing']), kind: 'boolean' },
   { field: 'segmentJump', label: '点正文跳到悬浮窗', path: Object.freeze(['segmentJump']), kind: 'boolean' },
   { field: 'uiMode', label: '界面模式', path: Object.freeze(['uiMode']), kind: 'enum', options: UI_MODES, valueLabels: UI_MODE_LABELS },
   { field: 'preset', label: '套餐', path: Object.freeze(['preset']), kind: 'enum', options: Object.freeze([...CONSOLE_PRESET_IDS, '']), valueLabels: Object.freeze({ ...PRESET_LABELS, '': '未选套餐' }) },

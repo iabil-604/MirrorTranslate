@@ -632,6 +632,65 @@ test('唱: a sentence set to sing goes to Fish as [singing] in the character\'s 
   assert.equal(s1.tts.fish.model, 's1');
 });
 
+// 歌词行 (DESIGN §17.15): sung in the original's words by the narrator, out of what is read where nothing
+// can sing, and 唱 in the sentence list turns a line to song and back. The lyric is invented text.
+test('歌词行: the floor sings a lyric line in its own words, GPT-SoVITS and s1 leave it out, and 唱 turns a line to song and back', async t => {
+  restoreGlobals(t);
+  const { context, toasts } = mockHost('tts-lyric-sing');
+  const settings = __testing.configureForTest({
+    settings: {
+      lyricLineRules: 'そらにひびけ',
+      tts: { enabled: true, mode: 'floor', analysis: 'annotations', narratorVoice: 'voice-narrator', dialogueVoice: 'voice-default', fish: FISH },
+      ttsVoices: { 'taro.png': [{ name: '泰罗', voiceId: 'voice-taro', moods: [{ when: 'sing', voiceId: 'voice-taro-sing' }] }] },
+    },
+  });
+  context.chat.push(await translatedFloor('風。\n\nそらにひびけ\n\n「暑い！」', [[1, '风停了。'], [2, '响彻天空'], [3, '「好热！」']], settings, { 3: { speaker: '泰罗', emotion: 'happy' } }));
+
+  const floor = await __testing.collectTtsFloor(0, settings);
+  assert.deepEqual(floor.lines.map(line => [line.lineId, line.text, line.sung === true]), [[1, '风停了。', false], [2, 'そらにひびけ', true], [3, '「好热！」', false]],
+    'read in the original, never the translation in its brackets');
+  const { segments } = await __testing.prepareTtsSegments(floor, settings);
+  const { items } = await __testing.ttsItemsFor(floor, segments, settings);
+  assert.deepEqual(items.map(item => [item.segment.id, item.segment.sung === true]), [[1, false], [2, true], [3, false]]);
+  assert.equal(items[1].voiceId, 'voice-narrator', 'the narrator sings it unless the reader gives it to somebody');
+  assert.equal((await __testing.ttsInspect(0, 2)).text, '[singing] そらにひびけ');
+  assert.deepEqual(__testing.planLyricRuns(segments, new Set(segments.map(segment => segment.id))), [{ lineId: 2, ids: [2], lines: [2], lyric: true }]);
+
+  // 唱 from the list: a sentence goes to song in the singing voice, then back to the reading's own version.
+  const calls = mockFish();
+  assert.equal(await __testing.toggleTtsSing(0, 3, null, { play: false }), true);
+  assert.equal(calls.at(-1).body.text, '[singing] 好热！');
+  assert.equal(calls.at(-1).body.reference_id, 'voice-taro-sing');
+  assert.equal((await __testing.ttsInspect(0, 3)).override.text, '[singing] 好热！');
+  assert.equal(await __testing.toggleTtsSing(0, 3, null, { play: false }), false);
+  assert.equal((await __testing.ttsInspect(0, 3)).override, null, "nothing of the reader's is kept once it is back to the reading's own version");
+  // A 歌词行 turned off keeps its plain words as the reader's version; turned on again, it is sung by itself.
+  assert.equal(await __testing.toggleTtsSing(0, 2, null, { play: false }), false);
+  assert.equal(calls.at(-1).body.text, 'そらにひびけ');
+  assert.equal((await __testing.ttsInspect(0, 2)).override.text, 'そらにひびけ');
+  assert.equal(await __testing.toggleTtsSing(0, 2, null, { play: false }), true);
+  assert.equal((await __testing.ttsInspect(0, 2)).override, null);
+
+  // GPT-SoVITS cannot sing: the lyric line is out of what is read, and 唱 only says why.
+  const gsv = __testing.configureForTest({ settings: { tts: { ...settings.tts, provider: 'gsv', gsv: { refAudioPath: 'D:\\refs\\a.wav' } } } });
+  const gsvFloor = await __testing.collectTtsFloor(0, gsv);
+  const gsvRead = await __testing.ttsItemsFor(gsvFloor, (await __testing.prepareTtsSegments(gsvFloor, gsv)).segments, gsv);
+  assert.deepEqual(gsvRead.items.map(item => item.segment.id), [1, 3]);
+  const asked = calls.length;
+  assert.equal(await __testing.toggleTtsSing(0, 3, null, { play: false }), false);
+  assert.equal(calls.length, asked, 'nothing is asked of any provider');
+  assert.ok(toasts.some(([kind, message]) => kind === 'info' && /GPT-SoVITS 不能唱/.test(message)));
+  // Nor can s1.
+  const s1 = __testing.configureForTest({ settings: { tts: { ...settings.tts, provider: 'fish', fish: { ...FISH, model: 's1' } } } });
+  const s1Floor = await __testing.collectTtsFloor(0, s1);
+  const s1Read = await __testing.ttsItemsFor(s1Floor, (await __testing.prepareTtsSegments(s1Floor, s1)).segments, s1);
+  assert.deepEqual(s1Read.items.map(item => item.segment.id), [1, 3]);
+
+  // 朗读时唱出来 off: the lyric line is not part of the floor's reading at all, as before v0.46.0.
+  const off = __testing.configureForTest({ settings: { lyricSing: false, tts: { ...settings.tts, provider: 'fish', fish: FISH } } });
+  assert.deepEqual((await __testing.collectTtsFloor(0, off)).lines.map(line => line.lineId), [1, 3]);
+});
+
 // A GPT-SoVITS stand-in, as its api_v2.py answers: /tts with a wav that lasts a tenth of a second per
 // character (a language no version has is refused with the version in the reason), the model routes with
 // success. Every call is kept, its url as sent and its body. `fail` may answer a call instead.
