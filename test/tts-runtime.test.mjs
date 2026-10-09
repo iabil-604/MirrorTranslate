@@ -3515,6 +3515,127 @@ test('with GPT-SoVITS reading the floors, tts.stream still reads in the voice ch
   assert.deepEqual(calls.map(call => call.body.reference_id), ['voice-sakurai', 'voice-default']);
 });
 
+// A stand-in AudioContext for the live (边收边放) player: every buffer it is handed is kept, and each
+// source ends on the next turn, as if it had been heard at once.
+function liveAudioContext() {
+  const buffers = [];
+  class FakeLiveContext {
+    constructor() {
+      this.state = 'running';
+      this.currentTime = 0;
+      this.destination = {};
+    }
+
+    createBuffer(channels, length, rate) {
+      const data = new Float32Array(length);
+      const buffer = { length, sampleRate: rate, duration: length / rate, getChannelData: () => data, copyToChannel: samples => data.set(samples) };
+      buffers.push(buffer);
+      return buffer;
+    }
+
+    createBufferSource() {
+      const source = { buffer: null, onended: null, connect() {}, disconnect() {}, stop() {}, start() { globalThis.setTimeout(() => source.onended?.(), 0); } };
+      return source;
+    }
+
+    addEventListener() {}
+
+    async resume() { this.state = 'running'; }
+
+    async suspend() { this.state = 'suspended'; }
+
+    async close() { this.state = 'closed'; }
+  }
+  const before = globalThis.AudioContext;
+  globalThis.AudioContext = FakeLiveContext;
+  return { buffers, restore: () => { globalThis.AudioContext = before; } };
+}
+
+test('with the call voice set to GPT-SoVITS, tts.stream reads every sentence through GPT-SoVITS, streamed when 边收边放 is on', async t => {
+  restoreGlobals(t);
+  mockHost('tts-api-stream-gsv-voice');
+  const library = [
+    { id: 'lib-hailing', name: '海铃', gsv: { refAudioPath: 'D:\\refs\\hailing.wav', promptText: 'こんにちは', promptLang: 'ja' } },
+  ];
+  const configured = __testing.configureForTest({
+    initialized: true,
+    settings: {
+      tts: { enabled: true, liveAudio: false, provider: 'fish', streamVoice: 'gsv', fish: { ...FISH, key: '' }, gsv: { refAudioPath: 'D:\\refs\\default.wav', promptText: '你好', promptLang: 'zh' } },
+      ttsVoices: { 'taro.png': [{ name: '樱井', aliases: [], voiceId: 'voice-sakurai' }, { name: '海铃', aliases: [], voiceId: gsvVoiceId('lib-hailing') }] },
+      voiceLibrary: library,
+    },
+  });
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  __testing.installPublicApi();
+  t.after(() => { delete globalThis.__JINGYI__; });
+  const api = globalThis.__JINGYI__;
+  // No key is asked for: GPT-SoVITS runs on the reader's own machine.
+  assert.equal(api.tts.status().streamProvider, 'gsv');
+  assert.equal(api.tts.status().streamReady, true);
+  assert.equal(api.tts.status().reason, '');
+
+  // Whole sentences: one /tts each, in the voice each speaker has there.
+  const audio = mockAudio();
+  t.after(() => audio.restore());
+  let calls = mockGsv();
+  const session = __testing.apiStream({ speaker: '樱井' });
+  session.push('今天也来了啊。\n<say who="海铃">你好。');
+  session.end();
+  const heard = await session.done;
+  assert.equal(heard.played, 2);
+  const spoken = calls.filter(call => call.url.endsWith('/tts'));
+  assert.deepEqual(spoken.map(call => call.body.ref_audio_path), ['D:\\refs\\default.wav', 'D:\\refs\\hailing.wav'], '樱井 has no clip of her own: the card\'s default voice');
+  assert.ok(spoken.every(call => !call.body.streaming_mode), 'not streamed while 边收边放 is off');
+
+  // 边收边放: streamed in GPT-SoVITS's fastest mode, played at the rate its header names.
+  const context = liveAudioContext();
+  t.after(() => context.restore());
+  __testing.resetLivePlayer();
+  t.after(() => __testing.resetLivePlayer());
+  __testing.configureForTest({ settings: { tts: { ...configured.tts, liveAudio: true } } });
+  calls = mockGsv();
+  const live = __testing.apiStream({ speaker: '樱井' });
+  live.push('今天真的好热啊。');
+  live.end();
+  const streamed = await live.done;
+  assert.equal(streamed.played, 1);
+  const asked = calls.filter(call => call.url.endsWith('/tts'));
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].body.streaming_mode, 3);
+  assert.equal(asked[0].body.media_type, 'wav');
+  assert.ok(context.buffers.length > 0, 'the sound went to the live player');
+  assert.ok(context.buffers.every(buffer => buffer.sampleRate === 32000), 'at GPT-SoVITS\'s own 32 kHz');
+  // The stand-in makes a tenth of a second per character it was sent.
+  const seconds = context.buffers.reduce((sum, buffer) => sum + buffer.duration, 0);
+  const expected = [...asked[0].body.text].length * 0.1;
+  assert.ok(Math.abs(seconds - expected) < 0.01, `the whole sentence was heard, its header left out (${seconds} s of ${expected} s)`);
+});
+
+test('with the call voice on GPT-SoVITS, a character\'s voice is one with a GPT-SoVITS clip, and 「去设置」 finds its address', t => {
+  restoreGlobals(t);
+  mockHost('call-connect-gsv');
+  const library = [{ id: 'lib-hailing', name: '海铃', gsv: { refAudioPath: 'D:\\refs\\hailing.wav', promptText: 'こんにちは', promptLang: 'ja' } }];
+  const rows = [
+    { name: '樱井', aliases: ['小樱'], voiceId: 'voice-sakurai' },
+    { name: '海铃', aliases: [], voiceId: gsvVoiceId('lib-hailing') },
+    { name: '路人', aliases: [], voiceId: 'voice-x', mute: true },
+  ];
+  const status = gsv => {
+    __testing.configureForTest({ initialized: true, settings: { tts: { enabled: true, fish: FISH, streamVoice: 'gsv', gsv }, ttsVoices: { 'taro.png': rows }, voiceLibrary: library } });
+    return __testing.callVoiceStatuses(['小樱', '海铃', '路人', '老胡']).map(item => `${item.name}:${item.status}`);
+  };
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  assert.deepEqual(status({ refAudioPath: 'D:\\refs\\default.wav' }), ['小樱:default', '海铃:own', '路人:muted', '老胡:default']);
+  assert.deepEqual(status({ refAudioPath: '' }), ['小樱:novoice', '海铃:own', '路人:muted', '老胡:novoice']);
+
+  const at = settings => {
+    __testing.configureForTest({ initialized: true, settings });
+    return __testing.callFixTarget('key');
+  };
+  assert.deepEqual(at({ tts: { enabled: true, provider: 'gsv', streamVoice: 'gsv' } }), { page: 'tts', selector: '[data-jy-tts-provider-card="gsv"] [data-jy-tts-gsv="baseUrl"]' });
+  assert.deepEqual(at({ tts: { enabled: true, provider: 'fish', streamVoice: 'gsv' } }), { page: 'tts', selector: '[data-jy-tts-provider-card="fish"] [data-jy-tts-field="provider"]' }, 'its card shows once it is the 声音来源');
+});
+
 // A box for the 「已连接的应用」 rows, with just enough of a document for renderCallApps.
 function fakeCallAppsBox() {
   const doc = {

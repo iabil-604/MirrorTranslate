@@ -128,8 +128,8 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.46.0-beta.1';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.46.0-beta.1';
+} from './core.js?v=0.46.0-beta.2';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.46.0-beta.2';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -202,10 +202,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.46.0-beta.1';
-import { createTtsStore } from './tts-store.js?v=0.46.0-beta.1';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.46.0-beta.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.46.0-beta.1';
+} from './tts.js?v=0.46.0-beta.2';
+import { createTtsStore } from './tts-store.js?v=0.46.0-beta.2';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.46.0-beta.2';
+import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.46.0-beta.2';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -215,7 +215,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.46.0-beta.1';
+} from './processing.js?v=0.46.0-beta.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -233,14 +233,14 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.46.0-beta.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.46.0-beta.1';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.46.0-beta.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.46.0-beta.1';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.46.0-beta.1';
-import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.46.0-beta.1';
-import { createPcmPlayer } from './pcm-player.js?v=0.46.0-beta.1';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.46.0-beta.1';
+} from './prompts.js?v=0.46.0-beta.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.46.0-beta.2';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.46.0-beta.2';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.46.0-beta.2';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.46.0-beta.2';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.46.0-beta.2';
+import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.46.0-beta.2';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.46.0-beta.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -258,8 +258,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.46.0-beta.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.46.0-beta.1';
+} from './palette.js?v=0.46.0-beta.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.46.0-beta.2';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -267,7 +267,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.46.0-beta.1';
+} from './diagnostics.js?v=0.46.0-beta.2';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -278,7 +278,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.46.0-beta.1';
+} from './helper.js?v=0.46.0-beta.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -830,10 +830,11 @@ const CONTROL_CENTER_MARKUP = `
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-call"><summary><h2>实时通话（测试版）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div data-jy-call-apps hidden></div>
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="readWhileWriting">边写边读（主模型一边写，一边一句一句读出来；读模型写出的原文，不等翻译）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="liveAudio">边收边放（边写边读和实时通话时，Fish 生成一点就播一点，不等一整句做完；延迟模式是 normal 时会换成 balanced）</label></div>
-<p class="jy-muted">勾了「边写边读」，主模型一边写，镜译一边按句请求 Fish、按顺序读出来：读的是模型写出的原文，不等翻译，需要酒馆开着流式输出；运行记录里每一楼会记下首字、首句、出声各用了多久。再勾「边收边放」，Fish 生成出一小块就开始播，不等一整句做完，出声更早（Fish 延迟模式选的是 normal 时，这里会换成 balanced，否则没东西可以提前播；楼层朗读不受影响）。</p>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="readWhileWriting">边写边读（主模型一边写，一边一句一句读出来；读模型写出的原文，不等翻译）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="liveAudio">边收边放（边写边读和实时通话时，生成一点就播一点，不等一整句做完；Fish 的延迟模式是 normal 时会换成 balanced）</label></div>
+<p class="jy-muted">勾了「边写边读」，主模型一边写，镜译一边按句请求下面选的声音、按顺序读出来：读的是模型写出的原文，不等翻译，需要酒馆开着流式输出；运行记录里每一楼会记下首字、首句、出声各用了多久。再勾「边收边放」，生成出一小块就开始播，不等一整句做完，出声更早（Fish 延迟模式选的是 normal 时，这里会换成 balanced，否则没东西可以提前播；GPT-SoVITS 用它出声最快的流式档，先攒半秒再播；楼层朗读不受影响）。</p>
 <p class="jy-muted">给小手机这类插件打电话用的接口：边写边读（tts.stream）、语音输入（stt）、流式请求模型（llm.stream），都挂在 <code>window.__JINGYI__</code> 上，插件接上这三个就能边说边听。悬浮窗的「通话测试」页用的也是这三个，可以直接打给当前角色试效果。这一栏和通话测试页只在测试版里有。</p>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">边写边读和通话用的声音</span><select data-jy-tts-field="streamVoice"><option value="fish">Fish Audio（和楼层朗读同一套）</option><option value="doubao">豆包语音（火山引擎）</option><option value="minimax">MiniMax</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">边写边读和通话用的声音</span><select data-jy-tts-field="streamVoice"><option value="fish">Fish Audio（和楼层朗读同一套）</option><option value="gsv">GPT-SoVITS（和楼层朗读同一套）</option><option value="doubao">豆包语音（火山引擎）</option><option value="minimax">MiniMax</option></select></label></div>
+<p class="jy-muted" data-jy-stream-voice="gsv" hidden>用「GPT-SoVITS」卡里的接口地址和默认音色，角色按角色表绑的音色读（音色库里填了 GPT-SoVITS 参考音频的那些）；那张卡在「声音来源」选 GPT-SoVITS 时才显示。一句一句生成；每个角色单独训练的模型，换人时要等模型换好，第一句会慢一些。</p>
 <div data-jy-stream-voice="doubao" hidden>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">豆包 API Key</span><input type="password" data-jy-tts-doubao="key" autocomplete="new-password" spellcheck="false"></label><label title="新版控制台只要 API Key，这格留空；旧版控制台在这里填 App ID，上一格填 Access Token。"><span class="jy-label">App ID（旧版控制台才填）</span><input type="text" data-jy-tts-doubao="appId" spellcheck="false"></label><label><span class="jy-label">资源</span><select data-jy-tts-doubao="resourceId"><option value="seed-tts-2.0">seed-tts-2.0（合成 2.0）</option><option value="seed-icl-2.0">seed-icl-2.0（复刻 2.0）</option><option value="seed-tts-1.0">seed-tts-1.0（合成 1.0）</option></select></label><label><span class="jy-label">默认音色</span><input type="text" data-jy-tts-doubao="voice" placeholder="zh_female_vv_uranus_bigtts" spellcheck="false"></label></div>
 <label><span class="jy-label">角色音色（一行一个：名字=音色ID；「旁白=…」给叙述）</span><textarea rows="3" data-jy-tts-doubao="voiceMap" spellcheck="false" placeholder="樱井=zh_female_linjianvhai_uranus_bigtts&#10;旁白=zh_male_m191_uranus_bigtts"></textarea></label>
@@ -5432,6 +5433,8 @@ async function fishRequestOnce(path, fish, { method = 'POST', body, signal } = {
 
 /** The key what is read while written needs, asked for before anything is sent. */
 function requireStreamKey(tts) {
+  // GPT-SoVITS runs on the reader's own machine and takes no key.
+  if (tts.streamVoice === 'gsv') return;
   if (tts.streamVoice === 'fish') {
     requireFishKey(tts);
     return;
@@ -5682,6 +5685,66 @@ async function gsvSynthesize(payload, gsv, signal, { onAttempt = null } = {}) {
     }
   }
   throw failure;
+}
+
+// GPT-SoVITS's own stream (api_v2 streaming_mode): its third mode answers soonest — about a second to the
+// first sound on a laptop GPU — at a little less quality than a whole take. The first half second of each
+// sentence is held back, so a model that starts slowly does not stutter.
+const GSV_STREAM_MODE = 3;
+const GSV_STREAM_HOLD_SEC = 0.5;
+
+/**
+ * One sentence from GPT-SoVITS while it is still being made, for a call or a reply read while written:
+ * the models loaded when they differ, then /tts asked to stream. `onBytes` gets what one take of the live
+ * player plays — the stream's WAV header only for the first sentence of a take (`first`), raw 16-bit PCM
+ * after it, the volume applied. Asked again, as gsvSynthesize asks, only while no sound has been handed
+ * on: words already heard cannot be taken back.
+ */
+async function gsvStreamSentence(payload, gsv, signal, { first = true, onBytes, onAttempt = null }) {
+  const attempts = Math.max(0, Number(gsv.retries) || 0) + 1;
+  const gain = payload.volume ? 10 ** (payload.volume / 20) : 1;
+  let headerSent = !first;
+  for (let attempt = 0; ; attempt += 1) {
+    onAttempt?.(attempt);
+    let handed = false;
+    try {
+      await gsvLoadWeights(payload.weights, gsv, signal);
+      await withTtsTimeout(signal, gsv.timeoutSec, async requestSignal => {
+        const response = await gsvRequestOnce('/tts', gsv, { body: { ...payload.body, streaming_mode: GSV_STREAM_MODE, media_type: 'wav' }, signal: requestSignal });
+        const feed = createWavStreamFeed({
+          first: !headerSent,
+          gain,
+          holdSec: GSV_STREAM_HOLD_SEC,
+          onBytes: bytes => {
+            if (pcmDataOffset(bytes)) headerSent = true;
+            else handed = true;
+            onBytes(bytes);
+          },
+        });
+        const reader = response.body?.getReader?.();
+        if (!reader) {
+          feed.push(new Uint8Array(await response.arrayBuffer()));
+        } else {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value?.length) feed.push(value);
+          }
+        }
+        feed.end();
+      }, { who: 'gsv' });
+      return;
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted || handed || attempt >= attempts - 1) throw error;
+      const status = Number(error.status) || 0;
+      if (status !== 0 && status < 500) throw error;
+      // A server that went away may come back with other models loaded.
+      runtime.tts.gsvLoaded = null;
+      recordDiagnostic('info', 'tts.retry', `GPT-SoVITS 这一句没生成，第 ${attempt + 1} 次重试（共 ${attempts - 1} 次）：${safeError(error)}`, {
+        status: status || null, attempt: attempt + 1, attempts, timeoutSec: gsv.timeoutSec, streamed: true,
+      });
+    }
+  }
 }
 
 /**
@@ -12229,7 +12292,7 @@ function syncTtsFoldSummaries(root, settings = runtime.settings) {
     'tts-call': [
       tts.readWhileWriting ? '边写边读' : '',
       tts.liveAudio ? '边收边放' : '',
-      tts.streamVoice === 'fish' ? '' : (CLOUD_VOICE_LABELS[tts.streamVoice] ?? tts.streamVoice),
+      tts.streamVoice === 'fish' ? '' : streamVoiceName(tts.streamVoice),
       // 已连接的应用: an app that still lacks something says so while the fold is closed.
       ...(runtime.callApps?.list() ?? []).map(entry => {
         const missing = callAppMissing(entry, settings);
@@ -19750,12 +19813,20 @@ function streamSegments(floor, utterances, settings, { mood = '' } = {}) {
 }
 
 /**
- * The settings what is read while written goes by. It is read in the voice chosen for it (Fish, 豆包 or
- * MiniMax), never through GPT-SoVITS: the 声音来源 on the 朗读 page is the floors' own. A voice that
- * exists only as a GPT-SoVITS clip is therefore no voice here, as it is no voice to Fish anywhere.
+ * The settings what is read while written goes by. It is read in the voice chosen for it — Fish or
+ * GPT-SoVITS (each with the floors' own card and voices), 豆包 or MiniMax — whatever the floors' 声音来源
+ * is: the provider is set to the one chosen. Under Fish a voice that exists only as a GPT-SoVITS clip is
+ * no voice, as it is no voice to Fish anywhere; under GPT-SoVITS a voice without a clip is the card's
+ * default voice.
  */
 function streamReadingSettings(settings = runtime.settings) {
-  return ttsSettings(settings).provider === 'fish' ? settings : { ...settings, tts: { ...settings?.tts, provider: 'fish' } };
+  const wanted = ttsSettings(settings).streamVoice === 'gsv' ? 'gsv' : 'fish';
+  return ttsSettings(settings).provider === wanted ? settings : { ...settings, tts: { ...settings?.tts, provider: wanted } };
+}
+
+/** Whose voice reads what is read while written, by name: Fish, GPT-SoVITS, 豆包语音 or MiniMax. */
+function streamVoiceName(voice) {
+  return voice === 'gsv' ? 'GPT-SoVITS' : voice === 'fish' ? 'Fish' : (CLOUD_VOICE_LABELS[voice] ?? voice);
 }
 
 /** How long each first thing took, for the log line a session leaves. */
@@ -19778,10 +19849,13 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
   const provider = ttsProviderFor(settings);
   // 豆包 or MiniMax in place of Fish, when the reader chose one; one section for the whole session, so
   // 豆包 keeps one manner across a call.
-  const cloud = tts.streamVoice !== 'fish' ? tts.streamVoice : null;
+  const cloud = tts.streamVoice === 'doubao' || tts.streamVoice === 'minimax' ? tts.streamVoice : null;
+  // GPT-SoVITS: a sentence at a time on the reader's own machine, through the queue the floors use too.
+  const gsv = tts.streamVoice === 'gsv';
+  const library = gsv ? normalizeVoiceLibrary(settings?.voiceLibrary) : null;
   const sectionId = newRequestId();
   const controller = new AbortController();
-  const lanes = Math.max(1, Math.min(3, Number(tts.fish.concurrency) || 1));
+  const lanes = gsv ? 1 : Math.max(1, Math.min(3, Number(tts.fish.concurrency) || 1));
   // 边收边放: each chunk is played as it lands, where the browser can; otherwise whole sentences.
   const live = tts.liveAudio ? livePlayer() : null;
   const now = () => globalThis.performance?.now?.() ?? Date.now();
@@ -19906,6 +19980,38 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
       }
       return blobs;
     }
+    if (gsv) {
+      // Every sentence a request of its own; streamed (边收边放), each goes to the player as it is made.
+      let opening = true;
+      for (const part of provider.parts(items, tts)) {
+        if (controller.signal.aborted) break;
+        const payload = provider.payload(part, tts, { library });
+        if (!payload.body.ref_audio_path) {
+          const item = part[0];
+          const who = item.segment.type === 'narration' ? '旁白' : (item.segment.speaker || '对白');
+          throw new Error(`${who}没有能用的 GPT-SoVITS 音色：在音色库里给它绑的音色填上参考音频，或者在「朗读」页 GPT-SoVITS 卡里填默认音色的参考音频。`);
+        }
+        mark('firstRequest');
+        if (job.live) {
+          const first = opening;
+          opening = false;
+          await gsvExclusive(() => gsvStreamSentence(payload, tts.gsv, controller.signal, {
+            first,
+            onAttempt: () => { requests += 1; },
+            onBytes: bytes => {
+              if (!pcmDataOffset(bytes)) mark('firstChunk');
+              job.live.chunks.push(bytes);
+              job.live.wake?.();
+            },
+          }));
+        } else {
+          const made = await gsvExclusive(() => gsvSynthesize(payload, tts.gsv, controller.signal, { onAttempt: () => { requests += 1; } }));
+          blobs.push(new Blob([made.bytes], { type: 'audio/wav' }));
+        }
+        mark('firstAudio');
+      }
+      return blobs;
+    }
     for (const part of provider.parts(items, tts)) {
       if (controller.signal.aborted) break;
       const { body } = provider.payload(part, tts);
@@ -19973,7 +20079,7 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
     if (runtime.tts.stream === session) runtime.tts.stream = null;
     stopListening?.();
     announce();
-    recordDiagnostic('info', 'tts.stream', `${Number.isInteger(messageId) ? `第 ${messageId} 楼` : '外部接口'}边写边读${cancelled ? '停下了' : '读完了'}：${streamTimingText(times)}；切出 ${pieces} 段，读出 ${played} 段，向 ${cloud ? CLOUD_VOICE_LABELS[cloud] : 'Fish'} 请求 ${requests} 次${failures ? `，${failures} 段没读出来` : ''}。`, {
+    recordDiagnostic('info', 'tts.stream', `${Number.isInteger(messageId) ? `第 ${messageId} 楼` : '外部接口'}边写边读${cancelled ? '停下了' : '读完了'}：${streamTimingText(times)}；切出 ${pieces} 段，读出 ${played} 段，向 ${streamVoiceName(tts.streamVoice)} 请求 ${requests} 次${failures ? `，${failures} 段没读出来` : ''}。`, {
       floor: messageId, kind, times, pieces, played, requests, failures, cancelled, lanes, model: tts.fish.model,
     }, '', Number.isInteger(messageId) ? { floor: messageId } : {});
     if (!lastFailure && !played && skipped) lastFailure = `切出的 ${skipped} 段都按「朗读范围」或静音设置跳过了，没有发请求。`;
@@ -20687,7 +20793,9 @@ function callVoiceStatuses(names, settings = runtime.settings) {
   const config = ttsVoiceConfig(stream);
   const table = ttsVoicesFor(stream);
   const spelled = unifySpeakerNames(names, ttsKnownNames(stream));
-  const cloud = tts.streamVoice === 'fish' ? null : parseVoiceMap(tts[tts.streamVoice]?.voiceMap);
+  const cloud = tts.streamVoice === 'doubao' || tts.streamVoice === 'minimax' ? parseVoiceMap(tts[tts.streamVoice]?.voiceMap) : null;
+  const gsv = tts.streamVoice === 'gsv';
+  const library = gsv ? normalizeVoiceLibrary(stream?.voiceLibrary) : [];
   const listed = new Set();
   const statuses = [];
   for (const name of names) {
@@ -20701,6 +20809,13 @@ function callVoiceStatuses(names, settings = runtime.settings) {
     if (entry?.mute === true) status = 'muted';
     else if (config.dialogueFallback === 'skip' && !own) status = 'skipped';
     else if (cloud) status = cloud.has(speaker.toLowerCase()) ? 'own' : 'default';
+    else if (gsv) {
+      // GPT-SoVITS hears a voice of the character's own where the bound library voice has a clip; anyone
+      // else is the card's default voice, and nobody at all when that has no clip either.
+      const bound = findVoiceEntry(table, speaker);
+      const ids = bound ? [bound.voiceId, ...Object.values(bound.voices ?? {})].filter(Boolean) : [];
+      status = ids.some(id => gsvVoiceFor(id, tts.gsv, library)?.source === 'library') ? 'own' : tts.gsv?.refAudioPath ? 'default' : 'novoice';
+    }
     else if (!own) {
       const bound = findVoiceEntry(table, speaker);
       status = bound && [bound.voiceId, ...Object.values(bound.voices ?? {})].some(isGsvVoiceId) ? 'gsv' : 'default';
@@ -20721,7 +20836,7 @@ function callAppFacts(names, settings = runtime.settings) {
     tts: {
       enabled: tts.enabled,
       voice: tts.streamVoice,
-      keyMissing: tts.streamVoice === 'fish' ? !tts.fish.key : !tts[tts.streamVoice]?.key,
+      keyMissing: tts.streamVoice === 'gsv' ? !String(tts.gsv?.baseUrl ?? '').trim() : tts.streamVoice === 'fish' ? !tts.fish.key : !tts[tts.streamVoice]?.key,
       fishCardHidden: tts.provider !== 'fish',
     },
     voices: callVoiceStatuses(names, settings),
@@ -20828,6 +20943,12 @@ function callFixTarget(id, app = '', settings = runtime.settings) {
   const fold = 'tts-call';
   if (id === 'tts') return { page: 'tts', selector: '[data-jy-tts-master] [data-jy-tts-field="enabled"]' };
   if (id === 'key') {
+    // GPT-SoVITS's address is on its own card, shown while it is the 声音来源; otherwise that choice first.
+    if (tts.streamVoice === 'gsv') {
+      return tts.provider === 'gsv'
+        ? { page: 'tts', selector: '[data-jy-tts-provider-card="gsv"] [data-jy-tts-gsv="baseUrl"]' }
+        : { page: 'tts', selector: '[data-jy-tts-provider-card="fish"] [data-jy-tts-field="provider"]' };
+    }
     if (tts.streamVoice !== 'fish') return { page: 'tts', fold, selector: `[data-jy-tts-${tts.streamVoice}="key"]` };
     return tts.provider === 'fish'
       ? { page: 'tts', selector: '[data-jy-tts-provider-card="fish"] [data-jy-tts-fish="key"]' }
@@ -20848,7 +20969,7 @@ function callFixTarget(id, app = '', settings = runtime.settings) {
   const entry = runtime.callApps?.list().find(item => item.app === app);
   const statuses = entry ? callVoiceStatuses(callAppNames(entry), settings) : [];
   const first = statuses.find(item => item.status !== 'own');
-  if (tts.streamVoice !== 'fish' && statuses.some(item => item.status === 'default')) {
+  if ((tts.streamVoice === 'doubao' || tts.streamVoice === 'minimax') && statuses.some(item => item.status === 'default')) {
     return { page: 'tts', fold, selector: `[data-jy-tts-${tts.streamVoice}="voiceMap"]` };
   }
   const row = first ? findVoiceEntry(ttsVoicesFor(settings), unifySpeakerNames([first.name], ttsKnownNames(settings)).get(first.name) ?? first.name) : null;
@@ -21201,7 +21322,7 @@ function installPublicApi() {
           hasKey: tts.provider === 'gsv' ? true : Boolean(tts.fish.key),
           // What tts.stream reads in, and whether it can: a caller that only streams asks this.
           streamProvider: tts.streamVoice,
-          streamReady: tts.enabled === true && Boolean(tts.streamVoice === 'fish' ? tts.fish.key : tts[tts.streamVoice]?.key),
+          streamReady: tts.enabled === true && Boolean(tts.streamVoice === 'gsv' ? tts.gsv?.baseUrl : tts.streamVoice === 'fish' ? tts.fish.key : tts[tts.streamVoice]?.key),
           // Why tts.stream cannot read now, to show the reader as it is; empty when it can.
           reason: apiTtsReason({ stream: true }),
           model: tts.provider === 'gsv' ? 'gpt-sovits' : tts.fish.model,
@@ -21461,6 +21582,8 @@ export const __testing = Object.freeze({
   playTtsUtterance,
   playTtsParagraph,
   resetTtsPlayer: () => { runtime.tts.player = null; runtime.tts.transport = null; },
+  // The live (边收边放) player is made once per page; a test with an AudioContext of its own makes it anew.
+  resetLivePlayer: () => { runtime.tts.live?.close?.(); runtime.tts.live = undefined; },
   playTtsFloor,
   stopTts,
   streamReplyLines,

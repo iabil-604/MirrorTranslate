@@ -430,7 +430,12 @@ test('each missing item says what is missing, what it does to a call, and where 
   // The floors read by GPT-SoVITS: the Fish card is not on the page, and the reason says what to do.
   const [hidden] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'fish', keyMissing: true, fishCardHidden: true } });
   assert.match(hidden.reason, /声音来源是 GPT-SoVITS/);
+  assert.match(hidden.reason, /把通话用的声音也换成 GPT-SoVITS/);
   assert.equal(hidden.where, '镜译 → 朗读 → 更多 → 实时通话（测试版） → 边写边读和通话用的声音');
+
+  // The call on GPT-SoVITS needs no key, only somewhere to send to.
+  const [gsv] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'gsv', keyMissing: true } });
+  assert.deepEqual([gsv.id, gsv.title, gsv.reason, gsv.where], ['key', 'GPT-SoVITS 接口地址', '还没填 GPT-SoVITS 的接口地址，镜译读不了通话里的话。', '镜译 → 朗读 →「GPT-SoVITS」→ 接口地址']);
 
   const [doubao] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'doubao', keyMissing: true } });
   assert.deepEqual([doubao.title, doubao.reason, doubao.where], ['豆包 API Key', '还没填豆包语音的 Key，镜译读不了通话里的话。', '镜译 → 朗读 → 更多 → 实时通话（测试版）']);
@@ -475,6 +480,13 @@ test('characters without a voice are named, grouped by what the call does with t
   assert.equal(muted.where, '镜译 → 朗读 → 音色 → 角色表');
 
   assert.deepEqual(callMissing(['tts.stream'], { tts: { enabled: true, voice: 'fish' }, voices: [{ name: '樱井', status: 'own' }] }), []);
+
+  // GPT-SoVITS: a character without a clip of its own is the card's default voice, or nobody when the
+  // card has none either.
+  const [local] = callMissing(['tts.stream'], { tts: { enabled: true, voice: 'gsv' }, voices: [{ name: '老胡', status: 'default' }, { name: '阿星', status: 'novoice' }] });
+  assert.deepEqual(local.names, ['老胡', '阿星']);
+  assert.equal(local.reason, '老胡还没绑 GPT-SoVITS 音色，通话里用 GPT-SoVITS 卡里的默认音色读；阿星没有 GPT-SoVITS 音色，GPT-SoVITS 卡里也没填默认音色的参考音频，通话里读不出来。');
+  assert.equal(local.where, '镜译 → 朗读 → 音色 → 角色表');
 });
 
 test('what an app is told in one line and in the reminder', () => {

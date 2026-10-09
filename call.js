@@ -560,8 +560,8 @@ const CALL_APP_NAME_MAX = 40;
 const CALL_NAME_MAX = 60;
 const CALL_NAMES_MAX = 60;
 const CALL_SETTINGS = '镜译 → 朗读 → 更多 → 实时通话（测试版）';
-const CALL_KEY_TITLES = Object.freeze({ fish: 'Fish Audio API Key', doubao: '豆包 API Key', minimax: 'MiniMax API Key' });
-const CALL_KEY_MISSING = Object.freeze({ fish: '还没填 Fish Audio 的 API Key', doubao: '还没填豆包语音的 Key', minimax: '还没填 MiniMax 的 Key' });
+const CALL_KEY_TITLES = Object.freeze({ fish: 'Fish Audio API Key', gsv: 'GPT-SoVITS 接口地址', doubao: '豆包 API Key', minimax: 'MiniMax API Key' });
+const CALL_KEY_MISSING = Object.freeze({ fish: '还没填 Fish Audio 的 API Key', gsv: '还没填 GPT-SoVITS 的接口地址', doubao: '还没填豆包语音的 Key', minimax: '还没填 MiniMax 的 Key' });
 
 function callName(value, max = CALL_NAME_MAX) {
   if (typeof value !== 'string' && typeof value !== 'number') return '';
@@ -635,9 +635,11 @@ export function callAppNames(entry) {
 
 function voicesItem(tts, voices) {
   const cloud = tts.voice === 'doubao' || tts.voice === 'minimax';
+  const gsv = tts.voice === 'gsv';
   const pick = status => voices.filter(item => item.status === status).map(item => item.name);
   const unbound = pick('default');
   const gsvOnly = pick('gsv');
+  const voiceless = pick('novoice');
   const muted = pick('muted');
   const skipped = pick('skipped');
   const names = voices.filter(item => item.status !== 'own').map(item => item.name);
@@ -646,11 +648,12 @@ function voicesItem(tts, voices) {
   const parts = [];
   if (unbound.length || gsvOnly.length) {
     const why = [
-      unbound.length ? `${list(unbound)}${cloud ? '在「角色音色」里还没配音色' : '还没绑音色'}` : '',
+      unbound.length ? `${list(unbound)}${cloud ? '在「角色音色」里还没配音色' : gsv ? '还没绑 GPT-SoVITS 音色' : '还没绑音色'}` : '',
       gsvOnly.length ? `${list(gsvOnly)}只绑了 GPT-SoVITS 的音色，通话用的 Fish Audio 用不了` : '',
     ].filter(Boolean).join('，');
-    parts.push(`${why}，通话里${cloud ? '用默认音色' : '用对白默认音色'}读`);
+    parts.push(`${why}，通话里${cloud ? '用默认音色' : gsv ? '用 GPT-SoVITS 卡里的默认音色' : '用对白默认音色'}读`);
   }
+  if (voiceless.length) parts.push(`${list(voiceless)}没有 GPT-SoVITS 音色，GPT-SoVITS 卡里也没填默认音色的参考音频，通话里读不出来`);
   if (muted.length) parts.push(`${list(muted)}在角色表里设成了不朗读，通话里不出声`);
   if (skipped.length) parts.push(`${list(skipped)}没有专属音色，「对白默认音色」又设成了跳过，通话里不出声`);
   // Where the first of them is fixed: a voice that is missing where the call's voice looks for it.
@@ -673,8 +676,9 @@ const STT_ITEMS = Object.freeze({
  * `where` it is set; the voices item also lists the `names` concerned.
  *
  * `facts`, read off the settings by index.js:
- *   tts:    { enabled, voice: 'fish' | 'doubao' | 'minimax', keyMissing, fishCardHidden }
- *   voices: [{ name, status }], status own / default / gsv (bound to a GPT-SoVITS voice only) / muted / skipped
+ *   tts:    { enabled, voice: 'fish' | 'gsv' | 'doubao' | 'minimax', keyMissing, fishCardHidden }
+ *   voices: [{ name, status }], status own / default / gsv (bound to a GPT-SoVITS voice only, the call on Fish) /
+ *           novoice (the call on GPT-SoVITS, no clip of its own and none on the card) / muted / skipped
  *   stt:    { available, problem: secure / browser / recorder / url / key }
  *   llm:    { problem: '' / follow / incomplete, connection, sameAsAnalysis }
  */
@@ -693,8 +697,8 @@ export function callMissing(needs, facts = {}) {
         id: 'key',
         need: 'tts.stream',
         title: CALL_KEY_TITLES[voice],
-        reason: `${CALL_KEY_MISSING[voice]}，镜译读不了通话里的话。${hidden ? '声音来源是 GPT-SoVITS 时「Fish Audio」卡不显示：把声音来源换成 Fish Audio 填好 Key 再换回来，或者把通话用的声音换成豆包语音或 MiniMax。' : ''}`,
-        where: voice !== 'fish' ? CALL_SETTINGS : hidden ? `${CALL_SETTINGS} → 边写边读和通话用的声音` : '镜译 → 朗读 →「Fish Audio」',
+        reason: `${CALL_KEY_MISSING[voice]}，镜译读不了通话里的话。${hidden ? '声音来源是 GPT-SoVITS 时「Fish Audio」卡不显示：把通话用的声音也换成 GPT-SoVITS，或者把声音来源换成 Fish Audio 填好 Key。' : ''}`,
+        where: voice === 'gsv' ? '镜译 → 朗读 →「GPT-SoVITS」→ 接口地址' : voice !== 'fish' ? CALL_SETTINGS : hidden ? `${CALL_SETTINGS} → 边写边读和通话用的声音` : '镜译 → 朗读 →「Fish Audio」',
       });
     }
     const voices = voicesItem({ voice }, Array.isArray(facts.voices) ? facts.voices : []);

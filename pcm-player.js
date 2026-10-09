@@ -44,6 +44,99 @@ export function pcmDataOffset(bytes) {
   return 0;
 }
 
+/** The sample rate a WAV header in front of the samples names; 0 when there is none to read. */
+export function wavSampleRate(bytes) {
+  const text = at => String.fromCharCode(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]);
+  if (!(bytes?.length >= 28) || text(0) !== 'RIFF' || text(8) !== 'WAVE') return 0;
+  for (let at = 12; at + 16 <= Math.min(bytes.length, 512); at += 1) {
+    if (text(at) !== 'fmt ') continue;
+    const rate = new DataView(bytes.buffer, bytes.byteOffset + at + 12, 4).getUint32(0, true);
+    return rate >= 3000 && rate <= 384000 ? rate : 0;
+  }
+  return 0;
+}
+
+/**
+ * A WAV stream (GPT-SoVITS's streaming_mode: its header, then raw 16-bit PCM) made into what one take
+ * plays. The header goes on only for the first sentence of a take (`first`), which reads the sample rate
+ * off it; a later sentence's header is dropped, or it would be heard as a click. Samples are scaled by
+ * `gain`, and nothing is handed on until `holdSec` of sound has come or the stream has ended, so a model
+ * that starts slowly does not stutter. `push` the stream's bytes as they come, `end` when it is over.
+ */
+export function createWavStreamFeed({ first = true, gain = 1, holdSec = 0, onBytes }) {
+  let head = new Uint8Array(0);
+  let started = false;
+  let rate = LIVE_SAMPLE_RATE;
+  let carry = null;
+  let held = [];
+  let heldBytes = 0;
+  let released = !(holdSec > 0);
+  const scale = Number.isFinite(gain) && gain > 0 ? gain : 1;
+  const hand = bytes => { if (bytes.length) onBytes(bytes); };
+  const release = () => {
+    released = true;
+    for (const bytes of held) hand(bytes);
+    held = [];
+    heldBytes = 0;
+  };
+  const samples = data => {
+    let bytes = data;
+    if (carry?.length) {
+      const joined = new Uint8Array(carry.length + bytes.length);
+      joined.set(carry);
+      joined.set(bytes, carry.length);
+      bytes = joined;
+    }
+    const whole = bytes.length - (bytes.length % 2);
+    carry = whole < bytes.length ? bytes.slice(whole) : null;
+    if (!whole) return;
+    const out = bytes.slice(0, whole);
+    if (scale !== 1) {
+      const view = new DataView(out.buffer, out.byteOffset, out.length);
+      for (let at = 0; at < out.length; at += 2) view.setInt16(at, Math.max(-32768, Math.min(32767, Math.round(view.getInt16(at, true) * scale))), true);
+    }
+    if (released) {
+      hand(out);
+      return;
+    }
+    held.push(out);
+    heldBytes += out.length;
+    if (heldBytes >= holdSec * rate * 2) release();
+  };
+  return {
+    push(bytes) {
+      let data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? 0);
+      if (!started) {
+        const joined = new Uint8Array(head.length + data.length);
+        joined.set(head);
+        joined.set(data, head.length);
+        head = joined;
+        const offset = pcmDataOffset(head);
+        // A header split across pieces is waited for; bytes that never turn into one are raw PCM.
+        if (!offset && head.length < 512 && (head.length < 4 || String.fromCharCode(...head.subarray(0, 4)) === 'RIFF')) return;
+        started = true;
+        if (offset) {
+          rate = wavSampleRate(head) || rate;
+          if (first) hand(head.slice(0, offset));
+        }
+        data = head.subarray(offset);
+        head = null;
+      }
+      samples(data);
+    },
+    end() {
+      if (!started && head?.length) {
+        started = true;
+        // A stream that ended inside its header has no sound; anything else is raw PCM after all.
+        if (head.length < 4 || String.fromCharCode(...head.subarray(0, 4)) !== 'RIFF') samples(head);
+        head = null;
+      }
+      release();
+    },
+    get sampleRate() { return rate; },
+  };
+}
+
 /**
  * The player. `createContext` makes the AudioContext the first time sound is needed (a page may not
  * have one before a tap); `sampleRate` is what the provider sends.
@@ -78,9 +171,9 @@ export function createPcmPlayer({ createContext, sampleRate = LIVE_SAMPLE_RATE }
     if (sources.size) return;
     while (drainWaiters.length) drainWaiters.shift()();
   };
-  const schedule = (samples, take) => {
+  const schedule = (samples, take, rate = sampleRate) => {
     const audio = ctx();
-    const buffer = audio.createBuffer(1, samples.length, sampleRate);
+    const buffer = audio.createBuffer(1, samples.length, rate);
     if (typeof buffer.copyToChannel === 'function') buffer.copyToChannel(samples, 0);
     else buffer.getChannelData(0).set(samples);
     const source = audio.createBufferSource();
@@ -88,7 +181,7 @@ export function createPcmPlayer({ createContext, sampleRate = LIVE_SAMPLE_RATE }
     source.connect(audio.destination);
     const at = Math.max(nextTime, audio.currentTime + LEAD_SEC);
     source.start(at);
-    nextTime = at + samples.length / sampleRate;
+    nextTime = at + samples.length / rate;
     const wasIdle = sources.size === 0;
     sources.add(source);
     take.pending += 1;
@@ -112,10 +205,15 @@ export function createPcmPlayer({ createContext, sampleRate = LIVE_SAMPLE_RATE }
     /** Paused by the reader (as opposed to a page that has not been allowed sound yet). */
     get held() { return held; },
 
-    /** One sentence's sound, in the order sentences are to be heard. */
+    /**
+     * One sentence's sound, in the order sentences are to be heard. Bytes that open with a WAV header are
+     * played at the rate it names (GPT-SoVITS sends 32 kHz); raw PCM at the player's own.
+     */
     take() {
       let carry = null;
       let skipped = false;
+      let rate = sampleRate;
+      let least = minSamples;
       let waiting = new Float32Array(0);
       let ended = false;
       let settle = null;
@@ -138,7 +236,7 @@ export function createPcmPlayer({ createContext, sampleRate = LIVE_SAMPLE_RATE }
       liveTakes.add(take);
       const flush = () => {
         if (!waiting.length) return null;
-        const lead = schedule(waiting, take);
+        const lead = schedule(waiting, take, rate);
         take.samples += waiting.length;
         waiting = new Float32Array(0);
         return lead;
@@ -151,7 +249,12 @@ export function createPcmPlayer({ createContext, sampleRate = LIVE_SAMPLE_RATE }
           let data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? 0);
           if (!skipped) {
             skipped = true;
-            data = data.subarray(pcmDataOffset(data));
+            const offset = pcmDataOffset(data);
+            if (offset) {
+              rate = wavSampleRate(data) || sampleRate;
+              least = Math.round(rate * MIN_BUFFER_SEC);
+            }
+            data = data.subarray(offset);
           }
           const read = pcmSamples(data, carry);
           carry = read.carry;
@@ -160,7 +263,7 @@ export function createPcmPlayer({ createContext, sampleRate = LIVE_SAMPLE_RATE }
           joined.set(waiting);
           joined.set(read.samples, waiting.length);
           waiting = joined;
-          return waiting.length >= minSamples ? flush() : null;
+          return waiting.length >= least ? flush() : null;
         },
         /** Nothing more comes for this sentence; `done` settles once it has been heard. */
         end() {

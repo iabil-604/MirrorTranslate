@@ -8,20 +8,20 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.46.0-beta.1';
+} from './prompts.js?v=0.46.0-beta.2';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.46.0-beta.1';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.46.0-beta.2';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.46.0-beta.1';
-import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.46.0-beta.1';
+import { resolveMoveStyle } from './palette.js?v=0.46.0-beta.2';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.46.0-beta.2';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.46.0-beta.1';
+export const APP_VERSION = '0.46.0-beta.2';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -996,7 +996,7 @@ export const DEFAULT_MINIMAX = Object.freeze({
   speed: 1,
 });
 
-export const STREAM_VOICES = Object.freeze(['fish', 'doubao', 'minimax']);
+export const STREAM_VOICES = Object.freeze(['fish', 'gsv', 'doubao', 'minimax']);
 
 export const DEFAULT_GSV = Object.freeze({
   // Where GPT-SoVITS's api_v2.py listens unless told otherwise. It sends no CORS headers, so the browser
@@ -1092,7 +1092,7 @@ export const DEFAULT_TTS = Object.freeze({
   // 边收边放: what is read while written (a reply, a call) is played as Fish sends it, not once a whole
   // sentence has come back.
   liveAudio: true,
-  // Whose voice reads what is read while written: Fish (as the floors are read), 豆包 or MiniMax.
+  // Whose voice reads what is read while written: Fish or GPT-SoVITS (each with the floors' own card), 豆包 or MiniMax.
   streamVoice: 'fish',
   // 实时通话（测试版）: the connection a caller's streamed requests go to ('' = the analysis one), and
   // how speech becomes text — the browser's recogniser, or a recording sent to a transcription API.
