@@ -1,7 +1,7 @@
 import {
   DEFAULT_QUOTE_PAIRS, STORY_TONES, isPlaceholderSpeaker, normalizeIntimateMode, normalizeLanguageCode, normalizeTts, parseJsonCandidates,
   storyToneOf, unwrapResponseContent,
-} from './core.js?v=0.47.1';
+} from './core.js?v=0.48.0';
 import {
   EDGE_PUNCTUATION_RE,
   FISH_EMOTIONS,
@@ -14,8 +14,9 @@ import {
   referenceLines,
   rosterList,
   styleEntries,
-} from './tts.js?v=0.47.1';
-import { normalizeEmotion } from './palette.js?v=0.47.1';
+  tamePunctuationMarks,
+} from './tts.js?v=0.48.0';
+import { normalizeEmotion } from './palette.js?v=0.48.0';
 
 // ---------------------------------------------------------------------------------------------
 // The deep reading, on its own.
@@ -106,6 +107,78 @@ export const ACOUSTIC_TONE_RULES = Object.freeze(Object.fromEntries(STORY_TONES.
 export function intimateAllowed(mode, tone) {
   const chosen = normalizeIntimateMode(mode);
   return chosen === 'on' || (chosen === 'auto' && tone === '亲密');
+}
+
+// ---------------------------------------------------------------------------------------------
+// 声学标注规则 in a call (边说边标). A call cannot wait for an analysis of each sentence, so the call's own
+// model performs its lines as it says them: the rules above that a phone conversation needs, in a form
+// that streams — a 〔张力〕 (or 〔张力,语速〕) in front of each sentence and the ten tags inline. call.js keeps
+// both on the voice's copy and off the screen's; acousticCallUtterances turns them into what the floors'
+// analysis gives a sentence: voice.script, voice.tensionLevel and voice.speed.
+// ---------------------------------------------------------------------------------------------
+
+const CALL_INTIMATE = Object.freeze({
+  off: '亲密的话题也照日常克制：不用 [groan]、[panting]，不写娇喘。',
+  auto: '只有通话里明确说到正在亲密接触时，才用 [breathy]、[panting]；不用 [groan]。',
+  on: '用户打开了「亲密场景」：只有通话里明确说到正在亲密接触时才放开，[breathy]、[panting]、[groan] 按强度递进；只是调情、没有身体接触时照常克制。',
+});
+
+/** The call's part of the 声学标注规则, by the reader's 亲密场景 (关 / 自动 / 开). */
+export function acousticCallRules(intimate = 'off') {
+  const mode = normalizeIntimateMode(intimate);
+  return [
+    '【声音】（声学标注规则）',
+    '你说的话会直接交给语音合成。情绪不靠喊，靠下面这些东西演出来：',
+    '1. 每一句开头写〔张力〕，张力是 1～5 的整数：1 平静中性（日常寒暄、平稳交谈）；2 轻度起伏（温和的喜怒、轻松调侃）；3 中度情绪（着急解释、撩拨、认真质问、轻度委屈）；4 强烈情绪（生气斥责、伤心哭泣、紧张示警）；5 极端（崩溃、歇斯底里、暴怒，很少用）。电话里大多数时候是 1 或 2。',
+    '2. 语速有变化时写在张力后面：〔3,fast〕。只有 very_slow、slow、fast、very_fast 四种，正常不写。',
+    '3. 不写情绪词，情绪落到声音上：先用标签，再用标点和拟声（~、……、叠字、嗯、唔、呜）。能用的标签只有这十个：[whisper] 耳语压低、[breathy] 气声漏气、[snicker] 窃笑、[laughter] 轻笑、[sigh] 叹气、[gasp] 倒抽气、[panting] 急喘、[groan] 低哼、[clear throat] 清嗓、[pause] 停顿。',
+    '4. 标签插在真正生效的字前面，标签和后面的字之间空一格；一处最多两个，[whisper]、[breathy] 在前（[whisper][gasp]）。平平常常的句子不加标签，不要句句都加。',
+    `5. 呼吸闸门：[breathy]、[panting]、[groan] 默认不用。只有说到了身体上的事（正在跑、刚运动完、身体不舒服）才开 [panting]；害羞、凑近话筒说悄悄话可以用 [whisper][breathy]。${CALL_INTIMATE[mode] ?? CALL_INTIMATE.off}`,
+    '6. ！！ 只给情绪顶点的爆发，平时一个 ！ 就够；～ 只给撒娇、拖长的尾音。叠字（我、我不是）比破折号更能表现结巴、颤抖、哽咽。',
+    '7. 光杆的单字疑问（嗯？、啊？、哈？、诶？）保留问号，不要被别的情绪盖掉。',
+    '8. 哭没有标签，靠 呜、嗯、断续的短句和省略号，抽气处至多一次 [gasp]；害羞用 [whisper] 打底，加首字叠字，被说中时 [pause] 卡一下；突然受惊用一次 [gasp]，不要句句打头。',
+    '9. 〔张力〕和标签只给配音看，屏幕上不显示。例：〔1〕嗯，刚到家。〔3〕[snicker] 你又想我了吧？〔2,slow〕[sigh] 好啦，我也是。',
+  ].join('\n');
+}
+
+const CALL_MARK_RE = /〔\s*([1-5])\s*(?:[,，]\s*(very_slow|slow|normal|fast|very_fast))?\s*〕/gi;
+const CALL_TAG_RE = /\[[^\]\n]{1,40}\]/g;
+const CALL_TAG_ONE = /\[[^\]\n]{1,40}\]/;
+const CALL_CJK = '\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}，。！？、；：…～—';
+const CALL_CJK_GAP = new RegExp(`(?<=[${CALL_CJK}])[ \\t]+(?=[${CALL_CJK}])`, 'gu');
+
+/**
+ * A call's sentences as the voice received them — 〔张力〕 marks and the ten tags inline — read into the
+ * reading's own terms. Each utterance comes back with its words alone (what is aligned and shown), and
+ * `voices` holds what the floors' analysis would give it: the tags as `script` (held by acousticScript,
+ * so a moan is still never sent without 亲密场景), the tension as `tensionLevel` (Fish's temperature) and a
+ * pace other than normal as `speed`. A sentence without a mark of its own goes on at the last one heard,
+ * across stretches too (`carry` in, `carry` out). Below tension 4 the script's runs of ！ are tamed, as a
+ * plain sentence's are: ！！ belongs to a peak. A stretch with nothing left to say is dropped.
+ */
+export function acousticCallUtterances(utterances, { intimate = false, carry = null } = {}) {
+  let state = { tension: Number.isInteger(carry?.tension) ? carry.tension : null, pace: typeof carry?.pace === 'string' ? carry.pace : null };
+  const kept = [];
+  const voices = new Map();
+  for (const utterance of utterances ?? []) {
+    const raw = String(utterance?.text ?? '');
+    const marks = [...raw.matchAll(CALL_MARK_RE)].map(match => ({ tension: Number(match[1]), pace: (match[2] || 'normal').toLowerCase() }));
+    const own = marks[0] ?? state;
+    if (marks.length) state = marks[marks.length - 1];
+    const tagged = raw.replace(CALL_MARK_RE, ' ').replace(/[ \t]{2,}/g, ' ').trim();
+    const words = tagged.replace(CALL_TAG_RE, ' ').replace(/[ \t]{2,}/g, ' ').replace(CALL_CJK_GAP, '').trim();
+    if (!/[\p{L}\p{N}]/u.test(words)) continue;
+    const voice = {};
+    if (Number.isInteger(own?.tension)) voice.tensionLevel = own.tension;
+    if (own?.pace && own.pace !== 'normal' && ACOUSTIC_PACES.includes(own.pace)) voice.speed = own.pace;
+    if (CALL_TAG_ONE.test(tagged)) {
+      const { script } = acousticScript(tagged, words, { narrator: false, intimate, tone: '' });
+      if (script) voice.script = (voice.tensionLevel ?? 2) < 4 ? tamePunctuationMarks(script) : script;
+    }
+    kept.push({ ...utterance, text: words });
+    if (Object.keys(voice).length) voices.set(utterance.id, voice);
+  }
+  return { utterances: kept, voices, carry: state };
 }
 
 function fillIntimate(system, intimate) {

@@ -113,6 +113,14 @@
     let insertedImageTag = false;
 
     const translatePayload = prompt => {
+      // A call (通话测试): the character answers, performing its lines by the 声学标注规则 when the call's
+      // instructions carry them.
+      const system = String((Array.isArray(prompt) ? prompt : []).find(item => item.role === 'system')?.content ?? '');
+      if (system.includes('通电话')) {
+        return system.includes('【声音】')
+          ? '〔1〕喂？是我。〔3〕[snicker] 你又想我了吧？？〔2,slow〕[sigh] 好啦……我也想你。'
+          : '喂？是我。你又想我了吧？好啦……我也想你。';
+      }
       // The last user message is not always the input: a connection can carry a postscript, which
       // rides after everything else. What is wanted is the last one that parses as the request.
       const parsed = (Array.isArray(prompt) ? prompt : []).filter(item => item.role === 'user')

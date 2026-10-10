@@ -16,16 +16,23 @@ export const CALL_OPENING = '（电话接通了）';
 const NAME_SEPARATORS = ['：', ':'];
 const QUOTES = /[「」『』“”"]/g;
 // An aside the model was told not to write: removed when closed, held back while still open.
-const ASIDES = [['（', '）'], ['(', ')'], ['【', '】'], ['[', ']']];
+const ASIDES = [['（', '）'], ['(', ')'], ['【', '】'], ['[', ']'], ['〔', '〕']];
+// 声学标注规则 in a call: the voice may keep its ten tags and each sentence's 〔张力〕 (or 〔张力,语速〕);
+// every other bracket is still an aside. The same ten as tts-deep.js ACOUSTIC_TAGS.
+const ACOUSTIC_TAG = /^(?:whisper|breathy|snicker|laughter|sigh|gasp|panting|groan|clear throat|pause)$/i;
+const ACOUSTIC_MARK = /^[1-5](?:\s*[,，]\s*(?:very_slow|slow|normal|fast|very_fast))?$/i;
+const keptAside = (open, inside) => (open === '[' ? ACOUSTIC_TAG.test(inside.trim().replace(/\s+/g, ' '))
+  : open === '〔' ? ACOUSTIC_MARK.test(inside.trim()) : false);
 
 /**
  * What of a reply is said aloud: the model's words without asides, stage directions, reasoning, tags,
  * quote marks or a speaker's name in front. The result only ever grows as the reply grows — anything
  * that might still turn out to be removed (an aside not yet closed, a line that may become a name in
  * front) is held back until it is known — because it is handed to the reading as the text so far.
- * `final` releases what was held back and could not be an aside after all.
+ * `final` releases what was held back and could not be an aside after all. `acoustic` is the voice's
+ * copy under 声学标注规则: the ten tags and the 〔张力〕 marks stay, the screen's copy goes without them.
  */
-export function spokenText(raw, { names = [], final = false } = {}) {
+export function spokenText(raw, { names = [], final = false, acoustic = false } = {}) {
   let text = String(raw ?? '');
   // Reasoning written into the reply, and what follows an unclosed opening of it.
   text = text.replace(/<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, '');
@@ -46,10 +53,19 @@ export function spokenText(raw, { names = [], final = false } = {}) {
   for (const [open, close] of ASIDES) {
     let out = '';
     let depth = 0;
+    let inside = '';
     for (const char of text) {
-      if (char === open) depth += 1;
-      else if (char === close && depth > 0) depth -= 1;
-      else if (depth === 0) out += char;
+      if (char === open) {
+        depth += 1;
+        if (depth === 1) inside = '';
+        else inside += char;
+      } else if (char === close && depth > 0) {
+        depth -= 1;
+        if (depth === 0) {
+          if (acoustic && keptAside(open, inside)) out += `${open}${inside.trim().replace(/\s+/g, ' ')}${close}`;
+        } else inside += char;
+      } else if (depth === 0) out += char;
+      else inside += char;
     }
     text = out;
   }
@@ -82,11 +98,20 @@ export function spokenText(raw, { names = [], final = false } = {}) {
     }
     if (body) lines.push(body);
   }
-  return lines.join('\n').replace(/[ \t]{2,}/g, ' ').trim();
+  // A space left between two characters of a script that writes none (where a tag stood, on the
+  // screen's copy) goes too.
+  return lines.join('\n').replace(/[ \t]{2,}/g, ' ').replace(CJK_GAP, '').trim();
 }
 
-/** The call's instructions to the model: who it is, who is on the line, what happened, how to talk. */
-export function callSystemPrompt({ char, user, character = '', persona = '', recent = '', previous = [] }) {
+const CJK_CHAR = '\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}，。！？、；：…～—';
+const CJK_GAP = new RegExp(`(?<=[${CJK_CHAR}])[ \\t]+(?=[${CJK_CHAR}])`, 'gu');
+
+/**
+ * The call's instructions to the model: who it is, who is on the line, what happened, how to talk.
+ * `acoustic` is the 声学标注规则 for a call (tts-deep.js ACOUSTIC_CALL_RULES): handed in, the model
+ * performs its lines with the ten tags and a 〔张力〕 in front of each sentence.
+ */
+export function callSystemPrompt({ char, user, character = '', persona = '', recent = '', previous = [], acoustic = '' }) {
   const parts = [`你是${char}，正在和${user}通电话。下面是你的设定和最近发生的事，用这个身份接这通电话。`];
   if (character) parts.push(`【设定】\n${character}`);
   if (persona) parts.push(`【${user}】\n${persona}`);
@@ -95,13 +120,17 @@ export function callSystemPrompt({ char, user, character = '', persona = '', rec
     .filter(turn => String(turn?.text ?? '').trim())
     .map(turn => `${turn.from === 'user' ? user : char}：${String(turn.text).trim()}${turn.cut ? '……' : ''}`);
   if (said.length) parts.push(`【你们上一次通话】\n${said.join('\n')}`);
+  const rules = String(acoustic ?? '').trim();
   parts.push([
     '【这通电话怎么说】',
-    '- 只说出口的话：不写动作、神态、心理和旁白，不用括号、星号和引号，句首也不写名字。',
+    rules
+      ? '- 只说出口的话：不写动作、神态、心理和旁白，不用星号和引号，句首也不写名字；除了下面「声音」里的十个标签和〔张力〕，不用任何括号。'
+      : '- 只说出口的话：不写动作、神态、心理和旁白，不用括号、星号和引号，句首也不写名字。',
     `- 口语，短句，一次说一到三句，说完就停，等${user}开口。`,
     `- 只说${char}自己的话，不替${user}说。`,
     '- 直接开口：不写思考过程、分析或计划，想到什么就说什么。',
   ].join('\n'));
+  if (rules) parts.push(rules);
   return parts.join('\n\n');
 }
 
@@ -296,9 +325,12 @@ export function createCall({ describe, ask, speak, listen, history, now = () => 
     const mine = () => turn?.id === id;
     // Set once the answer is fully handed over: from then on the reading ending is the turn ending.
     let ending = false;
+    // Under 声学标注规则 the voice hears the tags and 〔张力〕 marks the screen and the record go without.
+    const acoustic = Boolean(String(who.acoustic ?? '').trim());
+    let spoken = '';
     let voice;
     try {
-      voice = speak({ speaker: who.char });
+      voice = speak({ speaker: who.char, acoustic });
     } catch (error) {
       state.turns.splice(state.turns.indexOf(line), 1);
       state.phase = 'ready';
@@ -338,12 +370,16 @@ export function createCall({ describe, ask, speak, listen, history, now = () => 
     });
     emit();
     const messages = callMessages(callSystemPrompt({ ...who, previous }), state.turns.filter(item => item !== line));
-    const hear = raw => {
-      const said = spokenText(raw, { names: names() });
-      // What was handed over is kept: the reading only takes text that continues it.
+    // What was handed over is kept: the reading only takes text that continues it, and so does the line.
+    const hear = (raw, final = false) => {
+      const said = spokenText(raw, { names: names(), final });
+      const script = acoustic ? spokenText(raw, { names: names(), final, acoustic: true }) : said;
+      if (script !== spoken && script.startsWith(spoken)) {
+        spoken = script;
+        voice.push(script);
+      }
       if (said === line.text || !said.startsWith(line.text)) return;
       line.text = said;
-      voice.push(said);
       emit();
     };
     let text;
@@ -370,11 +406,7 @@ export function createCall({ describe, ask, speak, listen, history, now = () => 
       return;
     }
     if (!mine()) return;
-    const said = spokenText(text, { names: names(), final: true });
-    if (said.startsWith(line.text) && said !== line.text) {
-      line.text = said;
-      voice.push(said);
-    }
+    hear(text, true);
     ending = true;
     voice.end();
     emit();

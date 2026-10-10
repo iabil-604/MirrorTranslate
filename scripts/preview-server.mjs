@@ -333,6 +333,29 @@ http.createServer(async (request, response) => {
       'Cache-Control': 'no-cache',
     });
     const frame = delta => response.write(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`);
+    // A call (通话测试): the character answers a few characters at a time, performing its lines by the
+    // 声学标注规则 when the call's instructions carry them.
+    const system = String((body.messages ?? []).find(message => message.role === 'system')?.content ?? '');
+    if (system.includes('通电话')) {
+      const performed = system.includes('【声音】');
+      const answer = performed
+        ? '〔1〕喂？是我。〔3〕[snicker] 你又想我了吧？？〔2,slow〕[sigh] 好啦……我也想你。'
+        : '喂？是我。你又想我了吧？好啦……我也想你。';
+      const pieces = answer.match(/.{1,4}/gsu) ?? [];
+      let at = 0;
+      const typing = setInterval(() => {
+        if (at < pieces.length) {
+          frame({ content: pieces[at] });
+          at += 1;
+          return;
+        }
+        clearInterval(typing);
+        response.write('data: [DONE]\n\n');
+        response.end();
+      }, 60);
+      request.on('close', () => clearInterval(typing));
+      return;
+    }
     const thoughts = [
       '先看这一批要译几段。',
       '第 1 段是对话，说话人应该是女方，语气犹豫，句尾有省略号。',

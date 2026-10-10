@@ -7,7 +7,7 @@ import {
   splitUtterances, unsungText,
 } from '../tts.js';
 import {
-  ACOUSTIC_INTIMATE_AUTO, ACOUSTIC_INTIMATE_ON, ACOUSTIC_TONE_RULES, DEEP_PROMPT, acousticCurrentItem, acousticScript, buildDeepAnalysisMessages,
+  ACOUSTIC_INTIMATE_AUTO, ACOUSTIC_INTIMATE_ON, ACOUSTIC_TONE_RULES, DEEP_PROMPT, acousticCallRules, acousticCallUtterances, acousticCurrentItem, acousticScript, buildDeepAnalysisMessages,
   intimateAllowed, isAcousticPrompt, parseDeepAnalysis,
 } from '../tts-deep.js';
 import { STORY_TONES, mergeSettings, normalizeTts, normalizeVoiceList } from '../core.js';
@@ -437,4 +437,45 @@ test('唱: a line the reader set to sing opens on [singing], is read plainly by 
   assert.equal(resolveSegmentVoice(sung, { voices: [row] }), 'sing-voice');
   assert.equal(resolveSegmentVoice({ ...sung, sung: false, voice: undefined }, { voices: [row] }), 'speak');
   assert.equal(resolveSegmentVoice({ ...sung, lang: 'ja' }, { voices: [{ ...row, voices: { ja: 'ja-voice' } }] }), 'ja-voice', 'a voice for the language still comes first');
+});
+
+test('a call\'s performed lines: the words are read and shown, the marks and tags go on the voice', () => {
+  const utterances = splitUtterances([{ lineId: 1, text: '〔1〕嗯，刚到家。〔3〕[snicker] 你又想我了吧？？〔2,slow〕[sigh] 好啦……我也是！！〔4,fast〕[gasp] 你、你说什么！！' }]);
+  const read = acousticCallUtterances(utterances);
+  assert.deepEqual(read.utterances.map(item => item.text), ['嗯，刚到家。', '你又想我了吧？？', '好啦……我也是！！', '你、你说什么！！']);
+  const voices = read.utterances.map(item => read.voices.get(item.id));
+  assert.deepEqual(voices[0], { tensionLevel: 1 }, 'a plain sentence keeps its words and gets its tension');
+  assert.deepEqual(voices[1], { tensionLevel: 3, script: '[snicker] 你又想我了吧？' }, 'below 4 a run of marks is tamed on the script');
+  assert.deepEqual(voices[2], { tensionLevel: 2, speed: 'slow', script: '[sigh] 好啦……我也是！' });
+  assert.deepEqual(voices[3], { tensionLevel: 4, speed: 'fast', script: '[gasp] 你、你说什么！！' }, 'at a peak ！！ stays');
+  assert.deepEqual(read.carry, { tension: 4, pace: 'fast' });
+});
+
+test('a call\'s sentence without a mark goes on at the last one, across stretches too, and an empty one is dropped', () => {
+  const first = acousticCallUtterances(splitUtterances([{ lineId: 1, text: '〔3,fast〕喂？是你吗' }]));
+  assert.deepEqual(first.utterances.map(item => first.voices.get(item.id)), [{ tensionLevel: 3, speed: 'fast' }, { tensionLevel: 3, speed: 'fast' }], 'a sentence cut at its question mark keeps the mark it opened with');
+  const next = acousticCallUtterances(splitUtterances([{ lineId: 2, text: '我还以为打错了。〔1〕[pause] 〔2〕好。' }]), { carry: first.carry });
+  assert.deepEqual(next.utterances.map(item => [item.text, next.voices.get(item.id)]), [['我还以为打错了。', { tensionLevel: 3, speed: 'fast' }], ['好。', { tensionLevel: 1 }]],
+    'the next stretch goes on at the mark before it, and a sentence\'s first mark is its own');
+  const none = acousticCallUtterances(splitUtterances([{ lineId: 1, text: '没有标记的话。' }]));
+  assert.equal(none.voices.size, 0, 'no marks, no tags: nothing on the voice');
+  assert.deepEqual(none.utterances.map(item => item.text), ['没有标记的话。']);
+});
+
+test('a call keeps the rules\' gates: a moan only with 亲密场景, two tags at a point, filters first', () => {
+  const text = '〔4〕[groan] 嗯……[gasp][whisper][breathy] 别、别停。';
+  const off = acousticCallUtterances(splitUtterances([{ lineId: 1, text }]), { intimate: false });
+  const offScript = [...off.voices.values()][0].script;
+  assert.ok(!offScript.includes('[groan]'), 'no moan without 亲密场景');
+  assert.match(offScript, /\[whisper\]\[gasp\]|\[whisper\]\[breathy\]/, 'filters first, two at most');
+  const on = acousticCallUtterances(splitUtterances([{ lineId: 1, text }]), { intimate: true });
+  assert.ok([...on.voices.values()][0].script.startsWith('[groan]'), 'with it, the moan is sent');
+});
+
+test('the call\'s part of the rules says how to mark a sentence, and 亲密场景 decides what it says about moans', () => {
+  const off = acousticCallRules('off');
+  for (const part of ['〔张力〕', '〔3,fast〕', '[whisper]', '[clear throat]', '[pause]', '大多数时候是 1 或 2', '！！ 只给情绪顶点', '不用 [groan]、[panting]']) assert.ok(off.includes(part), part);
+  assert.ok(acousticCallRules('on').includes('[breathy]、[panting]、[groan] 按强度递进'));
+  assert.ok(acousticCallRules('auto').includes('不用 [groan]'));
+  assert.equal(acousticCallRules('nonsense'), acousticCallRules('off'), 'an unknown mode is 关');
 });

@@ -3552,6 +3552,38 @@ test('tts.stop leaves a floor being read alone; with all: true everything 镜译
   assert.equal(api.tts.stop({ all: true }), false, 'nothing left to stop');
 });
 
+test('a call read by 声学标注规则: the tags go to Fish, each 〔张力〕 sets the temperature, the words alone are read', async t => {
+  restoreGlobals(t);
+  mockHost('tts-call-acoustic');
+  __testing.configureForTest({
+    initialized: true,
+    settings: { tts: { enabled: true, mode: 'off', liveAudio: false, fish: { ...FISH, temperature: 0.7 }, intimate: 'off' } },
+  });
+  t.after(() => __testing.configureForTest({ initialized: false }));
+  const audio = mockAudio();
+  t.after(() => audio.restore());
+  const calls = mockFish();
+  const voice = __testing.apiStream({ speaker: '樱井' }, { acoustic: true });
+  voice.push('〔1〕嗯，刚到家。〔3〕[snicker] 你又想我了吧？？〔4,fast〕[groan] [gasp] 你、你说什么！！');
+  voice.end();
+  await voice.done;
+  const sent = calls.map(call => ({ text: String(call.body?.text ?? ''), temperature: call.body?.temperature, speed: call.body?.prosody?.speed }));
+  assert.deepEqual(sent, [
+    { text: '嗯，刚到家。', temperature: 0.6, speed: 1 },
+    { text: '[snicker] 你又想我了吧？', temperature: 0.75, speed: 1 },
+    { text: '[gasp] 你、你说什么！！', temperature: 0.8, speed: 1.12 },
+  ], 'tension 1 steadier, 3 and 4 freer; ？？ tamed below 4, ！！ kept at a peak; no moan without 亲密场景');
+
+  // Another app's text is read as written: its brackets are not 镜译's marks.
+  const before = calls.length;
+  const other = __testing.apiStream({ speaker: '樱井' });
+  other.push('〔1〕嗯。');
+  other.end();
+  await other.done;
+  assert.equal(calls[before].body.text, '〔1〕嗯。');
+  assert.equal(calls[before].body.temperature, 0.7);
+});
+
 // A stand-in AudioContext for the live (边收边放) player: every buffer it is handed is kept, and each
 // source ends on the next turn, as if it had been heard at once.
 function liveAudioContext() {

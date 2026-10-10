@@ -5,6 +5,7 @@ import {
   CALL_NEEDS, CALL_OPENING, callAppNames, callAppSummary, callMessages, callMissing, callReminder, callSystemPrompt, createCall, createCallApps, createCallHistory,
   normalizeCallApp, spokenText,
 } from '../call.js';
+import { ACOUSTIC_TAGS, acousticCallRules } from '../tts-deep.js';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const settle = async () => { for (let i = 0; i < 6; i += 1) await tick(); };
@@ -51,9 +52,10 @@ function fakeLine({ describe } = {}) {
       signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
       asks.push(asked);
     }),
-    speak: ({ speaker }) => {
+    speak: ({ speaker, acoustic }) => {
       const voice = fakeVoice();
       voice.speaker = speaker;
+      voice.acoustic = acoustic;
       voices.push(voice);
       return voice;
     },
@@ -103,6 +105,68 @@ test('as a reply is written what is said aloud only grows, so it can be handed o
     }
     assert.ok(spokenText(reply, { names, final: true }).startsWith(before), 'the end only adds');
   }
+});
+
+test('under 声学标注规则 the voice keeps the ten tags and each 〔张力〕, the screen gets the words alone', () => {
+  const names = ['樱井', '小林'];
+  const reply = '樱井：〔1〕嗯，刚到家。〔3〕[snicker] 你又想我了吧？（小声）[笑] 〔2,slow〕[whisper][breathy] 我、我也是…… [pause] 晚安。';
+  assert.equal(spokenText(reply, { names, final: true, acoustic: true }),
+    '〔1〕嗯，刚到家。〔3〕[snicker] 你又想我了吧？ 〔2,slow〕[whisper][breathy] 我、我也是…… [pause] 晚安。');
+  assert.equal(spokenText(reply, { names, final: true }), '嗯，刚到家。你又想我了吧？我、我也是……晚安。', 'no tag, mark or gap they left on the screen');
+  for (const tag of ACOUSTIC_TAGS) {
+    assert.equal(spokenText(`[${tag}] 好。`, { final: true, acoustic: true }), `[${tag}] 好。`, `${tag} is one of the ten`);
+  }
+  assert.equal(spokenText('[Sigh] 好。[clear  throat]嗯。', { final: true, acoustic: true }), '[Sigh] 好。[clear throat]嗯。', 'spelled loosely, still a tag');
+  assert.equal(spokenText('〔6〕[开心] 好。〔2，fast〕嗯。〔3,loud〕走。', { final: true, acoustic: true }), '好。〔2，fast〕嗯。走。', 'only a tension of 1 to 5 and a pace of the five are marks');
+  assert.equal(spokenText('〔2〕嗯。', { final: true }), '嗯。', 'without the rules a mark is an aside like any bracket');
+});
+
+test('as a performed reply is written both copies only grow', () => {
+  const names = ['樱井', '小林'];
+  const replies = [
+    '樱井：〔1〕喂？〔3,fast〕[gasp] 你、你怎么知道的！！[sigh] 算了…… [pause] 〔2〕晚上见。',
+    '〔2〕[whisper][breathy] 别、别这样嘛～（脸红）[clear throat] 〔1〕好啦。',
+    '〔4〕[gasp] 什么？！[笑] 〔5,very_fast〕我、我才没有！！',
+  ];
+  for (const reply of replies) {
+    for (const acoustic of [true, false]) {
+      let before = '';
+      for (let end = 1; end <= reply.length; end += 1) {
+        const now = spokenText(reply.slice(0, end), { names, acoustic });
+        assert.ok(now.startsWith(before), `「${reply.slice(0, end)}」 (${acoustic ? 'voice' : 'screen'}): 「${now}」 does not continue 「${before}」`);
+        before = now;
+      }
+      assert.ok(spokenText(reply, { names, final: true, acoustic }).startsWith(before), 'the end only adds');
+    }
+  }
+});
+
+test('a call under 声学标注规则: the voice hears the tags and marks, the screen and the record the words', async () => {
+  const rules = acousticCallRules('off');
+  const line = fakeLine({ describe: async () => ({ char: '樱井', user: '小林', characterKey: 'sakurai.png', chatId: 'chat-1', character: '', persona: '', recent: '', acoustic: rules }) });
+  await line.call.dial();
+  await settle();
+  const system = line.asks[0].messages[0].content;
+  assert.ok(system.endsWith(rules), 'the rules close the instructions');
+  assert.ok(system.includes('除了下面「声音」里的十个标签和〔张力〕，不用任何括号'));
+  assert.equal(line.voices[0].acoustic, true, 'the reading is told to read the marks');
+  line.asks[0].onText('〔1〕喂？');
+  line.asks[0].onText('〔1〕喂？〔3〕[snicker] 是我');
+  assert.deepEqual(line.voices[0].pushed, ['〔1〕喂？', '〔1〕喂？〔3〕[snicker] 是我']);
+  assert.equal(line.call.snapshot.turns[0].text, '喂？是我');
+  line.asks[0].resolve('〔1〕喂？〔3〕[snicker] 是我呀。');
+  await settle();
+  assert.equal(line.voices[0].pushed.at(-1), '〔1〕喂？〔3〕[snicker] 是我呀。');
+  line.voices[0].finish();
+  await settle();
+  assert.deepEqual(line.call.snapshot.turns.map(turn => turn.text), ['喂？是我呀。']);
+  assert.equal(line.history.list('sakurai.png')[0].turns[0].text, '喂？是我呀。', 'kept without the marks');
+
+  const plain = fakeLine();
+  await plain.call.dial();
+  await settle();
+  assert.equal(plain.voices[0].acoustic, false);
+  assert.ok(plain.asks[0].messages[0].content.includes('不用括号、星号和引号'), 'no rules handed in: the instructions as they were');
 });
 
 test('the call is one conversation that opens with the reader picking up', () => {

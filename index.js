@@ -128,8 +128,8 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.47.1';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.47.1';
+} from './core.js?v=0.48.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.48.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -202,10 +202,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.47.1';
-import { createTtsStore } from './tts-store.js?v=0.47.1';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.47.1';
-import { DEEP_PROMPT, DEEP_STATUS, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.47.1';
+} from './tts.js?v=0.48.0';
+import { createTtsStore } from './tts-store.js?v=0.48.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.48.0';
+import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.48.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -215,7 +215,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.47.1';
+} from './processing.js?v=0.48.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -233,14 +233,14 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.47.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.47.1';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.47.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.47.1';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.47.1';
-import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.47.1';
-import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.47.1';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.47.1';
+} from './prompts.js?v=0.48.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.48.0';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.48.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.48.0';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.48.0';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.48.0';
+import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.48.0';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.48.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -258,8 +258,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.47.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.47.1';
+} from './palette.js?v=0.48.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.48.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -267,7 +267,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.47.1';
+} from './diagnostics.js?v=0.48.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -278,7 +278,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.47.1';
+} from './helper.js?v=0.48.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -19779,6 +19779,15 @@ function apiMoodVoices(utterances, mood) {
   return new Map(utterances.map(item => [item.id, { ...voice }]));
 }
 
+/** Two readings' voices for the same sentences as one: the second's numbers and script over the first's mood. */
+function withVoices(first, second) {
+  if (!second?.size) return first;
+  if (!first?.size) return second;
+  const merged = new Map(first);
+  for (const [id, voice] of second) merged.set(id, { ...(merged.get(id) ?? {}), ...voice });
+  return merged;
+}
+
 /**
  * What a caller's text asks for, beside its words: the story's marks, as for any floor, and the mood a
  * line's own mark or the caller names. A whisper asked for that way is the text asking for it, the way
@@ -19842,7 +19851,7 @@ function streamTimingText(times) {
  * far, or what came next), `end`, `cancel`, `pause`, `resume`, `on('state')`, `state`, `done`, and
  * `finished` (a promise).
  */
-function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang = '', emotion = '', startedAt = null, onSpeakers = null }) {
+function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang = '', emotion = '', startedAt = null, onSpeakers = null, acoustic = false }) {
   const settings = streamReadingSettings(runtime.settings);
   const tts = ttsSettings(settings);
   requireStreamKey(tts);
@@ -19887,6 +19896,8 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
   let requests = 0;
   let played = 0;
   let failures = 0;
+  // 边说边标: the 〔张力〕 last heard, for the sentences after it that carry none (a stretch cut at a comma).
+  let acousticCarry = null;
   let feeding = false;
   let soundChecked = false;
   let lastFailure = '';
@@ -19930,10 +19941,18 @@ function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang =
     const line = floor.lines.find(item => item.lineId === lineId);
     const who = line?.who || speaker;
     const mood = knownMood(line?.mood) || emotion;
+    // A call's lines (边说边标) bring their 〔张力〕 and tags: the words alone are read and shown, the rest
+    // goes on each sentence's voice as the floors' analysis would put it.
+    const performed = acoustic && who && !line?.speech?.length
+      ? acousticCallUtterances(own, { intimate: intimateAllowed(tts.intimate, ''), carry: acousticCarry })
+      : null;
+    if (performed) acousticCarry = performed.carry;
+    const said = performed ? performed.utterances : own;
+    if (!said.length) return [];
     const segments = line?.speech?.length
       ? streamSegments(floor, utterances, settings, { mood }).filter(segment => segment.lineId === lineId)
       : who
-      ? buildSegments(own, apiLabels(own, { speaker: who, lang }), { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: apiMoodVoices(own, mood), evidence: callerEvidence(floor, mood) })
+      ? buildSegments(said, apiLabels(said, { speaker: who, lang }), { knownNames: ttsKnownNames(settings), cast: ttsCast(settings), voices: withVoices(apiMoodVoices(said, mood), performed?.voices), evidence: callerEvidence(floor, mood) })
       : streamSegments(floor, utterances, settings, { mood }).filter(segment => segment.lineId === lineId);
     if (onSpeakers) {
       const said = segments.filter(segment => segment.type === 'dialogue' && segment.speaker).map(segment => segment.speaker);
@@ -20727,6 +20746,8 @@ async function describeCall() {
     character: head(String(gathered.character ?? ''), CALL_CONTEXT_CAPS.character),
     persona: head(persona, CALL_CONTEXT_CAPS.persona),
     recent: tail(String(gathered.recent ?? ''), CALL_CONTEXT_CAPS.recent),
+    // 边说边标: the character performs its lines by the 声学标注规则 as it says them.
+    acoustic: acousticCallRules(ttsSettings(settings).intimate),
   };
 }
 
@@ -20735,7 +20756,7 @@ function callController() {
     runtime.call = createCall({
       describe: describeCall,
       ask: options => apiLlmStream(options),
-      speak: ({ speaker }) => apiStream({ speaker }),
+      speak: ({ speaker, acoustic }) => apiStream({ speaker }, { acoustic }),
       listen: options => startSpeechInput(options),
       history: callHistory(),
       log: (level, message) => recordDiagnostic(level, 'call', message),
@@ -21281,7 +21302,7 @@ function notifySceneListeners(messageId, scene) {
  * audio settings, Fish key and quota; nothing is written to the chat. `on('state', fn)` hears
  * 'buffering' / 'speaking' / 'paused' / 'idle'; `done` settles when the last stretch has been heard.
  */
-function apiStream({ speaker = '', lang = '', emotion = '', signal = null } = {}, { fromApp = false } = {}) {
+function apiStream({ speaker = '', lang = '', emotion = '', signal = null } = {}, { fromApp = false, acoustic = false } = {}) {
   const { tts } = apiTtsSettings({ stream: true });
   stopTts();
   runtime.tts.liveWanted = true;
@@ -21289,7 +21310,7 @@ function apiStream({ speaker = '', lang = '', emotion = '', signal = null } = {}
   if (tts.liveAudio) livePlayer()?.unlock();
   // What another extension reads (not the 通话测试 page's own calls): who it turned out to be said by is
   // checked for the apps connected through call.connect.
-  const session = createTtsStream({ kind: 'api', toLines: streamPlainLines, speaker, lang, emotion: String(emotion ?? ''), onSpeakers: fromApp ? noteCallSpeakers : null });
+  const session = createTtsStream({ kind: 'api', toLines: streamPlainLines, speaker, lang, emotion: String(emotion ?? ''), onSpeakers: fromApp ? noteCallSpeakers : null, acoustic: acoustic === true });
   if (signal?.aborted) session.cancel();
   else signal?.addEventListener?.('abort', () => session.cancel(), { once: true });
   return Object.freeze({
