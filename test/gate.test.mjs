@@ -32,6 +32,7 @@ const T = {
   CHARACTER_MESSAGE_RENDERED: 'character_message_rendered', MESSAGE_RECEIVED: 'message_received', MESSAGE_DELETED: 'message_deleted',
   MESSAGE_SWIPED: 'message_swiped', MESSAGE_EDITED: 'message_edited', MESSAGE_UPDATED: 'message_updated', CHAT_CHANGED: 'chat_id_changed',
   MESSAGE_SWIPE_DELETED: 'message_swipe_deleted', MORE_MESSAGES_LOADED: 'more_messages_loaded', STREAM_TOKEN_RECEIVED: 'stream_token_received',
+  CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready',
 };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const eventSource = new Emitter();
@@ -105,6 +106,8 @@ const handedOnce = [
   ['the streaming floor redrawn without a type', () => regenerate({ midStream: () => eventSource.emit(T.CHARACTER_MESSAGE_RENDERED, 6) })],
   ['the render announced twice', () => regenerate({ after: () => eventSource.emit(T.CHARACTER_MESSAGE_RENDERED, 6, 'regenerate') })],
   ['a script stopping its own generation mid-stream', () => regenerate({ midStream: () => eventSource.emit(T.GENERATION_STOPPED, 'th-gen-1') })],
+  ['a script\'s own model call mid-stream (a phone plugin texting back)', () => regenerate({ midStream: scriptGenerate })],
+  ['a script\'s own model call between the end and the render', () => regenerate({ beforeReceived: scriptGenerate })],
 ];
 
 for (const [label, run] of handedOnce) {
@@ -276,6 +279,11 @@ test('a reply read while it is written ends with the host\'s own stream, and sto
   await eventSource.emit(T.STREAM_TOKEN_RECEIVED, '你好');
   const session = watch();
   assert.equal(session.kind, 'reply');
+  // A phone plugin texting back while the reply is written.
+  await scriptGenerate();
+  await eventSource.emit(T.STREAM_TOKEN_RECEIVED, '你好，今天');
+  assert.deepEqual(calls, [], 'a script\'s own model call is no new reply');
+  assert.equal(__testing.ttsStream(), session, 'the same reading goes on');
   // 酒馆助手's generate() ending mid-stream: its stop carries an id and its end comes early.
   await eventSource.emit(T.GENERATION_STOPPED, 'th-gen-1');
   void eventSource.emit(T.GENERATION_ENDED, chat.length);
@@ -289,7 +297,9 @@ test('a reply read while it is written ends with the host\'s own stream, and sto
   calls.length = 0;
   await begin('normal', { command: true });
   assert.deepEqual(calls, [], 'a slash command does not end the reading before it');
-  await eventSource.emit(T.GENERATION_AFTER_COMMANDS, 'normal', {}, false);
+  await scriptGenerate();
+  assert.deepEqual(calls, [], 'nor does a script\'s own model call after it');
+  await begin('normal');
   assert.deepEqual(calls, ['end'], 'a new reply does');
   await eventSource.emit(T.GENERATION_STOPPED);
   assert.deepEqual(calls, ['end', 'cancel'], 'the reader\'s stop wants quiet');
@@ -408,6 +418,32 @@ test('a generation nobody ended stops holding the floor once the host page is id
     Object.assign(page, { getElementById, body });
     globalThis.getComputedStyle = computed;
   }
+});
+
+test('a script\'s own prompt has the translations taken out, and the host is not blamed for it', async () => {
+  const { TRANSLATION_START, TRANSLATION_END } = await import('../core.js');
+  const mirrored = () => ({ chat: [{ role: 'user', content: `剧情正文：彼女は笑った。\n${TRANSLATION_START}她笑了。${TRANSLATION_END}` }], dryRun: false });
+  const scoped = scope => readDiagnostics().filter(entry => entry.scope === scope).length;
+  clearDiagnostics();
+  // A phone plugin builds its chat from the floors and asks its model through 酒馆助手.
+  await scriptGenerate();
+  const own = mirrored();
+  await eventSource.emit(T.CHAT_COMPLETION_PROMPT_READY, own);
+  assert.equal(own.chat[0].content, '剧情正文：彼女は笑った。');
+  await scriptGenerate();
+  await eventSource.emit(T.CHAT_COMPLETION_PROMPT_READY, mirrored());
+  assert.equal(scoped('host.script-prompt'), 1, 'said once');
+  assert.equal(scoped('host.prompt-fallback'), 0);
+  // A dry run sends nothing.
+  const dry = { ...mirrored(), dryRun: true };
+  await eventSource.emit(T.CHAT_COMPLETION_PROMPT_READY, dry);
+  assert.equal(dry.chat[0].content, '剧情正文：彼女は笑った。');
+  assert.equal(scoped('host.prompt-fallback'), 0);
+  // The host's own prompt still carrying them, with no interceptor ever called, is the host skipping it.
+  await begin('normal');
+  await eventSource.emit(T.CHAT_COMPLETION_PROMPT_READY, mirrored());
+  assert.equal(scoped('host.prompt-fallback'), 1);
+  await eventSource.emit(T.GENERATION_STOPPED);
 });
 
 test.after(() => onDisable());

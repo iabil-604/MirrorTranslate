@@ -128,8 +128,8 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.48.0';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.48.0';
+} from './core.js?v=0.49.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.49.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -202,10 +202,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.48.0';
-import { createTtsStore } from './tts-store.js?v=0.48.0';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.48.0';
-import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.48.0';
+} from './tts.js?v=0.49.0';
+import { createTtsStore } from './tts-store.js?v=0.49.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.49.0';
+import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.49.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -215,7 +215,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.48.0';
+} from './processing.js?v=0.49.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -233,14 +233,14 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.48.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.48.0';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.48.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.48.0';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.48.0';
-import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.48.0';
-import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.48.0';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.48.0';
+} from './prompts.js?v=0.49.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.49.0';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.49.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.49.0';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.49.0';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.49.0';
+import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.49.0';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.49.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -258,8 +258,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.48.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.48.0';
+} from './palette.js?v=0.49.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.49.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -267,7 +267,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.48.0';
+} from './diagnostics.js?v=0.49.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -278,7 +278,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.48.0';
+} from './helper.js?v=0.49.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -309,6 +309,8 @@ const runtime = {
   mainGenerationActive: false,
   // The host's own GENERATION_STARTED, waiting for the "after commands" of the same generation.
   hostGenerationStart: null,
+  // The last "after commands" was a script's own model call (酒馆助手's generate()), not the host's reply.
+  scriptCall: false,
   // Bumped by every generation the gate takes, so a late look at the gate can tell a new one apart.
   generationSerial: 0,
   // The generation last stopped by hand, so the render that follows it can say why it is not translated.
@@ -317,6 +319,8 @@ const runtime = {
   interceptorSeen: false,
   interceptorWarned: false,
   promptFallbackStrips: 0,
+  // Said once: a script's own prompt carried translations, and they were taken out.
+  scriptPromptNoted: false,
   // What the chat's last message was when the open generation began: its reply is told apart from it.
   generationBase: null,
   // The host announced the open generation's end; whether its reply ever came is known at the next start.
@@ -19211,6 +19215,16 @@ function registerPromptFallback(eventTypes) {
     bindEvent(eventType, payload => {
       const stripped = stripPromptPayload(payload);
       if (!stripped) return;
+      // A dry run sends nothing, a script's own model call (a phone's chat built from the floors) was never
+      // the interceptor's to clean, and once the interceptor has run the host is known to call it: only the
+      // host's own prompt, before that, says the host skips it.
+      if (payload?.dryRun || runtime.scriptCall || runtime.interceptorSeen) {
+        if (runtime.scriptCall && !payload?.dryRun && !runtime.scriptPromptNoted) {
+          runtime.scriptPromptNoted = true;
+          recordDiagnostic('info', 'host.script-prompt', '别的插件自己请求模型时带上了楼层里的镜译译文，已在发出前去掉。', { event: name, stripped });
+        }
+        return;
+      }
       runtime.promptFallbackStrips += stripped;
       if (runtime.promptFallbackStrips === stripped) {
         recordDiagnostic('warn', 'host.prompt-fallback', '宿主没有调用生成拦截器，已改用提示词事件移除译文镜像块。', {
@@ -19240,8 +19254,15 @@ function registerRuntimeEvents() {
   bindEvent(eventTypes.GENERATION_AFTER_COMMANDS ?? eventTypes.GENERATION_STARTED, (type, options, dryRun) => {
     const start = runtime.hostGenerationStart;
     const host = !hostStarts || (start !== null && start.type === type && (namesOptions(options) || !start.named));
-    if (host && !dryRun) runtime.hostGenerationStart = null;
-    if (host && !dryRun && !['quiet', 'impersonate'].includes(type)) runtime.mainGenerationActive = true;
+    // Told to the reading's own listener of this announcement, bound below and called after this one, and
+    // to the prompt events of the same generation.
+    runtime.scriptCall = !host && !dryRun;
+    // A script's own model call writes no reply of the host's. A plugin that answers in a phone of its own
+    // calls one whenever the reader texts it, and after every reply and every swipe: the reply awaited,
+    // written or still being written, stays the one awaited, swipe or continue alike.
+    if (!host) return;
+    if (!dryRun) runtime.hostGenerationStart = null;
+    if (!dryRun && !['quiet', 'impersonate'].includes(type)) runtime.mainGenerationActive = true;
     const unrendered = runtime.generationEnded ? runtime.generationGate.peek() : null;
     const base = runtime.generationBase;
     if (runtime.generationGate.begin(getCurrentChatId(), type, dryRun)) {
@@ -19314,6 +19335,8 @@ function registerRuntimeEvents() {
   // counts as one nor ends the reading of the one before.
   bindEvent(eventTypes.GENERATION_AFTER_COMMANDS ?? eventTypes.GENERATION_STARTED, (type, _options, dryRun) => {
     if (dryRun || ['quiet', 'impersonate'].includes(type)) return;
+    // Nor does a script's own model call: the reply read while it is written goes on to its last word.
+    if (runtime.scriptCall) return;
     runtime.tts.generationId += 1;
     runtime.tts.generationStartedAt = globalThis.performance?.now?.() ?? Date.now();
     // A new reply is being written: a reading of the one before it reads what it had and ends.
@@ -21289,6 +21312,27 @@ async function apiScenes({ from = 0, to = null } = {}) {
   return scenes;
 }
 
+// ---------------------------------------------------------------------------------------------
+// The public interface's floors: a floor's text as the main model wrote it, for another extension that
+// reads the chat itself (a phone building its own chat from the story, a fingerprint kept of a floor)
+// and must see the same text before and after 镜译 translates it.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A floor's original: the floor's number or the message itself, with every line 镜译 wrote into it
+ * taken out; a floor with only its translation left in it (「只留译文」) gives the original from the
+ * record kept beside it. A floor changed by hand after that gives what it holds. '' for no floor.
+ */
+function apiFloorOriginal(target) {
+  const message = typeof target === 'number' || (typeof target === 'string' && /^\d+$/.test(target.trim()))
+    ? getContext().chat?.[Number(target)]
+    : target;
+  if (!message || typeof message !== 'object' || typeof message.mes !== 'string') return '';
+  const floor = readFloor(message);
+  const metadata = floor.metadata ?? message.extra?.[MESSAGE_META_KEY];
+  return stripGeneratedTranslationLines(upgradeLegacyBilingual(floor.text, metadata), metadata);
+}
+
 function notifySceneListeners(messageId, scene) {
   for (const listener of runtime.sceneListeners) {
     try { listener({ messageId, ...scene }); } catch { /* a caller's own bug is not ours */ }
@@ -21420,7 +21464,15 @@ function installPublicApi() {
     call: Object.freeze({
       connect: options => apiCallConnect(options ?? {}),
     }),
-    features: Object.freeze(['tts.speak', 'tts.stream', 'stt', 'llm.stream', 'call.connect']),
+    /**
+     * The chat's floors as the main model wrote them. `original(floor)` takes the floor's number or the
+     * message, and gives its text without the translation lines 镜译 wrote into it, the same before and
+     * after a translation, 「只留译文」 included.
+     */
+    floor: Object.freeze({
+      original: target => apiFloorOriginal(target),
+    }),
+    features: Object.freeze(['tts.speak', 'tts.stream', 'stt', 'llm.stream', 'call.connect', 'floor.original']),
     // Still true: apps written while these interfaces were in the test release check it beside `features`,
     // and the stable release has the same interfaces. New code goes by `features` alone.
     beta: true,

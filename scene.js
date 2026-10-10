@@ -1,4 +1,4 @@
-import { STORY_TONES, parseJsonCandidates, storyToneOf } from './core.js?v=0.48.0';
+import { STORY_TONES, parseJsonCandidates, storyToneOf } from './core.js?v=0.49.0';
 
 // ---------------------------------------------------------------------------------------------
 // The scene of a floor, written down by the translation while it reads the floor anyway.
