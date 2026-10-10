@@ -446,4 +446,38 @@ test('a script\'s own prompt has the translations taken out, and the host is not
   await eventSource.emit(T.GENERATION_STOPPED);
 });
 
+test('reading.onChange tells of an edit, a write, deleted floors and another chat, once per burst', async () => {
+  const heard = [];
+  const stop = globalThis.__JINGYI__.reading.onChange(event => heard.push(event));
+  await eventSource.emit(T.MESSAGE_EDITED, 6);
+  await eventSource.emit(T.MESSAGE_UPDATED, 6);
+  await wait(250);
+  assert.equal(heard.length, 1, 'one word for the burst');
+  assert.equal(heard[0].owner.messageId, 6);
+  assert.equal(heard[0].owner.chatId, context.chatId);
+  assert.deepEqual([...heard[0].reasons].sort(), ['edit', 'update']);
+  assert.equal(typeof heard[0].sourceRevision, 'string');
+  assert.ok(globalThis.__JINGYI__.reading.states.includes(heard[0].state));
+
+  await eventSource.emit(T.MESSAGE_DELETED, chat.length);
+  await wait(250);
+  assert.deepEqual(heard[1].owner, { chatId: context.chatId, messageId: null, swipeId: null });
+  assert.deepEqual(heard[1].reasons, ['delete']);
+
+  const before = context.chatId;
+  context.chatId = 'gate-chat-reading';
+  await eventSource.emit(T.CHAT_CHANGED, 'gate-chat-reading');
+  await wait(250);
+  assert.deepEqual(heard[2].owner, { chatId: 'gate-chat-reading', messageId: null, swipeId: null });
+  assert.deepEqual(heard[2].reasons, ['chat']);
+
+  // Left with a word still on its way: not told.
+  await eventSource.emit(T.MESSAGE_EDITED, 6);
+  stop();
+  await wait(250);
+  assert.equal(heard.length, 3);
+  context.chatId = before;
+  await eventSource.emit(T.CHAT_CHANGED, before);
+});
+
 test.after(() => onDisable());

@@ -128,8 +128,8 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.49.0';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.49.0';
+} from './core.js?v=0.50.0';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.50.0';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -202,10 +202,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.49.0';
-import { createTtsStore } from './tts-store.js?v=0.49.0';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.49.0';
-import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.49.0';
+} from './tts.js?v=0.50.0';
+import { createTtsStore } from './tts-store.js?v=0.50.0';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.50.0';
+import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.50.0';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -215,7 +215,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.49.0';
+} from './processing.js?v=0.50.0';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -233,14 +233,15 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.49.0';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.49.0';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.49.0';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.49.0';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.49.0';
-import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.49.0';
-import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.49.0';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.49.0';
+} from './prompts.js?v=0.50.0';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.50.0';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.50.0';
+import { READING_API_VERSION, READING_STATES, readingPositions, readingSnapshot, readingState } from './reading.js?v=0.50.0';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.50.0';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.50.0';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.50.0';
+import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.50.0';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.50.0';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -258,8 +259,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.49.0';
-import { sampleThemeBackground } from './theme-probe.js?v=0.49.0';
+} from './palette.js?v=0.50.0';
+import { sampleThemeBackground } from './theme-probe.js?v=0.50.0';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -267,7 +268,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.49.0';
+} from './diagnostics.js?v=0.50.0';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -278,7 +279,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.49.0';
+} from './helper.js?v=0.50.0';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -366,6 +367,11 @@ const runtime = {
   diagnosticSubscribers: new Set(),
   // Other extensions told whenever a translation writes a floor's scene (the public interface's scene.onChange).
   sceneListeners: new Set(),
+  // reading.onChange (reading.js): who listens, the notes on their way to them (one per floor and
+  // alternative per burst), and the last failed translation of each floor's alternative.
+  readingListeners: new Set(),
+  readingNotes: new Map(),
+  readingFailures: new Map(),
   // 已连接的应用: what each app said through call.connect, for as long as the page is open (call.js).
   callApps: null,
   update: { status: 'idle', installType: null, details: null },
@@ -1425,7 +1431,7 @@ function extractAllRegions(text, settings) {
   });
 }
 
-async function readMessageSnapshot(messageId = null, settings = runtime.settings, { quiet = false } = {}) {
+async function readMessageSnapshot(messageId = null, settings = runtime.settings, { quiet = false, swipeId: wantedSwipe = null } = {}) {
   const context = getContext();
   const id = messageId === null ? latestAssistantMessageId(context) : Number(messageId);
   if (!Number.isInteger(id) || id < 0) throw new Error('没有找到可翻译的 AI 回复。');
@@ -1433,10 +1439,14 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   if (!message) throw new Error(`没有找到第 ${id} 楼。`);
   if (message.is_user || message.is_system) throw new Error('目标楼层不是普通 AI 回复。');
 
-  const swipeId = Number(message.swipe_id ?? 0);
+  const shownSwipe = Number(message.swipe_id ?? 0);
+  const swipeId = wantedSwipe === null ? shownSwipe : Number(wantedSwipe);
+  // An alternative other than the one shown (only ever asked for by reading.get) is read from its own
+  // text and record, the way the shown one is read from the floor.
+  const subject = swipeId === shownSwipe ? message : swipeView(message, swipeId);
   // A floor with only its translation left in it is read from the bilingual text kept for it.
-  const floor = readFloor(message);
-  const metadata = floor.metadata ?? message.extra?.[MESSAGE_META_KEY];
+  const floor = readFloor(subject);
+  const metadata = floor.metadata ?? subject.extra?.[MESSAGE_META_KEY];
   const upgraded = upgradeLegacyBilingual(floor.text, metadata);
   const originalExtraction = extractAllRegions(upgraded, settings);
   // Metadata carries the affixes this floor was written with, so a wrapper that lost its invisible
@@ -1557,6 +1567,21 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     // may translate.
     stripped: floor.stripped,
     diverged: floor.diverged,
+    // This alternative's own record, no longer matching its text: written for text the floor no longer
+    // holds (edited since), or a floor with only its translation left that was changed after. A copy of
+    // another alternative's record (a new swipe starts with one) is no record of this one.
+    outdated: floor.diverged
+      || Boolean(metadata && !metadataMatches && (floor.stripped || Number(metadata.swipe_id ?? 0) === swipeId)),
+  };
+}
+
+/** A swipe that is not the one shown, as a message of its own: its text, and the record kept for it. */
+function swipeView(message, swipeId) {
+  return {
+    ...message,
+    mes: String(message.swipes?.[swipeId] ?? ''),
+    swipe_id: swipeId,
+    extra: { ...(message.swipe_info?.[swipeId]?.extra ?? {}) },
   };
 }
 
@@ -3327,6 +3352,7 @@ async function translateMessage(messageId = null, { force = false, quiet = false
       return { skipped: true, reason: 'cancelled' };
     }
     const message = safeError(error);
+    runtime.readingFailures.set(lockKey, { sourceHash: snapshot.sourceHash, message });
     updateTask({ status: 'error', title: '翻译未写回', message, progress: 0 });
     recordDiagnostic('error', 'translation.failed', message, {
       messageId: snapshot?.messageId ?? null,
@@ -3339,9 +3365,12 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     throw error;
   }).finally(() => {
     if (runtime.inflight.get(lockKey)?.promise === work) runtime.inflight.delete(lockKey);
+    noteReadingChange(snapshot.messageId, 'state', { swipeId: snapshot.swipeId });
   });
 
   runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash, messageId: snapshot.messageId, message: snapshot.message, since: Date.now() });
+  runtime.readingFailures.delete(lockKey);
+  noteReadingChange(snapshot.messageId, 'state', { swipeId: snapshot.swipeId });
   return work;
 }
 
@@ -3731,15 +3760,19 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       return { skipped: true, reason: 'cancelled' };
     }
     const message = safeError(error);
+    runtime.readingFailures.set(lockKey, { sourceHash: snapshot.sourceHash, message });
     updateTask({ status: 'error', title: '翻译未写回', message, progress: 0 });
     recordDiagnostic('error', 'translation.failed', message, { messageId: snapshot?.messageId ?? null, requestMode: 'stream', endpoint: describeChannelEndpoint(settings) });
     if (!quiet) toast('error', message);
     throw error;
   }).finally(() => {
     if (runtime.inflight.get(lockKey)?.promise === work) runtime.inflight.delete(lockKey);
+    noteReadingChange(snapshot.messageId, 'state', { swipeId: snapshot.swipeId });
   });
 
   runtime.inflight.set(lockKey, { promise: work, controller, sourceHash: snapshot.sourceHash, messageId: snapshot.messageId, message: snapshot.message, since: Date.now() });
+  runtime.readingFailures.delete(lockKey);
+  noteReadingChange(snapshot.messageId, 'state', { swipeId: snapshot.swipeId });
   return work;
 }
 
@@ -3890,6 +3923,7 @@ async function restoreChatOriginals({ ask = () => true } = {}) {
   }
   for (const { messageId } of plan) context.updateMessageBlock?.(messageId, chat[messageId]);
   scheduleTtsDecorateAll({ force: true });
+  for (const { messageId } of plan) noteReadingChange(messageId, 'update');
   recordDiagnostic('info', 'translation.originals-restored', `本聊天放回了 ${restores} 处原文。`, { restored: restores, floors: plan.length, edited });
   toast('success', `已放回 ${restores} 处原文。${runtime.settings.translationOnly ? '「只留译文」还开着，之后新翻译的楼层照样只留译文。' : ''}`);
   return { restored: restores, edited };
@@ -3970,6 +4004,7 @@ async function clearFloorTranslation(messageId = null, { ask = () => true } = {}
   // Guards the next automatic pass against redoing this straight away; see autoTranslateSuppressed.
   runtime.clearedFloors.set(lockKey, hashTextSync(original));
   scheduleTtsDecorate(id, { force: true });
+  noteReadingChange(id, 'update', { swipeId });
   recordDiagnostic('info', 'translation.floor-cleared', `第 ${id} 楼的译文已清除，正文恢复成原文。`, { floor: id, swipe: swipeId });
   toast('success', `第 ${id} 楼的译文已清除，恢复成原文了。`);
   return { cleared: true, messageId: id };
@@ -19429,6 +19464,13 @@ function registerRuntimeEvents() {
       if (lore && Array.isArray(lore.globalLore)) runtime.wiEntries = lore;
     });
   }
+  // reading.onChange: whatever may change what reading.get gives for a floor. A translation's own start,
+  // end and failure are told where the run is kept (translateMessage, translateMessageStreaming).
+  bindEvent(eventTypes.MESSAGE_UPDATED, messageId => noteReadingChange(messageId, 'update'));
+  bindEvent(eventTypes.MESSAGE_EDITED, messageId => noteReadingChange(messageId, 'edit'));
+  bindEvent(eventTypes.MESSAGE_SWIPED, messageId => noteReadingChange(messageId, 'swipe'));
+  // The host says how long the chat is now, not which floor went: every floor after it moved.
+  bindEvent(eventTypes.MESSAGE_DELETED, () => noteReadingChange(null, 'delete'));
   bindEvent(eventTypes.CHAT_CHANGED, chatId => {
     // The same chat announced again was only redrawn (酒馆助手's regex refresh, a reload of the chat):
     // what runs in it keeps running, and the reply being generated is still owed its translation.
@@ -19437,6 +19479,8 @@ function registerRuntimeEvents() {
     const sameChat = now !== '' && runtime.chatSeen !== null && now === runtime.chatSeen;
     runtime.chatSeen = now;
     if (!sameChat) {
+      runtime.readingFailures.clear();
+      noteReadingChange(null, 'chat');
       runtime.mainGenerationActive = false;
       // A call is about the chat it was started in.
       runtime.call?.hangUp('换了聊天');
@@ -21333,6 +21377,138 @@ function apiFloorOriginal(target) {
   return stripGeneratedTranslationLines(upgradeLegacyBilingual(floor.text, metadata), metadata);
 }
 
+// ---------------------------------------------------------------------------------------------
+// The public interface's reading (reading.js): one floor's alternative as 镜译 reads it, for another
+// extension that builds its own reading on 镜译's — the original for its history and summaries, each
+// line's translation for its own view — and a word whenever that may have changed. Nothing here
+// translates, asks a model, speaks, saves or changes a setting.
+// ---------------------------------------------------------------------------------------------
+
+/** reading.get: one floor's alternative (the one shown when `swipeId` is left out); null when there is none. */
+async function apiReadingGet({ messageId, swipeId = null } = {}) {
+  const context = getContext();
+  const chatId = getCurrentChatId(context);
+  // A number, or the digits of one; nothing else names a floor (null is no floor, not floor 0).
+  const number = value => (typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value.trim())) ? Number(value) : NaN);
+  const id = number(messageId);
+  const message = chatId && Number.isInteger(id) && id >= 0 ? context.chat?.[id] : null;
+  if (!message) return null;
+  const shown = Number(message.swipe_id ?? 0);
+  const swipe = swipeId === null || swipeId === undefined ? shown : number(swipeId);
+  if (!Number.isInteger(swipe) || swipe < 0) return null;
+  if (swipe !== shown && !(Array.isArray(message.swipes) && swipe < message.swipes.length)) return null;
+  const owner = { chatId, messageId: id, swipeId: swipe };
+  // A reader's own message and a system line are taken as written: 镜译 translates neither.
+  if (message.is_user || message.is_system) {
+    return readingSnapshot({ ...owner, source: String((swipe === shown ? message.mes : message.swipes?.[swipe]) ?? '') });
+  }
+  const snapshot = await readMessageSnapshot(id, runtime.settings, { quiet: true, swipeId: swipe });
+  const key = `${chatId}|${id}|${swipe}`;
+  const failure = runtime.readingFailures.get(key);
+  // The speaker a line's own <say> mark names stands in where no translation has marked one yet.
+  const annotations = new Map(snapshot.existingAnnotations);
+  for (const [segmentId, marked] of snapshot.speech) {
+    const speaker = marked?.marks?.find(mark => mark?.speaker)?.speaker;
+    if (speaker && !annotations.get(segmentId)?.speaker) annotations.set(segmentId, { ...annotations.get(segmentId), speaker });
+  }
+  return readingSnapshot({
+    ...owner,
+    source: snapshot.source,
+    segments: snapshot.segments,
+    positions: readingPositions(snapshot.source, snapshot.extraction.regions, new Map(snapshot.segments.map(segment => [segment.id, segment.text]))),
+    translations: snapshot.existingTranslations,
+    annotations,
+    language: normalizeTargetLanguage(getActivePromptProfile(runtime.settings).targetLanguage),
+    state: readingState({
+      total: snapshot.segments.length,
+      done: snapshot.existingTranslations.size,
+      complete: snapshot.translated,
+      processing: runtime.inflight.has(key),
+      outdated: snapshot.outdated,
+      failed: Boolean(failure && failure.sourceHash === snapshot.sourceHash),
+    }),
+    error: failure?.message ?? null,
+  });
+}
+
+/** reading.status: the settings a reading is shaped by, and nothing secret. */
+function apiReadingStatus() {
+  const settings = runtime.settings;
+  const tts = ttsSettings(settings);
+  return {
+    apiVersion: READING_API_VERSION,
+    autoGeneration: settings.autoGeneration === true,
+    translationOnly: settings.translationOnly === true,
+    targetLanguage: normalizeTargetLanguage(getActivePromptProfile(settings).targetLanguage),
+    bodyTags: [...(settings.bodyTags ?? [])],
+    bodyStartMarkers: [...(settings.bodyStartMarkers ?? [])],
+    tts: { enabled: tts.enabled === true, side: tts.side, range: tts.range, autoRead: tts.autoRead === true },
+  };
+}
+
+/** reading.onChange: told whenever a floor's reading may have changed. Returns the way to stop. */
+function apiReadingOnChange(listener) {
+  if (typeof listener !== 'function') return () => {};
+  runtime.readingListeners.add(listener);
+  return () => runtime.readingListeners.delete(listener);
+}
+
+// A burst of writes to one floor (a stream writing it back paragraph by paragraph) is one word.
+const READING_NOTE_DELAY_MS = 150;
+
+/**
+ * A floor's reading may have changed. `messageId` null speaks for the whole chat (another chat opened,
+ * floors deleted and renumbered). `swipeId` names the alternative a translation ran on; left out, the word
+ * is about the one shown when it is noted.
+ */
+function noteReadingChange(messageId, reason, { swipeId: ranOn = null } = {}) {
+  if (!runtime.readingListeners.size) return;
+  const context = getContext();
+  const chatId = getCurrentChatId(context);
+  if (!chatId) return;
+  const id = messageId === null || messageId === undefined || !Number.isInteger(Number(messageId)) ? null : Number(messageId);
+  // A floor's word is about one alternative: the one a translation ran on, else the one shown now. A
+  // translation's end and its write to the shown alternative are then one word, not two.
+  const shown = id === null ? null : Number(context.chat?.[id]?.swipe_id ?? 0);
+  const swipeId = id === null ? null : (ranOn ?? shown);
+  const key = `${chatId}|${id ?? '*'}|${swipeId ?? ''}`;
+  const pending = runtime.readingNotes.get(key);
+  if (pending) {
+    pending.reasons.add(reason);
+    return;
+  }
+  const note = { chatId, messageId: id, swipeId, reasons: new Set([reason]) };
+  runtime.readingNotes.set(key, note);
+  const timer = globalThis.setTimeout(() => {
+    runtime.timers.delete(timer);
+    runtime.readingNotes.delete(key);
+    void deliverReadingNote(note);
+  }, READING_NOTE_DELAY_MS);
+  runtime.timers.add(timer);
+}
+
+async function deliverReadingNote(note) {
+  let snapshot = null;
+  // Read only in the chat the word is about: a floor number means nothing in another one.
+  if (note.messageId !== null && getCurrentChatId() === note.chatId) {
+    try {
+      snapshot = await apiReadingGet({ messageId: note.messageId, swipeId: note.swipeId });
+    } catch {
+      snapshot = null;
+    }
+  }
+  const event = {
+    owner: snapshot?.owner ?? { chatId: note.chatId, messageId: note.messageId, swipeId: note.swipeId },
+    reasons: [...note.reasons],
+    ...(snapshot ? { state: snapshot.state, sourceRevision: snapshot.sourceRevision, readingRevision: snapshot.readingRevision } : {}),
+  };
+  for (const listener of [...runtime.readingListeners]) {
+    // One that stopped listening while this word was on its way is not told.
+    if (!runtime.readingListeners.has(listener)) continue;
+    try { listener(event); } catch { /* a caller's own bug is not ours */ }
+  }
+}
+
 function notifySceneListeners(messageId, scene) {
   for (const listener of runtime.sceneListeners) {
     try { listener({ messageId, ...scene }); } catch { /* a caller's own bug is not ours */ }
@@ -21390,6 +21566,9 @@ function installPublicApi() {
           streamReady: tts.enabled === true && Boolean(tts.streamVoice === 'gsv' ? tts.gsv?.baseUrl : tts.streamVoice === 'fish' ? tts.fish.key : tts[tts.streamVoice]?.key),
           // Why tts.stream cannot read now, to show the reader as it is; empty when it can.
           reason: apiTtsReason({ stream: true }),
+          // The same for tts.speak, which reads with the 声音来源 the floors are read with.
+          readReady: !apiTtsReason(),
+          readReason: apiTtsReason(),
           model: tts.provider === 'gsv' ? 'gpt-sovits' : tts.fish.model,
           voices: ttsVoicesFor().filter(row => row.voiceId).length,
           busy: Boolean(runtime.tts.transport && runtime.tts.transport.state !== 'idle'),
@@ -21472,7 +21651,21 @@ function installPublicApi() {
     floor: Object.freeze({
       original: target => apiFloorOriginal(target),
     }),
-    features: Object.freeze(['tts.speak', 'tts.stream', 'stt', 'llm.stream', 'call.connect', 'floor.original']),
+    /**
+     * The chat's floors as 镜译 reads them (reading.js). `get({ messageId, swipeId })` gives one floor's
+     * alternative: its original, each line 镜译 translates placed in it, the line's translation and marks,
+     * and where the floor stands; `onChange(fn)` tells of a change; `status()` gives the settings a reading
+     * is shaped by, nothing secret. Reading never translates, asks a model, speaks, saves or changes a
+     * setting.
+     */
+    reading: Object.freeze({
+      apiVersion: READING_API_VERSION,
+      states: READING_STATES,
+      get: options => apiReadingGet(options ?? {}),
+      onChange: listener => apiReadingOnChange(listener),
+      status: () => apiReadingStatus(),
+    }),
+    features: Object.freeze(['tts.speak', 'tts.stream', 'stt', 'llm.stream', 'call.connect', 'floor.original', 'reading']),
     // Still true: apps written while these interfaces were in the test release check it beside `features`,
     // and the stable release has the same interfaces. New code goes by `features` alone.
     beta: true,
