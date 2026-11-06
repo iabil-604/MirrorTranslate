@@ -680,25 +680,25 @@ function voicesItem(tts, voices) {
   const parts = [];
   if (unbound.length || gsvOnly.length) {
     const why = [
-      unbound.length ? `${list(unbound)}${cloud ? '在「角色音色」里还没配音色' : gsv ? '还没绑 GPT-SoVITS 音色' : '还没绑音色'}` : '',
-      gsvOnly.length ? `${list(gsvOnly)}只绑了 GPT-SoVITS 的音色，通话用的 Fish Audio 用不了` : '',
+      unbound.length ? `${list(unbound)}${cloud ? '未配角色音色' : gsv ? '未绑 GPT-SoVITS 音色' : '未绑音色'}` : '',
+      gsvOnly.length ? `${list(gsvOnly)}仅有 GPT-SoVITS 音色` : '',
     ].filter(Boolean).join('，');
-    parts.push(`${why}，通话里${cloud ? '用默认音色' : gsv ? '用 GPT-SoVITS 卡里的默认音色' : '用对白默认音色'}读`);
+    parts.push(`${why}，将用${cloud ? '默认音色' : gsv ? ' GPT-SoVITS 默认音色' : '对白默认音色'}`);
   }
-  if (voiceless.length) parts.push(`${list(voiceless)}没有 GPT-SoVITS 音色，GPT-SoVITS 卡里也没填默认音色的参考音频，通话里读不出来`);
-  if (muted.length) parts.push(`${list(muted)}在角色表里设成了不朗读，通话里不出声`);
-  if (skipped.length) parts.push(`${list(skipped)}没有专属音色，「对白默认音色」又设成了跳过，通话里不出声`);
+  if (voiceless.length) parts.push(`${list(voiceless)}缺少 GPT-SoVITS 音色和默认参考音频`);
+  if (muted.length) parts.push(`${list(muted)}已设为不朗读`);
+  if (skipped.length) parts.push(`${list(skipped)}缺少专属音色，已设为跳过`);
   // Where the first of them is fixed: a voice that is missing where the call's voice looks for it.
   const where = (unbound.length || gsvOnly.length) && cloud ? `${CALL_SETTINGS} → 角色音色` : '镜译 → 朗读 → 音色 → 角色表';
-  return { id: 'voices', need: 'tts.stream', title: '角色音色', reason: `${parts.join('；')}。`, where, names };
+  return { id: 'voices', need: 'tts.stream', title: '角色音色', reason: `${parts.join('。')}。`, where, names };
 }
 
 const STT_ITEMS = Object.freeze({
-  secure: { reason: '酒馆不是用 https 或本机地址打开的，浏览器不给开麦克风，语音输入用不了。', where: '用 https 或本机地址（localhost、127.0.0.1）打开酒馆' },
-  browser: { reason: '这个浏览器没有自带语音识别，语音输入用不了。', where: `${CALL_SETTINGS} → 语音输入：换成「按住说话，云端转写」` },
-  recorder: { reason: '这个浏览器不能录音，语音输入用不了。', where: `${CALL_SETTINGS} → 语音输入` },
-  url: { reason: '还没填转写地址，语音输入用不了。', where: `${CALL_SETTINGS} → 转写地址` },
-  key: { reason: '还没填转写 Key，语音输入用不了。', where: `${CALL_SETTINGS} → 转写 Key` },
+  secure: { reason: '麦克风需要 https 或本机地址。', where: '用 https 或本机地址（localhost、127.0.0.1）打开酒馆' },
+  browser: { reason: '浏览器不支持语音识别。', where: `${CALL_SETTINGS} → 语音输入：换成「按住说话，云端转写」` },
+  recorder: { reason: '浏览器不支持录音。', where: `${CALL_SETTINGS} → 语音输入` },
+  url: { reason: '请填写转写地址。', where: `${CALL_SETTINGS} → 转写地址` },
+  key: { reason: '请填写转写 Key。', where: `${CALL_SETTINGS} → 转写 Key` },
 });
 
 /**
@@ -708,7 +708,7 @@ const STT_ITEMS = Object.freeze({
  * `where` it is set; the voices item also lists the `names` concerned.
  *
  * `facts`, read off the settings by index.js:
- *   tts:    { enabled, voice: 'fish' | 'gsv' | 'doubao' | 'minimax', keyMissing, fishCardHidden }
+ *   tts:    { enabled, voice: 'fish' | 'gsv' | 'doubao' | 'minimax', keyMissing, fishCardHidden, streamProblem }
  *   voices: [{ name, status }], status own / default / gsv (bound to a GPT-SoVITS voice only, the call on Fish) /
  *           novoice (the call on GPT-SoVITS, no clip of its own and none on the card) / muted / skipped
  *   stt:    { available, problem: secure / browser / recorder / url / key }
@@ -721,15 +721,17 @@ export function callMissing(needs, facts = {}) {
     const tts = facts.tts ?? {};
     const voice = CALL_KEY_TITLES[tts.voice] ? tts.voice : 'fish';
     if (!tts.enabled) {
-      items.push({ id: 'tts', need: 'tts.stream', title: '朗读功能', reason: '朗读功能没打开，镜译读不了通话里的话。', where: '镜译 → 朗读 → 打开朗读' });
+      items.push({ id: 'tts', need: 'tts.stream', title: '朗读功能', reason: '请开启朗读。', where: '镜译 → 朗读 → 打开朗读' });
     }
-    if (tts.keyMissing) {
+    if (tts.streamProblem) {
+      items.push({ id: 'stream-source', need: 'tts.stream', title: '通话声音来源', reason: tts.streamProblem, where: CALL_SETTINGS });
+    } else if (tts.keyMissing) {
       const hidden = voice === 'fish' && tts.fishCardHidden === true;
       items.push({
         id: 'key',
         need: 'tts.stream',
         title: CALL_KEY_TITLES[voice],
-        reason: `${CALL_KEY_MISSING[voice]}，镜译读不了通话里的话。${hidden ? '声音来源是 GPT-SoVITS 时「Fish Audio」卡不显示：把通话用的声音也换成 GPT-SoVITS，或者把声音来源换成 Fish Audio 填好 Key。' : ''}`,
+        reason: `${CALL_KEY_MISSING[voice]}。${hidden ? '请切到官方 Fish 填 Key，或更换通话声音。' : ''}`,
         where: voice === 'gsv' ? '镜译 → 朗读 →「GPT-SoVITS」→ 接口地址' : voice !== 'fish' ? CALL_SETTINGS : hidden ? `${CALL_SETTINGS} → 边写边读和通话用的声音` : '镜译 → 朗读 →「Fish Audio」',
       });
     }
@@ -743,12 +745,12 @@ export function callMissing(needs, facts = {}) {
   if (wanted('llm.stream') && facts.llm?.problem) {
     const { problem, connection = '', sameAsAnalysis = false } = facts.llm;
     items.push(problem === 'incomplete'
-      ? { id: 'llm', need: 'llm.stream', title: '通话用的连接', reason: `通话用的连接「${connection}」还没填好地址或模型，请求不出去。`, where: '镜译 → 模型连接' }
+      ? { id: 'llm', need: 'llm.stream', title: '通话用的连接', reason: `请补齐「${connection}」的地址或模型。`, where: '镜译 → 模型连接' }
       : {
         id: 'llm',
         need: 'llm.stream',
         title: '通话用的连接',
-        reason: `${sameAsAnalysis ? '通话用的连接留空，和分析模式用同一条，现在是「跟随酒馆」' : '通话用的连接是「跟随酒馆」'}：要等整段回复写完才开始读，通话会慢。`,
+        reason: `${sameAsAnalysis ? '沿用分析模式连接。' : ''}跟随酒馆时，整段回复写完后开始读。`,
         where: `${CALL_SETTINGS} → 通话用的连接：选一条存好的连接`,
       });
   }

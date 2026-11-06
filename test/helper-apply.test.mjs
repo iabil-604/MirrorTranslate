@@ -178,11 +178,11 @@ test('helperRegexSnapshot never throws and reports 未知/0 when the host cannot
 test('extractControlCenterKnowledge files a card-row under its own <h3>, not an earlier unrelated <h2>, against the real control center markup', () => {
   const lines = extractControlCenterKnowledge(CONTROL_CENTER_MARKUP);
   assert.ok(
-    lines.some(line => line.startsWith('翻译台 › 只留译文 › ') && line.includes('正文里只留译文')),
+    lines.some(line => line.startsWith('翻译台 › 只留译文 › ') && line.includes('卸载前请恢复原文')),
     '只留译文的说明应归在「只留译文」这个 h3 底下，而不是前一个 h2「用什么翻」',
   );
   assert.ok(
-    !lines.some(line => line.startsWith('翻译台 › 用什么翻 › ') && line.includes('正文里只留译文')),
+    !lines.some(line => line.startsWith('翻译台 › 用什么翻 › ') && line.includes('卸载前请恢复原文')),
     '不应该再把只留译文的说明错误地归到「用什么翻」下面',
   );
 });
@@ -190,7 +190,7 @@ test('extractControlCenterKnowledge files a card-row under its own <h3>, not an 
 test('extractControlCenterKnowledge files a bare <summary> (no nested <h2>) as its own heading, against the real control center markup', () => {
   const lines = extractControlCenterKnowledge(CONTROL_CENTER_MARKUP);
   assert.ok(
-    lines.some(line => line.startsWith('模型连接 › 节约模式世界书白名单 › ') && line.includes('按世界书分组')),
+    lines.some(line => line.startsWith('模型连接 › 节约模式世界书白名单 › ') && line.includes('节约模式只发送勾选的条目')),
     '节约模式世界书白名单是一个没有嵌套 h2 的纯文字 summary，它自己的说明不该被归到前一个折叠组下面',
   );
 });
@@ -523,7 +523,7 @@ test('askHelper treats an independent connection\'s empty { content, reasoning }
 test('extractControlCenterKnowledge scopes a row title to its own row, against the real control center markup', () => {
   const lines = extractControlCenterKnowledge(CONTROL_CENTER_MARKUP);
   assert.ok(lines.includes('翻译台 › 自动 › 翻译失败后自动重试'), '重试次数这一行属于「自动」卡，不属于前面那一行的「自动接续翻译」');
-  assert.ok(lines.some(line => line.startsWith('朗读 › 让主模型给台词标上说话人和情绪 › 打开后，主模型每写一次回复')), '独占一组的勾选框，名下是紧跟着的那段说明');
+  assert.ok(lines.some(line => line.startsWith('朗读 › 让主模型给台词标上说话人和情绪 › 让主模型生成说话人标记')), '独占一组的勾选框，名下是紧跟着的那段说明');
   assert.ok(!lines.some(line => line.startsWith('朗读 › 多国语言 › ') && line.includes('主模型每写一次回复')));
   assert.ok(lines.includes('朗读 › 音色 › 角色表保存范围'));
   assert.ok(lines.includes('微调 › 翻译 › 翻译文风'), '微调页「翻译」卡里的行，不归到前面那行的「只留译文」；隐藏的「改过」药丸不算字');

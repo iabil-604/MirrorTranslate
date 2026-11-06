@@ -2,6 +2,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createPreviewFish } from './preview-fish.mjs';
+import { createBetaWorkshop } from './web-beta-workshop.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const mime = new Map([
@@ -25,6 +27,9 @@ let previewUpdateAvailable = true;
 const SAMPLE_RATE = 22050;
 const CHARACTER_SECONDS = 0.17;
 const PAUSE_SECONDS = 0.28;
+const workshop = createBetaWorkshop('http://127.0.0.1:' + previewPort);
+const fishRoot = '/api/plugins/mirrortranslate-fish';
+const previewFish = createPreviewFish((text, speaker) => synthesizeChunks([{ text, speaker }]).wav);
 
 function readBody(request) {
   return new Promise(resolve => {
@@ -254,6 +259,24 @@ async function handleMinimaxMock(request, response) {
 
 http.createServer(async (request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
+  if (pathname.startsWith(fishRoot + '/')) {
+    const url = new URL(request.url.slice(fishRoot.length), 'http://127.0.0.1');
+    try {
+      const body = ['POST', 'PATCH'].includes(request.method) ? await readBody(request) : {};
+      const result = previewFish(url, request.method, body);
+      response.writeHead(result.status, Object.fromEntries(result.headers));
+      response.end(Buffer.from(await result.arrayBuffer()));
+    } catch {
+      response.writeHead(500).end('Preview request failed');
+    }
+    return;
+  }
+  try {
+    if (await workshop(request, response, pathname)) return;
+  } catch {
+    response.writeHead(500).end('Preview workshop failed');
+    return;
+  }
   if (/^\/proxy\/https?:\/+openspeech\.bytedance\.com\/api\/v3\/tts\/unidirectional$/.test(pathname)) {
     void handleDoubaoMock(request, response);
     return;

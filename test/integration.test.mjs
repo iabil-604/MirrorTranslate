@@ -12,6 +12,7 @@ import {
   hashTextSync,
   interceptGenerationChat,
   mergeSettings,
+  getActivePromptProfile,
   restyleBilingual,
   segmentSource,
   stripGeneratedTranslationLines,
@@ -420,6 +421,117 @@ const streamingSettings = {
   selectedChannelId: 'default',
 };
 
+for (const stream of [false, true]) {
+  test(`dialogue scope translates only speech and reads its translation (stream=${stream})`, async t => {
+    const previousHost = globalThis.SillyTavern, previousFetch = globalThis.fetch;
+    t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+    const original = '<story_scene>她推开门，说：“你好！”\n窗外下着雨。她又说：「再见！」</story_scene>';
+    const message = { mes: original, swipe_id: 0, swipes: [original], swipe_info: [{ extra: {} }] };
+    const requests = [], saved = [];
+    const translated = JSON.stringify([{ id: 1, text: '“Hello!”' }, { id: 2, text: 'Goodbye!' }]);
+    mockHost([message], {
+      saveChat: async () => saved.push(message.mes),
+      ChatCompletionService: { processRequest: async params => { requests.push(params.messages); return translated; } },
+    });
+    const settings = __testing.configureForTest({ settings: { ...streamingSettings, streamingWriteback: stream,
+      translationScope: 'dialogue', translationOnly: true, tts: { side: 'source', range: 'narration', readWhileWriting: true } }, initialized: true });
+    getActivePromptProfile(settings).targetLanguage = 'English';
+    globalThis.fetch = async (_url, init) => {
+      requests.push(JSON.parse(init.body).messages);
+      return sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: translated } }] })}\n\n`, 'data: [DONE]\n\n']);
+    };
+    await __testing.startTranslation(0, { quiet: true });
+    assert.equal(message.extra[MESSAGE_META_KEY].complete, true);
+    assert.equal(message.extra[MESSAGE_META_KEY].translation_scope, 'dialogue');
+    assert.notEqual(message.extra[MESSAGE_META_KEY].stripped, true);
+    assert.equal(stripGeneratedTranslationLines(message.mes), original);
+    assert.equal(message.swipes[0], message.mes);
+    assert.ok(saved.every(text => stripGeneratedTranslationLines(text) === original));
+    const snapshot = await __testing.readMessageSnapshot(0, settings);
+    assert.deepEqual(snapshot.segments.map(item => item.text), ['“你好！”', '「再见！」']);
+    assert.deepEqual([...snapshot.existingTranslations], [[1, '“Hello!”'], [2, 'Goodbye!']]);
+    assert.equal(snapshot.translated, true);
+    const floor = await __testing.collectTtsFloor(0, settings);
+    assert.equal(floor.side, 'translation');
+    assert.equal(floor.dialogueOnly, true);
+    const utterances = __testing.ttsUtterances(floor, settings);
+    assert.deepEqual(utterances.map(item => item.text), ['Hello!', 'Goodbye!']);
+    assert.ok(utterances.every(item => item.kind === 'quoted'));
+    const source = await __testing.collectTtsFloor(0, settings, 'source');
+    assert.match(source.lines.map(line => line.text).join(''), /窗外下着雨/);
+    const all = await __testing.readMessageSnapshot(0, { ...settings, translationScope: 'all' });
+    assert.equal(all.existingTranslations.size, 0, 'switching scope cannot reuse differently numbered translations');
+    const again = await __testing.startTranslation(0, { quiet: true });
+    assert.equal(again.reason, 'already-translated');
+    assert.equal(requests.length, 1);
+    const request = requests[0].map(item => { try { return JSON.parse(item.content); } catch { return null; } }).find(item => item?.segments);
+    assert.deepEqual(request.segments.map(item => item.text), ['“你好！”', '「再见！」']);
+    assert.ok(requests[0].some(item => item.content.includes('本次只翻译对白')));
+  });
+
+  test(`dialogue scope leaves narration untouched without requesting translation (stream=${stream})`, async t => {
+    const previousHost = globalThis.SillyTavern;
+    t.after(() => { globalThis.SillyTavern = previousHost; });
+    const original = '<story_scene>她推开门。窗外下着雨。</story_scene>';
+    const message = { mes: original, swipe_id: 0 };
+    let requests = 0, writes = 0;
+    mockHost([message], { generateRaw: async () => { requests += 1; return ''; }, saveChat: async () => { writes += 1; } });
+    const settings = __testing.configureForTest({ settings: { ...streamingSettings, streamingWriteback: stream, translationScope: 'dialogue' }, initialized: true });
+    const result = await __testing.startTranslation(0, { quiet: true });
+    assert.equal(result.reason, 'no-dialogue');
+    assert.equal(message.mes, original);
+    assert.equal(requests, 0);
+    assert.equal(writes, 0);
+    assert.equal(await __testing.collectTtsFloor(0, settings), null);
+  });
+}
+
+test('dialogue scope repairs repeated dialogue across regions and keeps swipe records separate', async t => {
+  const previousHost = globalThis.SillyTavern, previousApi = globalThis.__JINGYI__;
+  t.after(() => { globalThis.SillyTavern = previousHost; globalThis.__JINGYI__ = previousApi; });
+  const original = '<story_scene><secret>「你好！」</secret>她说：「你好！」旁白。</story_scene>\n<reply>他答道：「你好！」</reply>';
+  const other = '<story_scene>下一页说：「晚安！」</story_scene>';
+  const message = { mes: original, swipe_id: 0, swipes: [original, other], swipe_info: [{ extra: {} }, { extra: {} }] };
+  const requests = [];
+  mockHost([message], { ChatCompletionService: { processRequest: async params => {
+    const input = params.messages.map(item => { try { return JSON.parse(item.content); } catch { return null; } }).find(item => item?.segments);
+    requests.push(input.segments.map(item => item.id));
+    return JSON.stringify(requests.length === 1 ? [{ id: 2, text: '「Hello again!」' }] : [{ id: 1, text: '「Hello!」' }]);
+  } } });
+  const settings = __testing.configureForTest({ settings: { ...streamingSettings, streamingWriteback: false,
+    translationScope: 'dialogue', replaceTags: ['reply'], excludedTags: ['secret'] }, initialized: true });
+  getActivePromptProfile(settings).targetLanguage = 'English';
+  await __testing.startTranslation(0, { quiet: true });
+  assert.equal(message.extra[MESSAGE_META_KEY].complete, false);
+  assert.deepEqual([...(await __testing.readMessageSnapshot(0, settings)).existingTranslations], [[2, '「Hello again!」']]);
+  await __testing.startTranslation(0, { quiet: true });
+  assert.deepEqual(requests, [[1, 2], [1]]);
+  assert.equal(message.extra[MESSAGE_META_KEY].complete, true);
+  assert.equal(stripGeneratedTranslationLines(message.mes), original);
+  assert.equal(message.swipes[1], other);
+  const prompt = [{ mes: message.mes, extra: message.extra }];
+  interceptGenerationChat(prompt);
+  assert.equal(prompt[0].mes, original);
+  // A fresh swipe can inherit the first swipe's extra, but never its translations.
+  message.swipe_id = 1;
+  message.mes = other;
+  assert.equal((await __testing.readMessageSnapshot(0, settings)).existingTranslations.size, 0);
+  message.swipe_id = 0;
+  message.mes = message.swipes[0];
+  assert.equal((await __testing.readMessageSnapshot(0, settings)).translated, true);
+  const stored = await __testing.collectTtsFloor(0, { ...settings, translationScope: 'all' }, 'translation');
+  assert.deepEqual(stored.lines.map(line => line.text), ['「Hello!」', '「Hello again!」']);
+  __testing.installPublicApi();
+  settings.translationScope = 'all';
+  const reading = await globalThis.__JINGYI__.reading.get({ messageId: 0 });
+  assert.equal(reading.state, 'ready', 'reading the saved floor is independent of the next translation mode');
+  assert.equal(reading.sourceMessage, original);
+  assert.deepEqual(reading.segments.map(item => item.source.start), [original.indexOf('「你好！」', original.indexOf('她说')), original.lastIndexOf('「你好！」')]);
+  settings.translationScope = 'dialogue';
+  await __testing.clearFloorTranslation(0, { ask: () => true });
+  assert.equal(message.mes, original);
+});
+
 test('an SSE stream writes the floor back through the ordinary pipeline', async t => {
   const previousHost = globalThis.SillyTavern;
   const previousFetch = globalThis.fetch;
@@ -497,24 +609,63 @@ test('reasoning deltas keep the stream alive without ever reaching the floor', a
   assert.doesNotMatch(message.mes, /译名无需统一/);
 });
 
-test('a batch that spends its whole budget thinking is parsed from the reasoning rather than failed', async t => {
+test('a batch that spends its whole budget thinking keeps the original and is not complete', async t => {
   const previousHost = globalThis.SillyTavern;
   const previousFetch = globalThis.fetch;
   t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
   const message = { mes: '<story_scene>\n雨が降っている。\n</story_scene>', swipe_id: 0 };
   mockHost([message]);
   __testing.configureForTest({ settings: streamingSettings, initialized: true });
-  // content never arrives at all: the answer exists only inside the thinking, which is where an
-  // overspent max_tokens leaves it. The whole-request path has always recovered this shape.
+  // A draft in thinking is not a final answer, even when it has the expected JSON shape.
   globalThis.fetch = async () => sseResponse([
     `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '先试一版：' } }] })}\n\n`,
     `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: JSON.stringify({ translations: [{ id: 1, text: '下雨了。' }] }) } }] })}\n\n`,
     'data: [DONE]\n\n',
   ]);
-  const result = await __testing.startTranslation(0, { quiet: true, force: true });
-  assert.equal(result.skipped, false);
-  assert.match(message.mes, /下雨了。/);
+  await __testing.startTranslation(0, { quiet: true, force: true }).catch(() => {});
+  assert.equal(message.mes, '<story_scene>\n雨が降っている。\n</story_scene>');
+  assert.notEqual(message.extra?.[MESSAGE_META_KEY]?.complete, true);
 });
+
+for (const mode of ['whole', 'stream']) {
+  for (const shape of ['reasoning-numbered', 'inline-numbered', 'inline-json-open', 'normal']) {
+    test(`${mode} translation writes only a final answer: ${shape}`, async t => {
+      const previousHost = globalThis.SillyTavern;
+      const previousFetch = globalThis.fetch;
+      t.after(() => { globalThis.SillyTavern = previousHost; globalThis.fetch = previousFetch; });
+      const original = '<story_scene>\n雨が降っている。\n</story_scene>';
+      const message = { mes: original, swipe_id: 0 };
+      const thought = '思考：先分析本句的人称，再决定译法。';
+      const valid = '{"translations":[{"id":1,"text":"下雨了。"}]}';
+      const draft = JSON.stringify({ translations: [{ id: 1, text: thought }] });
+      const deltas = shape === 'reasoning-numbered' ? [{ reasoning_content: `1: ${thought}` }]
+        : shape === 'inline-numbered' ? [{ content: `<think>\n1: ${thought}\n</think>\n1: 下雨了。` }]
+          : shape === 'inline-json-open' ? [{ content: `<think>\n${draft}\n` }, { content: '</think>' }]
+            : [{ reasoning_content: `1: ${thought}` }, { content: valid }];
+      const raw = { content: deltas.map(delta => delta.content ?? '').join(''), reasoning: deltas.map(delta => delta.reasoning_content ?? '').join('') };
+      const saved = [];
+      mockHost([message], {
+        saveChat: async () => saved.push(message.mes),
+        ChatCompletionService: { processRequest: async () => raw },
+      });
+      __testing.configureForTest({ settings: { ...streamingSettings, streamingWriteback: mode === 'stream' }, initialized: true });
+      globalThis.fetch = async () => sseResponse([
+        ...deltas.map(delta => `data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`),
+        'data: [DONE]\n\n',
+      ]);
+      await __testing.startTranslation(0, { quiet: true, force: true }).catch(() => {});
+      assert.equal(message.mes.includes(thought), false);
+      assert.equal(saved.some(text => text.includes(thought)), false, 'thinking never reaches even an interim save');
+      if (shape === 'normal' || shape === 'inline-numbered') {
+        assert.match(message.mes, /下雨了。/);
+        assert.equal(message.extra[MESSAGE_META_KEY].complete, true);
+      } else {
+        assert.equal(message.mes, original);
+        assert.notEqual(message.extra?.[MESSAGE_META_KEY]?.complete, true);
+      }
+    });
+  }
+}
 
 test('a relay that ignores the stream flag still lands the batch instead of writing nothing', async t => {
   const previousHost = globalThis.SillyTavern;

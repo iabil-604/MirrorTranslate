@@ -64,6 +64,7 @@ import {
   parseLyricLineRulesWithErrors,
   parseTagNamesWithErrors,
   recoverStructuredTranslations,
+  translationResponseContent,
   rebuildTaggedRegions,
   segmentSource,
   resolveSegmentationVersion,
@@ -128,8 +129,11 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.51.4';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.51.4';
+} from './core.js?v=0.51.5';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.51.5';
+import { WORKSHOP_ENTRY_MARKUP, WORKSHOP_FOLD_MARKUP, WORKSHOP_LAYER_MARKUP, WORKSHOP_PAGE_MARKUP, createWorkshop } from './workshop.js?v=0.51.5';
+import { FISH_WEB_TASK_CHECK, fishManagedRequest, fishWebOrigin, fishWebReadyReason, fishWebRequest, fishWebUsesManaged, probeFishWeb } from './fish-web.js?v=0.51.5';
+import { FISH_CENTER_ENTRY, FISH_CENTER_PAGE_MARKUP, createFishCenter } from './fish-center.js?v=0.51.5';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -202,10 +206,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.51.4';
-import { createTtsStore } from './tts-store.js?v=0.51.4';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.51.4';
-import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.51.4';
+} from './tts.js?v=0.51.5';
+import { createTtsStore } from './tts-store.js?v=0.51.5';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.51.5';
+import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.51.5';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -215,7 +219,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.51.4';
+} from './processing.js?v=0.51.5';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -233,15 +237,15 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.51.4';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.51.4';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.51.4';
-import { READING_API_VERSION, READING_STATES, readingPositions, readingSnapshot, readingState } from './reading.js?v=0.51.4';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.51.4';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.51.4';
-import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.51.4';
-import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.51.4';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.51.4';
+} from './prompts.js?v=0.51.5';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.51.5';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.51.5';
+import { READING_API_VERSION, READING_STATES, readingPositions, readingSnapshot, readingState } from './reading.js?v=0.51.5';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.51.5';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.51.5';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.51.5';
+import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.51.5';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.51.5';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -259,8 +263,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.51.4';
-import { sampleThemeBackground } from './theme-probe.js?v=0.51.4';
+} from './palette.js?v=0.51.5';
+import { sampleThemeBackground } from './theme-probe.js?v=0.51.5';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -268,7 +272,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.51.4';
+} from './diagnostics.js?v=0.51.5';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -279,7 +283,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.51.4';
+} from './helper.js?v=0.51.5';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -486,13 +490,14 @@ const runtime = {
   },
 };
 
+const TTS_SOURCE_PICKER = `<label><span class="jy-label">声音来源</span><select data-jy-tts-field="provider"><option value="fish">Fish Audio · 官方 API</option><option value="fish-web">Fish 网页订阅</option><option value="gsv">GPT-SoVITS（本地）</option></select></label>`;
 const CONTROL_CENTER_MARKUP = `
 <div class="jy-studio" data-jy-root>
 <aside class="jy-rail">
   <div class="jy-identity"><span class="jy-monogram" aria-hidden="true">镜</span><div><strong>镜译</strong><small>正文翻译器</small></div></div>
   <div class="jy-mode-switch" role="group" aria-label="界面模式"><button type="button" data-jy-action="set-ui-mode" data-jy-ui-mode="normal" aria-pressed="true">正常模式</button><button type="button" data-jy-action="set-ui-mode" data-jy-ui-mode="advanced" aria-pressed="false">高级模式</button></div>
   <nav class="jy-navigation" role="tablist" aria-label="工作区">
-  <button type="button" role="tab" aria-selected="true" data-jy-tab="main"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg></span>翻译台</button><button type="button" role="tab" aria-selected="false" data-jy-tab="finetune"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10"/><path d="M17 7h3"/><circle cx="14.5" cy="7" r="2.2"/><path d="M4 17h3"/><path d="M10 17h10"/><circle cx="7.5" cy="17" r="2.2"/></svg></span>微调</button><button type="button" role="tab" aria-selected="false" data-jy-tab="prompt"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg></span>翻译规则</button><button type="button" role="tab" aria-selected="false" data-jy-tab="settings"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg></span>模型连接</button><button type="button" role="tab" aria-selected="false" data-jy-tab="processing"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg></span>正文处理</button><button type="button" role="tab" aria-selected="false" data-jy-tab="tts"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6"/><path d="M18.3 6.2a8.2 8.2 0 0 1 0 11.6"/></svg></span>朗读</button><button type="button" role="tab" aria-selected="false" data-jy-tab="helper"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M9.8 9.8a2.3 2.3 0 1 1 3.4 2c-.8.5-1.2 1-1.2 2"/><circle cx="12" cy="16.3" r="0.9" fill="currentColor" stroke="none"/></svg></span>小助手</button><button type="button" role="tab" aria-selected="false" data-jy-tab="logs"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg></span>运行记录</button>
+  <button type="button" role="tab" aria-selected="true" data-jy-tab="main"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg></span>翻译台</button><button type="button" role="tab" aria-selected="false" data-jy-tab="finetune"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10"/><path d="M17 7h3"/><circle cx="14.5" cy="7" r="2.2"/><path d="M4 17h3"/><path d="M10 17h10"/><circle cx="7.5" cy="17" r="2.2"/></svg></span>微调</button><button type="button" role="tab" aria-selected="false" data-jy-tab="prompt"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg></span>翻译规则</button><button type="button" role="tab" aria-selected="false" data-jy-tab="settings"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg></span>模型连接</button><button type="button" role="tab" aria-selected="false" data-jy-tab="processing"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg></span>正文处理</button><button type="button" role="tab" aria-selected="false" data-jy-tab="tts"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6"/><path d="M18.3 6.2a8.2 8.2 0 0 1 0 11.6"/></svg></span>朗读</button><button type="button" role="tab" aria-selected="false" data-jy-tab="fish-center"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12c5-6 10-6 15 0-5 6-10 6-15 0zM18 12l3-3v6z"/><path d="M7.5 12h.1"/></svg></span>Fish 管理</button><button type="button" role="tab" aria-selected="false" data-jy-tab="helper"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M9.8 9.8a2.3 2.3 0 1 1 3.4 2c-.8.5-1.2 1-1.2 2"/><circle cx="12" cy="16.3" r="0.9" fill="currentColor" stroke="none"/></svg></span>小助手</button><button type="button" role="tab" aria-selected="false" data-jy-tab="logs"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg></span>运行记录</button>
   </nav>
   <details class="jy-theme-picker"><summary><span aria-hidden="true">◐</span> 外观</summary><div class="jy-theme-options"><button type="button" data-jy-action="set-theme" data-jy-theme="day" aria-pressed="false"><i aria-hidden="true"></i>日间</button><button type="button" data-jy-action="set-theme" data-jy-theme="night" aria-pressed="false"><i aria-hidden="true"></i>夜间</button><button type="button" data-jy-action="set-theme" data-jy-theme="fresh" aria-pressed="false"><i aria-hidden="true"></i>护眼小清新</button><button type="button" data-jy-action="set-theme" data-jy-theme="vampire" aria-pressed="false"><i aria-hidden="true"></i>华美吸血鬼</button><button type="button" data-jy-action="set-theme" data-jy-theme="glass" aria-pressed="false"><i aria-hidden="true"></i>极简毛玻璃</button></div></details><div class="jy-rail-bottom"><span class="jy-version">v${APP_VERSION}</span><button type="button" data-jy-action="check-update" class="jy-update-button" hidden aria-label="检查镜译更新">↻ <span data-jy-update-label>检查更新</span></button></div><p class="jy-update-notice" data-jy-update-notice hidden role="status"></p>
 </aside>
@@ -500,7 +505,7 @@ const CONTROL_CENTER_MARKUP = `
 <section class="jy-page" data-jy-page="main" role="tabpanel">
 
 <div data-jy-mode-content="normal">
-<header class="jy-page-heading"><div><h1>翻译台</h1><span class="jy-page-context">选一套，一次设好；API Key、朗读音色、提取标签、术语表不会被套餐覆盖</span></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span></header>
+<header class="jy-page-heading"><div><h1>翻译台</h1></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span></header>
 <div class="jy-connection-choice jy-preset-grid" data-jy-preset-grid role="radiogroup" aria-label="套餐"></div>
 <p class="jy-preset-drift" data-jy-preset-drift hidden><span class="jy-state-mark" data-state="busy" aria-hidden="true">◌</span><span data-jy-preset-drift-text></span><button type="button" class="jy-text-button" data-jy-action="preset-restore">恢复原样</button><button type="button" class="jy-text-button" data-jy-action="preset-drift-toggle" aria-expanded="false">看改了什么 ▸</button></p>
 <ul class="jy-preset-drift-list" data-jy-preset-drift-list hidden></ul>
@@ -512,12 +517,15 @@ const CONTROL_CENTER_MARKUP = `
    <div class="jy-summary-row"><span class="jy-state-mark" data-jy-desk-glossary-state aria-hidden="true"></span><div class="jy-summary-copy"><h3>姓名与术语表</h3><p data-jy-desk-glossary-summary></p></div><button type="button" class="jy-text-button" data-jy-action="goto-advanced" data-jy-goto-page="prompt">写</button></div>
   </section>
   <section class="jy-brief jy-desk-card jy-desk-fish" data-jy-desk-fish-card>
-   <div class="jy-card-head"><h2 class="jy-card-title">朗读 · Fish Audio</h2><span class="jy-mini-pill" data-state="error" data-jy-desk-fish-missing hidden>没填</span><span class="jy-muted" data-jy-desk-fish-need hidden>有声小说、全都要 要用</span></div>
-   <div class="jy-inline-actions">
+    <div class="jy-card-head"><h2 class="jy-card-title">朗读 · Fish Audio</h2><span class="jy-mini-pill" data-state="error" data-jy-desk-fish-missing hidden>没填</span><span class="jy-muted" data-jy-desk-fish-need hidden>有声小说、全都要 要用</span></div>
+    <div class="jy-form-grid jy-form-grid-tight">${TTS_SOURCE_PICKER}</div>
+    <div class="jy-inline-actions" data-jy-tts-provider-card="fish">
     <input type="password" data-jy-tts-fish="key" placeholder="Fish Audio API Key" aria-label="Fish Audio API Key" autocomplete="new-password" spellcheck="false" style="flex: 1 1 160px; min-width: 0;">
     <select data-jy-tts-fish="model" aria-label="模型"><option value="s2-pro">s2-pro</option><option value="s2.1-pro">s2.1-pro</option><option value="s2.1-pro-free">s2.1-pro-free（免费开发者档）</option><option value="drama-3-preview">drama-3-preview（预览版）</option><option value="s1">s1（旧版，不能一次用多个音色）</option></select>
     <button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button>
    </div>
+    <div data-jy-tts-provider-card="fish-web" hidden>${FISH_CENTER_ENTRY}</div>
+    <p class="jy-muted" data-jy-tts-provider-card="gsv" hidden><button type="button" class="jy-text-button" data-jy-action="goto-advanced" data-jy-goto-page="tts">打开 GPT-SoVITS 设置 →</button></p>
    <label class="jy-summary-row jy-summary-select"><span class="jy-label">分析模式</span><span class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></span></label>
    <p class="jy-muted" data-jy-desk-mode-help></p>
   </section>
@@ -537,7 +545,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-manuscript">
   <div class="jy-run-state" aria-live="polite"><span class="jy-dot" data-jy-task-dot="idle"></span><h2 data-jy-task-title>等待正文</h2><span class="jy-run-count" data-jy-current-state>待读取</span></div>
   <div class="jy-progress" aria-hidden="true"><span data-jy-progress></span></div>
-  <p class="jy-muted" data-jy-task-message>打开一段故事，从这里开始翻译。</p>
+  <p class="jy-muted" data-jy-task-message>暂无回复</p>
   <section class="jy-thinking" data-jy-thinking hidden>
    <button type="button" class="jy-thinking-head" data-jy-action="toggle-thinking" aria-expanded="false" aria-controls="jy-thinking-body">
     <span class="jy-thinking-pulse" aria-hidden="true"></span>
@@ -553,25 +561,29 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-card-grid">
  <section class="jy-card">
   <h2>自动</h2>
-  <div class="jy-card-row"><div class="jy-card-row-text"><h3>自动接续翻译</h3><p class="jy-muted">主回复完成后，自动补上译文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label></div>
-  <div class="jy-card-row jy-card-row-dependent" data-jy-dependent="autoSwipe"><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label><p class="jy-muted jy-dependent-reason">先打开上面的「自动接续翻译」，这一项才会生效。</p></div>
-  <div class="jy-card-row jy-card-row-dependent" data-jy-stream-row><label class="jy-check"><input type="checkbox" data-jy-field="streamingWriteback">流式写回（beta，勾选后所有翻译走流式；仅独立模式，跟随模式自动回退整包）</label><p class="jy-muted" data-jy-stream-reason>只在独立连接下生效；跟随酒馆时自动回退整包。</p></div>
+  <div class="jy-card-row"><div class="jy-card-row-text"><h3>自动接续翻译</h3></div><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="主回复完成后自动翻译"><span></span></label></div>
+  <div class="jy-card-row jy-card-row-dependent" data-jy-dependent="autoSwipe"><label class="jy-check"><input type="checkbox" data-jy-field="autoSwipe">切换滑动页时补译</label><p class="jy-muted jy-dependent-reason">需开启自动接续翻译</p></div>
+  <div class="jy-card-row jy-card-row-dependent" data-jy-stream-row><label class="jy-check"><input type="checkbox" data-jy-field="streamingWriteback">流式写回（测试版）</label><p class="jy-muted" data-jy-stream-reason>只在独立连接下生效。</p></div>
   <div class="jy-card-row"><span class="jy-label">翻译失败后自动重试</span><span class="jy-card-row-field"><input type="number" data-jy-field="retries" min="0" max="5" step="1" aria-label="翻译失败后自动重试"><span class="jy-muted">次</span></span></div>
  </section>
  <section class="jy-card">
   <h2>用什么翻</h2>
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>翻译方案</h3><p class="jy-muted" data-jy-active-profile>待读取</p></div><button type="button" class="jy-text-button" data-jy-action="open-prompt">编辑规则 →</button></div>
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>翻译用哪条连接</h3><p class="jy-muted" data-jy-channel-summary></p></div><label class="jy-sr-only" for="jy-desk-channel">翻译用哪条连接</label><select id="jy-desk-channel" data-jy-translation-channel></select></div>
-  <div class="jy-card-row"><p class="jy-muted">连接的地址、密钥、模型在「模型连接」页管理；翻译、分析模式、小助手各用哪条，在那一页最上面的「各功能用哪条连接」里选，互不牵连。</p><button type="button" class="jy-text-button" data-jy-action="open-settings">管理连接（地址、密钥、模型）→</button></div>
+  <div class="jy-actions"><button type="button" class="jy-text-button" data-jy-action="open-settings">管理连接 →</button></div>
   <div class="jy-card-row"><div class="jy-card-row-text"><h3>参考资料</h3><p class="jy-muted" data-jy-context-summary></p></div><button type="button" class="jy-text-button" data-jy-action="open-prompt">改 →</button></div>
  </section>
 </div>
+<section class="jy-card" data-jy-translation-scope>
+ <div class="jy-card-row"><div class="jy-card-row-text"><h3>翻译范围</h3></div><select data-jy-field="translationScope" aria-label="翻译范围"><option value="all">全文（旁白 + 对白）</option><option value="dialogue">只翻译对白（保留原文）</option></select></div>
+ <p class="jy-muted" data-jy-dialogue-note hidden>保留原文，只朗读对白译文。切换后重翻当前楼层。</p>
+</section>
 <section class="jy-card" data-jy-translation-only>
- <div class="jy-card-row"><div class="jy-card-row-text"><h3>只留译文</h3><p class="jy-muted">翻译完整的楼层，正文里只留译文；原文收进镜译的楼层数据，重译、朗读原文、发给主模型时自动取回。打开后新翻译的楼层生效。复制、导出 txt 和其他插件只拿得到译文；手改过的楼层不再自动翻译；卸载镜译前先点「恢复本聊天的原文」。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="translationOnly" aria-label="只留译文"><span></span></label></div>
+ <div class="jy-card-row"><div class="jy-card-row-text"><h3>只留译文</h3><p class="jy-muted">仅影响新翻译的楼层。复制和导出只有译文。卸载前请恢复原文。</p></div><label class="jy-switch"><input type="checkbox" data-jy-field="translationOnly" aria-label="只留译文"><span></span></label></div>
  <div class="jy-card-row jy-card-row-end"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="restore-originals">恢复本聊天的原文</button></div>
 </section>
 <section class="jy-card" data-jy-tts-desk>
- <div class="jy-card-row"><div class="jy-card-row-text"><h3>朗读（有声小说）</h3><p class="jy-muted">把译文或原文念出来，细节在朗读页。关着就是只翻译，楼层里不加任何东西。需要 Fish Audio 的 API Key，或者在自己电脑上运行 GPT-SoVITS。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
+ <div class="jy-card-row"><div class="jy-card-row-text"><h3>朗读</h3></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
  <div class="jy-card-row jy-card-row-end"><button type="button" class="jy-text-button" data-jy-action="open-tts" hidden>朗读设置 →</button></div>
 </section>
 </div>
@@ -582,8 +594,10 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-desk-columns jy-finetune-columns">
  <section class="jy-brief jy-desk-card">
   <h2 class="jy-card-title">翻译</h2>
+  <label class="jy-summary-row jy-summary-select"><span class="jy-label">翻译范围</span><select data-jy-field="translationScope"><option value="all">全文（旁白 + 对白）</option><option value="dialogue">只翻译对白（保留原文）</option></select></label>
+  <p class="jy-muted" data-jy-dialogue-note hidden>保留原文，只朗读对白译文。切换后重翻当前楼层。</p>
   <div class="jy-summary-row"><div class="jy-summary-copy"><h3>自动接续翻译</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="autoGeneration" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="autoGeneration" aria-label="自动接续翻译"><span></span></label></div>
-  <div class="jy-summary-row jy-summary-row-sub" data-jy-dependent="autoSwipe"><div class="jy-summary-copy"><h3>切换滑动页时补译</h3><p class="jy-muted jy-dependent-reason">先打开上面的「自动接续翻译」，这一项才会生效。</p></div><span class="jy-mini-pill" data-jy-finetune-drift="autoSwipe" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="autoSwipe" aria-label="切换滑动页时补译"><span></span></label></div>
+  <div class="jy-summary-row jy-summary-row-sub" data-jy-dependent="autoSwipe"><div class="jy-summary-copy"><h3>切换滑动页时补译</h3><p class="jy-muted jy-dependent-reason">需开启自动接续翻译</p></div><span class="jy-mini-pill" data-jy-finetune-drift="autoSwipe" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="autoSwipe" aria-label="切换滑动页时补译"><span></span></label></div>
   <div class="jy-summary-row"><div class="jy-summary-copy"><h3>只留译文</h3><p><button type="button" class="jy-text-button" data-jy-action="goto-advanced" data-jy-goto-page="main">打开前先看说明 →</button></p></div><label class="jy-switch"><input type="checkbox" data-jy-field="translationOnly" aria-label="只留译文"><span></span></label></div>
   <label class="jy-summary-row jy-summary-select"><span class="jy-label">翻译文风<span class="jy-mini-pill" data-jy-finetune-profile-drift="styleMode" hidden>改过</span></span><select data-jy-finetune-profile-field="styleMode"></select></label>
   <label class="jy-summary-row jy-summary-select"><span class="jy-label">称谓与角色口吻<span class="jy-mini-pill" data-jy-finetune-profile-drift="honorificMode" hidden>改过</span></span><select data-jy-finetune-profile-field="honorificMode"></select></label>
@@ -594,7 +608,7 @@ const CONTROL_CENTER_MARKUP = `
   <section class="jy-brief jy-desk-card">
    <h2 class="jy-card-title">显示</h2>
    <div class="jy-summary-row"><div class="jy-summary-copy"><h3>说话人着色</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringSpeakers" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringSpeakers" aria-label="说话人着色"><span></span></label></div>
-   <div class="jy-summary-row jy-summary-row-sub" data-jy-dependent="coloringEffects"><div class="jy-summary-copy"><h3>特效字</h3><p><button type="button" class="jy-text-button" data-jy-action="goto-advanced" data-jy-goto-page="processing" data-jy-open-fold="processing-moves">招式表 →</button></p><p class="jy-muted jy-dependent-reason">先打开上面的「说话人着色」，这一项才会生效。</p></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringEffects" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringEffects" aria-label="特效字"><span></span></label></div>
+   <div class="jy-summary-row jy-summary-row-sub" data-jy-dependent="coloringEffects"><div class="jy-summary-copy"><h3>特效字</h3><p><button type="button" class="jy-text-button" data-jy-action="goto-advanced" data-jy-goto-page="processing" data-jy-open-fold="processing-moves">招式表 →</button></p><p class="jy-muted jy-dependent-reason">需开启说话人着色</p></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringEffects" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringEffects" aria-label="特效字"><span></span></label></div>
    <div class="jy-summary-row"><div class="jy-summary-copy"><h3>情绪排版</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="coloringEmotions" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-field="coloringEmotions" aria-label="情绪排版"><span></span></label></div>
    <label class="jy-summary-row jy-summary-select"><span class="jy-label">内置美化</span><select data-jy-finetune-reading-style aria-label="内置美化"><option value="">（当前方案不是内置美化）</option><option value="cute">可爱风</option><option value="minimal">极简风</option><option value="fold">原文折叠</option></select></label>
    <div class="jy-summary-row"><div class="jy-summary-copy"><h3>点正文跳到悬浮窗</h3></div><label class="jy-switch"><input type="checkbox" data-jy-field="segmentJump" aria-label="点正文跳到悬浮窗"><span></span></label></div>
@@ -609,6 +623,7 @@ const CONTROL_CENTER_MARKUP = `
     <label class="jy-summary-row jy-summary-select jy-summary-row-sub"><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文</option></select></label>
     <div class="jy-summary-row jy-summary-row-sub"><div class="jy-summary-copy"><h3>新回复自动朗读</h3></div><span class="jy-mini-pill" data-jy-finetune-drift="ttsAutoRead" hidden>改过</span><label class="jy-switch"><input type="checkbox" data-jy-tts-field="autoRead" aria-label="新回复自动朗读"><span></span></label></div>
    </div>
+    <div class="jy-summary-row jy-summary-row-end">${WORKSHOP_ENTRY_MARKUP}</div>
   </section>
  </div>
 </div>
@@ -626,21 +641,21 @@ const CONTROL_CENTER_MARKUP = `
 <p class="jy-muted" data-jy-language-support></p>
 <div class="jy-card-grid">
  <section class="jy-card">
-  <h2>常用</h2><p class="jy-muted">选一下就行</p>
+  <h2>常用</h2>
   <div data-jy-standard-prompt-list="common"></div>
  </section>
  <section class="jy-card">
-  <h2>进阶</h2><p class="jy-muted">要自己写几句</p>
+  <h2>进阶</h2>
   <div data-jy-standard-prompt-list="advanced"></div>
-  <div class="jy-card-row"><div class="jy-card-row-text"><h3>自定义条目</h3><p class="jy-muted jy-empty-small" data-jy-custom-empty>按 ＋ 添加你的规则</p></div><button type="button" class="jy-icon-button" data-jy-action="add-prompt-section" aria-label="添加自定义条目">＋</button></div>
+  <div class="jy-card-row"><div class="jy-card-row-text"><h3>自定义条目</h3><p class="jy-muted jy-empty-small" data-jy-custom-empty>暂无自定义条目</p></div><button type="button" class="jy-icon-button" data-jy-action="add-prompt-section" aria-label="添加自定义条目">＋</button></div>
   <div data-jy-custom-prompt-list></div>
  </section>
  <section class="jy-card">
-  <h2>专家</h2><p class="jy-muted">直接改发给模型的话 · 共 <span data-jy-prompt-size>0 字</span></p>
+  <h2>专家</h2><p class="jy-muted"><span data-jy-prompt-size>0 字</span></p>
   <div data-jy-standard-prompt-list="expert"></div>
  </section>
 </div>
-<div class="jy-editor-stage" data-jy-editor-stage><div class="jy-editor-placeholder" data-jy-editor-placeholder><span aria-hidden="true">Aa</span><h2>点开一项规则来改</h2><p>文风、译名与措辞，都由你决定。</p></div></div>
+<div class="jy-editor-stage" data-jy-editor-stage><div class="jy-editor-placeholder" data-jy-editor-placeholder><span aria-hidden="true">Aa</span><h2>点开一项规则来改</h2></div></div>
 <section class="jy-card"><details class="jy-fold" data-jy-prompt-reference-fold><summary><h2>参考资料与上下文</h2><span class="jy-fold-summary" data-jy-prompt-reference-summary></span></summary><div class="jy-reference-body jy-form-body"><label class="jy-check"><input type="checkbox" data-jy-field="includeWorldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-field="includeCharacterCard">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-field="includeRecentContext">近期对话</label><label><span class="jy-label">近期对话条数</span><input type="number" data-jy-field="contextMessages" min="1" max="20" step="1"></label></div></details></section>
 <section class="jy-card">
  <h2>方案管理</h2>
@@ -658,11 +673,11 @@ const CONTROL_CENTER_MARKUP = `
 </section>
 
 <section class="jy-page" data-jy-page="settings" role="tabpanel" hidden>
-<header class="jy-page-heading"><div><h1>模型连接</h1><span class="jy-page-context">最上面选各功能用哪条，下面每条连接一张卡</span></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span><button type="button" class="jy-button" data-jy-action="add-channel">＋ 新建连接</button></header>
+<header class="jy-page-heading"><div><h1>模型连接</h1></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span><button type="button" class="jy-button" data-jy-action="add-channel">＋ 新建连接</button></header>
 <section class="jy-card jy-connection-uses-card"><div class="jy-connection-uses" data-jy-connection-uses><h2>各功能用哪条连接</h2></div></section>
 <section class="jy-card jy-channel-card">
  <div class="jy-channel-card-head">
-  <span class="jy-card-row-text"><h2>跟随酒馆</h2><p class="jy-muted">用酒馆当前的 API 和模型，不用填。</p></span>
+  <span class="jy-card-row-text"><h2>跟随酒馆</h2></span>
   <span class="jy-badge">内置</span>
  </div>
 </section>
@@ -679,15 +694,15 @@ const CONTROL_CENTER_MARKUP = `
  <label><span class="jy-label">当前模型（也可手动填写）</span><input type="text" data-jy-channel-field="model" placeholder="模型名称" autocomplete="off"></label>
  <p id="jy-api-model-help" class="jy-muted" data-jy-model-help></p>
  <details class="jy-fold" data-jy-fold="channel-request"><summary><h2>请求参数</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-grid">
- <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="长楼层拆成几批同时发送。越大越快，也越费 token；批次之间看不到彼此的上下文，名字靠术语表保持一致。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token 模式（世界书只注入白名单，近期对话最多 2 楼）</label>
- </div></details><details class="jy-fold" data-jy-fold="channel-postscript"><summary><h2>这条连接的后置提示词（附在每次请求的最末尾）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">翻译、分析模式、小助手——只要走这条连接，这段话都会加在请求的最后。用来关掉思维链、压住模型的废话最管用。每条连接各写各的，留空就不发。</p><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">按世界书分组，列出全局、角色卡、聊天和用户角色挂着的世界书。先打开一本书的「世界书开关」，它的条目才出现、才能勾选；第一次打开时条目全选，再把不要的去掉。节约 token 模式下只带开着的书里勾选的条目；关掉的书一条都不带，勾选会留着。跟随当前角色卡保存；一本都不开则节约模式下完全不带世界书。</p></details>
+ <label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-channel-field="timeoutSec" min="10" max="600" step="1"></label><label><span class="jy-label">最大输出 tokens</span><input type="number" data-jy-channel-field="maxTokens" min="256" max="1000000" step="1"></label><label><span class="jy-label">温度</span><input type="number" data-jy-channel-field="temperature" min="0" max="2" step="0.05"></label><label><span class="jy-label">排除参数</span><input type="text" data-jy-channel-field="excludeParams" placeholder="temperature, presence_penalty"></label><label><span class="jy-label">推理强度</span><select data-jy-channel-field="reasoningEffort"><option value="">不发送</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label><label title="并发越高，可能消耗更多 token。"><span class="jy-label">并发批次</span><input type="number" data-jy-channel-field="concurrency" min="1" max="4" step="1"></label><label class="jy-check"><input type="checkbox" data-jy-channel-field="tokenSaving">节约 token（仅白名单，最多带 2 楼）</label>
+ </div></details><details class="jy-fold" data-jy-fold="channel-postscript"><summary><h2>连接后置提示词</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">身份</span><select data-jy-channel-field="postscriptRole"><option value="user">user</option><option value="system">system</option><option value="assistant">assistant</option></select></label></div><textarea data-jy-channel-field="postscript" rows="3" spellcheck="false" placeholder="比如：直接输出结果，不要输出任何思考过程。"></textarea></div></details><details class="jy-advanced"><summary>节约模式世界书白名单</summary><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="refresh-wi-entries">刷新可读条目</button></div><div class="jy-wi-list" data-jy-wi-list></div><p class="jy-muted">节约模式只发送勾选的条目。白名单按角色保存。</p></details>
  <div class="jy-actions"><span class="jy-actions-spacer"></span><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="delete-channel">删除这条连接</button></div>
 </div>
-<section class="jy-card"><details class="jy-fold" data-jy-fold="helper-prompt"><summary><h2>小助手的提示词</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">小助手回答时用的提示词。留空就用镜译内置的（下面占位的文字就是它），资料本身——设置、当前楼层、运行记录——不受这里影响，一直都会给到小助手。</p><textarea data-jy-helper-prompt rows="6" spellcheck="false"></textarea><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="helper-reset-prompt">恢复默认</button></div></div></details></section>
+<section class="jy-card"><details class="jy-fold" data-jy-fold="helper-prompt"><summary><h2>小助手的提示词</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-reference-body"><p class="jy-muted">留空使用默认提示词。</p><textarea data-jy-helper-prompt rows="6" spellcheck="false"></textarea><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="helper-reset-prompt">恢复默认</button></div></div></details></section>
 </section>
 
 <section class="jy-page" data-jy-page="processing" role="tabpanel" hidden>
-<header class="jy-page-heading"><div><h1>正文处理</h1><span class="jy-page-context">决定哪些内容会被送去翻译</span></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span></header>
+<header class="jy-page-heading"><div><h1>正文处理</h1></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span></header>
 <div class="jy-processing-bar">
 <label class="jy-processing-choice"><span>方案</span><select aria-label="正文方案" data-jy-processing-select></select></label>
 <button type="button" class="jy-button" data-jy-action="import-processing">导入方案</button><button type="button" class="jy-button" data-jy-action="export-processing">导出方案</button>
@@ -695,14 +710,14 @@ const CONTROL_CENTER_MARKUP = `
 <input type="file" accept=".json,application/json" data-jy-processing-import hidden>
 </div>
 <div class="jy-processing-columns">
-<div class="jy-text-scope"><h2>提取范围</h2><label><span class="jy-label">提取标签</span><textarea rows="3" data-jy-field="bodyTags" placeholder="story_scene" spellcheck="false"></textarea></label><div class="jy-actions"><button type="button" class="jy-button" data-jy-action="inspect-tags">检查当前楼层</button></div><pre class="jy-inspection" data-jy-tag-inspection hidden></pre><p class="jy-muted">每行一个标签名。同一种标签出现好几组时，每组都翻译；写在排除标签里面的那组不翻译。一个标签写在另一个里面时，按外层整块翻译。</p><label><span class="jy-label">正文起点（找不到提取标签时用）</span><textarea rows="2" data-jy-field="bodyStartMarkers" placeholder="&lt;/thinking&gt;" spellcheck="false"></textarea></label><p class="jy-muted">回复里一个提取标签都没有时，从这里写的文字后面开始算正文，一直到楼层末尾；只写了结束标签的，算到结束标签为止。每行一个，比如思维链的结束标记 <code>&lt;/konatan_planning~&gt;</code>，写了几个就从最后出现的那个后面算。正文后面的摘要、建议之类，记得加进排除标签。</p><label><span class="jy-label">替换标签（译文直接替换原文）</span><textarea rows="2" data-jy-field="replaceTags" placeholder="replace_scene" spellcheck="false"></textarea></label><p class="jy-muted">该标签内的内容照常翻译，但写回时译文直接顶替原文：显示与主模型都只看到译文，原文隐藏保留在楼层里，点小铅笔可见，重新翻译时自动还原。</p><label><span class="jy-label">排除标签</span><textarea rows="2" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内部内容保留在原位，不翻译，也不朗读（比如生图插件的 &lt;image&gt;）。镜译自己的 <code>&lt;say&gt;</code> 说话人标记不用加在这里：翻译时自动去掉，显示时自动隐藏，朗读时自动读取。</p></div>
+<div class="jy-text-scope"><h2>提取范围</h2><label><span class="jy-label">提取标签</span><textarea rows="3" data-jy-field="bodyTags" placeholder="story_scene" spellcheck="false"></textarea></label><div class="jy-actions"><button type="button" class="jy-button" data-jy-action="inspect-tags">检查当前楼层</button></div><pre class="jy-inspection" data-jy-tag-inspection hidden></pre><p class="jy-muted">每行一个标签名。</p><label><span class="jy-label">正文起点（找不到提取标签时用）</span><textarea rows="2" data-jy-field="bodyStartMarkers" placeholder="&lt;/thinking&gt;" spellcheck="false"></textarea></label><p class="jy-muted">每行一个标记，取最后一次匹配之后的正文。</p><label><span class="jy-label">替换标签（译文直接替换原文）</span><textarea rows="2" data-jy-field="replaceTags" placeholder="replace_scene" spellcheck="false"></textarea></label><p class="jy-muted">主模型也会读到译文。原文可在编辑楼层时查看。</p><label><span class="jy-label">排除标签</span><textarea rows="2" data-jy-field="excludedTags" placeholder="thinking&#10;status" spellcheck="false"></textarea></label><p class="jy-muted">标签及内容原样保留，跳过翻译和朗读。</p></div>
 <div class="jy-text-scope" data-jy-coloring><h2>说话人着色</h2>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringSpeakers">说话人着色（按发色 / 瞳色）</label></div>
-<div class="jy-dependent" data-jy-dependent="coloringEffects"><label class="jy-check"><input type="checkbox" data-jy-field="coloringEffects">特效字（招式上色、搬运原文排版）</label><p class="jy-muted jy-dependent-reason">先打开上面的「说话人着色」，这一项才会生效。</p>
-<details class="jy-fold jy-move-fold" data-jy-fold="processing-moves"><summary><h2>招式表</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><div class="jy-move-list" data-jy-move-list></div><p class="jy-muted">改了就存，已写好的楼层马上重画。跟着角色卡存，这张卡的其他聊天里同名招式一样生效。自选的颜色太浅或太暗时会被拉到能看清。</p></div></details></div>
+<div class="jy-dependent" data-jy-dependent="coloringEffects"><label class="jy-check"><input type="checkbox" data-jy-field="coloringEffects">特效字（招式上色、搬运原文排版）</label><p class="jy-muted jy-dependent-reason">需开启说话人着色</p>
+<details class="jy-fold jy-move-fold" data-jy-fold="processing-moves"><summary><h2>招式表</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><div class="jy-move-list" data-jy-move-list></div></div></details></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringEmotions">情绪排版（字重 / 斜体 / 字号）</label></div>
 <label><span class="jy-label">内置美化</span><div class="jy-actions"><select aria-label="内置美化" data-jy-reading-style><option value="cute">可爱风</option><option value="minimal">极简风</option><option value="fold">原文折叠</option></select><button type="button" class="jy-button" data-jy-action="builtin-processing">使用</button></div></label>
-<p class="jy-muted">副模型只回答「这段谁在说、什么情绪」，颜色与排版全部由镜译按当前主题算出。先点一次「读取当前主题」，再登记角色。「特效字」只有说话人着色也开着时才会生效，也才会向翻译多问招式名和原文自带的排版：原文里整行、整句、半句的加粗变色会尽量搬到译文，招式、技能、法宝的名字会按属性单独上色（同招同色，随主题重新计算），『』标出的名号既不套说话人色也不当台词念。</p>
+
 <details class="jy-fold" data-jy-fold="processing-color"><summary><h2>颜色细节</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="coloringRhythm">情绪起伏（句内轻重变化）</label><label class="jy-check"><input type="checkbox" data-jy-field="coloringAutoSpeakers">名单外的说话人按名字自动取色</label></div>
 <div class="jy-form-grid"><label><span class="jy-label">对比度目标</span><input type="number" data-jy-field="coloringContrast" min="1.5" max="12" step="0.1"></label><label><span class="jy-label">彩度 <span data-jy-vividness-value></span></span><input type="range" data-jy-field="coloringVividness" min="0" max="100" step="5"></label></div>
@@ -710,53 +725,57 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-band-report" data-jy-band-report></div>
 <div class="jy-speaker-report" data-jy-speaker-report hidden></div>
 <div class="jy-speaker-list" data-jy-speaker-list></div>
-<p class="jy-muted">名单外的说话人默认按名字哈希自动取色，同一个名字在任何设备任何聊天里都是同一个颜色；关掉这项，没登记的人就只有情绪排版、没有颜色。<br>黑、白、银不参与着色：这三种是主题自己的文字颜色，认不出说话人。发色是黑白银的角色会按名字分到一个固定色相，同一个名字永远是同一个颜色。改主题或换壁纸后重新点一次「读取当前主题」即可，已翻译楼层重翻或补译后会用新颜色。</p>
+
 </div></details>
 </div>
 <div class="jy-text-scope"><h2>保留与歌词</h2>
-<details class="jy-fold" data-jy-fold="processing-preserve"><summary><h2>原样保留白名单</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">文字匹配整行，prefix: 匹配行首，/正则/ 只要这一行里有匹配就算（要整行匹配请写 ^…$）。纯边框、纯符号、标签行和只有图片的行自动保留。</p></div></details>
-<details class="jy-fold" data-jy-fold="processing-lyrics"><summary><h2>歌词行</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="lyricLineRules" spellcheck="false" placeholder="星が降る夜に&#10;/^もう一度/"></textarea></label><p class="jy-muted">写法和上面的保留白名单一样（文字、prefix:、/正则/），写的是歌词本身的文字或规律，不是「作词」「作曲」这类署名行。命中的行按歌词单独翻译：一行进一行出，不跟前后的正文并成一段；双语、只留译文和替换模式下都原位排成「原文 (译文)」；已经是中文的歌词行不翻译。</p><div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="lyricSing">朗读时唱出来</label></div><p class="jy-muted">勾上时（默认），朗读读到歌词行就唱出来：唱原文，读译文时也唱原文；默认用旁白的音色，悬浮窗改句面板里可以改成某个角色唱。楼层里一段歌词的末尾有「唱」「重新生成」，唱完这一段就停。只有 Fish 的 S2 系列模型能唱；用 GPT-SoVITS 或 s1 时歌词不读，「唱」按钮变淡，点一下会说原因。不勾，歌词行不朗读。</p></div></details>
+<details class="jy-fold" data-jy-fold="processing-preserve"><summary><h2>原样保留白名单</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="preserveLineRules" spellcheck="false" placeholder="此时彼刻&#10;prefix:【系统记录】"></textarea></label><p class="jy-muted">每行一条。文字匹配整行，<code>prefix:</code> 匹配行首，<code>/正则/</code> 匹配行内。</p></div></details>
+<details class="jy-fold" data-jy-fold="processing-lyrics"><summary><h2>歌词行</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><label><span class="jy-label">每行一条规则</span><textarea rows="5" data-jy-field="lyricLineRules" spellcheck="false" placeholder="星が降る夜に&#10;/^もう一度/"></textarea></label><p class="jy-muted">写法同保留白名单。命中的歌词逐行翻译。</p><div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="lyricSing">朗读时唱出来</label></div><p class="jy-muted">唱原文。需要 Fish S2 系列。</p></div></details>
 <label class="jy-check"><input type="checkbox" data-jy-field="musicCardRules">音乐卡片</label>
-<p class="jy-muted">手动开启，默认关闭。开启后，正文里以 <code>&lt;br&gt;</code> 分隔的一组行，只要其中出现 NOW PLAYING 这类固定文案、已经写成「原文 (中文)」的行、或命中上面的歌词规则，才会被当成卡片：这一组里已经是这三种样子的行自动保留，其余 <code>&lt;br&gt;</code> 行按歌词处理；没有出现这三种迹象的 <code>&lt;br&gt;</code> 分隔文字，仍按普通正文整体翻译。只按这一种卡片的样子写的，遇到别的卡片格式效果不对时，把歌名、歌手这类行加进「原样保留白名单」。</p>
+<p class="jy-muted">识别带 NOW PLAYING 等标记的 <code>&lt;br&gt;</code> 音乐卡片。</p>
 </div>
 <div class="jy-text-scope"><h2>写回</h2>
-<details class="jy-fold" data-jy-fold="processing-affix"><summary><h2>段落前后缀</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div><p class="jy-muted">勾选「跟随原文格式」后，原文某一行整行被 <code>&lt;span&gt;</code>、<code>&lt;font&gt;</code>、<code>&lt;b&gt;</code> 这类标签包着时，译文那一行也会套上同一层（只带 style / color / class / size / face，不复制 id、事件等属性）；预设给对话上的颜色不会只剩原文一半。开了说话人着色时以说话人颜色为准，粗体斜体仍然跟随。改这个开关只影响之后翻译的楼层，已有楼层重翻一次才会跟上。<br>留空即不添加。主模型仅保留原文，过滤镜译添加的装饰与译文。<br>默认按空行分段，整段原文后面跟整段译文。勾选后每一行都独立成段，原文与译文逐行贴在一起，各对之间空一行；用于分隔的空行写在不可见边界内，不会进入主模型。</p></div></details>
+<details class="jy-fold" data-jy-fold="processing-affix"><summary><h2>段落前后缀</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body"><div class="jy-affix-group"><span class="jy-label">原文</span><div class="jy-form-grid"><label><span class="jy-label">原文之前</span><input type="text" data-jy-field="segmentPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">原文之后</span><input type="text" data-jy-field="segmentSuffix" placeholder="留空即可不加后缀"></label></div></div><div class="jy-affix-group"><span class="jy-label">译文</span><div class="jy-form-grid"><label><span class="jy-label">译文之前</span><input type="text" data-jy-field="translationPrefix" placeholder="留空即可不加前缀"></label><label><span class="jy-label">译文之后</span><input type="text" data-jy-field="translationSuffix" placeholder="留空即可不加后缀"></label></div></div></div></details>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="paragraphPerLine">每行单独成段</label><label class="jy-check"><input type="checkbox" data-jy-field="carryFormatting">译文跟随原文格式</label><label class="jy-check"><input type="checkbox" data-jy-field="autoEdit">编辑回复后自动重译</label></div>
 </div>
 </div>
 <details class="jy-fold" data-jy-fold="processing-interface"><summary><h2>界面与正则</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层里的朗读按钮</span><select data-jy-field="floorButtons"><option value="line">每段一个（默认，手机也有）</option><option value="sentence">每段一个，再加每句一个</option><option value="off">不显示，只在悬浮窗里点</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="segmentJump">点正文跳到悬浮窗</label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
+<div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-field="showFloatingButton">显示悬浮入口</label><label class="jy-inline-field"><span class="jy-label">悬浮入口形态</span><select data-jy-field="floatingStyle"><option value="auto">自动（空闲圆环，翻译中胶囊，手机贴边）</option><option value="ring">始终圆环</option><option value="pill">始终胶囊</option><option value="edge">始终贴边</option></select></label><label class="jy-inline-field"><span class="jy-label">楼层里的朗读按钮</span><select data-jy-field="floorButtons"><option value="line">每段一个</option><option value="sentence">每段和每句</option><option value="off">隐藏楼层按钮</option></select></label><label class="jy-check"><input type="checkbox" data-jy-field="segmentJump">点正文跳到悬浮窗</label><label class="jy-check"><input type="checkbox" data-jy-field="leftHanded">左手模式（悬浮窗的主按钮靠左）</label></div>
 <div class="jy-form-section"><span class="jy-label">绑定正则 <span data-jy-processing-regex-count></span></span><div><div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="import-processing-regex">导入正则</button></div><input type="file" accept=".json,application/json" multiple data-jy-processing-regex-import hidden><div class="jy-processing-regex-list" data-jy-processing-regex-list></div><p class="jy-muted" data-jy-native-regex-status hidden></p><div class="jy-processing-toolbar"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="dedupe-processing-regex">删除多余正则</button></div></div></div>
 </div></details>
 </section>
 
 <section class="jy-page" data-jy-page="tts" role="tabpanel" hidden>
-<header class="jy-page-heading"><div><h1>朗读</h1><span class="jy-page-context">旁白和每个角色各用各的声音，多国语言各配各的音色，点哪句读哪句</span></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span></header>
-<div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3><p class="jy-muted">打开后，楼层里每个自然段后面会出现「播放」和「重新生成」两个按钮，楼层开头有一个小的「朗读」；按钮只加在页面上，不写进楼层。关掉就是一般模式：只翻译，这一页收起，后台不做任何事。</p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
+<header class="jy-page-heading"><div><h1>朗读</h1></div><span class="jy-autosave-indicator" data-jy-autosave-indicator>改了就存 ✓</span></header>
+<div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
 
 <div class="jy-processing-columns">
 <div class="jy-text-scope" data-jy-tts-provider-card="fish"><h2>Fish Audio</h2>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">声音来源</span><select data-jy-tts-field="provider"><option value="fish">Fish Audio</option><option value="gsv">GPT-SoVITS（本地）</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight">${TTS_SOURCE_PICKER}</div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">API Key</span><input type="password" data-jy-tts-fish="key" placeholder="sk-…" autocomplete="new-password" spellcheck="false"></label><label><span class="jy-label">模型</span><select data-jy-tts-fish="model"><option value="s2-pro">s2-pro</option><option value="s2.1-pro">s2.1-pro</option><option value="s2.1-pro-free">s2.1-pro-free（免费开发者档）</option><option value="drama-3-preview">drama-3-preview（预览版）</option><option value="s1">s1（旧版，不能一次用多个音色）</option></select></label></div>
 <div class="jy-actions"><button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button><span class="jy-muted" data-jy-tts-save-note></span></div>
 <label class="jy-check"><input type="checkbox" data-jy-tts-fish="viaProxy">经酒馆 CORS 代理发送</label>
 <p class="jy-muted" data-jy-tts-proxy-help></p>
 </div>
+<div class="jy-text-scope" data-jy-tts-provider-card="fish-web" hidden><h2>Fish 网页订阅</h2>
+<div class="jy-form-grid jy-form-grid-tight">${TTS_SOURCE_PICKER}</div>
+${FISH_CENTER_ENTRY}
+</div>
 <div class="jy-text-scope" data-jy-tts-provider-card="gsv" hidden><h2>GPT-SoVITS</h2>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">声音来源</span><select data-jy-tts-field="provider"><option value="fish">Fish Audio</option><option value="gsv">GPT-SoVITS（本地）</option></select></label><label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-gsv="baseUrl" placeholder="http://127.0.0.1:9880" spellcheck="false"></label></div>
+<div class="jy-form-grid jy-form-grid-tight">${TTS_SOURCE_PICKER}<label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-gsv="baseUrl" placeholder="http://127.0.0.1:9880" spellcheck="false"></label></div>
 <div class="jy-actions"><button type="button" class="jy-button" data-jy-action="tts-test-gsv">测试连接</button><span class="jy-muted" data-jy-tts-gsv-note></span></div>
 <label class="jy-check"><input type="checkbox" data-jy-tts-gsv="viaProxy">经酒馆 CORS 代理发送</label>
 <p class="jy-muted" data-jy-tts-gsv-proxy-help></p>
-<div class="jy-tts-lang-block"><h3>默认音色</h3><p class="jy-muted">音色库里没配 GPT-SoVITS 的音色、没绑音色的角色，都用这个读。</p>
+<div class="jy-tts-lang-block"><h3>默认音色</h3>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">参考音频</span><input type="text" data-jy-tts-gsv="refAudioPath" placeholder="D:\\GPT-SoVITS\\参考音频\\旁白.wav" spellcheck="false"></label><label><span class="jy-label">参考音频的文字</span><input type="text" data-jy-tts-gsv="promptText" placeholder="参考音频里说的话，一字不差" spellcheck="false"></label><label><span class="jy-label">参考音频语言</span><select data-jy-tts-gsv="promptLang"><option value="zh">中文</option><option value="ja">日语</option><option value="en">英语</option><option value="ko">韩语</option><option value="yue">粤语</option><option value="auto">自动</option></select></label><label><span class="jy-label">GPT 模型（.ckpt，可不填）</span><input type="text" data-jy-tts-gsv="gptWeights" placeholder="不填用 GPT-SoVITS 当前加载的" spellcheck="false"></label><label><span class="jy-label">SoVITS 模型（.pth，可不填）</span><input type="text" data-jy-tts-gsv="sovitsWeights" placeholder="不填用 GPT-SoVITS 当前加载的" spellcheck="false"></label></div>
 </div>
-<p class="jy-muted">GPT-SoVITS 在你自己的电脑上生成声音，不花钱、不限字数，需要 N 卡。先启动它的 api_v2.py（整合包目录里运行 <code>runtime\\python.exe api_v2.py</code>），窗口里出现 Uvicorn running on http://127.0.0.1:9880 之后点「测试连接」；默认音色填好了，测试时会用它读一句。路径都填 GPT-SoVITS 那台电脑上的完整路径：在文件上按住 Shift 点右键，「复制文件地址」，直接粘贴。参考音频要 3~10 秒，「参考音频的文字」要和音频里说的一字不差。给角色单独配，在「音色」卡的「音色库」里每个音色填自己的参考音频和模型。</p>
+<p class="jy-muted">请先启动 GPT-SoVITS 的 <code>api_v2.py</code>。</p>
 </div>
 <div class="jy-text-scope"><h2>音色</h2>
 <div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button></div>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">旁白音色 <span class="jy-tts-title" data-jy-tts-title="narrator"></span></span><span class="jy-tts-pick" data-jy-tts-pick-scope data-jy-tts-page-pick><input type="text" data-jy-tts-field="narratorVoice" placeholder="Fish Voice ID，留空用 Fish 默认音色" spellcheck="false"></span></label><label><span class="jy-label">对白默认音色 <span class="jy-tts-title" data-jy-tts-title="dialogue"></span></span><span class="jy-tts-pick" data-jy-tts-pick-scope data-jy-tts-page-pick><input type="text" data-jy-tts-field="dialogueVoice" placeholder="没有专属音色的角色都用这个" spellcheck="false"></span></label><label title="没有在角色表里绑定专属音色的人，是用上面这个默认音色读，还是干脆不读。"><span class="jy-label">没有专属音色的角色</span><select data-jy-tts-field="dialogueFallback"><option value="default">用对白默认音色读</option><option value="skip">跳过，不朗读</option></select></label></div>
-<p class="jy-muted">角色表里每一行都可以单独勾「不朗读这个角色的对白」，勾上的人一句都不读、也不生成音频。旁白不受这两项影响，旁白音色单独设。</p>
-<div class="jy-tts-lang-block" data-jy-tts-multilang><div class="jy-row-between"><div><h3>多国语言</h3><p class="jy-muted">同一个人读中文、英语、日语可以各用一个音色，英语还分美式和英式（伦敦腔）。这里给旁白加；每个角色行里各有一个「＋ 多国语言音色」按钮。句子的语言由副模型判断，没判断按文字本身。</p></div><button type="button" class="jy-button" data-jy-action="tts-add-narrator-lang">＋ 旁白加一门语言</button></div><div class="jy-tts-lang-list" data-jy-tts-narrator-langs></div></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">旁白音色 <span class="jy-tts-title" data-jy-tts-title="narrator"></span></span><span class="jy-tts-pick" data-jy-tts-pick-scope data-jy-tts-page-pick><input type="text" data-jy-tts-field="narratorVoice" placeholder="Fish Voice ID，留空用 Fish 默认音色" spellcheck="false"></span></label><label><span class="jy-label">对白默认音色 <span class="jy-tts-title" data-jy-tts-title="dialogue"></span></span><span class="jy-tts-pick" data-jy-tts-pick-scope data-jy-tts-page-pick><input type="text" data-jy-tts-field="dialogueVoice" placeholder="没有专属音色的角色都用这个" spellcheck="false"></span></label><label><span class="jy-label">没有专属音色的角色</span><select data-jy-tts-field="dialogueFallback"><option value="default">用对白默认音色读</option><option value="skip">跳过，不朗读</option></select></label></div>
+
+<div class="jy-tts-lang-block" data-jy-tts-multilang><div class="jy-row-between"><div><h3>多国语言</h3></div><button type="button" class="jy-button" data-jy-action="tts-add-narrator-lang">＋ 旁白加一门语言</button></div><div class="jy-tts-lang-list" data-jy-tts-narrator-langs></div></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">角色表保存范围</span><select data-jy-tts-field="voiceScope"><option value="character">跟着角色卡（这张卡的所有聊天共用一张表）</option><option value="chat">每个聊天单独一份（不同周目各配各的）</option></select></label></div>
 <p class="jy-muted" data-jy-tts-scope-note></p>
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-add-voice">添加角色</button><button type="button" class="jy-button" data-jy-action="tts-import-speakers">导入已知说话人</button><button type="button" class="jy-button" data-jy-action="tts-lookup-voices">查询音色名</button><button type="button" class="jy-text-button" data-jy-action="tts-prune-voices">删掉没绑音色的行</button></div>
@@ -765,35 +784,36 @@ const CONTROL_CENTER_MARKUP = `
      list it empties, ahead of every other button in its group (review finding index.js:11542). -->
 <div class="jy-processing-toolbar jy-processing-toolbar-end"><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="tts-clear-voices">清空角色表</button></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="speechMarks">让主模型给台词标上说话人和情绪</label></div>
-<p class="jy-muted">打开后，主模型每写一次回复，请求的最末尾（深度 0，系统消息）都会带上一段格式要求，让它把每句台词写成 <code>&lt;say who="名字" mood="情绪"&gt;「……」&lt;/say&gt;</code>。不分析模式靠这个分角色、带情绪读，不请求任何副模型。标记在楼层里自动隐藏，翻译时自动去掉；台词的引号没配对（比如「……"）时，显示和朗读都会补成一对。名单用下面角色表里的名字，引号用这个故事最近在用的那种，每次生成时现取。只在朗读功能打开时发送，总结、代写这类旁路生成不带；关掉就不再发送。以前点按钮写进世界书的「镜译 · 说话人与情绪标记」条目请自己删掉或关掉——它还在的话，关掉这里主模型也会照样写标记。</p>
-<p class="jy-muted">角色表跟着当前角色卡保存。「从角色卡和世界书识别角色」让副模型读一遍角色卡和世界书条目（连同最近几楼正文，好按故事里的写法给名字），把人物名单列出来，你勾选后再导进来（需要副模型能连上，模型没回应就什么都不加）；世界书里没有、只是模型编的名字，群体和身份称呼，还有你自己扮演的角色，都会被程序挡掉，关掉的世界书条目也不读；导进来的角色先跟随对白默认音色，改默认音色它们一起变；给某个角色填了专属 Voice ID（或从音色库选）就锁定，之后改默认音色不影响它，「解除绑定」才会解锁。「＋ 多国语言音色」给同一个角色按语言绑不同音色：读中文译文用一个，读日语原文用另一个，句子的语言由副模型判断，没判断时按文字本身。没登记的角色不会不读，用对白默认音色；连默认音色都没填就用 Fish 的默认音色（声音来源是 GPT-SoVITS 时，用它那张卡里的默认音色）。</p>
+<p class="jy-muted">让主模型生成说话人标记。旧版同名世界书条目请关闭。</p>
+
 <details class="jy-fold" data-jy-fold="tts-library"><summary><h2>音色库</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-add-library">添加音色</button></div>
 <div class="jy-tts-library" data-jy-tts-library></div>
-<p class="jy-muted">给常用的 Fish 音色起个自己的名字存起来，全部角色卡共用。之后旁白、对白默认音色、每个角色、每门语言的音色都可以直接从库里选，不用再去翻 32 位的 ID。Voice ID 在 fish.audio 音色页面的地址栏里。GPT-SoVITS 的音色也存在这里：展开一个音色，在「GPT-SoVITS」那几格填它的参考音频、参考音频的文字和模型，点「试听」听一句；只用 GPT-SoVITS 的音色不用填 Voice ID。同一个音色可以两边都填，换声音来源时角色绑的还是这个音色。</p>
+<p class="jy-muted">音色库由各角色共用。</p>
 </div></details>
+${WORKSHOP_FOLD_MARKUP}
 </div>
 <div class="jy-text-scope"><h2>读法</h2>
 <div class="jy-card-row"><div class="jy-card-row-text"><h3>分析模式</h3><p class="jy-muted" data-jy-tts-mode-help></p></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></label></div>
-<div class="jy-card-row jy-card-row-dependent" data-jy-dependent="ttsIntimate"><label class="jy-card-row-field"><span>亲密场景</span><select data-jy-tts-field="intimate"><option value="off">关</option><option value="auto">自动</option><option value="on">开</option></select></label><p class="jy-muted">关：一律不发低吟。自动：分析模式自己判断这一楼是不是亲密戏（叙述里写出了实质的亲密接触才算），是才逐段放开喘息和低吟。开：你允许了，分析模式按场景逐段放开；日常段落、只有话的调情照样克制。</p><p class="jy-muted jy-dependent-reason">先打开上面的「分析模式」，这一项才会生效。</p></div>
+<div class="jy-card-row jy-card-row-dependent" data-jy-dependent="ttsIntimate"><label class="jy-card-row-field"><span>亲密场景</span><select data-jy-tts-field="intimate"><option value="off">关</option><option value="auto">自动</option><option value="on">开</option></select></label><p class="jy-muted">自动由模型判断场景。开启后仍按段落决定。</p><p class="jy-muted jy-dependent-reason">需开启分析模式</p></div>
 <div class="jy-form-grid jy-form-grid-tight"><label data-jy-tts-ask-field><span class="jy-label">没翻译、没分析过的楼，按播放时</span><select data-jy-tts-field="askAnalysis"><option value="ask">问我一下</option><option value="analyze">先让副模型分析一次再读</option><option value="plain">直接读，程序认人</option></select></label></div>
-<p class="jy-muted">翻译和朗读各挑各的连接，谁也不跟着谁：翻译、分析模式、小助手各用哪条，在「模型连接」页最上面的「各功能用哪条连接」里选，分析模式用的连接在这一页「更多 → 分析模式」里也能改。换翻译的连接不会动这里。连接本身（地址、密钥、模型、后置提示词）也存在「模型连接」页。</p>
+
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">朗读语言</span><select data-jy-tts-field="side"><option value="translation">译文</option><option value="source">原文</option><option value="both">译文 + 原文（各自生成，点哪个读哪个）</option><option value="dialogue_source">对白读原文（旁白读译文，台词按角色写的语言读原文）</option></select></label><label><span class="jy-label">朗读范围</span><select data-jy-tts-field="range"><option value="all">旁白 + 对白</option><option value="dialogue">只读对白</option><option value="narration">只读旁白</option></select></label></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoRead">新回复自动朗读（只读最新一楼，写完才读；正在读别的楼时只提醒、不打断）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="autoGenerate">最新一楼分析完自动生成音频，不播放</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="playAfterGenerate">点播放后，做完直接播（关掉就只生成，再点一次才播）</label></div>
-<p class="jy-muted">开着翻译的楼，翻译时就顺手标好了谁在说、什么情绪，不分析时直接用这些标注，不再请求副模型；打开分析模式，正文一闭合就把这一楼发给副模型分析一次，走分析模式用的连接；勾了「自动生成音频」才会翻完就做；勾了「新回复自动朗读」，新回复写完（开着翻译就等译文写回）就自己从头读。每个自然段后面的「播放」只读这一段，读完就停；「重新生成」丢掉这一段的音频再向 Fish 要一次（同一段文字 Fish 每次读得不一样）；电脑手机都有。想要每句一个按钮，「正文处理」页的「楼层里的朗读按钮」选「每段一个，再加每句一个」。改一句发给 Fish 的内容，仍然在悬浮窗的朗读页。想让一句唱出来，在朗读页点这一句，再点「唱」（S2 系列模型才能唱）；歌词行默认就唱，楼层里一段歌词的末尾有「唱」按钮，开关在「正文处理 → 歌词行」。</p>
+
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">「保存到本地」保存什么</span><select data-jy-tts-field="downloadScope"><option value="auto">整楼音频（默认）</option><option value="floor">整楼音频</option><option value="current">正在读的那一段</option><option value="sentence">正在读的那一句</option></select></label><label><span class="jy-label">读译文时，楼层没有镜译译文就从这些标签里取文字</span><input type="text" data-jy-tts-field="sourceTags" placeholder="jy-translation" spellcheck="false"></label></div>
-<p class="jy-muted">读原文：按「正文处理」里的提取标签取原文，没翻译过的楼层也能读，思维链、状态栏这些不在提取标签里的内容不会被读。副模型分析时会附上每行的译文帮它认人，说话人按译名写；原文里的写法（比如桜井）可以加进角色的别名。<br>对白读原文：旁白读译文，每一句台词按正文里写的语言读原文——同一楼里日本人的台词读日语、英国人的台词读英语，说话人和情绪仍然取自译文的标注，句内的停顿重读带不过去。不用另外选语言配的音色：Fish 的 S2 系列按每句自己的语言发音，「音色」给角色配的「多国语言」音色也是按这句话自己的语言选的，没配就还是这个角色的默认音色。<br>不开分析模式时，以上几种读法都给每句写一句中文配音指令：谁在说、基础情绪、情绪怎么变、语气、语速、停顿重读、要不要笑声叹气喘息。S2 系列模型直接读方括号里的中文指令，句内还会插 [重读]、[停顿]、[长停顿] 和声音词，语速音量走 Fish 的参数；S1 读不懂自由文本，退回它认得的英文固定标签。台词本身不经过模型，一个字不改。<br>开着分析模式时按声学标注规则来：不写情绪词，只在字上插十个声音标签；台词可以加叠字、！！、~、……和呜、嗯、唔这类语气词，原文的字程序逐字核对，对不上的句子按原文念。语速分五档；张力 1~5 调 Fish 的 temperature，张力不同的句子分开请求；很短的语气句会加强防重复，免得卡在一个音上。分析按楼层文本缓存，一楼只请求一次；点句子旁的情绪按钮或悬浮窗的改句面板能看到分析结果和最终发给 Fish 的内容，可以改。</p>
+
 </div>
 <section class="jy-text-scope jy-more-group">
 <h2>更多</h2>
 <div class="jy-fold-list">
 <details class="jy-fold" data-jy-fold="tts-quotes"><summary><h2>对白符号 · 跳过符号</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">对白符号（这些符号里的是台词）</span><input type="text" data-jy-tts-field="quotePairs" placeholder="「」, 『』, “”, &quot;&quot;" spellcheck="false"></label><label><span class="jy-label">跳过符号（这些符号里的不读）</span><input type="text" data-jy-tts-field="skipPairs" placeholder="* *, ** **, （）" spellcheck="false"></label></div>
-<p class="jy-muted">符号成对写，逗号分隔；开合各一个字符时写在一起（「」），多字符或相同字符之间空一格（** **）。比如预设把动作写在星号里、台词写在引号里：对白符号填 “”，跳过符号填 * *，那么 <code>樱井说：“明天也来吗？” *低头摆弄着衣角*</code> 只读引号里的话，星号里的一句不读也不挂按钮。不同预设的写法不一样，按自己用的预设改。</p>
+<p class="jy-muted">逗号分隔，例 <code>「」, ** **</code>。</p>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-gsv" data-jy-tts-provider-card="gsv" hidden><summary><h2>GPT-SoVITS 参数</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-tts-gsv="timeoutSec" min="10" max="600" step="10"></label><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-tts-gsv="retries" min="0" max="5" step="1"></label></div>
-<p class="jy-muted">每句发一次请求，GPT-SoVITS 一句做完再做下一句；音色用的模型不一样时，先把同一套模型的句子做完再换模型（换一次要几秒）。超时和重试只管请求怎么发，改了不会重做音频；第一次读、刚换模型时要先把模型装进显卡，超时别调得太短。</p>
+
 <div class="jy-form-grid">
 <label><span class="jy-label">语速（0.6–1.65）</span><input type="number" data-jy-tts-gsv="speed" min="0.6" max="1.65" step="0.05"></label><label><span class="jy-label">音量调整 / dB</span><input type="number" data-jy-tts-gsv="volume" min="-20" max="20" step="1"></label>
 <label><span class="jy-label">temperature</span><input type="number" data-jy-tts-gsv="temperature" min="0.05" max="1" step="0.05"></label><label><span class="jy-label">top_p</span><input type="number" data-jy-tts-gsv="topP" min="0.05" max="1" step="0.05"></label>
@@ -801,13 +821,13 @@ const CONTROL_CENTER_MARKUP = `
 <label><span class="jy-label">切句方式</span><select data-jy-tts-gsv="splitMethod"><option value="cut5">按标点切（默认）</option><option value="cut0">不切</option><option value="cut1">凑四句一切</option><option value="cut2">凑 50 字一切</option><option value="cut3">按中文句号切</option><option value="cut4">按英文句号切</option></select></label>
 </div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 GPT-SoVITS 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量读（每句各自生效）</label></div>
-<p class="jy-muted">GPT-SoVITS 听不懂情绪、停顿、笑声这些标签，发出去的只有字：分析模式加的叠字、语气词照样读，标签不读。情绪靠参考音频——同一个角色录一段开心的、一段低落的，存成两个音色，在角色的「情绪音色」里按条件换。temperature、top_k、top_p 越低越稳、越高起伏越大；重复惩罚防止卡在一个音上；切句方式是 GPT-SoVITS 在一句里面再按标点切开，中间停一下。改了语速、音量和这几项，已经做好的音频会按新参数重做。</p>
+<p class="jy-muted">情绪跟随参考音频。更改声音参数后会重新生成音频。</p>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-fish" data-jy-tts-provider-card="fish"><summary><h2>Fish 参数</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-fish="baseUrl" placeholder="https://api.fish.audio" spellcheck="false"></label>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-tts-fish="timeoutSec" min="10" max="600" step="10"></label><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-tts-fish="retries" min="0" max="5" step="1"></label><label title="整楼拆成几段请求时，几段同时发。越大等得越短，Fish 提示限流（429）就调回 1。"><span class="jy-label">同时生成几段</span><select data-jy-tts-fish="concurrency"><option value="1">1（一段一段来，最稳）</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label></div>
-<p class="jy-muted">超时、重试和并发是这条连接怎么发请求，不影响声音。重试只在超时、断线和 Fish 自己出错（5xx）时发生；Key 不对、余额不足、限流（429）这些一次就停，重试也没用。</p>
-<div class="jy-form-grid jy-form-grid-tight"><label title="一次请求交给 Fish 多少内容。整楼一次：这一楼所有人的对白和旁白合成一个请求，各用各的音色，Fish 按一场对话连着读。"><span class="jy-label">一次请求发多少</span><select data-jy-tts-field="requestUnit"><option value="line">每段一次（默认，第一段做好就开始播）</option><option value="floor">整楼一次（所有角色合成一个请求）</option><option value="sentence">每句一次（每句单独请求）</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">超时 / 秒</span><input type="number" data-jy-tts-fish="timeoutSec" min="10" max="600" step="10"></label><label><span class="jy-label">失败后自动重试次数</span><input type="number" data-jy-tts-fish="retries" min="0" max="5" step="1"></label><label title="遇到限流可调到 1。"><span class="jy-label">同时生成几段</span><select data-jy-tts-fish="concurrency"><option value="1">1（一段一段来，最稳）</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label></div>
+
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">一次请求发多少</span><select data-jy-tts-field="requestUnit"><option value="line">每段一次</option><option value="floor">整楼一次</option><option value="sentence">每句一次</option></select></label></div>
 <p class="jy-muted" data-jy-tts-unit-help></p>
 <div class="jy-form-grid">
 <label><span class="jy-label">音频格式</span><select data-jy-tts-fish="format"><option value="mp3">mp3（兼容最好）</option><option value="opus">opus（体积小，旧版 Safari 可能播不了）</option><option value="wav">wav（无损，体积大）</option></select></label><label><span class="jy-label">延迟与质量</span><select data-jy-tts-fish="latency"><option value="normal">normal（质量最好）</option><option value="balanced">balanced</option><option value="low">low（最快）</option></select></label>
@@ -816,23 +836,23 @@ const CONTROL_CENTER_MARKUP = `
 <label><span class="jy-label">一次请求最多字数（标签一起算，超过就拆）</span><input type="number" data-jy-tts-fish="maxChars" min="200" max="10000" step="100"></label>
 </div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-fish="normalize">数字与符号规范化（中英文读数更稳）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="emotionCues">把配音指令一起发给 Fish（关掉只读字）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="sanitizeHtml">发给 Fish 前去掉正文里的 HTML（颜色、字号这类美化只留在页面上）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="prosodySplit">按分析出的语速、音量拆分请求（Fish 的语速音量按请求生效）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="tamePunctuation">连续的！！！压成一个，强度交给情绪标签</label></div>
-<p class="jy-muted">改任何一项声音参数，已经缓存的音频都会按新参数重新生成。超时、重试和并发不算声音参数，改了不会让音频重做，它们在这一栏最上面。</p>
+<p class="jy-muted">更改声音参数后会重新生成音频。</p>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-deep"><summary><h2>分析模式</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<p class="jy-muted">带着角色卡、世界书、前几楼把这一楼看一遍，判断每句情绪的因果和浓度，定下情绪、语气、语速、停顿、重读、句内转折和非语言声音，全是 Fish 官方认得的标签；调音台上你推到头的滑杆是它必须守的规则，留在中间的交给它判断。开着翻译时一楼两次调用（翻译一次、分析一次），不开翻译一次做完。这一栏里的东西只属于分析模式，改它不碰别的。</p>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式用的连接</span><select data-jy-tts-field="deepChannelId"></select></label><label title="从请求发出去算起，不管模型还在不在写。连接自己的「超时」只管「多久没动静」，思考型模型边想边写就永远不会超时。"><span class="jy-label">单次分析最长等待 / 秒</span><input type="number" data-jy-tts-field="analysisLimitSec" min="20" max="900" step="10"></label></div>
-<p class="jy-muted">「单次分析最长等待」是硬上限：到点就停，这一楼先按现有标注读，不会一直等下去。思考型模型嫌慢的话，把那条连接的「推理强度」调低比调大这个数更有用。</p>
+
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">分析模式用的连接</span><select data-jy-tts-field="deepChannelId"></select></label><label><span class="jy-label">单次分析最长等待 / 秒</span><input type="number" data-jy-tts-field="analysisLimitSec" min="20" max="900" step="10"></label></div>
+<p class="jy-muted">超时后按现有标注朗读。</p>
 <div class="jy-behaviors"><span class="jy-label">分析时附带</span><label class="jy-check"><input type="checkbox" data-jy-tts-context="character">角色卡设定</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="worldbook">世界书</label><label class="jy-check"><input type="checkbox" data-jy-tts-context="recent">前几楼剧情</label><label class="jy-inline-field"><span class="jy-label">楼数</span><input type="number" data-jy-tts-context="floors" min="0" max="10" step="1"></label></div>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-console"><summary><h2>默认调音台</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
-<p class="jy-muted">每一项五档，停在哪一档就把哪一句话交给副模型。中间那档是「AI 判断」——这一项不写任何规则，由分析模型按剧情自己定，也是默认值。往两边走才会变成硬性要求，比如「呼吸感明显」「声音克制」。数字本身不发给任何模型。每个角色还能在音色那栏单独调；最下面的自定义规则永远原样交给副模型，那才是最细的一层。</p>
-<p class="jy-muted">非语言声音（叹气、笑、抽泣这些）由「声音表现倾向」一项决定用多少；「气息感」只说用哪一种，不会自己加量。两项都停在「AI 判断」时，加不加、加多少由分析模型看着办。</p>
+
+
 <div class="jy-tts-console" data-jy-tts-console="default"><div class="jy-tts-console-presets" data-jy-console-preset-host></div><label class="jy-tts-console-field"><span>停顿感</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="pause"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>气息感</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="breath"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>口语颗粒度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="grain"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>情感强度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="intensity"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>情绪表现幅度</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="range"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>语速倾向</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="speed"><output>AI 判断</output></label><label class="jy-tts-console-field"><span>声音表现倾向</span><input type="range" min="0" max="100" step="25" value="50" data-jy-console-key="expression"><output>AI 判断</output></label><label class="jy-tts-console-rules"><span class="jy-label">自定义配音规则（一行一条，直接交给副模型）</span><textarea rows="3" data-jy-console-rules spellcheck="false" placeholder="比如：害羞时不要过度娇柔；生气时保持克制；不要每句话都加呼吸"></textarea></label></div>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-prompts"><summary><h2>副模型提示词（高级）</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <label><span class="jy-label">破限词</span><textarea data-jy-tts-prompt="jailbreak" rows="4" spellcheck="false" placeholder="留空即不发送"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-jailbreak">破限词</button></div>
-<p class="jy-muted">点「破限词」按钮会把翻译规则里的破限词填进来。填了就作为第一条 system 消息，放在发给副模型的每个请求最前面：分析这一楼、按意见改标注、从世界书识别角色都带上，翻译和小助手不带。<code>{{char}}</code>、<code>{{user}}</code> 会换成角色名。</p>
-<p class="jy-muted">留空用内置的。可用占位符：<code>{{user}}</code> 用户扮演的角色，<code>{{sounds}}</code> 声音词表，<code>{{references_rule}}</code> 读原文时关于译文的那条规则。JSON 的输出格式和字段名要照旧，不然解析不出来。</p>
+
+<p class="jy-muted">留空用默认提示词。自定义时保留 JSON 字段。</p>
 <label><span class="jy-label">分析模式</span><textarea data-jy-tts-prompt="deep" rows="10" spellcheck="false"></textarea></label><div class="jy-processing-toolbar"><button type="button" class="jy-text-button" data-jy-action="tts-fill-prompt" data-prompt="deep">填入内置的再改</button><button type="button" class="jy-text-button" data-jy-action="tts-copy-prompt" data-prompt="deep">复制内置提示词</button><button type="button" class="jy-text-button" data-jy-action="tts-reset-prompt" data-prompt="deep">恢复默认</button></div>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-cache"><summary><h2>缓存</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
@@ -841,28 +861,28 @@ const CONTROL_CENTER_MARKUP = `
 <details class="jy-fold" data-jy-fold="tts-call"><summary><h2>实时通话</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div data-jy-call-apps hidden></div>
 <div class="jy-behaviors"><label class="jy-check"><input type="checkbox" data-jy-tts-field="readWhileWriting">边写边读（主模型一边写，一边一句一句读出来；读模型写出的原文，不等翻译）</label><label class="jy-check"><input type="checkbox" data-jy-tts-field="liveAudio">边收边放（边写边读和实时通话时，生成一点就播一点，不等一整句做完；Fish 的延迟模式是 normal 时会换成 balanced）</label></div>
-<p class="jy-muted">勾了「边写边读」，主模型一边写，镜译一边按句请求下面选的声音、按顺序读出来：读的是模型写出的原文，不等翻译，需要酒馆开着流式输出；运行记录里每一楼会记下首字、首句、出声各用了多久。再勾「边收边放」，生成出一小块就开始播，不等一整句做完，出声更早（Fish 延迟模式选的是 normal 时，这里会换成 balanced，否则没东西可以提前播；GPT-SoVITS 用它出声最快的流式档，先攒半秒再播；楼层朗读不受影响）。</p>
-<p class="jy-muted">给小手机这类插件打电话用的接口：边写边读（tts.stream）、语音输入（stt）、流式请求模型（llm.stream），都挂在 <code>window.__JINGYI__</code> 上，插件接上这三个就能边说边听。悬浮窗的「通话测试」页用的也是这三个，可以直接打给当前角色试效果。</p>
+<p class="jy-muted">边写边读使用原文，需要酒馆开启流式输出。</p>
+
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">边写边读和通话用的声音</span><select data-jy-tts-field="streamVoice"><option value="fish">Fish Audio（和楼层朗读同一套）</option><option value="gsv">GPT-SoVITS（和楼层朗读同一套）</option><option value="doubao">豆包语音（火山引擎）</option><option value="minimax">MiniMax</option></select></label></div>
-<p class="jy-muted" data-jy-stream-voice="gsv" hidden>用「GPT-SoVITS」卡里的接口地址和默认音色，角色按角色表绑的音色读（音色库里填了 GPT-SoVITS 参考音频的那些）；那张卡在「声音来源」选 GPT-SoVITS 时才显示。一句一句生成；每个角色单独训练的模型，换人时要等模型换好，第一句会慢一些。</p>
+
 <div data-jy-stream-voice="doubao" hidden>
-<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">豆包 API Key</span><input type="password" data-jy-tts-doubao="key" autocomplete="new-password" spellcheck="false"></label><label title="新版控制台只要 API Key，这格留空；旧版控制台在这里填 App ID，上一格填 Access Token。"><span class="jy-label">App ID（旧版控制台才填）</span><input type="text" data-jy-tts-doubao="appId" spellcheck="false"></label><label><span class="jy-label">资源</span><select data-jy-tts-doubao="resourceId"><option value="seed-tts-2.0">seed-tts-2.0（合成 2.0）</option><option value="seed-icl-2.0">seed-icl-2.0（复刻 2.0）</option><option value="seed-tts-1.0">seed-tts-1.0（合成 1.0）</option></select></label><label><span class="jy-label">默认音色</span><input type="text" data-jy-tts-doubao="voice" placeholder="zh_female_vv_uranus_bigtts" spellcheck="false"></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">豆包 API Key</span><input type="password" data-jy-tts-doubao="key" autocomplete="new-password" spellcheck="false"></label><label title="旧版的 API Key 一栏填 Access Token。"><span class="jy-label">App ID（旧版控制台才填）</span><input type="text" data-jy-tts-doubao="appId" spellcheck="false"></label><label><span class="jy-label">资源</span><select data-jy-tts-doubao="resourceId"><option value="seed-tts-2.0">seed-tts-2.0（合成 2.0）</option><option value="seed-icl-2.0">seed-icl-2.0（复刻 2.0）</option><option value="seed-tts-1.0">seed-tts-1.0（合成 1.0）</option></select></label><label><span class="jy-label">默认音色</span><input type="text" data-jy-tts-doubao="voice" placeholder="zh_female_vv_uranus_bigtts" spellcheck="false"></label></div>
 <label><span class="jy-label">角色音色（一行一个：名字=音色ID；「旁白=…」给叙述）</span><textarea rows="3" data-jy-tts-doubao="voiceMap" spellcheck="false" placeholder="樱井=zh_female_linjianvhai_uranus_bigtts&#10;旁白=zh_male_m191_uranus_bigtts"></textarea></label>
 <label class="jy-check"><input type="checkbox" data-jy-tts-doubao="viaProxy">经酒馆 CORS 代理发送</label>
 <label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-doubao="baseUrl" placeholder="https://openspeech.bytedance.com" spellcheck="false"></label>
-<p class="jy-muted">豆包的 Key 过不了浏览器的跨域检查，只能经酒馆的 CORS 代理发（和 Fish 一样，要在 config.yaml 里开 enableCorsProxy）；TauriTavern 没有这条代理，「接口地址」要填自己的转发地址。音色 ID 在火山引擎控制台的音色列表里查，要和上面选的资源对得上：2.0 的音色名以 _uranus_bigtts 结尾。</p>
+<p class="jy-muted">豆包需开启酒馆 CORS 代理，TauriTavern 请填转发地址。</p>
 </div>
 <div data-jy-stream-voice="minimax" hidden>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">MiniMax API Key</span><input type="password" data-jy-tts-minimax="key" autocomplete="new-password" spellcheck="false"></label><label><span class="jy-label">站点</span><select data-jy-tts-minimax="baseUrl"><option value="https://api.minimax.cn">国内站（api.minimax.cn）</option><option value="https://api.minimax.io">海外站（api.minimax.io）</option></select></label><label><span class="jy-label">模型</span><select data-jy-tts-minimax="model"><option value="speech-2.8-turbo">speech-2.8-turbo（快）</option><option value="speech-2.6-turbo">speech-2.6-turbo（快）</option><option value="speech-2.8-hd">speech-2.8-hd</option><option value="speech-2.6-hd">speech-2.6-hd</option></select></label><label><span class="jy-label">默认音色</span><input type="text" data-jy-tts-minimax="voice" placeholder="female-shaonv" spellcheck="false"></label></div>
 <label><span class="jy-label">角色音色（一行一个：名字=音色ID；「旁白=…」给叙述）</span><textarea rows="3" data-jy-tts-minimax="voiceMap" spellcheck="false" placeholder="樱井=female-shaonv&#10;旁白=Chinese (Mandarin)_Gentleman"></textarea></label>
-<p class="jy-muted">MiniMax 浏览器能直接连，不用代理。国内站免费账号每分钟只能请求 10 次（充值后 20 次），边写边读一楼会切成好几句、每句一次请求，容易撞上限；撞上了会等几秒自动再试一次。</p>
+
 </div>
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="stream-voice-test">试听这个声音</button><span class="jy-muted" data-jy-stream-voice-note></span></div>
-<div class="jy-form-grid jy-form-grid-tight"><label title="插件用 llm.stream 请求模型时走这条。选「模型连接」页里存的连接才能一边写一边读；跟随酒馆时要等整段回复写完。"><span class="jy-label">通话用的连接</span><select data-jy-tts-field="callChannelId"><option value="">和分析模式用同一条</option></select></label><label><span class="jy-label">语音输入</span><select data-jy-tts-field="sttProvider"><option value="cloud">按住说话，云端转写</option><option value="browser">浏览器自带识别</option></select></label></div>
+<div class="jy-form-grid jy-form-grid-tight"><label title="跟随酒馆时，整段回复写完后开始读。"><span class="jy-label">通话用的连接</span><select data-jy-tts-field="callChannelId"><option value="">和分析模式用同一条</option></select></label><label><span class="jy-label">语音输入</span><select data-jy-tts-field="sttProvider"><option value="cloud">按住说话，云端转写</option><option value="browser">浏览器自带识别</option></select></label></div>
 <div class="jy-form-grid jy-form-grid-tight" data-jy-stt-cloud><label><span class="jy-label">转写服务</span><select data-jy-tts-field="sttPreset"><option value="siliconflow">SiliconFlow · SenseVoiceSmall（免费）</option><option value="groq">Groq · whisper-large-v3-turbo</option><option value="openai">OpenAI · gpt-4o-mini-transcribe</option><option value="custom">自定义（OpenAI 兼容）</option></select></label><label><span class="jy-label">转写地址</span><input type="text" data-jy-tts-field="sttUrl" spellcheck="false"></label><label><span class="jy-label">转写 Key</span><input type="password" data-jy-tts-field="sttApiKey" spellcheck="false" autocomplete="off"></label><label><span class="jy-label">转写模型</span><input type="text" data-jy-tts-field="sttModel" spellcheck="false"></label></div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">识别语言</span><input type="text" data-jy-tts-field="sttLang" placeholder="zh / ja / en" spellcheck="false"></label></div>
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="stt-test">试一下语音输入</button><span class="jy-muted" data-jy-stt-test-note></span></div>
-<p class="jy-muted">麦克风只能在 https 或本机地址（localhost、127.0.0.1）下打开：手机用 Termux 在本机开酒馆没问题，用局域网地址 http://192.168… 打开时浏览器不给麦克风。浏览器自带识别不用 Key，但只在电脑版 Chrome / Edge 上稳定，声音会交给浏览器厂商的服务转写。</p>
+<p class="jy-muted">麦克风需 HTTPS 或本机地址。浏览器识别由浏览器厂商转写。</p>
 </div></details>
 <details class="jy-fold" data-jy-fold="tts-tools" data-jy-tts-preview-panel><summary><h2>当前楼层的朗读结构</h2><span class="jy-fold-summary" data-jy-fold-summary></span></summary><div class="jy-form-body">
 <div class="jy-processing-toolbar"><button type="button" class="jy-button" data-jy-action="tts-preview">分析最新一楼</button><button type="button" class="jy-button" data-jy-action="tts-pregenerate">生成最新一楼的音频（不播放）</button><button type="button" class="jy-button" data-jy-action="tts-copy-structure" hidden>复制朗读结构 JSON</button></div><div class="jy-tts-preview" data-jy-tts-preview></div>
@@ -873,7 +893,7 @@ const CONTROL_CENTER_MARKUP = `
 </section>
 
 <section class="jy-page" data-jy-page="helper" role="tabpanel" hidden>
-<header class="jy-page-heading"><div><h1>小助手</h1><span class="jy-page-context">只读：会看你的设置、这一楼的状态和运行记录；给出的改动要点「照这样改」才会真的生效</span></div></header>
+<header class="jy-page-heading"><div><h1>小助手</h1><span class="jy-page-context">点「照这样改」才会应用建议。</span></div></header>
 <div class="jy-ask-chips" data-jy-helper-quick></div>
 <div class="jy-helper-conversation" data-jy-helper-conversation aria-live="polite"></div>
 <footer class="jy-footer jy-helper-footer">
@@ -888,7 +908,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-log-toolbar"><button type="button" class="jy-button jy-button-primary" data-jy-action="toggle-export-drawer">导出日志</button><div class="jy-log-tools"><button type="button" class="jy-button" data-jy-action="refresh-logs">刷新</button><button type="button" class="jy-text-button jy-text-button-danger" data-jy-action="clear-logs">清空</button></div></div>
 <div class="jy-export-drawer" data-jy-export-drawer>
   <div class="jy-export-body">
-    <p class="jy-muted">导出完整日志（含副 API 请求与返回正文，凭据特征已隐藏）。文件为 TXT，分享前请检查隐私内容。</p>
+    <p class="jy-muted">完整日志含正文，分享前请检查。</p>
     <div class="jy-export-controls">
       <label class="jy-export-scope"><span class="jy-label">最近楼数</span><input type="number" data-jy-export-floors min="1" max="999" step="1" value="1"></label>
       <button type="button" class="jy-button jy-button-primary" data-jy-action="export-recent">导出最近楼层</button>
@@ -896,10 +916,13 @@ const CONTROL_CENTER_MARKUP = `
     </div>
   </div>
 </div>
-<p class="jy-muted">展开记录可查看模型完整回复。完整日志含正文，分享前请检查。</p><div class="jy-log-list" data-jy-log-list></div>
+<div class="jy-log-list" data-jy-log-list></div>
 </section>
+${WORKSHOP_PAGE_MARKUP}
+${FISH_CENTER_PAGE_MARKUP}
 <p class="jy-sr-only" aria-live="polite" data-jy-live></p>
 </main>
+${WORKSHOP_LAYER_MARKUP}
 </div>`;
 
 const FALLBACK_PANEL_CSS = `
@@ -1431,7 +1454,7 @@ function extractAllRegions(text, settings) {
   });
 }
 
-async function readMessageSnapshot(messageId = null, settings = runtime.settings, { quiet = false, swipeId: wantedSwipe = null } = {}) {
+async function readMessageSnapshot(messageId = null, settings = runtime.settings, { quiet = false, swipeId: wantedSwipe = null, storedScope = false } = {}) {
   const context = getContext();
   const id = messageId === null ? latestAssistantMessageId(context) : Number(messageId);
   if (!Number.isInteger(id) || id < 0) throw new Error('没有找到可翻译的 AI 回复。');
@@ -1459,7 +1482,11 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
   // is the only time this snapshot's segments and what gets saved for it are the same act. See
   // resolveSegmentationVersion for why `metadata` alone is not enough to trust its own record.
   const segmentationVersion = resolveSegmentationVersion(upgraded, metadata, { stripped: floor.stripped });
+  const translationScope = storedScope && metadata ? metadata.translation_scope ?? 'all' : settings.translationScope ?? 'all';
+  const quotePairs = storedScope && metadata?.dialogue_quote_pairs ? metadata.dialogue_quote_pairs : normalizeTts(settings.tts).quotePairs;
+  const skipPairs = storedScope && metadata?.dialogue_skip_pairs ? metadata.dialogue_skip_pairs : normalizeTts(settings.tts).skipPairs;
   const segmentOptions = {
+    translationScope, quotePairs, skipPairs,
     segmentPrefix: metadata?.segment_prefix ?? settings.segmentPrefix,
     segmentSuffix: metadata?.segment_suffix ?? settings.segmentSuffix,
     translationPrefix: metadata?.translation_prefix ?? settings.translationPrefix,
@@ -1497,12 +1524,15 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     paragraphs += segmented.paragraphs;
     nextId += segmented.segments.length;
   }
-  const signature = createTranslationSignature(extraction.regions);
+  const segmentSignature = createTranslationSignature(extraction.regions);
+  const signature = translationScope === 'dialogue'
+    ? JSON.stringify({ scope: 'dialogue', quotePairs, skipPairs, segments: segmentSignature }) : segmentSignature;
   const sourceHash = await hashFloorText(signature);
   const messageHash = await hashText(cleanMessage);
   const sourceMatches = metadata ? await storedHashMatches(metadata.source_hash, signature, sourceHash) : false;
   const metadataMatches = Boolean(
     metadata
+    && (metadata.translation_scope ?? 'all') === translationScope
     && sourceMatches
     // The record of a floor with only its translation left in it was found by the floor's own text.
     && ((floor.stripped && !floor.diverged) || Number(metadata.swipe_id ?? 0) === swipeId)
@@ -1549,6 +1579,7 @@ async function readMessageSnapshot(messageId = null, settings = runtime.settings
     lyricIds,
     fragmentsById,
     paragraphs,
+    translationScope,
     // Whatever rules built `segments` above; a write carries this straight back onto the floor's
     // metadata so the next read agrees with it again. See segmentOptions.segmentationVersion.
     segmentationVersion,
@@ -1646,7 +1677,7 @@ async function withAbortTimeout(externalSignal, timeout, task) {
   try {
     return await task(controller.signal, renew);
   } catch (error) {
-    if (hitLimit) throw new Error(`这次分析写了 ${ceiling} 秒还没写完，已经停下，这一楼先按现有标注读。可以在「朗读 → 更多 → 分析模式」里调大「单次分析最长等待」，或者把那条连接的推理强度调低。`);
+    if (hitLimit) throw new Error(`分析超时（${ceiling} 秒）。本楼沿用现有标注。`);
     if (timedOut) throw new Error(describeTimeout(timeoutSec, renewed, typeof timeout === 'object' && timeout?.who ? timeout.who : undefined));
     throw error;
   } finally {
@@ -1703,7 +1734,7 @@ function enrichRequestError(error) {
   const raw = safeError(error);
   const opaque = !raw || raw.length <= 24 || /^[<\[(（【][^\s]{0,20}[>\])）】]$/.test(raw.trim());
   if (!opaque) return error;
-  const wrapped = new Error(`副 API 没有返回可用内容（${raw || '空响应'}）。完整请求与返回已记入运行记录，可在「运行记录」页用「导出日志」导出排查。`);
+  const wrapped = new Error(`副 API 响应不可用（${raw || '空响应'}）。详情见运行记录。`);
   wrapped.cause = error instanceof Error ? error : new Error(raw);
   return wrapped;
 }
@@ -2577,7 +2608,7 @@ function renderWorldInfoList(root) {
   if (!entries.length) {
     const note = document.createElement('p');
     note.className = 'jy-muted';
-    note.textContent = '还没有读到世界书条目。点「刷新可读条目」试一次；仍为空就先让酒馆加载完当前聊天再回来。';
+    note.textContent = '暂无可读的世界书条目。';
     list.appendChild(note);
     return;
   }
@@ -2807,13 +2838,15 @@ async function invokeTranslationBatch(segments, settings, signal, packet = {}, p
   signal?.throwIfAborted?.();
   const recovered = withoutUntranslated(recoverStructuredTranslations(raw, segments), segments, settings);
   // The part of the floor this request read, as a scene, when the request asked for one.
-  recovered.scene = requestMeta?.scene && phase === 'primary' ? recoverScene(raw) : null;
+  recovered.scene = requestMeta?.scene && phase === 'primary' ? recoverScene(translationResponseContent(raw)) : null;
   if (!recovered.translations.size) {
     // A reply that is entirely a recognised echo (recovered.echoes) is not a failure in the making —
     // translateOneBatch is about to accept it, or is already one matching reply away from accepting
     // it. An error-level entry here would sit right next to translation.echo-accepted and the eventual
     // translation.complete, reading as a run that failed when it in fact succeeded.
-    recordDiagnostic(recovered.echoes?.size ? 'warn' : 'error', 'translation.empty-response', '副 API 返回中没有任何可用译文。', {
+    recordDiagnostic(recovered.echoes?.size ? 'warn' : 'error', 'translation.empty-response', reasoning && !translationResponseContent(raw)
+      ? '副 API 只返回了思考，没有最终译文；原文保留，可补译。'
+      : '副 API 返回中没有任何可用译文。', {
       phase,
       requestedIds: segments.map(segment => segment.id),
       parserWarnings: recovered.warnings,
@@ -3119,8 +3152,22 @@ async function repairForbiddenPhrases(segments, translations, settings, signal, 
 }
 
 async function writeTranslation(snapshot, translationMap, epoch, settings, annotations = new Map(), scene = null) {
-  if (!runtime.initialized || runtime.epoch !== epoch) throw new Error('扩展已停用，旧翻译结果没有写回。');
-  const latest = await readMessageSnapshot(floorNow(snapshot), settings);
+  let latest;
+  for (;;) {
+    if (!runtime.initialized || runtime.epoch !== epoch) throw new Error('扩展已停用，旧翻译结果没有写回。');
+    const context = getContext();
+    if (getCurrentChatId(context) !== snapshot.chatId) throw swipeChangedError();
+    const id = floorNow(snapshot);
+    const candidate = context.chat[id];
+    const before = candidate?.mes;
+    latest = await readMessageSnapshot(id, settings);
+    if (!runtime.initialized || runtime.epoch !== epoch) throw new Error('扩展已停用，旧翻译结果没有写回。');
+    if (getCurrentChatId() !== snapshot.chatId || Number(candidate?.swipe_id ?? 0) !== snapshot.swipeId) throw swipeChangedError();
+    // Hashing yields to other extensions. If one inserted a block meanwhile, this layout is already
+    // stale: read again before writing, reusing the translations without another model request.
+    if (getContext().chat?.[floorNow(snapshot)] !== candidate || candidate.mes !== before) continue;
+    break;
+  }
   if (latest.chatId !== snapshot.chatId || latest.swipeId !== snapshot.swipeId) {
     throw swipeChangedError();
   }
@@ -3129,11 +3176,12 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
   let effectiveTranslations = translationMap;
   let runAnnotations = annotations instanceof Map ? annotations : new Map();
   if (latest.sourceHash !== snapshot.sourceHash) {
+    const matching = { stableOccurrences: latest.translationScope === 'dialogue' };
     // Salvage the paragraphs whose source text survived the edit instead of discarding the whole run.
-    effectiveTranslations = remapTranslationsBySource(snapshot.segments, translationMap, latest.segments);
+    effectiveTranslations = remapTranslationsBySource(snapshot.segments, translationMap, latest.segments, matching);
     if (!effectiveTranslations.size) throw sourceChangedError();
     // Their marks go with them, to the very same paragraphs.
-    const moved = matchSegmentsBySource(snapshot.segments, id => translationMap.has(id), latest.segments);
+    const moved = matchSegmentsBySource(snapshot.segments, id => translationMap.has(id), latest.segments, matching);
     runAnnotations = new Map([...moved].filter(([, before]) => runAnnotations.has(before)).map(([now, before]) => [now, runAnnotations.get(before)]));
     recordDiagnostic('warn', 'translation.resync', '正文在翻译期间变化，已保留仍然对得上的译文，其余段落留待补译。', {
       messageId: snapshot.messageId,
@@ -3156,8 +3204,8 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
   const effectiveAnnotations = new Map([...latest.existingAnnotations, ...runAnnotations]);
   for (const id of effectiveAnnotations.keys()) if (!effectiveTranslations.has(id)) effectiveAnnotations.delete(id);
   const styleFor = buildSegmentStyler(settings, effectiveAnnotations, buildChatMoveIndex(), effectiveTranslations);
-  const bilingual = rebuildTaggedRegions(latest.extraction, region => region.mode === 'replace'
-    ? assembleReplace(region.layout, effectiveTranslations, { allowMissing: !complete, styleFor })
+  const bilingual = !effectiveTranslations.size ? latest.source : rebuildTaggedRegions(latest.extraction, region => region.mode === 'replace'
+    ? assembleReplace(region.layout, effectiveTranslations, { ...settings, allowMissing: !complete, styleFor })
     : assembleBilingual(
       region.layout,
       effectiveTranslations,
@@ -3170,6 +3218,11 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
     // whatever the newest code knows: the two must agree, or the next read derives a different
     // segmentation than what this write is about to save under it.
     segmentation_version: latest.segmentationVersion,
+    translation_scope: latest.translationScope,
+    ...(latest.translationScope === 'dialogue' ? {
+      dialogue_quote_pairs: normalizeTts(settings.tts).quotePairs,
+      dialogue_skip_pairs: normalizeTts(settings.tts).skipPairs,
+    } : {}),
     app_version: APP_VERSION,
     source_hash: latest.sourceHash,
     swipe_id: snapshot.swipeId,
@@ -3198,7 +3251,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
   // metadata. A floor with gaps stays bilingual, so 补译 still has the original beside each gap. So does
   // a floor with swipes on a host that keeps no record per swipe: the mirror would have nowhere to live.
   const keepsSwipeRecord = !Array.isArray(message.swipes) || Boolean(message.swipe_info?.[snapshot.swipeId]);
-  const strip = settings.translationOnly === true && complete && keepsSwipeRecord;
+  const strip = settings.translationOnly === true && latest.translationScope !== 'dialogue' && complete && keepsSwipeRecord;
   if (settings.translationOnly === true && complete && !keepsSwipeRecord) {
     recordDiagnostic('warn', 'translation.only-skipped', `第 ${snapshot.messageId} 楼没有滑动页记录，放不下原文备份，这一楼照常写双语。`, { messageId: snapshot.messageId });
   }
@@ -3250,7 +3303,7 @@ async function writeTranslation(snapshot, translationMap, epoch, settings, annot
 }
 
 function divergedFloorError(messageId) {
-  const error = new Error(`第 ${messageId} 楼只留了译文，后来又被改过，镜译不再翻译它（会把译文当成原文）。要重新翻译，先在总控页点「恢复本聊天的原文」，这一楼的改动会丢。`);
+  const error = new Error(`第 ${messageId} 楼只留了译文，后来被改过。重译前请先恢复原文，楼层改动会丢失。`);
   error.code = 'JY_FLOOR_DIVERGED';
   return error;
 }
@@ -3272,7 +3325,11 @@ async function translateMessage(messageId = null, { force = false, quiet = false
     if (quiet) return { skipped: true, reason: 'diverged', snapshot };
     throw divergedFloorError(snapshot.messageId);
   }
-  if (!snapshot.segments.length) throw new Error('当前 AI 回复没有可翻译的正文段落。');
+  if (!snapshot.segments.length) {
+    if (snapshot.translationScope !== 'dialogue') throw new Error('当前 AI 回复没有可翻译的正文段落。');
+    if (!quiet) toast('info', '这一楼没有可翻译的完整对白，原文保留。');
+    return { skipped: true, reason: 'no-dialogue', snapshot };
+  }
   // Paragraphs asked for by themselves are re-requested whatever the floor's state.
   const supersede = force || Boolean(only);
   if (snapshot.translated && !supersede) return { skipped: true, reason: 'already-translated', snapshot };
@@ -3502,11 +3559,9 @@ async function streamOnce(payload, settings, signal, onDelta, onThinking, { limi
       throw new Error('副 API 没有返回 SSE 流，也无法按整包解析（可能是反代忽略了 stream 参数）。');
     }
     if (!text.trim()) {
-      // The whole-request path already unwraps a {content, reasoning} envelope and falls back to the
-      // reasoning field, which is where a model that overspent its budget on thinking leaves the only
-      // copy of its answer. Hand the parser the same shape instead of failing the batch outright.
+      // Preserve diagnostics; the translation parser must never promote this to an answer.
       if (reasoning.trim()) {
-        recordDiagnostic('warn', 'translation.stream-thinking-only', '副 API 本批只返回了思考内容，改按思考文本解析。', {
+        recordDiagnostic('warn', 'translation.stream-thinking-only', '副 API 本批只返回了思考，没有最终译文；原文保留，可补译。', {
           reasoningCharacters: reasoning.length,
           frames,
         });
@@ -3542,7 +3597,11 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     if (quiet) return { skipped: true, reason: 'diverged', snapshot };
     throw divergedFloorError(snapshot.messageId);
   }
-  if (!snapshot.segments.length) throw new Error('当前 AI 回复没有可翻译的正文段落。');
+  if (!snapshot.segments.length) {
+    if (snapshot.translationScope !== 'dialogue') throw new Error('当前 AI 回复没有可翻译的正文段落。');
+    if (!quiet) toast('info', '这一楼没有可翻译的完整对白，原文保留。');
+    return { skipped: true, reason: 'no-dialogue', snapshot };
+  }
   // Same gate as the whole-request path: without it a finished floor streams nothing and still
   // reports success, which reads as "流式写回没有生效".
   if (snapshot.translated && !force) return { skipped: true, reason: 'already-translated', snapshot };
@@ -3600,9 +3659,11 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     // One progressive write at a time. Overlapping runs each snapshot the floor before the other
     // has assigned, so a failing saveChat could roll the floor back over a newer write.
     let progressChain = Promise.resolve();
+    let progressWritten = false;
     const writeProgress = () => {
       progressChain = progressChain.catch(() => {}).then(async () => {
         if (controller.signal.aborted || runtime.epoch !== epoch) return;
+        if (!translations.size && !progressWritten) return;
         const latest = await readMessageSnapshot(floorNow(snapshot), settings).catch(() => null);
         // Floors before it deleted, another swipe shown, the chat reloaded with a floor put in: this is not
         // the text being translated any more, and the end-of-run write sorts out what still fits.
@@ -3611,9 +3672,18 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
         // keep theirs meanwhile, so a run stopped or failed halfway leaves no paragraph bare.
         const shown = force ? new Map([...snapshot.existingTranslations, ...translations]) : translations;
         const shownMarks = force ? new Map([...snapshot.existingAnnotations, ...annotations]) : annotations;
-        await writeTranslation(latest, shown, epoch, settings, shownMarks);
+        // Keep the original until the final write. An inserted excluded block after a progressive
+        // write must still be mergeable, even when all translations have already arrived.
+        await writeTranslation(latest, shown, epoch, { ...settings, translationOnly: false }, shownMarks);
+        progressWritten = true;
       });
       return progressChain;
+    };
+    const removeDiscardedProgress = async () => {
+      await progressChain.catch(() => {});
+      // Rebuild on the current floor, never restore an old message string over inserted content.
+      // No preview was saved: the empty-result path still does not touch the floor at all.
+      if (progressWritten) await writeProgress();
     };
     // Rewriting the floor is not free: every progressive write is a saveChat plus a MESSAGE_UPDATED
     // that other extensions listen to. The first updates stay quick so the floor visibly fills in,
@@ -3684,6 +3754,14 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
     const streamBatch = async (batch, batchIndex) => {
       const pending = batch.filter(segment => !translations.has(segment.id));
       if (!pending.length) return;
+      // Partial items belong to this batch only. At completion (or fallback), replace
+      // them with the validated final result; an empty result cannot leave stale items.
+      const discardPartial = () => {
+        for (const segment of pending) {
+          translations.delete(segment.id);
+          annotations.delete(segment.id);
+        }
+      };
       const phase = seeded ? 'repair' : 'primary';
       const hasLyrics = pending.some(segment => snapshot.lyricIds?.has(segment.id));
       const hasFragments = pending.some(segment => segment.fragments?.length);
@@ -3699,12 +3777,19 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
         raw = await streamTranslationBatch(messages, settings, controller.signal, foldStreamedItems(pending), reportThinking);
       } catch (error) {
         if (controller.signal.aborted || isAbortError(error)) throw error;
+        discardPartial();
         recordDiagnostic('warn', 'translation.stream-fallback', '流式请求中断，自动改用整包请求重试本批。', {
           batch: batchIndex + 1,
           segments: pending.length,
           error: safeError(error),
         });
-        const recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, knownMoves, hasLyrics, hasFragments, scene: true });
+        let recovered;
+        try {
+          recovered = await invokeTranslationBatch(pending, settings, controller.signal, packet, phase, { roster, styles, knownMoves, hasLyrics, hasFragments, scene: true });
+        } catch (error) {
+          await removeDiscardedProgress();
+          throw error;
+        }
         for (const [id, value] of recovered.translations) translations.set(id, value);
         for (const [id, mark] of recovered.annotations ?? []) annotations.set(id, mark);
         if (recovered.scene) scenes.push({ order: pending[0].id, scene: recovered.scene });
@@ -3720,9 +3805,10 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
         return;
       }
       const recovered = withoutUntranslated(recoverStructuredTranslations(raw, pending), pending, settings);
+      discardPartial();
       for (const [id, value] of recovered.translations) translations.set(id, value);
       for (const [id, mark] of recovered.annotations) annotations.set(id, mark);
-      const scene = phase === 'primary' ? recoverScene(raw) : null;
+      const scene = phase === 'primary' ? recoverScene(translationResponseContent(raw)) : null;
       if (scene) scenes.push({ order: pending[0].id, scene });
       // The streaming path never confirms an echo itself — one attempt per batch, no repair loop here
       // — but a segment it drops as a recognised echo is still worth remembering: the whole-request
@@ -3779,6 +3865,10 @@ async function translateMessageStreaming(messageId = null, { quiet = false, forc
       }
     }
 
+    if (!translations.size) {
+      await removeDiscardedProgress();
+      throw new Error('副 API 没有返回可用的最终译文；原文保留，请补译。');
+    }
     await repairForbiddenPhrases(snapshot.segments, translations, settings, controller.signal, packet);
     updateTask({ status: 'running', message: '正在写回楼层…', progress: 95 });
     await progressChain.catch(() => {});
@@ -3993,7 +4083,7 @@ async function clearFloorTranslation(messageId = null, { ask = () => true } = {}
   const lockKey = `${chatId}|${id}|${swipeId}`;
   if (runtime.inflight.has(lockKey)) throw new Error('这一楼正在翻译，等它写完再清除译文。');
   if (snapshot.diverged) {
-    throw new Error(`第 ${id} 楼只留了译文，后来又被改过，镜译认不出它的翻译记录，没法清除；要清除请先在总控页点「恢复本聊天的原文」。`);
+    throw new Error(`第 ${id} 楼只留了译文，后来被改过。清除前请先恢复原文。`);
   }
   const floor = readFloor(message);
   const metadata = floor.metadata ?? message.extra?.[MESSAGE_META_KEY];
@@ -4201,8 +4291,16 @@ const TTS_RANGE_LABELS = Object.freeze({ all: '旁白 + 对白', dialogue: '只�
 const TTS_MODE_LABELS = Object.freeze({ off: '不分析', deep: '分析模式' });
 const TTS_INLINE_WRAPPERS = new Set(['Q', 'EM', 'STRONG', 'I', 'B', 'U', 'S', 'SPAN', 'FONT', 'SMALL', 'MARK', 'DEL', 'INS', 'SUB', 'SUP', 'CITE']);
 
+const FISH_WEB_STREAM_REASON = 'Fish 网页订阅用于常规朗读。边写边读和通话可在「朗读 → 更多 → 实时通话」另选声音来源。';
+const fishWebSelectedForStream = tts => tts.provider === 'fish-web' && tts.streamVoice === 'fish';
+
 function ttsSettings(settings = runtime.settings) {
-  return normalizeTts(settings?.tts);
+  let tts = normalizeTts(settings?.tts);
+  if (tts.provider === 'fish-web') {
+    tts = { ...tts, autoRead: false, autoGenerate: false, readWhileWriting: !fishWebSelectedForStream(tts) && tts.readWhileWriting };
+  }
+  if (settings?.translationScope === 'dialogue') return { ...tts, side: 'translation', range: 'dialogue', readWhileWriting: false };
+  return tts;
 }
 
 function ttsStore() {
@@ -4246,7 +4344,7 @@ function ttsVoicesOwned(settings = runtime.settings) {
 function ttsVoiceConfig(settings = runtime.settings) {
   const tts = ttsSettings(settings);
   const config = { voices: ttsVoicesFor(settings), narratorVoice: tts.narratorVoice, narratorVoices: tts.narratorVoices, dialogueVoice: tts.dialogueVoice, dialogueFallback: tts.dialogueFallback };
-  return tts.provider === 'fish' ? withoutGsvOnlyVoices(config) : config;
+  return tts.provider === 'gsv' ? config : withoutGsvOnlyVoices(config);
 }
 
 /**
@@ -4338,12 +4436,16 @@ function ttsProviderFor(settings = runtime.settings) {
 
 /** The provider's name, for the lines the reader sees. */
 function ttsProviderName(tts) {
-  return tts?.provider === 'gsv' ? 'GPT-SoVITS' : 'Fish';
+  return tts?.provider === 'fish' || !tts?.provider ? 'Fish' : ttsProvider(tts.provider).label;
 }
 
 /** What must be set before anything is asked of the provider: Fish's key; GPT-SoVITS needs none. */
 function requireTtsReady(tts) {
-  if (tts.provider !== 'gsv') requireFishKey(tts);
+  if (tts.provider === 'fish') requireFishKey(tts);
+  if (tts.provider === 'fish-web') {
+    const reason = fishWebReadyReason(tts.fishWeb);
+    if (reason) throw new Error(reason);
+  }
 }
 
 /**
@@ -4352,7 +4454,7 @@ function requireTtsReady(tts) {
  * first one up.
  */
 function ttsLanes(tts) {
-  return tts.provider === 'gsv' ? 1 : Math.max(1, Number(tts.fish.concurrency) || 1);
+  return tts.provider === 'fish' ? Math.max(1, Number(tts.fish.concurrency) || 1) : 1;
 }
 
 /**
@@ -4361,11 +4463,13 @@ function ttsLanes(tts) {
  * paragraph at a time there, the first one playing while the rest are made.
  */
 function ttsRequestUnit(tts) {
+  if (tts?.provider === 'fish-web') return 'sentence';
   return tts?.provider === 'gsv' && tts.requestUnit === 'floor' ? 'line' : tts?.requestUnit;
 }
 
 /** What a part the browser could not play is said as: mp3 helps Fish; GPT-SoVITS only makes wav. */
 function ttsPlaybackFailure(tts) {
+  if (tts?.provider === 'fish-web') return '音频播放失败，可在 Fish 管理里试听。';
   return tts?.provider === 'gsv'
     ? '浏览器播放这段音频失败。点这一句的「重新生成」，让 GPT-SoVITS 再做一次。'
     : '浏览器播放这段音频失败。换成 mp3 格式通常能解决。';
@@ -4373,12 +4477,14 @@ function ttsPlaybackFailure(tts) {
 
 /** The format recordings are made in: what Fish was asked for, or GPT-SoVITS's wav. */
 function ttsAudioFormat(tts) {
-  return tts?.provider === 'gsv' ? 'wav' : tts.fish.format;
+  return tts?.provider === 'fish' ? tts.fish.format : 'wav';
 }
 
 function ttsUtterances(floor, settings = runtime.settings) {
   const tts = ttsSettings(settings);
-  return splitUtterances(floor.lines, { quotePairs: tts.quotePairs, skipPairs: tts.skipPairs });
+  const utterances = splitUtterances(floor.lines, { quotePairs: tts.quotePairs, skipPairs: tts.skipPairs });
+  // The segment itself already proves it is dialogue, including when the translator omitted quotes.
+  return floor.dialogueOnly ? utterances.map(item => ({ ...item, kind: 'quoted' })) : utterances;
 }
 
 /**
@@ -4469,11 +4575,13 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
   let speechSource = null;
   // The original of a floor with only its translation left in it is read, but not on the page.
   let offPage = false;
+  let dialogueOnly = false;
   // The original is readable on any floor whose body tags extract, translated or not; the translation
   // only on a floor this extension wrote, or through the literal source tags below.
   if (side === 'source' || side === 'dialogue_source' || message.extra?.[MESSAGE_META_KEY]) {
     try {
-      const snapshot = await readMessageSnapshot(id, settings, { quiet: true });
+      const snapshot = await readMessageSnapshot(id, side === 'source' ? { ...settings, translationScope: 'all' } : settings, { quiet: true, storedScope: side !== 'source' });
+      dialogueOnly = side !== 'source' && snapshot.translationScope === 'dialogue';
       annotations = canonicalAnnotations(settings, snapshot.existingAnnotations);
       complete = snapshot.translated === true;
       // A line the story marked with <say> is read off its marks: the words as every line is cleaned,
@@ -4562,7 +4670,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
       lines = [];
     }
   }
-  if (!lines.length && side === 'translation') {
+  if (!lines.length && side === 'translation' && !dialogueOnly && settings.translationScope !== 'dialogue') {
     lines = linesFromTaggedText(floorText(message), ttsSettings(settings).sourceTags, { excludedTags: settings.excludedTags });
     source = 'tags';
   }
@@ -4576,6 +4684,7 @@ async function collectTtsFloor(messageId, settings = runtime.settings, sideOverr
     floorId: `${chatId}|${id}|${swipeId}|${side}`,
     version: await hashText(JSON.stringify(lines.map(line => line.text))),
     lines,
+    ...(dialogueOnly ? { dialogueOnly: true } : {}),
     annotations,
     references: references?.size ? references : null,
     // The original of each translated line, for the details page of a bilingual reader.
@@ -5346,8 +5455,12 @@ async function regenerateTtsParagraph(messageId, lineId, side = null, lines = [l
   const { floor, settings } = prepared;
   setTtsLineState(messageId, lineId, 'busy', floor.side);
   try {
+    const tts = ttsSettings(settings);
     for (const [id, items] of groups) {
-      await ensureTtsRecording(floor, `line:${id}`, items, settings, text => setTtsStatus(messageId, text, 'busy'), (step, patch) => ttsStep(floor, step, patch));
+      const units = tts.provider === 'fish-web' ? ttsUnitsOf(tts, items) : [{ unit: `line:${id}`, items }];
+      for (const target of units) {
+        await ensureTtsRecording(floor, target.unit, target.items, settings, text => setTtsStatus(messageId, text, 'busy'), (step, patch) => ttsStep(floor, step, patch));
+      }
     }
   } finally {
     setTtsLineState(messageId, lineId, null, floor.side);
@@ -5375,8 +5488,9 @@ async function dropTtsRecordings(prepared, items, { paragraph = true } = {}) {
     units.add(`sentence:${item.segment.id}`);
   }
   const keys = new Set();
+  const web = ttsSettings(prepared.settings).provider === 'fish-web';
   for (const record of await ttsRecordings(prepared.floor)) {
-    if (units.has(record.unit)) keys.add(record.key);
+    if (units.has(record.unit) && web === (record.provider === 'fish-web')) keys.add(record.key);
   }
   if (!keys.size) return 0;
   for (const key of keys) {
@@ -5521,6 +5635,7 @@ async function fishRequestOnce(path, fish, { method = 'POST', body, signal } = {
 
 /** The key what is read while written needs, asked for before anything is sent. */
 function requireStreamKey(tts) {
+  if (fishWebSelectedForStream(tts)) throw new Error(FISH_WEB_STREAM_REASON);
   // GPT-SoVITS runs on the reader's own machine and takes no key.
   if (tts.streamVoice === 'gsv') return;
   if (tts.streamVoice === 'fish') {
@@ -5775,6 +5890,28 @@ async function gsvSynthesize(payload, gsv, signal, { onAttempt = null } = {}) {
   throw failure;
 }
 
+// The companion owns submission and account rotation. A failed response may already have used quota.
+async function fishWebSynthesize(body, config, signal) {
+  try {
+    return await withTtsTimeout(signal, 240, async requestSignal => {
+      const headers = fishWebUsesManaged(config) ? requestHeaders() : undefined;
+      const response = await fishWebRequest(config, '/v1/audio/speech', { body, signal: requestSignal, headers });
+      const raw = await response.arrayBuffer().catch(error => {
+        if (requestSignal.aborted) throw error;
+        throw new Error(`本机 Fish 的音频接收中断。${FISH_WEB_TASK_CHECK}`);
+      });
+      requestSignal.throwIfAborted();
+      const bytes = new Uint8Array(raw);
+      const info = wavInfo(bytes);
+      if (!info?.bytes) throw new Error(`本机 Fish 没有返回可播放的 WAV。${FISH_WEB_TASK_CHECK}`);
+      return { bytes, duration: info.duration };
+    }, { label: 'Fish 网页订阅' });
+  } catch (error) {
+    if (error.retryable && !signal?.aborted) throw new Error(`${error.message}${FISH_WEB_TASK_CHECK}`);
+    throw error;
+  }
+}
+
 // GPT-SoVITS's own stream (api_v2 streaming_mode): its third mode answers soonest — about a second to the
 // first sound on a laptop GPU — at a little less quality than a whole take. The first half second of each
 // sentence is held back, so a model that starts slowly does not stutter.
@@ -5894,6 +6031,39 @@ async function makeGsvRecording({ floor, unit, items, settings, tts, provider, s
   return made;
 }
 
+async function makeFishWebRecording({ floor, items, tts, provider, signal, onStatus, onStep, stepId, label, unit }) {
+  const parts = provider.parts(items);
+  const made = [];
+  for (const part of parts) {
+    signal?.throwIfAborted();
+    const detail = `${made.length}/${parts.length} 句已完成`;
+    onStep?.(stepId, { state: 'active', label: ttsUnitLabel(unit), detail });
+    onStatus?.(`Fish 网页订阅正在生成${label}（${detail}）…`);
+    const { body } = provider.payload(part, tts);
+    let result;
+    try {
+      if (body.input) {
+        ttsFishTally(floor).requests += 1;
+        result = await fishWebSynthesize(body, tts.fishWeb, signal);
+      } else {
+        result = { bytes: encodeWav([new Float32Array(9600)], 32000), duration: 0.3 };
+      }
+    } catch (error) {
+      if (!isAbortError(error) && !signal?.aborted) {
+        ttsFishTally(floor).failed += 1;
+        onStep?.(stepId, { state: 'error', detail: safeError(error) });
+      }
+      throw error;
+    }
+    const { duration } = result;
+    made.push({
+      part, duration, blob: new Blob([result.bytes], { type: provider.mime() }),
+      aligned: [{ id: part[0].segment.id, start: 0, end: duration, coverage: 1 }],
+    });
+  }
+  return made;
+}
+
 /** A finished recording, kept: its parts in order and every sentence's place in them. */
 async function storeTtsRecording(floor, { key, unit, items, fingerprintId, made, provider = 'fish' }) {
   const storedParts = [];
@@ -5930,10 +6100,35 @@ function reportTtsFish(floor) {
   }, '', { floor: floor.messageId });
 }
 
+let managedFishVoiceKey = '';
+let managedFishSettingsAt = 0;
+let managedFishSettingsRequest;
+
+function rememberManagedFishSettings({ backend, defaultVoice }) {
+  managedFishSettingsAt = Date.now();
+  managedFishVoiceKey = JSON.stringify([backend, defaultVoice]);
+}
+
+async function managedFishFingerprint() {
+  if (!managedFishSettingsRequest && Date.now() - managedFishSettingsAt >= 4000) {
+    const last = managedFishSettingsAt = Date.now();
+    managedFishSettingsRequest = fishManagedRequest('/settings', { headers: requestHeaders(), signal: AbortSignal.timeout(1200) })
+      .then(response => response.json())
+      .then(settings => { if (last === managedFishSettingsAt) rememberManagedFishSettings(settings); })
+      .catch(() => {})
+      .finally(() => { managedFishSettingsRequest = undefined; });
+  }
+  await managedFishSettingsRequest;
+  return 'managed:' + managedFishVoiceKey;
+}
+
 // Everything that changes the sound, hashed once per distinct settings.
 async function ttsFingerprint(settings = runtime.settings) {
   const tts = ttsSettings(settings);
-  const fingerprint = ttsProviderFor(settings).fingerprint(tts, { consoles: consoleFingerprint(settings) });
+  const options = { consoles: consoleFingerprint(settings) };
+  if (tts.provider === 'fish-web') options.origin = fishWebUsesManaged(tts.fishWeb)
+    ? await managedFishFingerprint() : fishWebOrigin(tts.fishWeb.baseUrl);
+  const fingerprint = ttsProviderFor(settings).fingerprint(tts, options);
   const json = JSON.stringify(fingerprint);
   if (runtime.tts.fingerprint?.json !== json) runtime.tts.fingerprint = { json, fingerprint, key: await fingerprintKey(fingerprint) };
   return runtime.tts.fingerprint;
@@ -6066,7 +6261,8 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
   if (!items.length) throw new Error('这一段没有可朗读的句子。');
   const stepId = `record:${unit}`;
   const { fingerprint, key: fingerprintId } = await ttsFingerprint(settings);
-  const key = await recordingCacheKey({ floorId: floor.floorId, version: floor.version, unit, maxChars: tts.fish.maxChars, items, fingerprint });
+  const maxChars = tts.provider === 'fish-web' ? 0 : tts.fish.maxChars;
+  const key = await recordingCacheKey({ floorId: floor.floorId, version: floor.version, unit, maxChars, items, fingerprint });
   const cached = await ttsStore().getAudio(key);
   // The same words under the same labels make the same key, so a reading asked for again that came
   // out word for word the same would find the take made before it. That take predates the reading
@@ -6084,8 +6280,9 @@ async function ensureTtsRecording(floor, unit, items, settings, onStatus = null,
   const record = await dedupeTtsJob(key, floor.messageId, async (signal, notify) => {
     const provider = ttsProviderFor(settings);
     const label = unit.startsWith('line:') ? '这一段' : unit.startsWith('sentence:') ? '这一句' : unit.startsWith('chunk:') ? `第 ${unit.slice(6)} 批` : '整楼';
-    if (provider.id === 'gsv') {
-      const made = await makeGsvRecording({ floor, unit, items, settings, tts, provider, signal, onStatus, onStep, stepId, label });
+    if (provider.id === 'gsv' || provider.id === 'fish-web') {
+      const makeRecording = provider.id === 'fish-web' ? makeFishWebRecording : makeGsvRecording;
+      const made = await makeRecording({ floor, unit, items, settings, tts, provider, signal, onStatus, onStep, stepId, label });
       const stored = await storeTtsRecording(floor, { key, unit, items, fingerprintId, made, provider: provider.id });
       onStep?.(stepId, { state: 'done', detail: `${items.length} 句 · ${made.reduce((sum, part) => sum + (Number(part.duration) || 0), 0).toFixed(1)} 秒` });
       notifyTtsPanels();
@@ -6304,7 +6501,8 @@ function ttsUnitsOf(tts, items) {
  * and cheap when nothing has changed.
  */
 function scheduleTtsAhead(transport) {
-  if (transport.single || transport.paragraph) return;
+  // A failed prefetch would otherwise be submitted again as soon as the reader reaches that sentence.
+  if (transport.single || transport.paragraph || ttsSettings(transport.settings).provider === 'fish-web') return;
   const key = `${transport.items.length}|${transport.index}`;
   if (transport.aheadKey === key) return;
   transport.aheadKey = key;
@@ -7341,7 +7539,9 @@ async function runTtsTransport(transport) {
       // Read off the transport, not the list this turn started with: a batch that arrived meanwhile is in it.
       // Not while the floor is still arriving: the request making it is making the next one too.
       const next = transport.items[lastOffset + 1];
-      if (next && !transport.single && !entry.live) void resolveTtsEntry(floor, transport.items, next, settings, null, null, unitOf(next)).catch(() => {});
+      if (next && !transport.single && !entry.live && ttsSettings(settings).provider !== 'fish-web') {
+        void resolveTtsEntry(floor, transport.items, next, settings, null, null, unitOf(next)).catch(() => {});
+      }
       setTransport(transport, { state: 'playing', message: '' });
       highlightTtsUtterance(transport.messageId, item.segment.id, transport.side);
       let beat = -1;
@@ -8410,7 +8610,7 @@ async function autoReadTtsFloor(messageId, side) {
   const current = runtime.tts.transport;
   const release = () => runtime.tts.autoRead.delete(key);
   if (current && ['loading', 'playing', 'paused'].includes(current.state)) {
-    toast('info', `第 ${messageId} 楼的新回复可以听了：正在读的这一楼读完后，点「朗读」或者悬浮窗的播放键。`);
+    toast('info', `第 ${messageId} 楼可朗读。`);
     return;
   }
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
@@ -9799,6 +9999,21 @@ async function testFishConnection(settings = runtime.settings) {
   return { credit: Number.isFinite(credit) ? credit : null, freeCredit: data?.has_free_credit === true };
 }
 
+function testFishWebConnection(settings = runtime.settings) {
+  const config = ttsSettings(settings).fishWeb;
+  return withTtsTimeout(undefined, 10, signal => probeFishWeb(config, signal,
+    fishWebUsesManaged(config) ? requestHeaders() : undefined), { label: 'Fish 网页订阅' });
+}
+
+async function auditionFishWeb(settings = runtime.settings) {
+  const tts = ttsSettings(settings);
+  const result = await fishWebSynthesize({
+    input: '你好，这是镜译的试听。',
+    model: 'tts-1', voice: 'default', response_format: 'wav', speed: 1,
+  }, tts.fishWeb);
+  await playAuditionBlob(new Blob([result.bytes], { type: 'audio/wav' }));
+}
+
 // What 「试听」 and 「测试连接」 have a voice say, in the language it is for.
 const GSV_SAMPLE_LINES = Object.freeze({
   zh: '你好，这是镜译的试听。今天也请多多关照。',
@@ -9867,11 +10082,27 @@ async function testGsvConnection(settings = runtime.settings) {
   return { version, sampled: true, seconds: result.duration };
 }
 
-async function lookupFishVoiceTitle(voiceId, settings = runtime.settings) {
+async function fetchFishVoiceModel(voiceId, settings) {
   const tts = ttsSettings(settings);
   const response = await withTtsTimeout(undefined, 30, signal => fishRequest(`/model/${encodeURIComponent(voiceId)}`, tts.fish, { method: 'GET', signal }));
-  const data = await response.json().catch(() => null);
+  return response.json().catch(() => null);
+}
+
+async function lookupFishVoiceTitle(voiceId, settings = runtime.settings) {
+  const data = await fetchFishVoiceModel(voiceId, settings);
   return String(data?.title ?? '').trim();
+}
+
+async function lookupWorkshopFishVoice(voiceId) {
+  const data = await fetchFishVoiceModel(voiceId, runtime.settings);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Fish 没有返回这个音色的信息。');
+  const author = typeof data.author === 'string' ? data.author : (data.author?.nickname ?? data.author?.name ?? '');
+  return {
+    title: String(data.title ?? '').trim(),
+    author: String(author).trim(),
+    visibility: String(data.visibility ?? '').trim().toLowerCase(),
+    languages: Array.isArray(data.languages) ? data.languages.map(String) : [],
+  };
 }
 
 // Where a shadow host of ours sits: the whole viewport, sized by the viewport, and the box its fixed
@@ -10288,7 +10519,7 @@ function renderStandardPromptItems(root, profile) {
       appendLabeledControl(doc, editor, '身份', roleSelect);
       const note = doc.createElement('p');
       note.className = 'jy-muted';
-      note.textContent = '留空时不发送；填写后作为最后一条消息附在全部条目之后，身份可选，附在请求最末尾。';
+      note.textContent = '附在请求末尾。';
       editor.appendChild(note);
       appendLabeledControl(doc, editor, '内容', makePromptTextarea(doc, 'postscript', profile.postscript, 4, '留空即不发送'));
     },
@@ -10665,8 +10896,8 @@ const PRESET_DESCRIPTIONS = Object.freeze({
 // The one-line note under 翻译台的「分析模式」 switch — shorter than 朗读页 data-jy-tts-mode-help's own
 // paragraph (updateTtsModeHelp).
 const DESK_TTS_MODE_HELP = Object.freeze({
-  off: '关着：不额外请求副模型，翻译过的楼用翻译时标好的说话人和情绪，其余由程序认人。',
-  deep: '开着：每楼写完让副模型分析一遍，定情绪起伏和表演。',
+  off: '沿用现有标注，按需分析。',
+  deep: '每楼额外请求一次副模型。',
 });
 
 /** DESIGN §15.2 套餐：2×2 的 .jy-connection-choice 可点卡片，一个套餐一张。 */
@@ -10830,7 +11061,7 @@ function syncDeskFields(root, settings, { rebuildList = true } = {}) {
 
   const tts = ttsSettings(settings);
   // A reader on GPT-SoVITS needs no Fish key, so nothing is missing from this card for them.
-  const fishMissing = tts.enabled && tts.provider !== 'gsv' && !tts.fish.key.trim();
+  const fishMissing = tts.enabled && (tts.provider === 'fish-web' ? Boolean(fishWebReadyReason(tts.fishWeb)) : tts.provider === 'fish' && !tts.fish.key);
   const missingPill = root.querySelector('[data-jy-desk-fish-missing]');
   if (missingPill) missingPill.hidden = !fishMissing;
   const needNote = root.querySelector('[data-jy-desk-fish-need]');
@@ -11120,6 +11351,8 @@ function syncFields(root, settings) {
   if (modelSearch) modelSearch.value = '';
 
   for (const [name, value] of Object.entries(settings)) setField(root, name, value);
+  for (const control of root.querySelectorAll('[data-jy-field="translationOnly"]')) control.disabled = settings.translationScope === 'dialogue';
+  for (const note of root.querySelectorAll('[data-jy-dialogue-note]')) note.hidden = settings.translationScope !== 'dialogue';
   syncChannelFields(root, settings);
   renderWorldInfoList(root);
   syncPromptFields(root, settings);
@@ -11167,7 +11400,7 @@ function collectSettings(root) {
     const element = root.querySelector(`[data-jy-field="${name}"]`);
     if (element) current[name] = element.checked;
   }
-  for (const name of ['segmentPrefix', 'segmentSuffix', 'translationPrefix', 'translationSuffix', 'preserveLineRules', 'lyricLineRules', 'floatingStyle', 'floorButtons']) {
+  for (const name of ['translationScope', 'segmentPrefix', 'segmentSuffix', 'translationPrefix', 'translationSuffix', 'preserveLineRules', 'lyricLineRules', 'floatingStyle', 'floorButtons']) {
     const element = root.querySelector(`[data-jy-field="${name}"]`);
     if (element) current[name] = element.value;
   }
@@ -11189,7 +11422,7 @@ function collectSettings(root) {
   if (bodyStartMarkers) current.bodyStartMarkers = parseStartMarkers(bodyStartMarkers.value);
   if (excludedTags) {
     const parsed = parseTagNamesWithErrors(excludedTags.value);
-    if (parsed.invalid.length) throw new Error(`无法识别排除标签：${parsed.invalid.join('、')}。这里只填标签名称或完整尖括号标签；图片、固定写法这类不是标签的内容，填到下面的「原样保留白名单」。`);
+    if (parsed.invalid.length) throw new Error(`无法识别排除标签：${parsed.invalid.join('、')}。请填写标签名。`);
     current.excludedTags = parsed.tags;
   }
   const preserveRules = parsePreserveLineRulesWithErrors(current.preserveLineRules);
@@ -11385,7 +11618,7 @@ function renderBandReport(root, settings = runtime.settings) {
   if (!band) {
     const note = doc.createElement('p');
     note.className = 'jy-muted';
-    note.textContent = '还没有读取过主题。着色需要知道文字后面到底是什么颜色，否则在深色主题上算出来的颜色到浅色主题就看不清了。';
+    note.textContent = '请先读取当前主题。';
     target.appendChild(note);
     return;
   }
@@ -11462,7 +11695,7 @@ function renderMoveTable(root, settings = runtime.settings) {
   if (!moves.length) {
     const note = doc.createElement('p');
     note.className = 'jy-muted';
-    note.textContent = '这个聊天还没有招式。开着特效字翻译过的楼层里出现招式后，这里会列出来。';
+    note.textContent = '本聊天暂无招式。';
     list.appendChild(note);
   }
   for (const move of moves) list.appendChild(moveRowElement(doc, move, overrides.get(move.name)));
@@ -11719,7 +11952,7 @@ function renderSpeakerReport(root, settings = runtime.settings, force = false) {
     target.appendChild(tools);
     const hint = doc.createElement('p');
     hint.className = 'jy-muted';
-    hint.textContent = '加进名单后可以填上真实发色或瞳色，颜色会从自动取色换成按发色取色；不填就沿用现在这个。';
+    hint.textContent = '留空时自动取色。';
     target.appendChild(hint);
   }
 }
@@ -12016,7 +12249,7 @@ function marksFoldElement(doc, marks) {
   fold.appendChild(summary);
   const hint = doc.createElement('p');
   hint.className = 'jy-muted';
-  hint.textContent = '正文里出现左边的标点时，发给 Fish 的文本里加上右边的标签。「原位替换」把标点换成标签，适合停顿、叹气这类声音；「放在句首」把标签放到这个标点结尾的那句话前面，适合情绪、音量。发出去的是 Fish 官方认得的英文标签。不开分析模式时生效。';
+  hint.textContent = '将标点映射为 Fish 标签。仅在分析模式关闭时生效。';
   fold.appendChild(hint);
   const list = doc.createElement('div');
   list.className = 'jy-tts-marks';
@@ -12189,7 +12422,6 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   lock.dataset.locked = String(own);
   lock.dataset.muted = String(muted);
   lock.textContent = muted ? '🔇 不朗读' : own ? '🔒 专属音色' : '跟随默认音色';
-  lock.title = muted ? '这个角色的对白不会朗读，也不会生成音频。' : own ? '已绑定专属音色，改默认音色不影响这个角色。' : '没有专属音色，读的时候用对白默认音色；填上 Voice ID 就会锁定。';
   // Not a voice setting but a casting one: whether this character is heard at all.
   const silence = doc.createElement('label');
   silence.className = 'jy-tts-voice-mute';
@@ -12199,7 +12431,6 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   silenceBox.checked = muted;
   const silenceText = doc.createElement('span');
   silenceText.textContent = '不朗读这个角色的对白';
-  silence.title = '勾上以后，这个角色说的每一句都跳过：不请求、不生成音频、正文里也不给按钮。';
   silence.append(silenceBox, silenceText);
   const tools = doc.createElement('span');
   tools.className = 'jy-tts-voice-tools';
@@ -12208,7 +12439,6 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   addLang.className = 'jy-button jy-tts-lang-button';
   addLang.dataset.jyAction = 'tts-add-lang';
   addLang.textContent = '＋ 多国语言音色';
-  addLang.title = '同一个角色读别的语言时用别的音色：中文一个、日语一个、美式英语一个……';
   const unbind = doc.createElement('button');
   unbind.type = 'button';
   unbind.className = 'jy-text-button';
@@ -12225,7 +12455,7 @@ function ttsVoiceRowElement(doc, voice, settings = runtime.settings, { open = fa
   addMood.className = 'jy-button jy-tts-lang-button';
   addMood.dataset.jyAction = 'tts-add-mood';
   addMood.textContent = '＋ 情绪音色';
-  addMood.title = '同一个声优分别克隆的几种声音（耳语、怒吼、唱歌……）：按分析模式的结果，耳语、笑、张力高或某种基调的句子换成另一个 Voice ID，要开分析模式才会换；「唱」是你在悬浮窗里设成唱的句子，不用开分析模式。';
+  addMood.title = '情绪换声需要开启分析模式。';
   tools.append(addLang, addMood, unbind, remove);
   const langs = doc.createElement('div');
   langs.className = 'jy-tts-lang-list';
@@ -12317,7 +12547,7 @@ function renderTtsVoiceList(root, settings = runtime.settings) {
   if (!voices.length) {
     const note = doc.createElement('p');
     note.className = 'jy-muted';
-    note.textContent = '还没有登记角色。没登记的角色用对白默认音色读，不会不读。可以从角色卡和世界书一键识别角色。';
+    note.textContent = '暂无角色音色。';
     list.appendChild(note);
     return;
   }
@@ -12530,11 +12760,31 @@ function renderTtsLibrary(root, settings = runtime.settings) {
   if (!library.length) {
     const note = doc.createElement('p');
     note.className = 'jy-muted';
-    note.textContent = '音色库是空的。把常用的 Voice ID 起个名字存进来，之后给角色、旁白选音色就不用再翻 ID。';
+    note.textContent = '音色库为空。';
     list.appendChild(note);
     return;
   }
   for (const voice of library) list.appendChild(ttsLibraryRowElement(doc, voice, { open: open.has(voice.id) }));
+}
+
+function addWorkshopVoiceToLibrary(root, entry) {
+  const library = normalizeVoiceLibrary(runtime.settings.voiceLibrary);
+  const id = `voice-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const [voice] = normalizeVoiceLibrary([{ ...entry, id }]);
+  if (!voice) throw new Error('这个 Fish 音色 ID 存不进音色库。');
+  if (library.some(item => item.voiceId.toLowerCase() === voice.voiceId.toLowerCase())) return { added: false };
+  const voiceLibrary = normalizeVoiceLibrary([...library, voice]);
+  if (voiceLibrary.at(-1)?.id !== voice.id) throw new Error('音色库已满，请先移除一个音色。');
+  saveSettings({ ...runtime.settings, voiceLibrary });
+
+  // Append so an unfinished row in the existing library stays where the reader left it.
+  const list = root.querySelector('[data-jy-tts-library]');
+  if (list?.querySelector('[data-jy-tts-library-row]')) list.appendChild(ttsLibraryRowElement(list.ownerDocument, voice));
+  else renderTtsLibrary(root);
+  syncTtsPickers(root, runtime.settings, { all: true });
+  syncKnownVoices(root);
+  syncTtsFoldSummaries(root);
+  return { added: true };
 }
 
 function renderNarratorLanguages(root, settings = runtime.settings) {
@@ -12546,10 +12796,10 @@ function renderNarratorLanguages(root, settings = runtime.settings) {
   for (const [lang, id] of Object.entries(tts.narratorVoices)) list.appendChild(ttsLanguageRowElement(doc, lang, id, settings));
 }
 
-// Fills the pickers next to the narrator and dialogue fields, which are typed in the markup.
-function syncTtsPickers(root, settings = runtime.settings) {
+// Other pickers are made with their rows. Refresh those too when the library changes without a redraw.
+function syncTtsPickers(root, settings = runtime.settings, { all = false } = {}) {
   const doc = root.ownerDocument;
-  for (const scope of root.querySelectorAll('[data-jy-tts-page-pick]')) {
+  for (const scope of root.querySelectorAll(all ? '[data-jy-tts-pick-scope]' : '[data-jy-tts-page-pick]')) {
     scope.querySelector('[data-jy-tts-pick]')?.remove();
     scope.appendChild(ttsLibraryPicker(doc, settings));
   }
@@ -12562,13 +12812,13 @@ function updateTtsProxyHelp(root) {
   if (!help) return;
   if (detectTtsHost() === 'tauritavern') {
     if (proxy) proxy.disabled = true;
-    help.textContent = '你在 TauriTavern 里：它没有酒馆那条 CORS 代理，这个开关不起作用，请求会直接发出去。api.fish.audio 不让网页直接访问，所以「接口地址」要填一个自己的、带跨域头的转发地址（使用手册第六节有现成的 Cloudflare Worker 脚本），或者等 TauriTavern 加上通用代理。Key 只发给你填的那个地址。';
+    help.textContent = 'TauriTavern 请填写支持跨域的 Fish 转发地址。';
     return;
   }
   if (proxy) proxy.disabled = false;
   help.textContent = proxy?.checked !== false
-    ? 'api.fish.audio 不允许浏览器直接访问，请求要经酒馆服务端转发。第一次用之前，在酒馆目录的 config.yaml 里把 enableCorsProxy 改成 true，然后重启酒馆。Key 只发给你自己的酒馆和 Fish。'
-    : '直连只适合允许跨域访问的中转地址或本地 fish-speech 服务。填官方地址直连会被浏览器拦下。';
+    ? '首次使用请开启酒馆的 enableCorsProxy，并重启酒馆。'
+    : '直连需要支持跨域的地址。';
 }
 
 // The same line for GPT-SoVITS, which sends no CORS headers either.
@@ -12578,13 +12828,13 @@ function updateGsvProxyHelp(root) {
   if (!help) return;
   if (detectTtsHost() === 'tauritavern') {
     if (proxy) proxy.disabled = true;
-    help.textContent = '你在 TauriTavern 里：它没有酒馆那条 CORS 代理，这个开关不起作用，请求会直接发出去。GPT-SoVITS 自己不带跨域头，「接口地址」要填一个带跨域头的转发地址。';
+    help.textContent = 'TauriTavern 请填写支持跨域的 GPT-SoVITS 转发地址。';
     return;
   }
   if (proxy) proxy.disabled = false;
   help.textContent = proxy?.checked !== false
-    ? 'GPT-SoVITS 不带跨域头，请求经酒馆服务端转发，和 Fish 一样要在酒馆目录的 config.yaml 里把 enableCorsProxy 改成 true（已经为 Fish 改过就不用再改）。'
-    : '直连只适合你自己给 GPT-SoVITS 加了跨域头，或者填的是带跨域头的转发地址；否则会被浏览器拦下。';
+    ? '首次使用请开启酒馆的 enableCorsProxy，并重启酒馆。'
+    : '直连需要支持跨域的地址。';
 }
 
 function formatBytes(bytes) {
@@ -12631,6 +12881,16 @@ function syncTtsFields(root, settings = runtime.settings, { renderLists = true }
   for (const row of root.querySelectorAll('[data-jy-dependent="ttsIntimate"]')) row.dataset.jyDependentOff = String(tts.mode !== 'deep');
   for (const element of root.querySelectorAll('[data-jy-tts-field]')) {
     const key = element.dataset.jyTtsField;
+    if (['side', 'range', 'readWhileWriting'].includes(key)) {
+      const dialogue = settings.translationScope === 'dialogue';
+      const unavailable = key === 'readWhileWriting' && fishWebSelectedForStream(tts);
+      element.disabled = dialogue || unavailable;
+      element.title = dialogue ? '只翻译对白模式：只朗读对白译文，等待翻译完成后再读。' : unavailable ? FISH_WEB_STREAM_REASON : '';
+    }
+    if (key === 'autoRead' || key === 'autoGenerate') {
+      element.disabled = tts.provider === 'fish-web';
+      element.title = element.disabled ? 'Fish 网页订阅首版从播放或试听按钮手动生成语音。' : '';
+    }
     // 分析模式 is one switch (DESIGN §17.2): on is the analysed reading, off the plain one.
     if (key === 'mode' && element.type === 'checkbox') {
       element.checked = tts.mode === 'deep';
@@ -12706,22 +12966,10 @@ function updateTtsUnitHelp(root, settings = runtime.settings) {
   const tts = ttsSettings(settings);
   const unit = root.querySelector('[data-jy-tts-field="requestUnit"]')?.value ?? tts.requestUnit;
   const model = root.querySelector('[data-jy-tts-fish="model"]')?.value ?? tts.fish.model;
-  if (unit === 'floor') {
-    help.textContent = [
-      '整楼一次：这一楼要读的句子按顺序排好，所有角色连同旁白放进同一个请求，各用各的音色，Fish 当成一场对话连着读，人和人之间的衔接更自然。',
-      '音频是 mp3 时不用等整楼做完：Fish 送回来的段落一段收全就先播这一段，后面边收边接上；opus、wav 还是整楼做完才出声。点单句、单段播放，要等那一段收到。',
-      '整楼只有一个语速音量：分析给某句的快慢轻重、调音台的语速倾向在这种方式下不单独生效，情绪、语气、停顿、重读这些标签照旧。',
-      model === 's1' ? 's1 不能在一个请求里用多个音色，整楼会按说话人拆开，想要一次就换 S2 系列模型。' : '',
-      `超过「一次请求最多字数」（声音参数里，现在是 ${tts.fish.maxChars}）才拆。字数按发给 Fish 的原样算：情绪、停顿这些标签，每次换人的说话人标记（一个 13 字），都算；对白来回多的楼，发出去的字能到正文的两倍多。`,
-      '要拆只在段落之间拆（一段自己就超过上限，才在这段里面拆）：先挑旁白开头的段落，其次前后情绪一样的地方，情绪正在转折的地方尽量不拆，拆出的几次尽量一样长。想整楼真的一次，就把字数调大，最多 10000（Fish 一次最多收这么多）。',
-      '没配音色的句子不能和有音色的混在一个请求里，旁白音色和对白默认音色都填上就不会因为这个被拆。',
-      '改了这项，已经做好的音频会按新方式重做。',
-    ].filter(Boolean).join('');
-    return;
-  }
-  help.textContent = unit === 'sentence'
-    ? '每句一次：每句话单独一个请求，一句做好播一句，请求数最多、每个最短。和「每段一次」做出来的声音共用，切换不会重做。'
-    : '每段一次：一段一个请求，几段同时做（上面「同时生成几段」），第一段做好就开始播。一段里有几个人说话，本来就在同一个请求里各用各的音色；想让整楼所有人在一个请求里连着读，选「整楼一次」。';
+  help.textContent = unit === 'floor'
+    ? (model === 's1' ? 'S1 会按说话人拆开。' : '整楼共用语速和音量。') + '切换后需重新生成音频。'
+    : '';
+  help.hidden = !help.textContent;
 }
 
 // The line under the 分析模式 switch says what either position comes to.
@@ -12735,8 +12983,8 @@ function updateTtsModeHelp(root) {
   const askField = root.querySelector('[data-jy-tts-ask-field]');
   if (askField) askField.hidden = analysed;
   help.textContent = analysed
-    ? '开着：正文一闭合就把原文发给副模型，不等翻译、也不用翻译的标注，一次请求，旁白和对白逐句标：对白由谁念、语速、张力，再按声学标注规则在字上插 Fish 认得的声音标签（耳语、气声、窃笑、轻笑、叹气、倒抽气、急喘、低哼、清嗓、停顿），不写情绪词；台词可以加叠字、！！、~、……和语气词，原文的字不改。带角色资料、世界书和前几楼（在「更多 → 分析模式」里勾）。读译文时把结果对到译文上。走分析模式用的连接。'
-    : '关着：不额外请求副模型。翻译过的楼直接用翻译时标好的说话人和情绪——翻译那一次请求本身带了分析；正文里带 <say> 说话人标记的楼，按标记分角色、带情绪读（「音色」卡里打开「让主模型给台词标上说话人和情绪」，主模型写的台词就会带标记）；其余的楼由程序按上下文认谁在说，认不出的用对白默认音色。想让副模型分析一次，点悬浮窗朗读页的「分析这一楼」，或者在下面选按播放时怎么办。';
+    ? '每楼额外请求一次副模型，逐句分析。'
+    : '沿用现有标注，按需分析。';
 }
 
 /**
@@ -12762,10 +13010,11 @@ function syncTtsFeatureVisibility(root, settings = runtime.settings) {
 
 function collectTtsFields(root, current) {
   if (!root.querySelector('[data-jy-page="tts"]')) return;
-  const previous = ttsSettings(current);
-  const next = { ...previous, fish: { ...previous.fish }, gsv: { ...previous.gsv } };
+  const previous = normalizeTts(current.tts);
+  const next = { ...previous, fish: { ...previous.fish }, fishWeb: { ...previous.fishWeb }, gsv: { ...previous.gsv } };
   for (const element of root.querySelectorAll('[data-jy-tts-field]')) {
     const key = element.dataset.jyTtsField;
+    if (element.disabled && ['side', 'range', 'readWhileWriting', 'autoRead', 'autoGenerate'].includes(key)) continue;
     if (key === 'mode' && element.type === 'checkbox') {
       next.mode = element.checked ? 'deep' : 'off';
     } else if (element.type === 'radio') {
@@ -12960,7 +13209,7 @@ async function importCastFromWorldbook(settings = runtime.settings, { signal } =
     sources.push(name, text);
     return { title: `角色卡：${name}`, keys: name ? [name] : [], content: text.slice(0, 3000) };
   }).filter(card => card.keys.length || card.content);
-  if (!digest.length && !cards.length) throw new Error('没有可读的世界书条目，也没有角色卡。先给这个角色启用一本世界书，或者发一条消息让酒馆扫描一次，再来识别。');
+  if (!digest.length && !cards.length) throw new Error('没有可读的世界书条目。请加载角色卡或世界书。');
   const story = castStorySample(context);
   const cardNames = cards.flatMap(card => card.keys);
   const messages = withAnalysisPrelude([
@@ -13201,7 +13450,7 @@ function renderTtsPreview(root) {
   if (!preview) {
     const note = doc.createElement('p');
     note.className = 'jy-muted';
-    note.textContent = '还没有分析过。点「分析最新一楼」，看每一句会被谁、用什么情绪、哪个音色读。';
+    note.textContent = '暂无分析。';
     target.appendChild(note);
     return;
   }
@@ -14352,9 +14601,41 @@ function createControlCenter(rootDocument = document) {
     notice.textContent = '更新完成，请手动刷新酒馆。';
   } else void checkUpdatesSilently(updateButton);
 
+  const workshopParentPage = () => runtime.settings.uiMode === 'normal' ? 'finetune' : 'tts';
+  const workshop = createWorkshop(root, {
+    copyText,
+    lookupFish: lookupWorkshopFishVoice,
+    addToLibrary: entry => addWorkshopVoiceToLibrary(root, entry),
+    selectTab: target => selectTab(target === 'back' ? workshopParentPage() : target),
+  });
+
+  let fishParentPage = 'main';
+  const fishCenter = createFishCenter(root, {
+    headers: requestHeaders,
+    back: () => selectTab(resolvePageForMode(fishParentPage, runtime.settings.uiMode)),
+    selected: () => {
+      const tts = ttsSettings();
+      return tts.enabled && tts.provider === 'fish-web' && fishWebUsesManaged(tts.fishWeb);
+    },
+    use: () => {
+      const next = mergeSettings(runtime.settings);
+      next.tts.enabled = true;
+      next.tts.provider = 'fish-web';
+      next.tts.fishWeb.managed = true;
+      saveSettings(next);
+      syncFields(root, runtime.settings);
+    },
+    onSettings: rememberManagedFishSettings,
+  });
+
   const selectTab = target => {
+    if (target === 'fish-center') {
+      const from = root.querySelector('[data-jy-tab][aria-selected="true"]')?.dataset.jyTab;
+      if (from && from !== 'fish-center') fishParentPage = from;
+    }
+    const litTab = target === 'workshop' ? workshopParentPage() : target;
     for (const tabButton of root.querySelectorAll('[data-jy-tab]')) {
-      tabButton.setAttribute('aria-selected', String(tabButton.dataset.jyTab === target));
+      tabButton.setAttribute('aria-selected', String(tabButton.dataset.jyTab === litTab));
     }
     for (const page of root.querySelectorAll('[data-jy-page]')) {
       const active = page.dataset.jyPage === target;
@@ -14368,6 +14649,8 @@ function createControlCenter(rootDocument = document) {
     if (target === 'processing') renderMoveTable(root);
     syncTtsFeatureVisibility(root);
     if (target === 'tts' && ttsSettings().enabled) void renderTtsUsage(root);
+    workshop.onSelect(target);
+    fishCenter.onSelect(target);
   };
 
   /**
@@ -14404,6 +14687,10 @@ function createControlCenter(rootDocument = document) {
     const button = event.target.closest('[data-jy-action]');
     if (!button) return;
     const action = button.dataset.jyAction;
+    if (action === 'open-fish-center') {
+      selectTab('fish-center');
+      return;
+    }
     if (action === 'import-processing' || action === 'import-processing-regex') {
       root.querySelector(action === 'import-processing' ? '[data-jy-processing-import]' : '[data-jy-processing-regex-import]').click();
       return;
@@ -14757,7 +15044,7 @@ function createControlCenter(rootDocument = document) {
         runtime.deskExpandedChannelId = id;
         saveSettings(next);
         syncFields(root, runtime.settings);
-        toast('success', '新建了一条连接。填好地址和模型后，在翻译台或朗读页的下拉框里选它才会用上。');
+        toast('success', '已新建连接。请填写地址和模型。');
       } else if (action === 'delete-channel') {
         await deleteChannel(root, root.dataset.jyEditingChannelId || editingChannelId());
       } else if (action === 'desk-delete-channel') {
@@ -14836,7 +15123,7 @@ function createControlCenter(rootDocument = document) {
         toast(hint ? 'warning' : 'success', `Fish 连接正常。${credit}${hint}`);
       } else if (action === 'tts-test-gsv') {
         saveSettings(collectSettings(root));
-        setText(root, '[data-jy-tts-gsv-note]', '正在连接 GPT-SoVITS…第一次或刚换模型时要先把模型装进显卡，可能要半分钟。');
+        setText(root, '[data-jy-tts-gsv-note]', '正在连接 GPT-SoVITS…');
         try {
           const result = await testGsvConnection(runtime.settings);
           const line = `GPT-SoVITS 连接正常${result.version ? `（${result.version}）` : ''}。${result.sampled ? `默认音色试读了一句（${result.seconds.toFixed(1)} 秒）。` : '默认音色还没填参考音频，填好再点一次就能听到。'}`;
@@ -15217,7 +15504,7 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'tts-clear-chat') {
         if (!await confirmDestructive({
           title: '清空本聊天的朗读缓存',
-          message: '这个聊天里已经生成的朗读音频全部删除，不能撤销，之后播放会重新生成。真的要清空吗？',
+          message: '清空后无法撤销，播放时需重新生成音频。',
           confirmLabel: '清空缓存',
         })) return;
         stopTts();
@@ -15231,7 +15518,7 @@ function createControlCenter(rootDocument = document) {
       } else if (action === 'tts-clear-all') {
         if (!await confirmDestructive({
           title: '清空全部朗读缓存',
-          message: '每个聊天已经生成的朗读音频全部删除，不能撤销，之后播放会重新生成。真的要全部清空吗？',
+          message: '清空所有聊天的音频缓存？播放时需重新生成。',
           confirmLabel: '清空全部',
         })) return;
         stopTts();
@@ -15502,7 +15789,7 @@ function createControlCenter(rootDocument = document) {
     }
     // 翻译台 has no save button (DESIGN §15.4 改了就存): 重试次数 saves itself once the field loses focus
     // with a changed value, same as every switch on this page already does at once.
-    if (event.target.matches('[data-jy-field="retries"]')) {
+    if (event.target.matches('[data-jy-field="retries"], [data-jy-field="translationScope"]')) {
       try {
         saveSettings(collectSettings(root));
       } catch (error) {
@@ -15595,7 +15882,7 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="intimate"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="readWhileWriting"], [data-jy-tts-field="liveAudio"], [data-jy-tts-field="streamVoice"], [data-jy-tts-field="callChannelId"], [data-jy-tts-field="sttProvider"], [data-jy-tts-field="sttPreset"], [data-jy-tts-doubao="resourceId"], [data-jy-tts-doubao="viaProxy"], [data-jy-tts-minimax="baseUrl"], [data-jy-tts-minimax="model"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"], [data-jy-tts-field="provider"], [data-jy-tts-gsv="viaProxy"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="intimate"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="readWhileWriting"], [data-jy-tts-field="liveAudio"], [data-jy-tts-field="streamVoice"], [data-jy-tts-field="callChannelId"], [data-jy-tts-field="sttProvider"], [data-jy-tts-field="sttPreset"], [data-jy-tts-doubao="resourceId"], [data-jy-tts-doubao="viaProxy"], [data-jy-tts-minimax="baseUrl"], [data-jy-tts-minimax="model"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"], [data-jy-tts-fish-web], [data-jy-tts-field="provider"], [data-jy-tts-gsv="viaProxy"]')) {
       if (event.target.matches('[data-jy-tts-field="sttPreset"]')) {
         const preset = STT_PRESETS[event.target.value];
         if (preset) {
@@ -15608,7 +15895,10 @@ function createControlCenter(rootDocument = document) {
       // twinField() above already carried the new value onto every other copy of this same field
       // (deepChannelId/mode/enabled all live on 微调 or 翻译台 too, DESIGN §15.2/§15.3).
       try {
+        const providerBefore = ttsSettings().provider;
         saveSettings(collectSettings(root));
+        const providerAfter = ttsSettings().provider;
+        if (providerAfter !== providerBefore && [providerAfter, providerBefore].includes('fish-web')) stopTts();
         syncTtsFields(root, runtime.settings, { renderLists: false });
         syncDeskFields(root, runtime.settings);
         syncFinetuneFields(root, runtime.settings);
@@ -15722,7 +16012,11 @@ function createControlCenter(rootDocument = document) {
   root.addEventListener('input', onInput);
   return {
     root,
+    escape: () => workshop.handleEscape(),
+    activeSheet: () => workshop.activeSheet(),
     cleanup() {
+      workshop.cleanup();
+      fishCenter.cleanup();
       unsubscribe();
       unsubscribeDiagnostics();
       // A question still in flight when the panel closes is left to finish (DESIGN §17.3): the reader
@@ -15737,7 +16031,7 @@ function createControlCenter(rootDocument = document) {
 
 async function loadPanelCss() {
   if (!runtime.panelCssPromise) {
-    runtime.panelCssPromise = fetch(new URL('./style.css', import.meta.url))
+    runtime.panelCssPromise = fetch(new URL(`./style.css?v=${APP_VERSION}`, import.meta.url))
       .then(response => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.text();
@@ -15828,16 +16122,21 @@ async function openControlCenter() {
       // running next, is left to handle it alone.
       if (document.getElementById(`${MODULE_ID}-confirm`)) return;
       event.preventDefault();
+      if (controller.escape()) return;
       close();
       return;
     }
     if (event.key !== 'Tab') return;
-    const focusable = [...shadow.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled])')]
-      .filter(element => !element.closest('[hidden]') && element.getClientRects().length > 0);
+    const sheet = controller.activeSheet();
+    const focusable = [...(sheet ?? shadow).querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled])')]
+      .filter(element => !element.closest('[hidden], [inert]') && element.getClientRects().length > 0);
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable.at(-1);
-    if (event.shiftKey && shadow.activeElement === first) {
+    if (sheet && !sheet.contains(shadow.activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && shadow.activeElement === first) {
       event.preventDefault();
       last.focus();
     } else if (!event.shiftKey && shadow.activeElement === last) {
@@ -16366,7 +16665,7 @@ async function openMiniWindow() {
   <div class="jy-mini-more" data-jy-mini-more hidden>
     <div class="jy-mini-more-head"><strong>更多</strong><button type="button" class="jy-mini-inspect-close" data-jy-action="mini-more-close" aria-label="收起" title="收起">×</button></div>
     <div class="jy-mini-quick">
-      <label title="只管翻译走哪条连接，和控制中心「翻译台」里那个是同一个选择。分析模式、小助手用哪条在「模型连接」页最上面另选，互不影响。"><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
+      <label><span class="jy-label">翻译模型</span><select data-jy-mini-channel></select></label>
       <label><span class="jy-label">方案</span><select data-jy-mini-profile></select></label>
       <button type="button" class="jy-text-button" data-jy-action="mini-translate-all" data-jy-mini-untranslated hidden></button>
       <button type="button" class="jy-text-button" data-jy-action="mini-clear-floor" hidden title="清除这一楼的译文，正文恢复成原文">清除这一楼的译文</button>
@@ -16418,19 +16717,19 @@ async function openMiniWindow() {
   <ol class="jy-mini-sentences" data-jy-tts-list hidden></ol>
   <p class="jy-muted jy-mini-sentences-note" data-jy-tts-list-note hidden></p>
   <div class="jy-mini-inspect" data-jy-tts-inspect hidden>
-    <div class="jy-mini-inspect-head"><strong data-jy-tts-who>—</strong><select data-jy-tts-speaker aria-label="这一句是谁说的" title="这一句是谁说的。改了就按这个人的音色重新生成，不重新分析" hidden></select><button type="button" class="jy-mini-inspect-close" data-jy-action="tts-inspect-close" aria-label="关闭改句面板" title="关闭">×</button></div>
+    <div class="jy-mini-inspect-head"><strong data-jy-tts-who>—</strong><select data-jy-tts-speaker aria-label="这一句是谁说的" title="换人会重新生成这一句。" hidden></select><button type="button" class="jy-mini-inspect-close" data-jy-action="tts-inspect-close" aria-label="关闭改句面板" title="关闭">×</button></div>
     <p class="jy-muted jy-mini-inspect-depth" data-jy-tts-depth></p>
     <p class="jy-mini-inspect-source" data-jy-tts-source hidden></p>
     <p class="jy-mini-inspect-text" data-jy-tts-text></p>
     <dl class="jy-mini-inspect-summary" data-jy-tts-summary hidden></dl>
-    <label class="jy-mini-inspect-field"><span class="jy-label">发给 Fish 的内容（方括号里是情绪、停顿、强调标签，可以直接改、直接插）</span><textarea data-jy-tts-fish rows="3" spellcheck="false"></textarea></label>
+    <label class="jy-mini-inspect-field"><span class="jy-label">发给 Fish 的内容</span><textarea data-jy-tts-fish rows="3" spellcheck="false"></textarea></label>
     <div class="jy-mini-inspect-tags" data-jy-tts-tags></div>
-    <div class="jy-mini-inspect-custom"><input type="text" data-jy-tts-custom maxlength="40" placeholder="自己写一条指令插到光标处，比如：压低声音"><button type="button" class="jy-text-button" data-jy-action="tts-insert-custom">插入</button></div>
-    <div class="jy-mini-inspect-prosody"><label><span class="jy-label">语速</span><input type="number" data-jy-tts-speed min="0.5" max="2" step="0.05"></label><label title="1 平静到 5 极端顶点，越高 Fish 的 temperature 越高；留空按分析的"><span class="jy-label">张力</span><input type="number" data-jy-tts-tension min="1" max="5" step="1"></label><label><span class="jy-label">音量 dB</span><input type="number" data-jy-tts-volume min="-20" max="20" step="1"></label></div>
+    <div class="jy-mini-inspect-custom"><input type="text" data-jy-tts-custom maxlength="40" placeholder="如：压低声音"><button type="button" class="jy-text-button" data-jy-action="tts-insert-custom">插入</button></div>
+    <div class="jy-mini-inspect-prosody"><label><span class="jy-label">语速</span><input type="number" data-jy-tts-speed min="0.5" max="2" step="0.05"></label><label title="1 最低，5 最高。留空按分析结果。"><span class="jy-label">张力</span><input type="number" data-jy-tts-tension min="1" max="5" step="1"></label><label><span class="jy-label">音量 dB</span><input type="number" data-jy-tts-volume min="-20" max="20" step="1"></label></div>
     <div class="jy-mini-inspect-actions">
       <button type="button" class="jy-button jy-button-primary" data-jy-action="tts-apply" hidden>重新生成并播放</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-refine-sentence" title="说一句哪里不对，让副模型只改这一句的分析">改这一句的分析</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-save-sentence" title="把这一句的音频存到本地，从已经听到的那一条里剪出来">保存这一句</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-refine-sentence">改这一句的分析</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-save-sentence">保存这一句</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-reset" hidden>恢复自动</button>
     </div>
     <p class="jy-muted" data-jy-tts-note></p>
@@ -16440,8 +16739,8 @@ async function openMiniWindow() {
     <div class="jy-mini-more-head"><strong>更多</strong><button type="button" class="jy-mini-inspect-close" data-jy-action="mini-more-close" aria-label="收起" title="收起">×</button></div>
     <div class="jy-mini-links">
       <button type="button" class="jy-text-button" data-jy-action="tts-read-floor" title="从头朗读这一楼">从头读</button>
-      <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze" title="按你的意见改这一楼的分析，或者丢掉重来">重新分析</button>
-      <button type="button" class="jy-text-button jy-mini-auto" data-jy-action="tts-intimate" aria-pressed="false" title="点一下换一档：关 → 自动 → 开。自动是分析模式自己判断这一楼是不是亲密戏；和朗读页的「亲密场景」是同一个设置" hidden>亲密场景 关</button>
+      <button type="button" class="jy-text-button" data-jy-action="tts-reanalyze">重新分析</button>
+      <button type="button" class="jy-text-button jy-mini-auto" data-jy-action="tts-intimate" aria-pressed="false" title="关 / 自动 / 开" hidden>亲密场景 关</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-download" title="把这段音频保存到本地">保存到本地</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-locate" title="把聊天滚到正在读的句子">定位到正文</button>
       <button type="button" class="jy-text-button" data-jy-action="tts-copy-analysis" title="把这一楼的分析结果复制成 JSON">复制分析</button>
@@ -16449,13 +16748,13 @@ async function openMiniWindow() {
   </div>
   <div class="jy-mini-foot jy-mini-player">
     <div class="jy-progress jy-progress-seek" data-jy-tts-seek role="slider" aria-label="播放进度，拖动或点击跳转" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><span data-jy-tts-progress></span><i data-jy-tts-knob></i></div>
-    <div class="jy-mini-clock"><span data-jy-tts-clock-now>0:00</span><span class="jy-muted" data-jy-tts-message>点播放键读这一楼，或者点上面的某一句。</span><span data-jy-tts-clock-total>0:00</span></div>
+    <div class="jy-mini-clock"><span data-jy-tts-clock-now>0:00</span><span class="jy-muted" data-jy-tts-message>待播放</span><span data-jy-tts-clock-total>0:00</span></div>
     <div class="jy-mini-transport">
       <button type="button" class="jy-button jy-mini-danger" data-jy-action="tts-stop" title="停止朗读" disabled>停止</button>
       <button type="button" class="jy-button" data-jy-action="tts-prev" title="回到上一段">上一段</button>
       <button type="button" class="jy-mini-play" data-jy-action="tts-toggle" aria-label="播放或暂停" title="播放 / 暂停">▶</button>
       <button type="button" class="jy-button" data-jy-action="tts-next" title="快进到下一段">下一段</button>
-      <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false" title="从头读、重新分析、保存到本地、定位到正文、复制分析">更多</button>
+      <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false">更多</button>
     </div>
   </div>
 </div>
@@ -16485,7 +16784,7 @@ async function openMiniWindow() {
   <div class="jy-mini-more" data-jy-mini-more hidden>
     <div class="jy-mini-more-head"><strong>往期通话</strong><button type="button" class="jy-mini-inspect-close" data-jy-action="mini-more-close" aria-label="收起" title="收起">×</button></div>
     <ol class="jy-mini-log" data-jy-call-history></ol>
-    <p class="jy-muted jy-mini-log-empty" data-jy-call-history-empty hidden>和这个角色还没有通话记录。</p>
+    <p class="jy-muted jy-mini-log-empty" data-jy-call-history-empty hidden>暂无通话记录</p>
     <div class="jy-mini-log-detail" data-jy-call-detail hidden></div>
     <div class="jy-mini-links">
       <button type="button" class="jy-text-button" data-jy-action="call-clear" hidden>清空这个角色的通话记录</button>
@@ -16496,11 +16795,11 @@ async function openMiniWindow() {
     <div class="jy-mini-inspect-custom" data-jy-call-typing hidden><input type="text" data-jy-call-input maxlength="500" placeholder="语音输入没开，打字说"><button type="button" class="jy-button jy-button-primary" data-jy-action="call-send">发送</button></div>
     <div class="jy-mini-actions">
       <button type="button" class="jy-button jy-button-primary" data-jy-action="call-dial">拨打</button>
-      <button type="button" class="jy-button jy-button-primary jy-mini-call-talk" data-jy-call-talk aria-pressed="false" title="按住说话，说完松开；对方在说时按下会打断" hidden>按住说话</button>
+      <button type="button" class="jy-button jy-button-primary jy-mini-call-talk" data-jy-call-talk aria-pressed="false" title="按下会打断对方。" hidden>按住说话</button>
       <button type="button" class="jy-button jy-button-primary" data-jy-action="call-resume" hidden>继续</button>
-      <button type="button" class="jy-button jy-mini-danger" data-jy-action="call-interrupt" title="让对方停下，电话不挂" hidden>打断</button>
+      <button type="button" class="jy-button jy-mini-danger" data-jy-action="call-interrupt" hidden>打断</button>
       <button type="button" class="jy-button jy-mini-danger" data-jy-action="call-hang" hidden>挂断</button>
-      <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false" title="往期通话、清空记录、通话设置">更多</button>
+      <button type="button" class="jy-button" data-jy-action="mini-more" aria-expanded="false">更多</button>
     </div>
   </div>
 </div>`;
@@ -17053,7 +17352,7 @@ async function openMiniWindow() {
   const syncSing = () => {
     const blocked = singingBlockedReason(ttsSettings());
     singChip.setAttribute('aria-disabled', blocked ? 'true' : 'false');
-    singChip.title = blocked || '整句用 Fish 的 [singing] 唱出来：带旋律感地念，不会照某首歌的曲调唱。按下时去掉这句的其他标签，再按一次取消';
+    singChip.title = blocked || '唱这一句，会替换其他声音标签。';
     singChip.setAttribute('aria-pressed', !blocked && isSungText(fishInput.value) ? 'true' : 'false');
   };
   const toggleSing = () => {
@@ -17179,7 +17478,7 @@ async function openMiniWindow() {
     if (fieldLabel) {
       fieldLabel.textContent = ttsSettings().provider === 'gsv'
         ? '发给 GPT-SoVITS 的内容（它只读字，方括号里的标签会被去掉）'
-        : '发给 Fish 的内容（方括号里是情绪、停顿、强调标签，可以直接改、直接插）';
+        : '发给 Fish 的内容';
     }
     speedInput.value = data.override?.speed ?? data.prosody.speed;
     volumeInput.value = data.override?.volume ?? data.prosody.volume;
@@ -19021,6 +19320,7 @@ function noteUntranslatedRender(messageId, type, pending, { stale = false } = {}
 // What a skipped automatic translation says in the log, by the reason the run gave.
 const AUTO_SKIP_REASONS = Object.freeze({
   'already-translated': '这一楼已经翻译过了',
+  'no-dialogue': '这一楼没有可翻译的完整对白，原文保留',
   'not-translatable': '不是可以翻译的 AI 回复',
   cancelled: '翻译被取消了（换了聊天、停用了扩展，或者同一楼开始了新的翻译）',
   diverged: '这一楼只留了译文，后来又被改过，不再自动翻译（要重译先在总控页点「恢复本聊天的原文」）',
@@ -19043,7 +19343,7 @@ function autoTranslateSuppressed(messageId) {
   const hash = runtime.clearedFloors.get(key);
   if (!hash) return false;
   if (hashTextSync(String(message.mes ?? '')) === hash) {
-    recordDiagnostic('info', 'translation.auto-skip', `第 ${messageId} 楼刚清除过译文，没有自动翻译（要翻的时候点「翻译本楼」或「翻译当前回复」）。`, { floor: messageId }, undefined, { floor: messageId });
+    recordDiagnostic('info', 'translation.auto-skip', `第 ${messageId} 楼的译文已清除。可手动重译。`, { floor: messageId }, undefined, { floor: messageId });
     return true;
   }
   runtime.clearedFloors.delete(key);
@@ -19133,7 +19433,7 @@ function noteMissingBodyTag(messageId, message) {
   const key = `${getCurrentChatId()}|${(runtime.settings.bodyTags ?? []).join(',')}`;
   if (runtime.bodyTagNoted === key) return;
   runtime.bodyTagNoted = key;
-  toast('warning', `第 ${messageId} 楼没有自动翻译：${message.replace(/[。.]$/, '')}。这张卡的回复用的是别的标签的话，到「正文处理」页把正文标签改成它；回复里根本没有标签的话，在同一页填「正文起点」。`);
+  toast('warning', `第 ${messageId} 楼跳过自动翻译：${message.replace(/[。.]$/, '')}。请在「正文处理」检查提取标签或正文起点。`);
 }
 
 /**
@@ -19990,9 +20290,9 @@ function streamTimingText(times) {
  * `finished` (a promise).
  */
 function createTtsStream({ kind, messageId = null, toLines, speaker = '', lang = '', emotion = '', startedAt = null, onSpeakers = null, acoustic = false }) {
+  requireStreamKey(ttsSettings());
   const settings = streamReadingSettings(runtime.settings);
   const tts = ttsSettings(settings);
-  requireStreamKey(tts);
   const provider = ttsProviderFor(settings);
   // 豆包 or MiniMax in place of Fish, when the reader chose one; one section for the whole session, so
   // 豆包 keeps one manner across a call.
@@ -20706,7 +21006,7 @@ async function startCloudSpeech(lang, tts) {
           if (cancelled) return '';
           if (calledOff.signal.reason?.name === 'TimeoutError') {
             recordDiagnostic('warn', 'stt', `语音输入（${tts.sttModel}）：转写超过 ${limitSec} 秒没回来，放弃了。`, { model: tts.sttModel, bytes: blob.size });
-            throw new Error(`转写超过 ${limitSec} 秒没回来。转写服务太慢或者连不上：开着代理或 VPN 时，国内的 SiliconFlow 常被绕远路，关掉代理，或者把转写服务换成 Groq 再试。`);
+            throw new Error(`语音转写超时（${limitSec} 秒）。`);
           }
           throw error;
         } finally {
@@ -20997,6 +21297,7 @@ function callAppFacts(names, settings = runtime.settings) {
       voice: tts.streamVoice,
       keyMissing: tts.streamVoice === 'gsv' ? !String(tts.gsv?.baseUrl ?? '').trim() : tts.streamVoice === 'fish' ? !tts.fish.key : !tts[tts.streamVoice]?.key,
       fishCardHidden: tts.provider !== 'fish',
+      streamProblem: fishWebSelectedForStream(tts) ? FISH_WEB_STREAM_REASON : '',
     },
     voices: callVoiceStatuses(names, settings),
     stt: { available: stt.available, problem: stt.problem },
@@ -21101,6 +21402,7 @@ function callFixTarget(id, app = '', settings = runtime.settings) {
   const tts = ttsSettings(settings);
   const fold = 'tts-call';
   if (id === 'tts') return { page: 'tts', selector: '[data-jy-tts-master] [data-jy-tts-field="enabled"]' };
+  if (id === 'stream-source') return { page: 'tts', fold, selector: '[data-jy-tts-field="streamVoice"]' };
   if (id === 'key') {
     // GPT-SoVITS's address is on its own card, shown while it is the 声音来源; otherwise that choice first.
     if (tts.streamVoice === 'gsv') {
@@ -21216,6 +21518,8 @@ function apiTtsReason({ stream = false } = {}) {
   if (!runtime.initialized) return '镜译还没启动完，稍后再试。';
   if (!tts.enabled) return '镜译的朗读没有打开：镜译 → 朗读 → 打开朗读。';
   const voice = stream ? tts.streamVoice : tts.provider;
+  if (stream && fishWebSelectedForStream(tts)) return FISH_WEB_STREAM_REASON;
+  if (voice === 'fish-web') return fishWebReadyReason(tts.fishWeb);
   if (voice === 'gsv') return '';
   if (voice === 'fish' && !tts.fish.key) return '镜译还没填 Fish Audio 的 API Key：镜译 → 朗读 →「Fish Audio」。';
   if (voice !== 'fish' && !tts[voice]?.key) return spacedLatin(`镜译还没填${CLOUD_VOICE_LABELS[voice]}的 Key：镜译 → 朗读 → 更多 → 实时通话。`);
@@ -21310,7 +21614,7 @@ function apiSession(floor, items, settings, { play, signal, speaker = '' }) {
         const url = ttsObjectUrl(`${record.key}#${part}`, record.parts[part].blob);
         // The next paragraph is made while this one is heard.
         const next = items[ahead + 1];
-        if (next) void resolveTtsEntry(floor, items, next, settings).catch(() => {});
+        if (next && ttsSettings(settings).provider !== 'fish-web') void resolveTtsEntry(floor, items, next, settings).catch(() => {});
         state.playing = true;
         begin?.();
         begin = null;
@@ -21483,7 +21787,7 @@ async function apiReadingGet({ messageId, swipeId = null } = {}) {
   }
   let snapshot;
   try {
-    snapshot = await readMessageSnapshot(id, runtime.settings, { quiet: true, swipeId: swipe });
+    snapshot = await readMessageSnapshot(id, runtime.settings, { quiet: true, swipeId: swipe, storedScope: true });
   } catch (error) {
     // None of its body where 镜译 is told to look (its body tag not in 提取标签, say): nothing in it to
     // translate, and its original all the same. Tags that are there but cannot be read stay an error.
@@ -21647,16 +21951,16 @@ function installPublicApi() {
           enabled: tts.enabled === true,
           provider: tts.provider,
           // GPT-SoVITS runs on the reader's machine and needs no key; ready means as much as Fish's key does.
-          hasKey: tts.provider === 'gsv' ? true : Boolean(tts.fish.key),
+          hasKey: tts.provider === 'gsv' || (tts.provider === 'fish-web' ? !fishWebReadyReason(tts.fishWeb) : Boolean(tts.fish.key)),
           // What tts.stream reads in, and whether it can: a caller that only streams asks this.
           streamProvider: tts.streamVoice,
-          streamReady: tts.enabled === true && Boolean(tts.streamVoice === 'gsv' ? tts.gsv?.baseUrl : tts.streamVoice === 'fish' ? tts.fish.key : tts[tts.streamVoice]?.key),
+          streamReady: tts.enabled === true && !fishWebSelectedForStream(tts) && Boolean(tts.streamVoice === 'gsv' ? tts.gsv?.baseUrl : tts.streamVoice === 'fish' ? tts.fish.key : tts[tts.streamVoice]?.key),
           // Why tts.stream cannot read now, to show the reader as it is; empty when it can.
           reason: apiTtsReason({ stream: true }),
           // The same for tts.speak, which reads with the 声音来源 the floors are read with.
           readReady: !apiTtsReason(),
           readReason: apiTtsReason(),
-          model: tts.provider === 'gsv' ? 'gpt-sovits' : tts.fish.model,
+          model: tts.provider === 'gsv' ? 'gpt-sovits' : tts.provider === 'fish-web' ? 'tts-1' : tts.fish.model,
           voices: ttsVoicesFor().filter(row => row.voiceId).length,
           busy: Boolean(runtime.tts.transport && runtime.tts.transport.state !== 'idle'),
         };
@@ -21917,6 +22221,7 @@ export const __testing = Object.freeze({
   renumberSwipeRecords,
   initializeSettings,
   configureForTest,
+  addWorkshopVoiceToLibrary,
   buildRegexCleanupPlan,
   regexCleanupSummary,
   applyScopedRegexCleanup,
@@ -21934,6 +22239,8 @@ export const __testing = Object.freeze({
   ttsVoicesKey,
   ttsVoicesFor,
   ensureTtsRecording,
+  testFishWebConnection,
+  auditionFishWeb,
   resolveTtsEntry,
   findTtsEntry,
   testGsvConnection,

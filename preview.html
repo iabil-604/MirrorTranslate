@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>镜译扩展本地宿主预览</title>
+  <title>镜译网页 Beta · 0.51.5</title>
   <link rel="stylesheet" href="./host.css">
   <style>
     :root { color-scheme: dark; font-family: system-ui, "Microsoft YaHei", sans-serif; background: #15171c; color: #eceff4; }
@@ -23,20 +23,37 @@
     #chat q { color: #e2c08a; }
     .extension_container { padding: 13px; border: 1px solid #3a414d; border-radius: 12px; }
     .inline-drawer-header { display: flex; justify-content: space-between; }
+    .beta-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .beta-actions button:disabled { opacity: .55; cursor: default; }
+    .beta-note, #beta-status { color: #bfc9d7; font-size: 13px; }
+    #chat bbi_image { display: block; padding: 10px 14px; border: 1px dashed #7886a0; border-radius: 8px; }
+    #beta-raw { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: #13161c; }
     @media (max-width: 760px) { .mock-layout { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <header class="mock-toolbar">
-    <h1>SillyTavern 1.18.0 模拟宿主</h1>
+    <h1>镜译网页 Beta · 0.51.5</h1>
     <div id="extensionsMenu" aria-label="魔法棒扩展菜单"></div>
   </header>
   <main class="mock-layout">
     <section class="mock-card">
       <h2>当前 AI 回复</h2>
+      <div class="beta-actions">
+        <button type="button" id="beta-translate" class="menu_button" disabled>开始翻译</button>
+        <button type="button" id="beta-insert" class="menu_button" disabled>插入标签</button>
+        <button type="button" id="beta-clear" class="menu_button" disabled>清除译文</button>
+      </div>
+      <p id="beta-status" role="status">正在加载示例…</p>
       <div id="chat"><div class="mes" mesid="0"><div class="mes_block"><div class="mes_text"></div></div></div></div>
+      <details><summary>查看本楼原始内容</summary><pre id="beta-raw"></pre></details>
     </section>
     <aside class="mock-card">
+      <div class="beta-actions">
+        <button type="button" id="beta-fish-web-open" class="menu_button" disabled>Fish 管理</button>
+        <button type="button" id="beta-workshop-open" class="menu_button" disabled>试用音色工坊</button>
+      </div>
+      <p class="beta-note" id="beta-entry-status" role="status"></p>
       <h2>扩展设置区</h2>
       <label class="mock-probe">宿主输入框样式探针<input id="host-style-probe" value="不应被扩展样式拉伸"></label>
       <div id="extensions_settings2"></div>
@@ -64,9 +81,16 @@
       WORLDINFO_ENTRIES_LOADED: 'worldinfo_entries_loaded',
     };
     const eventSource = new MockEvents();
-    const original = `<story_scene>\n夕暮れの教室には、誰もいなかった。\n窓から差し込む光が、机を淡く照らしている。\n\n桜井は振り返って、「来たんだね」と小さく笑った。\n\n「明日も、ここで会える？」\n「……うん。約束する」\n</story_scene>`;
+    const dialogueBeta = !new URLSearchParams(location.search).has('legacy');
+    const original = dialogueBeta
+      ? '<story_scene>\n窗外下着小雨，教室里只剩他们两个人。\n\n樱井转过身，轻声问：“明天还会来吗？”\n他点点头：「当然。我答应过你。」\n\n她笑了，把书包放回桌上。\n</story_scene>'
+      : `<story_scene>\n夕暮れの教室には、誰もいなかった。\n窓から差し込む光が、机を淡く照らしている。\n\n桜井は振り返って、「来たんだね」と小さく笑った。\n\n「明日も、ここで会える？」\n「……うん。約束する」\n</story_scene>`;
     // Stand-in translations for the lines above, with the per-line speaker labels a model returns.
     const previewTranslations = new Map([
+      ['“明天还会来吗？”', { text: '“Will you come again tomorrow?”', speaker: '樱井' }],
+      ['「当然。我答应过你。」', { text: '「Of course. I promised you.」', speaker: '玩家' }],
+      ['窗外下着小雨，教室里只剩他们两个人。', { text: 'Rain fell outside. They were alone in the classroom.' }],
+      ['她笑了，把书包放回桌上。', { text: 'She smiled and put her bag back on the desk.' }],
       ['夕暮れの教室には、誰もいなかった。', { text: '傍晚的教室里，一个人也没有。' }],
       ['窓から差し込む光が、机を淡く照らしている。', { text: '从窗外照进来的光，淡淡地照着桌面。' }],
       ['桜井は振り返って、「来たんだね」と小さく笑った。', { text: '樱井回过头，「你来了啊」，轻轻笑了一下。', speaker: '樱井', emotion: 'happy', intensity: 1, direction: '平静叙述，句尾带一点暖意', quotes: [{ head: '你来了', speaker: '樱井', emotion: 'happy', intensity: 1, direction: '见到人就开心，声音亮起来，带一点笑', sounds: [{ at: 'end', tag: '轻笑' }] }] }],
@@ -108,9 +132,46 @@
       .map(block => (tagsOnly.test(block) ? block.replace(/\n/g, '') : `<p>${block.replace(/\n/g, '<br>')}</p>`))
       .join('')
       .replace(/class="([^"]*)"/g, (_whole, names) => `class="${names.split(/\s+/).filter(Boolean).map(name => `custom-${name}`).join(' ')}"`);
-    const renderChat = () => { document.querySelector('#chat .mes_text').innerHTML = formatMessage(chat[0].mes); };
+    const renderChat = () => {
+      document.querySelector('#chat .mes_text').innerHTML = formatMessage(chat[0].mes);
+      document.querySelector('#beta-raw').textContent = chat[0].mes;
+    };
     renderChat();
     let insertedImageTag = false;
+    let previewRun = null;
+    const sampleTag = '<bbi_image data-preview="late-insert">\n🖼 试用插图「这一段保留原样」。\n</bbi_image>';
+    const thinkingMarker = '模拟思考标记';
+    const translateButton = document.querySelector('#beta-translate');
+    const insertButton = document.querySelector('#beta-insert');
+    const clearButton = document.querySelector('#beta-clear');
+    const status = document.querySelector('#beta-status');
+
+    function waitForInsert() {
+      const run = previewRun;
+      if (!run || run.waited || insertedImageTag) return Promise.resolve();
+      run.waited = true;
+      insertButton.disabled = false;
+      status.textContent = '翻译中，可插入标签。';
+      return new Promise(resolve => {
+        const done = () => {
+          clearTimeout(timer);
+          run.release = null;
+          insertButton.disabled = true;
+          resolve();
+        };
+        const timer = setTimeout(done, 9000);
+        run.release = done;
+      });
+    }
+
+    const originalFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href);
+      if (url.pathname === '/api/backends/chat-completions/generate' && String(init?.body).includes('segments')) {
+        await waitForInsert();
+      }
+      return originalFetch(input, init);
+    };
 
     const translatePayload = prompt => {
       // A call (通话测试): the character answers, performing its lines by the 声学标注规则 when the call's
@@ -173,6 +234,12 @@
       }).reverse();
       return `模型说明会被忽略\n\`\`\`json\n${JSON.stringify({ translations })}\n\`\`\``;
     };
+    const modelReply = async prompt => {
+      const answer = translatePayload(prompt);
+      if (!answer.includes('"translations"')) return answer;
+      await waitForInsert();
+      return `<think>${thinkingMarker}</think>\n${answer}`;
+    };
     const context = {
       chat,
       chatId: 'preview-chat',
@@ -186,7 +253,14 @@
       eventTypes,
       extensionSettings: {
         disabledExtensions: [],
-        'jingyi-translator': { excludedTags: ['image_prompt'] },
+        'jingyi-translator': {
+          excludedTags: ['bbi_image', 'image_prompt'],
+          translationScope: dialogueBeta ? 'dialogue' : 'all',
+          autoGeneration: false,
+          tts: {
+            enabled: true, autoRead: false, autoGenerate: false, fish: { key: 'preview-key' },
+          },
+        },
         connectionManager: {
           profiles: [{ id: 'preview-profile', name: '副 API 测试配置', model: 'translator-model', api: 'openai' }],
         },
@@ -210,16 +284,10 @@
       updateMessageBlock() { renderChat(); },
       getCurrentChatId() { return 'preview-chat'; },
       async generateRaw({ prompt }) {
-        if (!insertedImageTag) {
-          insertedImageTag = true;
-          chat[0].mes = chat[0].mes.replace('\n\n「明日も', '\n\n<image_prompt data-preview="late-insert"/>\n「明日も');
-          chat[0].swipes[0] = chat[0].mes;
-          renderChat();
-        }
-        return translatePayload(prompt);
+        return modelReply(prompt);
       },
       ChatCompletionService: {
-        async processRequest(payload) { return { content: translatePayload(payload.messages), reasoning: '' }; },
+        async processRequest(payload) { return { content: await modelReply(payload.messages), reasoning: '' }; },
       },
     };
     globalThis.toastr = {
@@ -228,8 +296,99 @@
       info(message, title) { console.info(`${title}: ${message}`); },
     };
     globalThis.SillyTavern = { getContext: () => context };
+    const workshopButton = document.querySelector('#beta-workshop-open');
+    const entryStatus = document.querySelector('#beta-entry-status');
+    try {
+      const response = await fetch('/preview/workshop/session', { method: 'POST' });
+      const session = await response.json();
+      if (!response.ok || !session.ok) throw new Error('模拟工坊暂时连不上。');
+      localStorage.setItem('jingyi.workshop.api', session.base);
+      localStorage.setItem('jingyi.workshop.session.v1', JSON.stringify(session));
+      workshopButton.disabled = false;
+    } catch {
+      entryStatus.textContent = '模拟工坊连接失败。';
+    }
     const extension = await import('./index.js');
     await extension.onActivate();
+    if (dialogueBeta) {
+      const settings = context.extensionSettings['jingyi-translator'];
+      const { getActivePromptProfile } = await import('./core.js');
+      getActivePromptProfile(settings).targetLanguage = 'English';
+    }
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    translateButton.disabled = false;
+    clearButton.disabled = false;
+    status.textContent = dialogueBeta ? '示例已就绪 · 只翻译对白' : '示例已就绪 · 全文翻译';
+    translateButton.addEventListener('click', async () => {
+      if (previewRun) return;
+      previewRun = {};
+      translateButton.disabled = true;
+      clearButton.disabled = true;
+      status.textContent = '正在启动模拟翻译…';
+      try {
+        const result = await extension.__testing.startTranslation(0, { force: true });
+        const tagState = insertedImageTag
+          ? (chat[0].mes.includes(sampleTag) ? '标签块完整保留。' : '没有在写回内容里找到完整标签块。')
+          : '本次没有插入标签。';
+        status.textContent = result?.skipped ? `本次未写入译文（${result.reason}）。` : `翻译完成。${tagState}`;
+        if (chat[0].mes.includes(thinkingMarker)) status.textContent += ' 检测到模拟思考内容混入。';
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        previewRun?.release?.();
+        previewRun = null;
+        translateButton.disabled = false;
+        clearButton.disabled = false;
+      }
+    });
+    insertButton.addEventListener('click', () => {
+      if (!previewRun?.release || insertedImageTag) return;
+      insertedImageTag = true;
+      const point = chat[0].mes.indexOf('\n他点点头：');
+      const at = point < 0 ? chat[0].mes.lastIndexOf('</story_scene>') : point;
+      chat[0].mes = chat[0].mes.slice(0, at) + `\n\n${sampleTag}\n\n` + chat[0].mes.slice(at);
+      chat[0].swipes[0] = chat[0].mes;
+      renderChat();
+      void eventSource.emit(eventTypes.MESSAGE_EDITED, 0);
+      status.textContent = '已插入标签，等译文写回。';
+      previewRun.release();
+    });
+    clearButton.addEventListener('click', async () => {
+      try {
+        const result = await extension.__testing.clearFloorTranslation(0);
+        const kept = insertedImageTag && chat[0].mes.includes(sampleTag);
+        status.textContent = result.cleared ? (kept ? '译文已清除，插入标签仍在。' : '译文已清除。') : '这楼没有需要清除的译文。';
+      } catch (error) {
+        status.textContent = error.message;
+      }
+    });
+    async function openPreviewTab(selector) {
+      document.querySelector('#jingyi-translator-menu-entry')?.click();
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const panel = document.querySelector('#jingyi-translator-panel-host')?.shadowRoot;
+        const tab = panel?.querySelector(selector);
+        if (tab) {
+          tab.click();
+          return { panel, page: tab.dataset.jyTab };
+        }
+        await delay(60);
+      }
+      return null;
+    }
+
+    const fishWebButton = document.querySelector('#beta-fish-web-open');
+    fishWebButton.disabled = false;
+    fishWebButton.addEventListener('click', async () => {
+      if (!await openPreviewTab('[data-jy-tab="fish-center"]')) entryStatus.textContent = 'Fish 管理打开失败。';
+    });
+    workshopButton.addEventListener('click', async () => {
+      const target = await openPreviewTab('[data-jy-tab="finetune"]:not([hidden]), [data-jy-tab="tts"]:not([hidden])');
+      const entry = target?.panel.querySelector(`[data-jy-page="${target.page}"] [data-jy-ws-go="workshop"]`);
+      if (!entry) { entryStatus.textContent = '音色工坊打开失败。'; return; }
+      const fold = entry.closest('details');
+      if (fold) fold.open = true;
+      entry.click();
+    });
     globalThis.__JINGYI_PREVIEW__ = { context, extension };
   </script>
 </body>

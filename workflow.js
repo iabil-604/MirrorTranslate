@@ -1,8 +1,8 @@
-import { extractFloorRegions, extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, DEFAULT_QUOTE_PAIRS, MESSAGE_META_KEY } from './core.js?v=0.51.4';
-import { composeAnnotationSection, composeLyricsSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.51.4';
-import { EMOTION_KEYS } from './palette.js?v=0.51.4';
-import { composeSceneSection } from './scene.js?v=0.51.4';
-import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOFT_MOODS, SOUND_CUES, SOUND_PLACE_RULE, SOUND_TAGS, TONE_CUES } from './tts.js?v=0.51.4';
+import { extractFloorRegions, extractTaggedRegions, floorText, getActiveChannel, getActivePromptProfile, normalizeTts, stripGeneratedTranslationLines, withoutSpeechMarks, DEFAULT_QUOTE_PAIRS, MESSAGE_META_KEY } from './core.js?v=0.51.5';
+import { composeAnnotationSection, composeLyricsSection, composeTranslationSpecification, normalizeTargetLanguage, resolvePromptVariables } from './prompts.js?v=0.51.5';
+import { EMOTION_KEYS } from './palette.js?v=0.51.5';
+import { composeSceneSection } from './scene.js?v=0.51.5';
+import { ANNOTATION_SOUNDS, FISH_EMOTIONS, FISH_EMOTION_GROUPS, FISH_TONES, SOFT_MOODS, SOUND_CUES, SOUND_PLACE_RULE, SOUND_TAGS, TONE_CUES } from './tts.js?v=0.51.5';
 
 const WORLD_INFO_SCAN_CONTEXT = 65536;
 
@@ -175,6 +175,7 @@ export function buildTranslationMessages(segments, settings, packet = {}, phase 
   const jailbreak = resolvePromptVariables(String(profile.jailbreakPrompt ?? '').trim(), profile);
   if (jailbreak) messages.push({ role: 'system', content: jailbreak });
   messages.push({ role: 'system', content: composeTranslationSpecification(profile) });
+  if (settings.translationScope === 'dialogue') messages.push({ role: 'system', content: '本次只翻译对白。每个 segment 是从原文提取的一段完整对白；只返回对应编号的对白译文，保留引号，不添加旁白、说话人前缀、解释或思考过程。原文与旁白由程序原样保留。' });
   messages.push({ role: 'system', content: resolvePromptVariables(String(profile.checklistPrompt ?? '').trim(), profile) });
   // Speaker and emotion labelling is a display feature, so it rides as its own message rather than
   // being edited into the user's translation spec. Turning it off removes it from the request whole.

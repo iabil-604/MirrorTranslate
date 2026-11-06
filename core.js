@@ -8,20 +8,20 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.51.4';
+} from './prompts.js?v=0.51.5';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.51.4';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.51.5';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.51.4';
-import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.51.4';
+import { resolveMoveStyle } from './palette.js?v=0.51.5';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.51.5';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.51.4';
+export const APP_VERSION = '0.51.5';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -820,9 +820,9 @@ export const TTS_STREAM_UNITS = Object.freeze(['line', 'sentence']);
 // paragraph at a time (the default: the first paragraph plays while the rest are made), or one
 // sentence at a time.
 export const TTS_REQUEST_UNITS = Object.freeze(['floor', 'line', 'sentence']);
-// Who makes the sound: Fish Audio over the network, or a GPT-SoVITS server the reader runs on their own
+// Who makes the sound: Fish's official API, its local web companion, or the reader's GPT-SoVITS server.
 // machine (its api_v2.py), which costs nothing per character.
-export const TTS_PROVIDERS = Object.freeze(['fish', 'gsv']);
+export const TTS_PROVIDERS = Object.freeze(['fish', 'fish-web', 'gsv']);
 // GPT-SoVITS's own language codes, for a reference clip: zh, ja, ko and yue each read mixed with English,
 // auto lets it find the language itself.
 export const GSV_LANGUAGES = Object.freeze(['zh', 'ja', 'en', 'ko', 'yue', 'auto']);
@@ -970,6 +970,8 @@ export const DEFAULT_FISH = Object.freeze({
   concurrency: 2,
 });
 
+export const DEFAULT_FISH_WEB = Object.freeze({ baseUrl: 'http://127.0.0.1:7860', key: '' });
+
 // 豆包语音 (Volcengine) for what is read while written. The key is the new console's API Key; an App ID
 // makes it the old console's Access Token instead. Its key headers are refused across origins, so it
 // goes through the host's proxy like Fish.
@@ -1110,6 +1112,7 @@ export const DEFAULT_TTS = Object.freeze({
   // says what an id sounds like on each provider.
   provider: 'fish',
   fish: DEFAULT_FISH,
+  fishWeb: DEFAULT_FISH_WEB,
   doubao: DEFAULT_DOUBAO,
   minimax: DEFAULT_MINIMAX,
   gsv: DEFAULT_GSV,
@@ -1152,6 +1155,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   streamingWriteback: false,
   // 「只留译文」: a finished floor holds only its translation; the bilingual text goes into its metadata.
   translationOnly: false,
+  translationScope: 'all',
   apiMode: 'follow',
   selectedChannelId: DEFAULT_CHANNEL.id,
   channels: [DEFAULT_CHANNEL],
@@ -1208,12 +1212,10 @@ const FLOOR_BUTTON_LEGACY = Object.freeze({ auto: 'line', on: 'sentence' });
 export const UI_MODES = Object.freeze(['normal', 'advanced']);
 export const CONSOLE_PRESET_IDS = Object.freeze(['light', 'comfort', 'audiobook', 'everything']);
 
-// DESIGN §15.1/§16.1: which rail pages exist in which mode. 'main' (翻译台), 'helper' (小助手) and
-// 'logs' (运行记录) are in both; 'finetune' (微调) is normal-mode only. The other four are unchanged
-// advanced-mode pages.
+// Fish management is shared by both control-center modes.
 export const CONTROL_CENTER_PAGES = Object.freeze({
-  normal: Object.freeze(['main', 'finetune', 'helper', 'logs']),
-  advanced: Object.freeze(['main', 'prompt', 'settings', 'processing', 'tts', 'helper', 'logs']),
+  normal: Object.freeze(['main', 'finetune', 'fish-center', 'helper', 'logs']),
+  advanced: Object.freeze(['main', 'prompt', 'settings', 'processing', 'tts', 'fish-center', 'helper', 'logs']),
 });
 
 /** The page ids shown in a mode's rail, advanced's list for anything that is not a known mode. */
@@ -2231,6 +2233,11 @@ export function normalizeTts(value) {
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     provider: TTS_PROVIDERS.includes(source.provider) ? source.provider : DEFAULT_TTS.provider,
     fish: normalizeFishSettings(source.fish),
+    fishWeb: {
+      baseUrl: String(source.fishWeb?.baseUrl ?? '').trim().slice(0, 400) || DEFAULT_FISH_WEB.baseUrl,
+      key: String(source.fishWeb?.key ?? '').trim().slice(0, 512),
+      ...(source.fishWeb?.managed === true ? { managed: true } : {}),
+    },
     doubao: normalizeDoubaoSettings(source.doubao),
     minimax: normalizeMinimaxSettings(source.minimax),
     gsv: normalizeGsvSettings(source.gsv),
@@ -2425,6 +2432,7 @@ export function mergeSettings(value = {}) {
   merged.autoEdit = Boolean(merged.autoEdit);
   merged.streamingWriteback = Boolean(merged.streamingWriteback);
   merged.translationOnly = merged.translationOnly === true;
+  merged.translationScope = merged.translationScope === 'dialogue' ? 'dialogue' : 'all';
   merged.showFloatingButton = Boolean(merged.showFloatingButton);
   merged.floatingStyle = FLOATING_STYLES.includes(merged.floatingStyle) ? merged.floatingStyle : DEFAULT_SETTINGS.floatingStyle;
   merged.floorButtons = FLOOR_BUTTON_MODES.includes(merged.floorButtons)
@@ -4116,7 +4124,92 @@ function isPictureLine(value) {
   return !stripped || isBuiltinPreservedLine(text);
 }
 
+// Quote and skip pairs have the same meaning as the reading's settings. Offsets always refer to
+// the original, even when tags or excluded blocks have been blanked out for recognition.
+function dialogueParts(source, options) {
+  const quotes = parsePairList(options.quotePairs ?? DEFAULT_QUOTE_PAIRS).map(pair => ({ ...pair, kind: 'quoted' }));
+  const pairs = [...parsePairList(options.skipPairs ?? DEFAULT_SKIP_PAIRS).map(pair => ({ ...pair, kind: 'skipped' })), ...quotes]
+    .sort((a, b) => b.open.length - a.open.length);
+  const parts = [];
+  let cursor = 0, plainStart = 0;
+  while (cursor < source.length) {
+    const pair = pairs.find(item => source.startsWith(item.open, cursor));
+    if (!pair) { cursor += 1; continue; }
+    let at = cursor + pair.open.length, depth = 1;
+    for (; at < source.length;) {
+      if (source.startsWith(pair.close, at)) {
+        depth -= 1;
+        at += pair.close.length;
+        if (!depth) break;
+      } else if (pair.open !== pair.close && source.startsWith(pair.open, at)) {
+        depth += 1;
+        at += pair.open.length;
+      } else at += 1;
+    }
+    // An open quote cannot authorize translating the rest of the floor.
+    if (depth) break;
+    if (cursor > plainStart) parts.push({ text: source.slice(plainStart, cursor), kind: 'narration' });
+    parts.push({ text: source.slice(cursor, at), kind: pair.kind });
+    cursor = plainStart = at;
+  }
+  if (plainStart < source.length) parts.push({ text: source.slice(plainStart), kind: 'narration' });
+  return foldEmbeddedQuotes(parts, text => {
+    const pair = quotes.find(item => text.startsWith(item.open) && text.endsWith(item.close));
+    return pair ? text.slice(pair.open.length, -pair.close.length) : text;
+  });
+}
+
+function segmentDialogueSource(text, options) {
+  const base = segmentSource(text, { ...options, translationScope: 'all' });
+  const layout = [], segments = [], speech = new Map(), reading = new Map(), fragmentsById = new Map();
+  const startId = clampInteger(options.startId, 1, Number.MAX_SAFE_INTEGER, 1);
+  let sourceOffset = 0;
+  const raw = text => { if (text) { layout.push({ type: 'raw', text }); sourceOffset += text.length; } };
+  for (const unit of base.layout) {
+    if (unit.type !== 'segment' || unit.lyric) { raw(unit.sourceText ?? unit.text); continue; }
+    const source = unit.sourceText ?? unit.text;
+    let masked = source;
+    // Preserve rules are decided by the ordinary segmentation, before any quotes are considered.
+    let lineOffset = 0;
+    for (const line of unit.lineParts ?? []) {
+      if (!line.semantic) masked = masked.slice(0, lineOffset) + ' '.repeat(line.source.length) + masked.slice(lineOffset + line.source.length);
+      lineOffset += line.source.length + (line.separator ?? '').length;
+    }
+    for (const range of outermostExcludedRanges(source, [...parseTagNames(options.excludedTags), 's', 'del', 'strike'], { quoteAware: true })) {
+      masked = masked.slice(0, range.start) + ' '.repeat(range.end - range.start) + masked.slice(range.end);
+    }
+    masked = masked.replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, tag => ' '.repeat(tag.length));
+    let offset = 0;
+    for (const part of dialogueParts(masked, options)) {
+      const begin = offset;
+      offset += part.text.length;
+      const original = source.slice(begin, offset);
+      if (part.kind !== 'quoted') { raw(original); continue; }
+      const clean = withoutExcludedBlocks(original, options.excludedTags);
+      const translatedText = stripStructuralTags(dropHiddenMarkup(clean)).replace(/\s*\n\s*/g, ' ').trim();
+      if (!/[\p{L}\p{N}]/u.test(translatedText)) { raw(original); continue; }
+      const id = startId + segments.length;
+      const fragments = inlineFormatRuns(clean);
+      segments.push({ id, text: translatedText, ...(fragments.length ? { fragments: fragments.map(run => run.text) } : {}) });
+      if (fragments.length) fragmentsById.set(id, fragments);
+      // Carry the enclosing speaker mark without putting it in the translator's text.
+      const open = [];
+      for (const tag of source.slice(0, begin).matchAll(/<\/?say\b[^>]*>/gi)) {
+        if (/^<\//.test(tag[0])) open.pop(); else open.push(tag[0]);
+      }
+      const marked = speechMarkedLine(`${open.at(-1) ?? ''}${clean}${open.length ? '</say>' : ''}`);
+      if (marked) speech.set(id, marked);
+      layout.push({ type: 'segment', id, ids: [id], text: translatedText, sourceText: original, sourceOffset, dialogue: true,
+        formats: [lineFormatting(clean)], quoteFormats: [lineQuoteFormats(clean)], fragments: [fragments],
+        lineParts: [{ semantic: true, source: original, lead: '', trail: '' }] });
+      sourceOffset += original.length;
+    }
+  }
+  return { ...base, layout, segments, speech, reading, fragmentsById, lyricIds: new Set(), paragraphs: segments.length };
+}
+
 export function segmentSource(text, options = {}) {
+  if (options.translationScope === 'dialogue') return segmentDialogueSource(text, options);
   const source = stripGeneratedTranslationLines(text);
   const layout = [];
   const segments = [];
@@ -4536,26 +4629,35 @@ export function segmentSource(text, options = {}) {
  * current id → earlier id. Only the earlier paragraphs `kept` names take part; a text found more than
  * once is matched in turn.
  */
-export function matchSegmentsBySource(previousSegments, kept, currentSegments) {
+export function matchSegmentsBySource(previousSegments, kept, currentSegments, { stableOccurrences = false } = {}) {
   const pairs = new Map();
   const byText = new Map();
   for (const segment of Array.isArray(previousSegments) ? previousSegments : []) {
-    if (!kept(segment?.id)) continue;
+    if (!stableOccurrences && !kept(segment?.id)) continue;
     const text = String(segment?.text ?? '');
     if (!byText.has(text)) byText.set(text, []);
     byText.get(text).push(segment.id);
   }
-  for (const segment of Array.isArray(currentSegments) ? currentSegments : []) {
-    const queue = byText.get(String(segment?.text ?? ''));
-    if (queue?.length) pairs.set(segment.id, queue.shift());
+  const current = Array.isArray(currentSegments) ? currentSegments : [];
+  const counts = new Map();
+  for (const segment of current) counts.set(String(segment?.text ?? ''), (counts.get(String(segment?.text ?? '')) ?? 0) + 1);
+  // If a repeated dialogue was edited away or added, text alone cannot tell which occurrence survived.
+  // Keep the holes for untranslated occurrences too, instead of moving a later answer onto the first.
+  const ambiguous = new Set(stableOccurrences ? [...byText].filter(([text, ids]) => ids.length !== counts.get(text)).map(([text]) => text) : []);
+  for (const segment of current) {
+    const text = String(segment?.text ?? '');
+    const queue = byText.get(text);
+    if (!queue?.length || ambiguous.has(text)) continue;
+    const before = queue.shift();
+    if (!stableOccurrences || kept(before)) pairs.set(segment.id, before);
   }
   return pairs;
 }
 
-export function remapTranslationsBySource(previousSegments, translations, currentSegments) {
+export function remapTranslationsBySource(previousSegments, translations, currentSegments, options = {}) {
   const carried = new Map();
   if (!(translations instanceof Map) || !translations.size) return carried;
-  for (const [currentId, previousId] of matchSegmentsBySource(previousSegments, id => translations.has(id), currentSegments)) {
+  for (const [currentId, previousId] of matchSegmentsBySource(previousSegments, id => translations.has(id), currentSegments, options)) {
     const value = translations.get(previousId);
     if (value) carried.set(currentId, value);
   }
@@ -4574,7 +4676,7 @@ export function createTranslationSignature(regions) {
 // recoverStructuredTranslations already unwrap here, instead of re-deriving it (review finding
 // helper.js:616: askHelper handed an independent connection's raw { content, reasoning } object
 // straight to String(), which read as "[object Object]").
-export function unwrapResponseContent(raw) {
+export function unwrapResponseContent(raw, { allowReasoning = true } = {}) {
   let value = raw;
   for (let depth = 0; depth < 3; depth += 1) {
     if (!value || typeof value !== 'object') break;
@@ -4585,12 +4687,34 @@ export function unwrapResponseContent(raw) {
     }
     const reasoning = value.reasoning ?? value.reasoning_content ?? value.thinking;
     if (typeof reasoning === 'string' && reasoning.trim()) {
+      if (!allowReasoning) return '';
       value = reasoning;
       continue;
     }
     break;
   }
   return value;
+}
+
+// Used by every translation parser, including the numbered-line fallback. An open
+// thinking block consumes the rest of a partial stream until its closing tag arrives.
+function withoutThinkingBlocks(value) {
+  let result = '';
+  let cursor = 0;
+  let depth = 0;
+  for (const match of value.matchAll(/<(\/?)(?:think|thinking|analysis)\b[^>]*>/gi)) {
+    if (!depth) result += value.slice(cursor, match.index);
+    if (match[1]) depth = Math.max(0, depth - 1);
+    else depth += 1;
+    cursor = match.index + match[0].length;
+  }
+  return result + (depth ? '' : value.slice(cursor));
+}
+
+/** Thinking is diagnostic data, never a fallback answer for a translation. */
+export function translationResponseContent(raw) {
+  const content = unwrapResponseContent(raw, { allowReasoning: false });
+  return typeof content === 'string' ? withoutThinkingBlocks(content) : content;
 }
 
 /**
@@ -4709,7 +4833,7 @@ const TRANSLATION_PLACEHOLDER_RE = /^(?:[<\[(（【]\s*)?(?:none|null|nil|empty|
 
 function normalizeTranslationText(value) {
   if (typeof value !== 'string') return '';
-  let text = value.trim().replace(/^```(?:text)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  let text = withoutThinkingBlocks(value).trim().replace(/^```(?:text)?\s*/i, '').replace(/\s*```$/i, '').trim();
   if (text.startsWith('{') && text.endsWith('}') && text.length > 2) text = text.slice(1, -1).trim();
   text = text.replaceAll(INVISIBLE_MARKER, '').replace(/\r?\n+/g, ' ').replace(/[ \t]{2,}/g, ' ').trim();
   text = text.replace(/^(?:中文|译文|translation)\s*[:：]\s*/i, '').trim();
@@ -4948,7 +5072,8 @@ function splitBatchesEvenly(list, count) {
 export function recoverStructuredTranslations(raw, expectedSegments) {
   const expected = Array.isArray(expectedSegments) ? expectedSegments : [];
   const expectedIds = new Set(expected.map(item => Number(item.id)));
-  const parsedCandidates = parseJsonCandidates(raw);
+  const content = translationResponseContent(raw);
+  const parsedCandidates = parseJsonCandidates(content);
   const items = [];
   const seenItems = new Set();
   // A run's own marks inside `quotes` parse as fragments of their own: the array alone reads as a list
@@ -4995,7 +5120,7 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
       }
     }
   }
-  if (!items.length) items.push(...lineProtocolItems(raw));
+  if (!items.length) items.push(...lineProtocolItems(content));
   const translations = new Map();
   const annotations = new Map();
   const warnings = [];
@@ -5036,7 +5161,7 @@ export function recoverStructuredTranslations(raw, expectedSegments) {
   }
 
   const missingIds = expected.map(item => Number(item.id)).filter(id => !translations.has(id));
-  const unwrapped = unwrapResponseContent(raw);
+  const unwrapped = content;
   let contentCharacters = 0;
   if (typeof unwrapped === 'string') contentCharacters = unwrapped.length;
   else if (unwrapped && typeof unwrapped === 'object') {
@@ -5084,7 +5209,7 @@ export function assembleBilingual(layout, translationMap, options = {}) {
     const decoration = segmentDecoration(options.styleFor, ids, ids.map(id => translationMap.get(id) ?? ''), part.quoteFormats, part.fragments);
     const body = translationUnitBody(part, ids, translationMap, options, decoration);
     if (body) {
-      pieces.push(`\n${renderTranslationBlock(body, {
+      pieces.push(`${part.dialogue ? '' : '\n'}${renderTranslationBlock(body, {
         ...options,
         padAfter: part.padAfter === true,
         ...decoration,
@@ -5628,6 +5753,7 @@ function replaceUnitBody(part, ids, translationMap, options, decoration = {}) {
 }
 
 export function assembleReplace(layout, translationMap, options = {}) {
+  if (layout.some(part => part.dialogue)) return assembleBilingual(layout, translationMap, options);
   const allowMissing = options.allowMissing === true;
   const pieces = [];
   for (const part of layout) {
@@ -5796,6 +5922,7 @@ function readReplaceBodyByLine(body, lineParts, ids) {
 // hidden original rather than consumed by position. Getting that wrong silently shifted every
 // remaining translation one segment earlier and overwrote good paragraphs on the next run.
 export function extractReplaceTranslations(text, options = {}) {
+  if (options.translationScope === 'dialogue') return extractGeneratedTranslations(text, options);
   const segmented = segmentSource(stripGeneratedTranslationLines(text), { ...options, legacyWrappers: false });
   const pairs = [];
   for (const match of String(text ?? '').matchAll(REPLACE_PAIR_BOTH_RE)) {

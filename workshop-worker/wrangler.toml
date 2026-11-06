@@ -1,0 +1,22 @@
+name = "jingyi-voice-workshop"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+# 部署后你的 Worker 地址（不带结尾的斜杠）。Discord 授权完成后会回到 PUBLIC_URL/api/auth/callback
+PUBLIC_URL = "https://jingyi-voice-workshop.你的子域名.workers.dev"
+# Discord 开发者后台 → 你的应用 → OAuth2 里的 Client ID（这个不是秘密）
+DISCORD_CLIENT_ID = "填 Client ID"
+# 管理员的 Discord 用户 ID，多个用英文逗号隔开。管理员能删任何人的投稿、封人。
+ADMIN_IDS = ""
+# 同一个音色被多少个不同的人举报后自动隐藏（默认 3）
+REPORT_HIDE_AT = "3"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "jingyi-voice-workshop"
+database_id = "填 wrangler d1 create 输出的 database_id"
+
+# 需要用 wrangler secret put 设置的（不要写进这个文件）：
+#   DISCORD_CLIENT_SECRET   Discord 应用的 Client Secret
+#   FISH_API_KEY            可选。填了以后，投稿时由服务器再去 Fish 核对一次音色是否存在、是否私有

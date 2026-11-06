@@ -107,6 +107,47 @@ import {
   normalizeHelper,
   helperPromptFoldSummary,
 } from '../core.js';
+
+test('dialogue scope preserves every original byte and recovers repeated and multiline quotes', () => {
+  const source = '她说：“你好！”他答道：「你好！」\n接着说道：「第一行\n第二行。」\n旁白留在这里。';
+  const options = { translationScope: 'dialogue', startId: 4 };
+  const segmented = segmentSource(source, options);
+  assert.deepEqual(segmented.segments, [
+    { id: 4, text: '“你好！”' }, { id: 5, text: '「你好！」' }, { id: 6, text: '「第一行 第二行。」' },
+  ]);
+  const translations = new Map([[4, '“Hello!”'], [5, '「Hello again!」'], [6, '「Two lines.」']]);
+  for (const render of [assembleBilingual, assembleReplace]) {
+    const written = render(segmented.layout, translations, options);
+    assert.equal(stripGeneratedTranslationLines(written), source);
+    assert.deepEqual(extractGeneratedTranslations(written, options), translations);
+    assert.deepEqual(extractReplaceTranslations(written, options), translations);
+    assert.equal(stripGeneratedTranslationLines(restyleBilingual(written, { translationPrefix: '【', translationSuffix: '】' })), source);
+  }
+});
+
+test('dialogue scope honours excluded tags, preserved lines, skip pairs and complete quote boundaries', () => {
+  const source = '<span title="do not translate > this">她说：“你好！”</span>\n<pic prompt="1girl, <lora:x:1>, 「隐藏对白」"/>\n' +
+    '<secret>「藏起来。」</secret>\n保留：「不译。」\n（她想：「不说出口。」）她道：「我说「可以」了。」\n' +
+    '那个“称呼”没有变。\n「这一句未闭合';
+  const options = { translationScope: 'dialogue', excludedTags: ['secret', 'pic'], preserveLineRules: '/^保留：/', skipPairs: ['（）'] };
+  const segmented = segmentSource(source, options);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['“你好！”', '「我说「可以」了。」']);
+  const partial = assembleBilingual(segmented.layout, new Map([[2, '「I said yes.」']]), { ...options, allowMissing: true });
+  assert.equal(stripGeneratedTranslationLines(partial), source);
+  assert.deepEqual([...extractGeneratedTranslations(partial, options)], [[2, '「I said yes.」']]);
+  assert.equal(segmentSource('纯旁白，没有人说话。', options).segments.length, 0);
+});
+
+test('dialogue scope carries speaker marks and formatting and accepts configured quote pairs', () => {
+  const options = { translationScope: 'dialogue', quotePairs: ['«»'], skipPairs: [] };
+  const source = '<say who="小明">«<b>你好！</b>»</say>旁白。';
+  const segmented = segmentSource(source, options);
+  assert.deepEqual(segmented.segments.map(item => item.text), ['«你好！»']);
+  assert.equal(segmented.speech.get(1).marks[0].speaker, '小明');
+  assert.equal(stripGeneratedTranslationLines(assembleBilingual(segmented.layout, new Map([[1, '«Hello!»']]), options)), source);
+  assert.equal(mergeSettings({}).translationScope, 'all');
+  assert.equal(mergeSettings({ translationScope: 'invalid' }).translationScope, 'all');
+});
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -775,10 +816,30 @@ test('partial bilingual assembly keeps untranslated source segments untouched', 
   assert.equal(output.replace(/[\u200b\u200c\u2060-\u2064]/g, ''), '一。\n{一。}\n\n二。\n\n三。\n{三。}');
 });
 
-test('reasoning-only compatibility responses can still recover the final JSON', () => {
+test('reasoning-only compatibility responses never supply a translation', () => {
   const expected = [{ id: 1, text: '雨。' }];
   const raw = { content: '', reasoning: '先检查 {姓名}。\n{"translations":[{"id":1,"text":"雨。"}]}\n完成。' };
-  assert.equal(parseStructuredTranslations(raw, expected).get(1), '雨。');
+  assert.deepEqual(recoverStructuredTranslations(raw, expected).missingIds, [1]);
+  assert.throws(() => parseStructuredTranslations(raw, expected), /没有返回可恢复的译文/);
+});
+
+test('every translation format excludes closed, open and nested thinking blocks', () => {
+  const expected = [{ id: 1, text: '雨。' }];
+  const draft = '思考：这一句是旁白。';
+  for (const tag of ['think', 'thinking', 'analysis']) {
+    for (const answer of ['1: 下雨了。', '{"translations":[{"id":1,"text":"下雨了。"}]}']) {
+      const raw = `<${tag}>\n1: ${draft}\n<think>嵌套草稿</think>\n</${tag}>\n${answer}`;
+      assert.equal(parseStructuredTranslations(raw, expected).get(1), '下雨了。');
+    }
+    for (const body of [`1: ${draft}`, JSON.stringify([{ id: 1, text: draft }])]) {
+      assert.equal(recoverStructuredTranslations(`<${tag}>\n${body}`, expected).translations.size, 0);
+    }
+  }
+  for (const key of ['reasoning', 'reasoning_content', 'thinking']) {
+    assert.equal(recoverStructuredTranslations({ content: { content: '', [key]: `1: ${draft}` } }, expected).translations.size, 0);
+    assert.equal(parseStructuredTranslations({ content: '1: 下雨了。', [key]: `1: ${draft}` }, expected).get(1), '下雨了。');
+  }
+  assert.equal(recoverStructuredTranslations({ translations: [{ id: 1, text: `<think>${draft}</think>` }] }, expected).translations.size, 0);
 });
 
 test('visible think and thinking blocks are ignored only while parsing final JSON', () => {
@@ -2651,8 +2712,8 @@ test('preset remembers the last applied package id, and drops anything unrecogni
 });
 
 test('pagesForMode lists the rail per DESIGN §15.1/§16.1, and resolvePageForMode falls back to 翻译台', () => {
-  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'helper', 'logs']);
-  assert.deepEqual(pagesForMode('advanced'), ['main', 'prompt', 'settings', 'processing', 'tts', 'helper', 'logs']);
+  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'fish-center', 'helper', 'logs']);
+  assert.deepEqual(pagesForMode('advanced'), ['main', 'prompt', 'settings', 'processing', 'tts', 'fish-center', 'helper', 'logs']);
   assert.deepEqual(pagesForMode('bogus'), pagesForMode('advanced'));
   assert.equal(pageExistsInMode('tts', 'normal'), false);
   assert.equal(pageExistsInMode('tts', 'advanced'), true);

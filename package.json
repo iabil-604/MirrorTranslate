@@ -1,10 +1,10 @@
 {
   "name": "st-jingyi-translator",
-  "version": "0.51.4",
+  "version": "0.51.5",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check index.js && node --check core.js && node --check palette.js && node --check theme-probe.js && node --check processing.js && node --check jailbreak-default.js && node --check prompts.js && node --check workflow.js && node --check diagnostics.js && node --check tts.js && node --check tts-store.js && node --check console-autosave.js && node --check helper.js && node --check tts-stream.js && node --check pcm-player.js && node --check tts-cloud.js && node --check call.js && node --check reading.js && node --check scripts/preview-server.mjs && node --check scripts/mock-services.mjs && node --check scripts/sandbox-tavern.mjs",
+    "check": "node --check index.js && node --check core.js && node --check palette.js && node --check theme-probe.js && node --check processing.js && node --check jailbreak-default.js && node --check prompts.js && node --check workflow.js && node --check diagnostics.js && node --check tts.js && node --check tts-store.js && node --check console-autosave.js && node --check helper.js && node --check tts-stream.js && node --check pcm-player.js && node --check tts-cloud.js && node --check call.js && node --check reading.js && node --check workshop.js && node --check fish-web.js && node --check workshop-worker/src/index.js && node --check scripts/preview-server.mjs && node --check scripts/mock-services.mjs && node --check scripts/sandbox-tavern.mjs && node --check fish-center.js && node --check scripts/install-mirrortranslate.mjs && node --check scripts/preview-fish.mjs && node --check scripts/web-beta-workshop.mjs && node --check server-plugin/index.mjs && node --check server-plugin/child.mjs && node --check server-plugin/lib/accounts.mjs && node --check server-plugin/lib/browser.mjs && node --check server-plugin/lib/config.mjs && node --check server-plugin/lib/errors.mjs && node --check server-plugin/lib/fish.mjs && node --check server-plugin/lib/gateway.mjs && node --check server-plugin/lib/network-proxy.mjs && node --check server-plugin/lib/pool.mjs && node --check server-plugin/lib/scheduler.mjs",
     "preview": "node scripts/preview-server.mjs",
     "mock": "node scripts/mock-services.mjs",
     "sandbox": "node scripts/sandbox-tavern.mjs",

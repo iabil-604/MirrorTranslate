@@ -1,4 +1,4 @@
-import { hashTextSync } from './core.js?v=0.51.4';
+import { hashTextSync } from './core.js?v=0.51.5';
 
 // ---------------------------------------------------------------------------------------------
 // The public interface's reading of a floor (window.__JINGYI__.reading), in the shape agreed with the
@@ -58,6 +58,9 @@ export function readingPositions(source, regions, texts = new Map()) {
     const end = Number.isInteger(region?.closeStart) ? Math.min(region.closeStart, text.length) : text.length;
     for (const part of Array.isArray(region?.layout) ? region.layout : []) {
       if (part?.type !== 'segment') continue;
+      // A dialogue fragment can repeat words inside an excluded block before it. Its source offset
+      // identifies the actual spoken occurrence, without searching that earlier, unspoken text.
+      if (part.dialogue && Number.isInteger(part.sourceOffset)) cursor = (Number(region.contentStart) || 0) + part.sourceOffset;
       const ids = Array.isArray(part.ids) && part.ids.length ? part.ids : [part.id];
       const lines = Array.isArray(part.lineParts) && part.lineParts.length
         ? part.lineParts

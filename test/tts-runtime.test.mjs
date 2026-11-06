@@ -878,7 +878,8 @@ test('the latest floor is made in the background, paragraph by paragraph in the 
   context.chat.push(await translatedFloor('一。\n\n二。\n\n三。', [[1, '第一段。'], [2, '第二段。'], [3, '第三段。']], settings));
   const calls = mockFish();
   assert.equal(await __testing.pregenerateTtsFloor(0, { quiet: true }), 3);
-  assert.deepEqual(calls.map(call => call.body.text), ['第一段。', '第二段。', '第三段。']);
+  // Concurrent requests may reach Fish in either order.
+  assert.deepEqual(new Set(calls.map(call => call.body.text)), new Set(['第一段。', '第二段。', '第三段。']));
   assert.equal(await __testing.pregenerateTtsFloor(0, { quiet: true }), 0);
   assert.equal(calls.length, 3);
   const usage = await __testing.ttsStore().usage();
@@ -3754,9 +3755,9 @@ test('call.connect tells an app what is still missing for what it asked for, and
   assert.deepEqual(first.missing.map(item => item.id), ['tts', 'key', 'voices', 'stt', 'llm']);
   const voices = first.missing.find(item => item.id === 'voices');
   assert.deepEqual(voices.names, ['老胡', '路人'], '小樱 is 樱井 by another name, and 樱井 has a voice');
-  assert.equal(voices.reason, '老胡还没绑音色，通话里用对白默认音色读；路人在角色表里设成了不朗读，通话里不出声。');
-  assert.match(first.missing.find(item => item.id === 'llm').reason, /^通话用的连接留空，和分析模式用同一条，现在是「跟随酒馆」/);
-  assert.equal(first.missing.find(item => item.id === 'stt').reason, '这个浏览器不能录音，语音输入用不了。');
+  assert.equal(voices.reason, '老胡未绑音色，将用对白默认音色。路人已设为不朗读。');
+  assert.match(first.missing.find(item => item.id === 'llm').reason, /^沿用分析模式连接。跟随酒馆/);
+  assert.equal(first.missing.find(item => item.id === 'stt').reason, '浏览器不支持录音。');
   assert.deepEqual(toasts, [['warning', '小手机连上了镜译，还缺 5 项：朗读功能、Fish Audio API Key、角色音色、语音输入、通话用的连接。到「朗读 → 更多 → 实时通话」看怎么补。']]);
 
   // Asked again: what the app said is replaced, and the reminder is not said twice.
@@ -3812,7 +3813,7 @@ test('the speakers an app\'s own readings turn out to have are checked too, and 
   __testing.renderCallApps(root);
   assert.deepEqual(rows(), [
     [false, '·', '已连接的应用：小手机', '还缺 1 项', null],
-    [true, '·', '角色音色', '老胡还没绑音色，通话里用对白默认音色读。', '去设置:voices'],
+    [true, '·', '角色音色', '老胡未绑音色，将用对白默认音色。', '去设置:voices'],
   ]);
 
   // The 通话测试 page's own calls are 镜译's, not the app's: nobody it hears is added.

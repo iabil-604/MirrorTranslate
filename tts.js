@@ -15,9 +15,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.51.4';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.51.4';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.51.4';
+} from './core.js?v=0.51.5';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.51.5';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.51.5';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -1868,6 +1868,7 @@ export function unsungText(text) {
  */
 export function singingBlockedReason(tts) {
   if (tts?.provider === 'gsv') return 'GPT-SoVITS 不能唱，换成 Fish 的 S2 系列才能唱。';
+  if (tts?.provider === 'fish-web') return 'Fish 网页订阅目前支持朗读。需要唱歌时请使用官方 API 的 S2 系列。';
   if (tts?.fish?.model === 's1') return 's1 不能唱，换成 Fish 的 S2 系列才能唱。';
   return '';
 }
@@ -2977,7 +2978,35 @@ export const GSV_ADAPTER = Object.freeze({
   voiceTag: (voiceId, tts, library = []) => gsvVoiceTag(voiceId, tts?.gsv, library),
 });
 
-const PROVIDERS = new Map([[FISH_ADAPTER.id, FISH_ADAPTER], [GSV_ADAPTER.id, GSV_ADAPTER]]);
+// The companion returns audio without a timeline. Keep one sentence per WAV so every seek is exact.
+const fishWebProsody = (item, tts) => ({
+  speed: sentenceProsody(item, { speed: 1, volume: 0, model: 's2-pro' }, { prosodySplit: tts?.prosodySplit !== false }).speed,
+  volume: 0,
+});
+export const FISH_WEB_ADAPTER = Object.freeze({
+  id: 'fish-web',
+  label: 'Fish 网页订阅',
+  vocabulary: FISH_ADAPTER.vocabulary,
+  sentenceText: gsvSentenceText,
+  prosody: fishWebProsody,
+  parts: items => items.map(item => [item]),
+  payload([item], tts) {
+    return { body: {
+      input: gsvSentenceText(item, tts),
+      model: 'tts-1',
+      voice: item.voiceId || 'default',
+      response_format: 'wav',
+      speed: fishWebProsody(item, tts).speed,
+    } };
+  },
+  fingerprint: (tts, { consoles = '', origin = '' } = {}) => ({
+    provider: 'fish-web', origin, mode: tts.mode, consoles, prosodySplit: tts.prosodySplit,
+  }),
+  mime: () => 'audio/wav',
+  supportsMultiSpeaker: () => false,
+});
+
+const PROVIDERS = new Map([FISH_ADAPTER, GSV_ADAPTER, FISH_WEB_ADAPTER].map(adapter => [adapter.id, adapter]));
 
 /** The adapter for a provider id; an unknown id reads through Fish, the one every setting was made for. */
 export function ttsProvider(id = 'fish') {

@@ -5,12 +5,13 @@
 | 项 | 内容 |
 | --- | --- |
 | 是什么 | SillyTavern 的浏览器端扩展。主模型照常用原文写正文；回复写完后，镜译把正文翻成目标语言，用不可见边界写回楼层；发给主模型前由生成拦截器去掉译文。另有朗读（有声小说）、实时通话、小助手 |
-| 技术栈 | 原生 ES 模块 + CSS，没有依赖、没有打包、没有构建步骤；测试用 Node 自带的 `node --test` |
+| 技术栈 | 扩展使用原生 ES 模块和 CSS；Fish 网页订阅使用酒馆的 Node.js 服务端插件；音色工坊使用 Cloudflare Worker 和 D1。自动测试用 `node --test` |
 | 入口 | `manifest.json` → `index.js`（生命周期钩子 `onActivate` / `onDisable` / `onClean`，生成拦截器 `JingyiTranslator_interceptGeneration`）；宿主页面样式 `host.css`（引入 `reading.css`）；控制中心、悬浮窗和弹出的对话框用的 `style.css` 由脚本读进各自的 shadow root |
 | 设置存放 | `SillyTavern.getContext().extensionSettings['jingyi-translator']`，`schemaVersion: 13`，读入时由 `core.js` 的 `mergeSettings` 补默认值并迁移旧字段 |
 | 公开接口 | `window.__JINGYI__`：`tts`（`status` / `voices` / `speak` / `read` / `stream` / `stop`）、`stt`（`status` / `start`）、`llm`（`status` / `stream`）、`call.connect`、`scene`（`get` / `list` / `onChange`）、`floor.original`、`reading`（`get` / `onChange` / `status`）。能不能用看 `features` |
-| 当前版本 | 0.51.4。版本号写在 `core.js` 的 `APP_VERSION`、`manifest.json`（`version` 和两个 `?v=`）、`package.json`，以及每个模块导入路径的 `?v=` |
-| 当前未做 | 场景只记录、界面里还没有用它的功能（配乐、大纲、配图，配图字段关着）；豆包语音、MiniMax 只用于边写边读和通话；TauriTavern 真机和豆包、MiniMax 的真实接口没有实测；「只留译文」的楼层被插件在正文标签里插入内容（比如图片）后算作手改过（`conflict`），不再自动翻译；v0.51.4 只在沙盒酒馆里验证过；`使用手册.md`、`VALIDATION.md` 停在 v0.32.3 |
+| 当前版本 | 0.51.5。版本号写在 `core.js` 的 `APP_VERSION`、`manifest.json`（`version` 和两个 `?v=`）、`package.json`，以及每个模块导入路径的 `?v=` |
+| 验证范围 | Fish 网页订阅已通过酒馆 1.18.0 隔离安装和服务测试，真实账号登录及合成待验证。音色工坊已通过模拟测试，真实 Discord 登录待验证。TauriTavern 真机和豆包、MiniMax 的真实接口未实测 |
+| 当前未做 | 场景只记录，界面还没有配乐、大纲或配图功能；已完成「只留译文」的楼层在正文里插图后仍可能标为 `conflict`；`使用手册.md`、`VALIDATION.md` 停在 v0.32.3 |
 | 接手先看 | `交接.md`（交接时的状态和待办）、`AGENT_LOG.md` 末尾（开发记录，只追加）、`DESIGN.md`（界面与动效规约） |
 
 ## 仓库结构
@@ -37,6 +38,10 @@ MirrorTranslate/
 ├─ tts-store.js             音频缓存（IndexedDB）
 ├─ tts-stream.js            边写边读的切句
 ├─ tts-cloud.js             豆包语音、MiniMax 的请求与读流
+├─ fish-center.js / fish-web.js   Fish 管理页面和网页订阅客户端
+├─ server-plugin/           Fish 网页订阅的酒馆服务端插件
+├─ workshop.js              音色工坊页面
+├─ workshop-worker/         工坊的 Cloudflare Worker、D1 与部署说明
 ├─ pcm-player.js            边收边放：PCM / WAV 流式播放
 ├─ call.js                  通话测试：通话流程、通话记录、已连接的应用
 ├─ host.css / reading.css / style.css   宿主页面样式 / 楼层朗读样式 / 控制中心与悬浮窗样式
@@ -57,21 +62,24 @@ MirrorTranslate/
 
 ```text
 .gitattributes  .gitignore
-README.md  Public.md  VALIDATION.md  使用手册.md  DESIGN.md  AGENT_LOG.md  交接.md
+README.md  BETA.md  Public.md  VALIDATION.md  使用手册.md  DESIGN.md  AGENT_LOG.md  交接.md
 manifest.json  package.json  capability-contract.json
 index.js  core.js  prompts.js  workflow.js  processing.js  palette.js  theme-probe.js
 scene.js  helper.js  mini.js  diagnostics.js  console-autosave.js  jailbreak-default.js
 tts.js  tts-deep.js  tts-speakers.js  tts-sanitizer.js  tts-store.js  tts-stream.js  tts-cloud.js
 pcm-player.js  call.js
+fish-center.js  fish-web.js  workshop.js  server-plugin/  workshop-worker/
 host.css  reading.css  style.css
 preview.html  reading-preview.html
 scripts/preview-server.mjs  scripts/create-reading-preview.mjs
 scripts/mock-services.mjs  scripts/sandbox-tavern.mjs
+scripts/preview-fish.mjs  scripts/web-beta-workshop.mjs
+scripts/Install-MirrorTranslate.cmd  scripts/install-mirrortranslate.mjs
 validation/sillytavern-1.18.0.snapshot.json
 design/Baseline.dc.html  design/Connection.dc.html  design/Logs.dc.html  design/Main.dc.html
 design/Mini.dc.html  design/MiniStates.dc.html  design/Motion.dc.html  design/Processing.dc.html
 design/Rules.dc.html  design/canvas.json  design/jingyi-control-center.html
-test/*.test.mjs（43 个文件）
+test/*.test.mjs
 ```
 
 </details>
@@ -90,10 +98,11 @@ test/*.test.mjs（43 个文件）
       - 流式写回和通话：`POST /api/backends/chat-completions/generate`，带 `stream: true`。
 
       独立连接平时以 `openai` 来源加 `reverse_proxy` 发出。选了推理强度（或要关掉思考）时改走宿主的 `custom` 来源，参数写进 `custom_include_body`，连接自己的 Key 写进 `custom_include_headers`。
-   6. 解析回答（容错的 JSON 解析），缺的段落补译。
+   6. 过滤模型的思考字段和思考块，再解析译文，缺的段落补译。
    7. 拼装写回：
       - 双语：原文段和译文段各用不可见边界包住；
       - 只留译文：`mes` 只留译文，双语稿存进楼层的 `extra`。
+      - 只翻对白：保留原文和旁白，把译文附在对应对白后，并按楼层记录翻译范围和引号规则。
    8. 写回后重画楼层并保存聊天，发出 `MESSAGE_UPDATED`。
 3. **发给主模型**：宿主调用生成拦截器时，镜译依次做四件事：
    1. 「让主模型给台词标上说话人和情绪」开着时，加上标记要求；
@@ -137,7 +146,7 @@ test/*.test.mjs（43 个文件）
 
 **写回**
 
-- 同一楼同一滑动页只允许一个翻译任务。写回前重读楼层，正文变了就不写旧结果；只在正文标签外多了内容时安全合并。
+- 同一楼同一滑动页只允许一个翻译任务。写回前重读楼层，完整的排除标签块按最新位置合并；改了要翻的原文时，不把旧结果写到变动处。
 - 「只留译文」的记录按楼层内容认领，不按滑动页号：删除、新建滑动页都不会认错。只留译文之后又被手改的楼层（`diverged`）不再翻译，插件在正文标签里插入内容（比如图片）也算手改。「恢复本聊天的原文」把它们放回双语，楼层上的改动会丢。
 
 **请求**
@@ -173,6 +182,7 @@ test/*.test.mjs（43 个文件）
 | `autoSwipe` | `true` | 切换滑动页时补译（跟着 `autoGeneration`） |
 | `autoEdit` | `false` | 编辑楼层后自动重译；只在要翻的原文变了时请求模型 |
 | `streamingWriteback` | `false` | 流式写回（只在独立连接下生效） |
+| `translationScope` | `'all'` | 全文；设为 `'dialogue'` 时只翻对白并保留原文 |
 | `translationOnly` | `false` | 只留译文 |
 | `apiMode` / `selectedChannelId` / `channels` | `'follow'` / 默认连接 / 一条 | 翻译用哪条连接、保存的连接 |
 | `channels[].reasoningEffort` | `''` | 推理强度：`''` 不发送 / `minimal` / `low` / `medium` / `high`；写进 `excludeParams` 也不发送 |
@@ -479,7 +489,7 @@ if (jy?.features?.includes('reading')) {
 | 通用通讯终端 V4（小手机） | 能同时用。它的「自动主动消息」按楼层文字记指纹，要打配套补丁（改用 `floor.original` 读楼层）才不会因为镜译翻译而丢消息 |
 | 「东京都2051」卡片 | 用 `reading` 读正文（正文标签是 `cxx-story`，要用户加进提取标签）；`apiVersion` 2 起要处理 `conflict` 状态 |
 | tokimemo | 用 `tts.speak` 读台词和睡前故事，用 `tts.stream`、`llm.stream`、`stt` 打电话 |
-| 往正文里插图的生图插件（比如百宝汇的 `bbi_image`） | 把插图的标签加进排除标签后，插图不触发重翻；「只留译文」的楼层插图后会变成 `conflict` |
+| 往正文里插图的生图插件（比如百宝汇的 `bbi_image`） | 加入排除标签后，翻译途中插入完整标签块会原样保留；在已完成「只留译文」的正文里插图仍可能标为 `conflict` |
 | 开着登录保护（`basicAuthMode`）的酒馆 | 经代理时 Key 不放 `Authorization`，不会弹出登录框 |
 
 ## 开发与验证
@@ -487,7 +497,7 @@ if (jy?.features?.includes('reading')) {
 | 命令 | 做什么 |
 | --- | --- |
 | `npm run check` | 用 `node --check` 检查各模块语法 |
-| `npm test` | 跑全部自动测试（`node --test`，目前 1021 项） |
+| `npm test` | 跑全部自动测试（`node --test`） |
 | `npm run validate` | 上面两步一起跑 |
 | `npm run preview` | 起本地预览服务（`scripts/preview-server.mjs`）：模拟酒馆、翻译模型、Fish、豆包、MiniMax，打开 `preview.html` 看控制中心、悬浮窗和楼层 |
 | `npm run mock` | 起模拟服务（`scripts/mock-services.mjs`，端口 8812）：OpenAI 兼容的聊天补全（主回复、镜译的翻译请求、小手机的请求）、Fish、GPT-SoVITS、语音转写，声音是一段纯音。`POST /__mock/config` 打开失败、延迟、拒收某个参数（`refuseField`），`GET /__mock/log` 看收到的请求，`POST /__mock/reset` 复原 |
