@@ -76,6 +76,13 @@
       "fallback": "direct-connection-to-a-cors-enabled-relay"
     },
     {
+      "id": "android-fish-local",
+      "owner": "provider",
+      "symbol": "Android TauriTavern 2.3.0 native OpenAI-compatible TTS + Fish Local /v1/mirror/check",
+      "required": false,
+      "fallback": "show-fish-local-setup-or-use-another-reading-source"
+    },
+    {
       "id": "native-extension-updater",
       "owner": "sillytavern",
       "symbol": "/api/extensions/discover + /api/extensions/version + /api/extensions/update",

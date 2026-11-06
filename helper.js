@@ -34,7 +34,7 @@ import {
   pathSet,
   presetDrift,
   unwrapResponseContent,
-} from './core.js?v=0.51.5';
+} from './core.js?v=0.51.6-beta.1';
 
 // ---------------------------------------------------------------------------------------------
 // Default prompt and quick questions
@@ -178,7 +178,7 @@ export function buildSettingsSummaryLines(settings = {}) {
   lines.push(`副模型提示词 › 破限词：${String(tts.prompts?.jailbreak ?? '').trim() ? '已填写' : '未填写'}`);
   const sources = { fish: 'Fish Audio', 'fish-web': 'Fish 网页订阅', gsv: 'GPT-SoVITS（本地）' };
   lines.push(`声音来源：${sources[tts.provider] ?? sources.fish}`);
-  if (tts.provider === 'fish-web') lines.push('Fish 网页订阅：在「Fish 管理」启动服务、登录和选音色。');
+  if (tts.provider === 'fish-web') lines.push('Fish 网页订阅：从「Fish 管理」连接。');
   if (tts.provider === 'gsv') {
     const gsv = tts.gsv || {};
     lines.push(`GPT-SoVITS › 接口地址：${urlHost(gsv.baseUrl) || '未填'}`);

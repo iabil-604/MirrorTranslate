@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { basename, dirname, resolve } from 'node:path';
 import { Readable, Writable } from 'node:stream';
-import { FISH_CENTER_MARKUP } from '../fish-center.js';
+import { setImmediate as nextTick } from 'node:timers/promises';
+import { createFishCenter, FISH_CENTER_MARKUP } from '../fish-center.js';
 import { FISH_MANAGED_ROOT, fishManagedRequest } from '../fish-web.js';
 import { createFishRoutes } from '../server-plugin/index.mjs';
 import { makeTask } from '../server-plugin/lib/fish.mjs';
@@ -50,7 +51,97 @@ test('Fish management is nested in the original reading page', () => {
   const reading = markup.slice(markup.indexOf('data-jy-page="tts"'), markup.indexOf('</section>\n\n', markup.indexOf('data-jy-page="tts"')));
   assert.match(reading, /class="jy-tts-sources"[\s\S]*data-jy-fold="tts-fish-center"/);
   assert.match(FISH_CENTER_MARKUP, /releases\/latest\/download\/MirrorTranslate\.zip/);
+  const installerLink = FISH_CENTER_MARKUP.match(/<a[^>]*data-fish-install-download[^>]*>/)[0];
+  assert.match(installerLink, /download="MirrorTranslate\.zip"/);
+  assert.doesNotMatch(installerLink, /target=/);
   assert.doesNotMatch(FISH_CENTER_MARKUP, /iframe|Fish\.exe|allowedOrigins|API Key/);
+});
+
+test('missing Fish shows a desktop ZIP only on the supported host and device', async t => {
+  t.mock.method(globalThis, 'fetch', async url => {
+    assert.equal(url, FISH_MANAGED_ROOT + '/state');
+    return Response.json({ error: { code: 'not_found' } }, { status: 404 });
+  });
+  for (const scenario of [
+    { host: 'sillytavern', browser: { platform: 'Win32' }, download: true, help: /运行酒馆的电脑/ },
+    { host: 'tauritavern', browser: { userAgent: 'Desktop webview' }, download: false, help: /TauriTavern/ },
+    { host: 'sillytavern', browser: { userAgentData: { mobile: false, platform: 'Android' } }, download: false, help: /平板本机/ },
+    { host: 'sillytavern', browser: { platform: 'MacIntel', maxTouchPoints: 5 }, download: false, help: /平板本机/ },
+  ]) {
+    const nodes = new Map();
+    const fold = {
+      open: true, hidden: false, ownerDocument: {},
+      querySelector(selector) {
+        if (!nodes.has(selector)) nodes.set(selector, { hidden: true, dataset: {}, addEventListener() {} });
+        return nodes.get(selector);
+      },
+      addEventListener() {}, removeEventListener() {},
+    };
+    const page = { hidden: false, dataset: {}, querySelector: () => fold };
+    const controller = createFishCenter({ querySelector: () => page }, {
+      host: scenario.host, browser: scenario.browser, headers: () => ({}), selected: () => false,
+    });
+    try {
+      controller.onSelect();
+      await nextTick();
+      assert.equal(fold.querySelector('[data-fish-install]').hidden, false);
+      assert.equal(fold.querySelector('[data-fish-install-download]').hidden, !scenario.download);
+      assert.match(fold.querySelector('[data-fish-install-help]').textContent, scenario.help);
+      assert.equal(fold.querySelector('[data-fish-action="start"]').hidden, true);
+    } finally {
+      controller.cleanup();
+    }
+  }
+});
+
+test('Android TauriTavern shows Fish Local in the existing panel and connects through the form', async t => {
+  const button = { disabled: false };
+  const form = Object.assign(new EventTarget(), { querySelector: () => button });
+  const port = { value: '' };
+  const key = { value: '' };
+  const note = { hidden: true, dataset: {} };
+  const desktop = { hidden: false };
+  const android = { hidden: true };
+  const fold = {
+    querySelector: selector => ({
+      '[data-fish-desktop]': desktop, '[data-fish-android]': android,
+      '[data-fish-android-form]': form, '[data-fish-android-port]': port,
+      '[data-fish-android-key]': key, '[data-fish-android-note]': note,
+    })[selector],
+  };
+  const page = { querySelector: () => fold };
+  const oldHost = Object.getOwnPropertyDescriptor(globalThis, '__TAURITAVERN__');
+  t.after(() => oldHost ? Object.defineProperty(globalThis, '__TAURITAVERN__', oldHost) : delete globalThis.__TAURITAVERN__);
+  globalThis.__TAURITAVERN__ = { invoke: { safeInvoke: async () => ({ request_proxy: { enabled: false } }) } };
+  const routes = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    routes.push(url);
+    assert.equal(init.headers.get('x-csrf-token'), 'tavern-fixture');
+    if (url === '/api/secrets/read') return Response.json({
+      api_key_custom_openai_tts: [{ id: 'existing-fish', active: true, label: '镜译 · Fish Local' }],
+    });
+    assert.equal(url, '/api/openai/custom/generate-voice');
+    assert.equal(JSON.parse(init.body).input, '');
+    return new Response('fish-local-mirror-v1 drama-3 default_voice', { status: 400 });
+  });
+  const connected = Promise.withResolvers();
+  const controller = createFishCenter({ querySelector: () => page }, {
+    host: 'tauritavern', browser: { userAgent: 'Android tablet' }, headers: () => HOST_HEADERS,
+    selected: () => false, getAndroidConnection: () => ({ port: 7860, secretId: 'existing-fish' }),
+    use: connected.resolve,
+  });
+  t.after(() => controller.cleanup());
+  controller.onSelect();
+  assert.equal(android.hidden, false);
+  assert.equal(desktop.hidden, true);
+  assert.equal(port.value, '7860');
+  assert.match(note.textContent, /已保存/);
+  const submit = new Event('submit', { cancelable: true });
+  form.dispatchEvent(submit);
+  assert.equal(submit.defaultPrevented, true);
+  assert.deepEqual(await connected.promise, { port: 7860, secretId: 'existing-fish', profile: 'drama-3:default_voice' });
+  assert.match(note.textContent, /已连接/);
+  assert.ok(routes.every(route => !route.startsWith(FISH_MANAGED_ROOT)));
 });
 
 test('same-origin managed voice sends Tavern CSRF headers and accepts the supplied Fish task schema', async t => {

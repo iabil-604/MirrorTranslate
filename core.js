@@ -8,20 +8,21 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.51.5';
+} from './prompts.js?v=0.51.6-beta.1';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.51.5';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.51.6-beta.1';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.51.5';
-import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.51.5';
+import { resolveMoveStyle } from './palette.js?v=0.51.6-beta.1';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.51.6-beta.1';
+import { DEFAULT_FISH_ANDROID_PORT, fishAndroidPort } from './fish-web.js?v=0.51.6-beta.1';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.51.5';
+export const APP_VERSION = '0.51.6-beta.1';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -1110,6 +1111,7 @@ export const DEFAULT_TTS = Object.freeze({
   // says what an id sounds like on each provider.
   provider: 'fish',
   fish: DEFAULT_FISH,
+  fishAndroid: Object.freeze({ port: DEFAULT_FISH_ANDROID_PORT, secretId: '', profile: '' }),
   doubao: DEFAULT_DOUBAO,
   minimax: DEFAULT_MINIMAX,
   gsv: DEFAULT_GSV,
@@ -2230,6 +2232,11 @@ export function normalizeTts(value) {
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     provider: TTS_PROVIDERS.includes(source.provider) ? source.provider : DEFAULT_TTS.provider,
     fish: normalizeFishSettings(source.fish),
+    fishAndroid: {
+      port: fishAndroidPort(source.fishAndroid?.port) || DEFAULT_FISH_ANDROID_PORT,
+      secretId: String(source.fishAndroid?.secretId ?? '').slice(0, 128),
+      profile: String(source.fishAndroid?.profile ?? '').slice(0, 160),
+    },
     doubao: normalizeDoubaoSettings(source.doubao),
     minimax: normalizeMinimaxSettings(source.minimax),
     gsv: normalizeGsvSettings(source.gsv),

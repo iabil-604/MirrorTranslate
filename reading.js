@@ -1,4 +1,4 @@
-import { hashTextSync } from './core.js?v=0.51.5';
+import { hashTextSync } from './core.js?v=0.51.6-beta.1';
 
 // ---------------------------------------------------------------------------------------------
 // The public interface's reading of a floor (window.__JINGYI__.reading), in the shape agreed with the

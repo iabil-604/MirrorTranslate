@@ -1,4 +1,7 @@
-import { FISH_SERVICE_MISSING, fishManagedRequest, missingFishService } from './fish-web.js?v=0.51.5';
+import {
+  DEFAULT_FISH_ANDROID_PORT, FISH_SERVICE_MISSING, connectFishAndroid,
+  fishManagedRequest, isAndroidFishHost, missingFishService,
+} from './fish-web.js?v=0.51.6-beta.1';
 
 export const FISH_CENTER_ENTRY = '<button type="button" class="jy-button" data-jy-action="goto-advanced" data-jy-goto-page="tts" data-jy-open-fold="tts-fish-center">Fish 管理 →</button>';
 
@@ -6,6 +9,19 @@ export const FISH_CENTER_MARKUP = `
 <details class="jy-text-scope jy-fold" data-jy-fold="tts-fish-center">
   <summary><h2>Fish 管理</h2></summary>
   <div class="jy-form-body">
+  <section class="jy-brief" data-fish-android hidden>
+    <h2>Fish Local</h2>
+    <p class="jy-muted">在 Fish Local 登录并启动服务，再把控制台的本地 Key 粘贴到这里。</p>
+    <form data-fish-android-form>
+      <div class="jy-form-grid jy-form-grid-tight">
+        <label><span class="jy-label">本地 Key</span><input type="password" data-fish-android-key autocomplete="new-password" spellcheck="false" maxlength="48"></label>
+        <label><span class="jy-label">端口</span><input type="number" data-fish-android-port min="1024" max="65535" step="1" inputmode="numeric" required></label>
+      </div>
+      <div class="jy-actions"><button type="submit" class="jy-button jy-button-primary">连接并用于朗读</button></div>
+    </form>
+    <p class="jy-muted" data-fish-android-note role="status" hidden></p>
+  </section>
+  <div data-fish-desktop>
   <section class="jy-brief">
     <div class="jy-row-between"><h2>网页订阅</h2><span data-fish-state></span></div>
     <div class="jy-actions">
@@ -15,13 +31,16 @@ export const FISH_CENTER_MARKUP = `
       <button type="button" class="jy-text-button" data-fish-action="refresh">刷新</button>
     </div>
     <p class="jy-muted" data-fish-note role="status" hidden></p>
-    <a class="jy-text-button" data-fish-install href="https://github.com/iabil-604/MirrorTranslate/releases/latest/download/MirrorTranslate.zip" target="_blank" rel="noopener noreferrer" hidden>下载镜译安装包</a>
+    <div data-fish-install hidden>
+      <p class="jy-muted" data-fish-install-help role="status"></p>
+      <a class="jy-text-button" data-fish-install-download href="https://github.com/iabil-604/MirrorTranslate/releases/latest/download/MirrorTranslate.zip" download="MirrorTranslate.zip" hidden>下载电脑安装包（ZIP）</a>
+    </div>
   </section>
   <div data-fish-workspace hidden>
     <section class="jy-brief">
       <div class="jy-row-between"><h2>账号</h2><span class="jy-muted" data-fish-ready></span></div>
       <form class="jy-inline-actions" data-fish-form="add">
-        <input name="name" aria-label="账号备注" placeholder="账号备注" maxlength="64" required>
+        <input type="text" name="name" aria-label="账号备注" placeholder="账号备注" maxlength="64" required>
         <button class="jy-button" type="submit">添加账号</button>
       </form>
       <label class="jy-inline-field"><span class="jy-label">账号调度</span>
@@ -33,10 +52,10 @@ export const FISH_CENTER_MARKUP = `
       <h2>音色与试听</h2>
       <div class="jy-form-grid jy-form-grid-tight">
         <label><span class="jy-label">合成模型</span><select data-fish-model></select></label>
-        <label><span class="jy-label">默认音色</span><input data-fish-voice placeholder="音色 ID 或 Fish 链接" spellcheck="false"></label>
+        <label><span class="jy-label">默认音色</span><input type="text" data-fish-voice placeholder="音色 ID 或 Fish 链接" spellcheck="false"></label>
       </div>
       <form class="jy-inline-actions" data-fish-form="search">
-        <input name="query" aria-label="音色名称" placeholder="音色名称" maxlength="100">
+        <input type="search" name="query" aria-label="音色名称" placeholder="音色名称" maxlength="100">
         <button class="jy-button" type="submit">搜索音色</button>
       </form>
       <div class="jy-actions" data-fish-voices hidden></div>
@@ -56,6 +75,7 @@ export const FISH_CENTER_MARKUP = `
     </section>
   </div>
   </div>
+  </div>
 </details>`;
 
 const SERVICE_STATES = { stopped: '未启动', starting: '启动中…', running: '运行中', stopping: '停止中…' };
@@ -70,13 +90,77 @@ const TASK_STATES = {
 const MODELS = { 'drama-3': 'Drama 3', 's2.1-pro': 'S2.1 Pro', 's2-pro': 'S2 Pro', s1: 'S1（旧版）' };
 const accountPath = id => `/accounts/${encodeURIComponent(id)}`;
 
-export function createFishCenter(root, { headers, selected, use, onSettings }) {
+function createFishAndroidCenter(field, { headers, selected, use, getAndroidConnection }) {
+  const form = field('android-form');
+  const port = field('android-port');
+  const key = field('android-key');
+  const submit = form.querySelector('button[type="submit"]');
+  const note = field('android-note');
+  let switchFrom;
+  port.value = String(getAndroidConnection().port || DEFAULT_FISH_ANDROID_PORT);
+
+  function show(message, error = false) {
+    note.textContent = message;
+    note.dataset.state = error ? 'error' : '';
+    note.hidden = !message;
+  }
+
+  async function connect(event) {
+    event.preventDefault();
+    if (submit.disabled) return;
+    submit.disabled = true;
+    show('正在连接…');
+    try {
+      const result = await connectFishAndroid({
+        port: port.value, key: key.value.trim(), secretId: getAndroidConnection().secretId, switchFrom,
+      }, { headers: headers() });
+      use(result);
+      key.value = '';
+      switchFrom = undefined;
+      show('已连接并设为朗读来源。');
+    } catch (error) {
+      switchFrom = error.switchFrom;
+      show(error.message, !switchFrom);
+    } finally {
+      submit.textContent = switchFrom ? '切换 Key 并连接' : '连接并用于朗读';
+      submit.disabled = false;
+    }
+  }
+
+  form.addEventListener('submit', connect);
+  return {
+    onSelect() {
+      if (getAndroidConnection().secretId && !note.textContent) {
+        show(selected() ? '已设为朗读来源。' : '已保存连接。');
+      }
+    },
+    cleanup() {
+      form.removeEventListener('submit', connect);
+      key.value = '';
+    },
+  };
+}
+
+export function createFishCenter(root, { headers, selected, use, onSettings, getAndroidConnection, host, browser = globalThis.navigator }) {
   const page = root.querySelector('[data-jy-page="tts"]');
   const fold = page.querySelector('[data-jy-fold="tts-fish-center"]');
   const field = name => fold.querySelector(`[data-fish-${name}]`);
   const button = action => fold.querySelector(`[data-fish-action="${action}"]`);
+  if (isAndroidFishHost(host, browser)) {
+    field('desktop').hidden = true;
+    field('android').hidden = false;
+    return createFishAndroidCenter(field, { headers, selected, use, getAndroidConnection });
+  }
   const document = fold.ownerDocument;
   const audio = fold.querySelector('audio');
+  const platform = browser?.userAgentData?.platform || browser?.platform || '';
+  const mobile = browser?.userAgentData?.mobile === true || /Android|iPad|iPhone|iPod/i.test(`${platform} ${browser?.userAgent ?? ''}`)
+    || (platform === 'MacIntel' && browser?.maxTouchPoints > 1);
+  const installBlocked = host === 'tauritavern'
+    ? '当前版本的 Fish 网页订阅暂未适配 TauriTavern。'
+    : mobile ? '当前版本的 Fish 网页订阅暂未适配手机和平板本机。' : '';
+  field('install-help').textContent = installBlocked || '在运行酒馆的电脑上解压并运行安装器，装完后重启酒馆。';
+  field('install-download').hidden = Boolean(installBlocked);
   let visible;
   let timer;
   let busy = false;
@@ -99,10 +183,12 @@ export function createFishCenter(root, { headers, selected, use, onSettings }) {
   const json = async (path, options, signal) => (await api(path, options, signal)).json();
 
   function note(message = '', error) {
+    const missing = error?.code === FISH_SERVICE_MISSING;
+    if (missing) statusView('');
     field('note').textContent = message;
-    field('note').hidden = !message;
+    field('note').hidden = !message || missing;
     field('note').dataset.state = error ? 'error' : '';
-    field('install').hidden = error?.code !== FISH_SERVICE_MISSING;
+    field('install').hidden = !missing;
   }
 
   function statusView(next) {
@@ -163,6 +249,7 @@ export function createFishCenter(root, { headers, selected, use, onSettings }) {
         edit.append(node('summary', '编辑'));
         const form = node('form', undefined, 'jy-inline-actions');
         const name = node('input');
+        name.type = 'text';
         name.value = account.name;
         name.maxLength = 64;
         name.required = true;

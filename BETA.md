@@ -1,8 +1,16 @@
-# 镜译 0.51.5 · 一体安装
+# 镜译 0.51.6-beta.1
+
+## 安卓 TauriTavern
+
+1. 覆盖安装 Fish Local 0.3.0-preview.5。在 App 里登录 Fish、启动服务，再点「复制 Key」。
+2. 在 TauriTavern 2.3.0 的「管理扩展」将镜译切到 `beta/fish-android`，然后重载。
+3. 打开镜译的朗读功能，进入「朗读 → Fish 管理」，粘贴本地 Key，点「连接并用于朗读」。回聊天点楼层的朗读按钮。
+
+端口默认 `7860`。连接检查免费，生成朗读会使用 Fish 网页额度。账号和默认音色在 Fish Local 里管理。
+
+## 电脑一体安装
 
 适用于 Windows、macOS 和 Linux 上的本机 SillyTavern。Fish 登录使用本机的 Edge、Chrome 或 Chromium。
-
-## 安装
 
 关闭酒馆，解压[镜译安装包](https://github.com/iabil-604/MirrorTranslate/releases/latest/download/MirrorTranslate.zip)。
 
