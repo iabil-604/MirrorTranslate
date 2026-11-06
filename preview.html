@@ -51,7 +51,7 @@
     <aside class="mock-card">
       <div class="beta-actions">
         <button type="button" id="beta-fish-web-open" class="menu_button" disabled>Fish 管理</button>
-        <button type="button" id="beta-workshop-open" class="menu_button" disabled>试用音色工坊</button>
+        <button type="button" id="beta-workshop-open" class="menu_button" disabled>音色工坊</button>
       </div>
       <p class="beta-note" id="beta-entry-status" role="status"></p>
       <h2>扩展设置区</h2>
@@ -299,15 +299,12 @@
     const workshopButton = document.querySelector('#beta-workshop-open');
     const entryStatus = document.querySelector('#beta-entry-status');
     try {
-      const response = await fetch('/preview/workshop/session', { method: 'POST' });
-      const session = await response.json();
-      if (!response.ok || !session.ok) throw new Error('模拟工坊暂时连不上。');
-      localStorage.setItem('jingyi.workshop.api', session.base);
-      localStorage.setItem('jingyi.workshop.session.v1', JSON.stringify(session));
-      workshopButton.disabled = false;
-    } catch {
-      entryStatus.textContent = '模拟工坊连接失败。';
-    }
+      if (localStorage.getItem('jingyi.workshop.api') === location.origin) {
+        localStorage.removeItem('jingyi.workshop.api');
+        localStorage.removeItem('jingyi.workshop.session.v1');
+      }
+    } catch { /* local storage may be disabled */ }
+    workshopButton.disabled = false;
     const extension = await import('./index.js');
     await extension.onActivate();
     if (dialogueBeta) {
@@ -379,7 +376,14 @@
     const fishWebButton = document.querySelector('#beta-fish-web-open');
     fishWebButton.disabled = false;
     fishWebButton.addEventListener('click', async () => {
-      if (!await openPreviewTab('[data-jy-tab="fish-center"]')) entryStatus.textContent = 'Fish 管理打开失败。';
+      const target = await openPreviewTab('[data-jy-tab="tts"]:not([hidden]), [data-jy-tab="finetune"]:not([hidden])');
+      if (target?.page === 'finetune') {
+        target.panel.querySelector('[data-jy-action="set-ui-mode"][data-jy-ui-mode="advanced"]')?.click();
+        target.panel.querySelector('[data-jy-tab="tts"]:not([hidden])')?.click();
+      }
+      const fold = target?.panel.querySelector('[data-jy-fold="tts-fish-center"]');
+      if (fold) fold.open = true;
+      else entryStatus.textContent = 'Fish 管理打开失败。';
     });
     workshopButton.addEventListener('click', async () => {
       const target = await openPreviewTab('[data-jy-tab="finetune"]:not([hidden]), [data-jy-tab="tts"]:not([hidden])');

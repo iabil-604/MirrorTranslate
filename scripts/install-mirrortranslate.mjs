@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPOSITORY = /^https:\/\/github\.com\/iabil-604\/MirrorTranslate(?:\.git)?\/?$/i;
+const CLIENT_DOCS = new Set(['manifest.json', 'capability-contract.json', 'README.md', 'BETA.md', 'Public.md', '使用手册.md']);
 
 async function exists(path) {
   try { return await lstat(path); }
@@ -54,7 +55,7 @@ async function installedExtension(roots) {
   return matches[0];
 }
 
-async function stage(source, target, backupId) {
+async function stage(source, target, backupId, filter) {
   const parent = dirname(target);
   await mkdir(parent, { recursive: true });
   const staging = await mkdtemp(join(parent, '.mirrortranslate-stage-'));
@@ -62,7 +63,7 @@ async function stage(source, target, backupId) {
   const backup = join(dirname(parent), '.mirrortranslate-backups', backupId, basename(target));
   const current = await exists(target);
   if (current && !current.isDirectory()) throw new Error('安装位置被其他文件占用。');
-  await cp(source, stagedTree, { recursive: true, errorOnExist: true, force: false });
+  await cp(source, stagedTree, { recursive: true, errorOnExist: true, force: false, filter });
   let backedUp = false;
   let installed = false;
   return {
@@ -97,12 +98,17 @@ export async function installMirrorTranslate(tavernPath, bundlePath, { yaml, con
   const yamlModule = yaml ?? createRequire(packagePath)('yaml');
   const updated = enableFishPlugin(original, yamlModule);
   const profiles = resolve(tavern, dataRoot ?? updated.dataRoot ?? 'data');
-  const client = join(bundle, 'MirrorTranslate');
+  const packagedClient = join(bundle, 'MirrorTranslate');
+  const client = await exists(join(packagedClient, 'manifest.json')) ? packagedClient : bundle;
   const server = join(bundle, 'server-plugin');
-  const manifest = await readJson(join(client, 'manifest.json'));
-  if (!REPOSITORY.test(manifest.homePage ?? '') || !await exists(join(server, 'runtime', 'node.exe'))) {
-    throw new Error('安装包不完整，请重新解压。');
+  const manifest = await readJson(join(client, 'manifest.json')).catch(() => null);
+  if (!REPOSITORY.test(manifest?.homePage ?? '') || !await exists(join(server, 'index.mjs')) || !await exists(join(server, 'child.mjs'))) {
+    throw new Error('安装文件不完整，请重新解压。');
   }
+  const clientFilter = client === bundle ? entry => {
+    const name = basename(entry);
+    return entry === client || (dirname(entry) === client && (CLIENT_DOCS.has(name) || /\.(?:js|css)$/.test(name)));
+  } : undefined;
   const lock = join(tavern, '.mirrortranslate-install-lock');
   await mkdir(lock).catch(error => {
     if (error.code === 'EEXIST') throw new Error('这份酒馆已有安装任务。');
@@ -123,7 +129,7 @@ export async function installMirrorTranslate(tavernPath, bundlePath, { yaml, con
       const marker = await readFile(join(pluginTarget, 'index.mjs'), 'utf8').catch(() => '');
       if (!marker.includes("id: 'mirrortranslate-fish'")) throw new Error('Fish 服务端插件的安装目录被占用。');
     }
-    const trees = await Promise.all([stage(client, extensionTarget, backupId), stage(server, pluginTarget, backupId)]);
+    const trees = await Promise.all([stage(client, extensionTarget, backupId, clientFilter), stage(server, pluginTarget, backupId)]);
     if (updated.source !== original) {
       if (await readFile(settings, 'utf8') !== original) throw new Error('酒馆配置刚被修改，请重新运行安装。');
       const backup = join(tavern, '.mirrortranslate-backups', backupId);
@@ -156,9 +162,10 @@ async function main() {
   }
   target = target.trim().replace(/^"(.*)"$/, '$1');
   if (!target) throw new Error('请选择 SillyTavern 安装目录。');
-  const bundle = fileURLToPath(new URL('./', import.meta.url));
+  const directory = dirname(fileURLToPath(import.meta.url));
+  const bundle = await exists(join(directory, 'server-plugin', 'index.mjs')) ? directory : dirname(directory);
   await installMirrorTranslate(target, bundle, { configPath, dataRoot });
-  console.log('镜译已安装。重启酒馆，打开镜译 → Fish 管理。');
+  console.log('镜译已安装。重启酒馆，开启朗读，在「朗读 → Fish 管理」启动服务。');
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

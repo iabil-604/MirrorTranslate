@@ -329,7 +329,8 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-card-row-text h3 { overflow-wrap: anywhere; }
 .jy-card-row-text > .jy-muted { margin-top: 0; }
 .jy-fish-list { padding: 0; margin: 10px 0 0; list-style: none; }
-[data-jy-page="fish-center"] .jy-brief + .jy-brief, [data-fish-workspace] { margin-top: 12px; }
+.jy-tts-sources { display: grid; gap: 12px; min-width: 0; }
+[data-jy-fold="tts-fish-center"] .jy-brief + .jy-brief, [data-fish-workspace] { margin-top: 12px; }
 [data-fish-workspace] .jy-inline-actions { margin: 8px 0; }
 [data-fish-workspace] details > summary { cursor: pointer; }
 [data-fish-player] audio { width: min(320px, 100%); }

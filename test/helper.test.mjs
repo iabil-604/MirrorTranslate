@@ -495,7 +495,7 @@ test('validateHelperSuggestion rejects an empty bodyTags value instead of promis
 test('validateHelperSuggestion narrows open-page to whatever pages exist in the *current* 界面模式 (review finding index.js:12202)', () => {
   const normal = mergeSettings({ uiMode: 'normal', schemaVersion: 13 });
   const advanced = mergeSettings({ uiMode: 'advanced', schemaVersion: 13 });
-  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'fish-center', 'helper', 'logs']);
+  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'helper', 'logs']);
   // 'settings' (模型连接) only exists in 高级模式's rail — suggesting it while 正常模式 is showing would
   // leave no tab looking selected once applied.
   assert.equal(validateHelperSuggestion({ type: 'action', action: 'open-page', value: 'settings' }, normal), null);

@@ -189,7 +189,7 @@ export const WORKSHOP_PAGE_MARKUP = `<section class="jy-page jy-ws" data-jy-page
 <header class="jy-page-heading jy-ws-headrow"><div><h1>音色工坊</h1></div>
 <span class="jy-ws-me-wrap" data-jy-ws-me hidden><button type="button" class="jy-ws-me" data-jy-ws-me-toggle aria-haspopup="true" aria-expanded="false"><img class="jy-ws-av" data-jy-ws-me-avatar data-name="" alt="" referrerpolicy="no-referrer"><span data-jy-ws-me-name></span></button><div class="jy-ws-menu" data-jy-ws-menu hidden><button type="button" data-jy-ws-logout>退出登录</button></div></span></header>
 <p class="jy-ws-notice" data-jy-ws-notice hidden></p>
-<div data-jy-ws-gate>
+<div data-jy-ws-gate hidden>
 <div class="jy-ws-gate-card"><span class="jy-ws-gate-seal" aria-hidden="true">${ICON.key}</span><h2>先登录，再进工坊</h2>
 <p class="jy-ws-gate-lead">工坊用 Discord 的 ID、名称和头像确认身份。</p>
 <button type="button" class="jy-ws-discord" data-jy-ws-login></button>
@@ -298,7 +298,7 @@ export function createWorkshop(root, deps = {}) {
 
   function updateSummary() {
     const target = $('[data-jy-fold="tts-workshop"] [data-jy-fold-summary]');
-    if (target) target.textContent = state.session ? `已登录 · ${state.session.user.name}` : base ? '需要 Discord 登录' : '待配置服务';
+    if (target) target.textContent = state.session ? `已登录 · ${state.session.user.name}` : base ? '需要 Discord 登录' : '敬请期待';
     const tag = $('[data-jy-ws-new]');
     if (tag) {
       let seen = false;
@@ -421,9 +421,9 @@ export function createWorkshop(root, deps = {}) {
     const configured = Boolean(base);
     const notice = $('[data-jy-ws-notice]');
     notice.hidden = configured;
-    if (!configured) notice.textContent = '工坊服务未配置。';
+    if (!configured) notice.textContent = '敬请期待';
     const loggedIn = Boolean(state.session);
-    $('[data-jy-ws-gate]').hidden = loggedIn;
+    $('[data-jy-ws-gate]').hidden = !configured || loggedIn;
     $('[data-jy-ws-main]').hidden = !loggedIn;
     const me = $('[data-jy-ws-me]');
     me.hidden = !loggedIn;

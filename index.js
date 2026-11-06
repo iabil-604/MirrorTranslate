@@ -132,8 +132,8 @@ import {
 } from './core.js?v=0.51.5';
 import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.51.5';
 import { WORKSHOP_ENTRY_MARKUP, WORKSHOP_FOLD_MARKUP, WORKSHOP_LAYER_MARKUP, WORKSHOP_PAGE_MARKUP, createWorkshop } from './workshop.js?v=0.51.5';
-import { FISH_WEB_TASK_CHECK, fishManagedRequest, fishWebOrigin, fishWebReadyReason, fishWebRequest, fishWebUsesManaged, probeFishWeb } from './fish-web.js?v=0.51.5';
-import { FISH_CENTER_ENTRY, FISH_CENTER_PAGE_MARKUP, createFishCenter } from './fish-center.js?v=0.51.5';
+import { FISH_WEB_TASK_CHECK, fishManagedRequest } from './fish-web.js?v=0.51.5';
+import { FISH_CENTER_ENTRY, FISH_CENTER_MARKUP, createFishCenter } from './fish-center.js?v=0.51.5';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -497,7 +497,7 @@ const CONTROL_CENTER_MARKUP = `
   <div class="jy-identity"><span class="jy-monogram" aria-hidden="true">镜</span><div><strong>镜译</strong><small>正文翻译器</small></div></div>
   <div class="jy-mode-switch" role="group" aria-label="界面模式"><button type="button" data-jy-action="set-ui-mode" data-jy-ui-mode="normal" aria-pressed="true">正常模式</button><button type="button" data-jy-action="set-ui-mode" data-jy-ui-mode="advanced" aria-pressed="false">高级模式</button></div>
   <nav class="jy-navigation" role="tablist" aria-label="工作区">
-  <button type="button" role="tab" aria-selected="true" data-jy-tab="main"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg></span>翻译台</button><button type="button" role="tab" aria-selected="false" data-jy-tab="finetune"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10"/><path d="M17 7h3"/><circle cx="14.5" cy="7" r="2.2"/><path d="M4 17h3"/><path d="M10 17h10"/><circle cx="7.5" cy="17" r="2.2"/></svg></span>微调</button><button type="button" role="tab" aria-selected="false" data-jy-tab="prompt"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg></span>翻译规则</button><button type="button" role="tab" aria-selected="false" data-jy-tab="settings"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg></span>模型连接</button><button type="button" role="tab" aria-selected="false" data-jy-tab="processing"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg></span>正文处理</button><button type="button" role="tab" aria-selected="false" data-jy-tab="tts"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6"/><path d="M18.3 6.2a8.2 8.2 0 0 1 0 11.6"/></svg></span>朗读</button><button type="button" role="tab" aria-selected="false" data-jy-tab="fish-center"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12c5-6 10-6 15 0-5 6-10 6-15 0zM18 12l3-3v6z"/><path d="M7.5 12h.1"/></svg></span>Fish 管理</button><button type="button" role="tab" aria-selected="false" data-jy-tab="helper"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M9.8 9.8a2.3 2.3 0 1 1 3.4 2c-.8.5-1.2 1-1.2 2"/><circle cx="12" cy="16.3" r="0.9" fill="currentColor" stroke="none"/></svg></span>小助手</button><button type="button" role="tab" aria-selected="false" data-jy-tab="logs"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg></span>运行记录</button>
+  <button type="button" role="tab" aria-selected="true" data-jy-tab="main"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 10h16"/><path d="M9 14h6"/></svg></span>翻译台</button><button type="button" role="tab" aria-selected="false" data-jy-tab="finetune"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10"/><path d="M17 7h3"/><circle cx="14.5" cy="7" r="2.2"/><path d="M4 17h3"/><path d="M10 17h10"/><circle cx="7.5" cy="17" r="2.2"/></svg></span>微调</button><button type="button" role="tab" aria-selected="false" data-jy-tab="prompt"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5z"/><path d="M14 4v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/></svg></span>翻译规则</button><button type="button" role="tab" aria-selected="false" data-jy-tab="settings"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg></span>模型连接</button><button type="button" role="tab" aria-selected="false" data-jy-tab="processing"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16"/><path d="M15 4v16"/><path d="M4 9h16"/><path d="M4 15h16"/></svg></span>正文处理</button><button type="button" role="tab" aria-selected="false" data-jy-tab="tts"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6"/><path d="M18.3 6.2a8.2 8.2 0 0 1 0 11.6"/></svg></span>朗读</button><button type="button" role="tab" aria-selected="false" data-jy-tab="helper"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M9.8 9.8a2.3 2.3 0 1 1 3.4 2c-.8.5-1.2 1-1.2 2"/><circle cx="12" cy="16.3" r="0.9" fill="currentColor" stroke="none"/></svg></span>小助手</button><button type="button" role="tab" aria-selected="false" data-jy-tab="logs"><span aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg></span>运行记录</button>
   </nav>
   <details class="jy-theme-picker"><summary><span aria-hidden="true">◐</span> 外观</summary><div class="jy-theme-options"><button type="button" data-jy-action="set-theme" data-jy-theme="day" aria-pressed="false"><i aria-hidden="true"></i>日间</button><button type="button" data-jy-action="set-theme" data-jy-theme="night" aria-pressed="false"><i aria-hidden="true"></i>夜间</button><button type="button" data-jy-action="set-theme" data-jy-theme="fresh" aria-pressed="false"><i aria-hidden="true"></i>护眼小清新</button><button type="button" data-jy-action="set-theme" data-jy-theme="vampire" aria-pressed="false"><i aria-hidden="true"></i>华美吸血鬼</button><button type="button" data-jy-action="set-theme" data-jy-theme="glass" aria-pressed="false"><i aria-hidden="true"></i>极简毛玻璃</button></div></details><div class="jy-rail-bottom"><span class="jy-version">v${APP_VERSION}</span><button type="button" data-jy-action="check-update" class="jy-update-button" hidden aria-label="检查镜译更新">↻ <span data-jy-update-label>检查更新</span></button></div><p class="jy-update-notice" data-jy-update-notice hidden role="status"></p>
 </aside>
@@ -750,6 +750,7 @@ const CONTROL_CENTER_MARKUP = `
 <div class="jy-automation" data-jy-tts-master><div><h3>朗读功能</h3></div><label class="jy-switch"><input type="checkbox" data-jy-tts-field="enabled" aria-label="朗读功能"><span></span></label></div>
 
 <div class="jy-processing-columns">
+<div class="jy-tts-sources">
 <div class="jy-text-scope" data-jy-tts-provider-card="fish"><h2>Fish Audio</h2>
 <div class="jy-form-grid jy-form-grid-tight">${TTS_SOURCE_PICKER}</div>
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">API Key</span><input type="password" data-jy-tts-fish="key" placeholder="sk-…" autocomplete="new-password" spellcheck="false"></label><label><span class="jy-label">模型</span><select data-jy-tts-fish="model"><option value="s2-pro">s2-pro</option><option value="s2.1-pro">s2.1-pro</option><option value="s2.1-pro-free">s2.1-pro-free（免费开发者档）</option><option value="drama-3-preview">drama-3-preview（预览版）</option><option value="s1">s1（旧版，不能一次用多个音色）</option></select></label></div>
@@ -759,7 +760,6 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <div class="jy-text-scope" data-jy-tts-provider-card="fish-web" hidden><h2>Fish 网页订阅</h2>
 <div class="jy-form-grid jy-form-grid-tight">${TTS_SOURCE_PICKER}</div>
-${FISH_CENTER_ENTRY}
 </div>
 <div class="jy-text-scope" data-jy-tts-provider-card="gsv" hidden><h2>GPT-SoVITS</h2>
 <div class="jy-form-grid jy-form-grid-tight">${TTS_SOURCE_PICKER}<label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-gsv="baseUrl" placeholder="http://127.0.0.1:9880" spellcheck="false"></label></div>
@@ -770,6 +770,8 @@ ${FISH_CENTER_ENTRY}
 <div class="jy-form-grid jy-form-grid-tight"><label><span class="jy-label">参考音频</span><input type="text" data-jy-tts-gsv="refAudioPath" placeholder="D:\\GPT-SoVITS\\参考音频\\旁白.wav" spellcheck="false"></label><label><span class="jy-label">参考音频的文字</span><input type="text" data-jy-tts-gsv="promptText" placeholder="参考音频里说的话，一字不差" spellcheck="false"></label><label><span class="jy-label">参考音频语言</span><select data-jy-tts-gsv="promptLang"><option value="zh">中文</option><option value="ja">日语</option><option value="en">英语</option><option value="ko">韩语</option><option value="yue">粤语</option><option value="auto">自动</option></select></label><label><span class="jy-label">GPT 模型（.ckpt，可不填）</span><input type="text" data-jy-tts-gsv="gptWeights" placeholder="不填用 GPT-SoVITS 当前加载的" spellcheck="false"></label><label><span class="jy-label">SoVITS 模型（.pth，可不填）</span><input type="text" data-jy-tts-gsv="sovitsWeights" placeholder="不填用 GPT-SoVITS 当前加载的" spellcheck="false"></label></div>
 </div>
 <p class="jy-muted">请先启动 GPT-SoVITS 的 <code>api_v2.py</code>。</p>
+</div>
+${FISH_CENTER_MARKUP}
 </div>
 <div class="jy-text-scope"><h2>音色</h2>
 <div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button></div>
@@ -919,7 +921,6 @@ ${WORKSHOP_FOLD_MARKUP}
 <div class="jy-log-list" data-jy-log-list></div>
 </section>
 ${WORKSHOP_PAGE_MARKUP}
-${FISH_CENTER_PAGE_MARKUP}
 <p class="jy-sr-only" aria-live="polite" data-jy-live></p>
 </main>
 ${WORKSHOP_LAYER_MARKUP}
@@ -4442,10 +4443,6 @@ function ttsProviderName(tts) {
 /** What must be set before anything is asked of the provider: Fish's key; GPT-SoVITS needs none. */
 function requireTtsReady(tts) {
   if (tts.provider === 'fish') requireFishKey(tts);
-  if (tts.provider === 'fish-web') {
-    const reason = fishWebReadyReason(tts.fishWeb);
-    if (reason) throw new Error(reason);
-  }
 }
 
 /**
@@ -5891,11 +5888,10 @@ async function gsvSynthesize(payload, gsv, signal, { onAttempt = null } = {}) {
 }
 
 // The companion owns submission and account rotation. A failed response may already have used quota.
-async function fishWebSynthesize(body, config, signal) {
+async function fishWebSynthesize(body, signal) {
   try {
     return await withTtsTimeout(signal, 240, async requestSignal => {
-      const headers = fishWebUsesManaged(config) ? requestHeaders() : undefined;
-      const response = await fishWebRequest(config, '/v1/audio/speech', { body, signal: requestSignal, headers });
+      const response = await fishManagedRequest('/speech', { method: 'POST', body, signal: requestSignal, headers: requestHeaders() });
       const raw = await response.arrayBuffer().catch(error => {
         if (requestSignal.aborted) throw error;
         throw new Error(`本机 Fish 的音频接收中断。${FISH_WEB_TASK_CHECK}`);
@@ -6044,7 +6040,7 @@ async function makeFishWebRecording({ floor, items, tts, provider, signal, onSta
     try {
       if (body.input) {
         ttsFishTally(floor).requests += 1;
-        result = await fishWebSynthesize(body, tts.fishWeb, signal);
+        result = await fishWebSynthesize(body, signal);
       } else {
         result = { bytes: encodeWav([new Float32Array(9600)], 32000), duration: 0.3 };
       }
@@ -6126,8 +6122,7 @@ async function managedFishFingerprint() {
 async function ttsFingerprint(settings = runtime.settings) {
   const tts = ttsSettings(settings);
   const options = { consoles: consoleFingerprint(settings) };
-  if (tts.provider === 'fish-web') options.origin = fishWebUsesManaged(tts.fishWeb)
-    ? await managedFishFingerprint() : fishWebOrigin(tts.fishWeb.baseUrl);
+  if (tts.provider === 'fish-web') options.origin = await managedFishFingerprint();
   const fingerprint = ttsProviderFor(settings).fingerprint(tts, options);
   const json = JSON.stringify(fingerprint);
   if (runtime.tts.fingerprint?.json !== json) runtime.tts.fingerprint = { json, fingerprint, key: await fingerprintKey(fingerprint) };
@@ -9999,21 +9994,6 @@ async function testFishConnection(settings = runtime.settings) {
   return { credit: Number.isFinite(credit) ? credit : null, freeCredit: data?.has_free_credit === true };
 }
 
-function testFishWebConnection(settings = runtime.settings) {
-  const config = ttsSettings(settings).fishWeb;
-  return withTtsTimeout(undefined, 10, signal => probeFishWeb(config, signal,
-    fishWebUsesManaged(config) ? requestHeaders() : undefined), { label: 'Fish 网页订阅' });
-}
-
-async function auditionFishWeb(settings = runtime.settings) {
-  const tts = ttsSettings(settings);
-  const result = await fishWebSynthesize({
-    input: '你好，这是镜译的试听。',
-    model: 'tts-1', voice: 'default', response_format: 'wav', speed: 1,
-  }, tts.fishWeb);
-  await playAuditionBlob(new Blob([result.bytes], { type: 'audio/wav' }));
-}
-
 // What 「试听」 and 「测试连接」 have a voice say, in the language it is for.
 const GSV_SAMPLE_LINES = Object.freeze({
   zh: '你好，这是镜译的试听。今天也请多多关照。',
@@ -11061,7 +11041,7 @@ function syncDeskFields(root, settings, { rebuildList = true } = {}) {
 
   const tts = ttsSettings(settings);
   // A reader on GPT-SoVITS needs no Fish key, so nothing is missing from this card for them.
-  const fishMissing = tts.enabled && (tts.provider === 'fish-web' ? Boolean(fishWebReadyReason(tts.fishWeb)) : tts.provider === 'fish' && !tts.fish.key);
+  const fishMissing = tts.enabled && tts.provider === 'fish' && !tts.fish.key;
   const missingPill = root.querySelector('[data-jy-desk-fish-missing]');
   if (missingPill) missingPill.hidden = !fishMissing;
   const needNote = root.querySelector('[data-jy-desk-fish-need]');
@@ -12996,7 +12976,7 @@ function updateTtsModeHelp(root) {
  * once the reader moves elsewhere.
  */
 function syncTtsFeatureVisibility(root, settings = runtime.settings) {
-  const enabled = ttsSettings(settings).enabled;
+  const { enabled, provider } = ttsSettings(settings);
   const tab = root.querySelector('[data-jy-tab="tts"]');
   // DESIGN §15.1: 「朗读」has no rail button at all in normal mode (its settings live on 翻译台/微调
   // instead) — enabling TTS there must not resurrect this advanced-only tab. pageExistsInMode keeps
@@ -13004,6 +12984,11 @@ function syncTtsFeatureVisibility(root, settings = runtime.settings) {
   if (tab) tab.hidden = !pageExistsInMode('tts', settings.uiMode) || (!enabled && tab.getAttribute('aria-selected') !== 'true');
   const page = root.querySelector('[data-jy-page="tts"]');
   if (page) page.dataset.jyTtsOff = String(!enabled);
+  const fishFold = root.querySelector('[data-jy-fold="tts-fish-center"]');
+  if (fishFold) {
+    fishFold.hidden = provider === 'gsv';
+    if (!enabled || fishFold.hidden) fishFold.open = false;
+  }
   const shortcut = root.querySelector('[data-jy-action="open-tts"]');
   if (shortcut) shortcut.hidden = !enabled;
 }
@@ -13011,7 +12996,7 @@ function syncTtsFeatureVisibility(root, settings = runtime.settings) {
 function collectTtsFields(root, current) {
   if (!root.querySelector('[data-jy-page="tts"]')) return;
   const previous = normalizeTts(current.tts);
-  const next = { ...previous, fish: { ...previous.fish }, fishWeb: { ...previous.fishWeb }, gsv: { ...previous.gsv } };
+  const next = { ...previous, fish: { ...previous.fish }, gsv: { ...previous.gsv } };
   for (const element of root.querySelectorAll('[data-jy-tts-field]')) {
     const key = element.dataset.jyTtsField;
     if (element.disabled && ['side', 'range', 'readWhileWriting', 'autoRead', 'autoGenerate'].includes(key)) continue;
@@ -14609,19 +14594,16 @@ function createControlCenter(rootDocument = document) {
     selectTab: target => selectTab(target === 'back' ? workshopParentPage() : target),
   });
 
-  let fishParentPage = 'main';
   const fishCenter = createFishCenter(root, {
     headers: requestHeaders,
-    back: () => selectTab(resolvePageForMode(fishParentPage, runtime.settings.uiMode)),
     selected: () => {
       const tts = ttsSettings();
-      return tts.enabled && tts.provider === 'fish-web' && fishWebUsesManaged(tts.fishWeb);
+      return tts.enabled && tts.provider === 'fish-web';
     },
     use: () => {
       const next = mergeSettings(runtime.settings);
       next.tts.enabled = true;
       next.tts.provider = 'fish-web';
-      next.tts.fishWeb.managed = true;
       saveSettings(next);
       syncFields(root, runtime.settings);
     },
@@ -14629,10 +14611,6 @@ function createControlCenter(rootDocument = document) {
   });
 
   const selectTab = target => {
-    if (target === 'fish-center') {
-      const from = root.querySelector('[data-jy-tab][aria-selected="true"]')?.dataset.jyTab;
-      if (from && from !== 'fish-center') fishParentPage = from;
-    }
     const litTab = target === 'workshop' ? workshopParentPage() : target;
     for (const tabButton of root.querySelectorAll('[data-jy-tab]')) {
       tabButton.setAttribute('aria-selected', String(tabButton.dataset.jyTab === litTab));
@@ -14650,7 +14628,7 @@ function createControlCenter(rootDocument = document) {
     syncTtsFeatureVisibility(root);
     if (target === 'tts' && ttsSettings().enabled) void renderTtsUsage(root);
     workshop.onSelect(target);
-    fishCenter.onSelect(target);
+    fishCenter.onSelect();
   };
 
   /**
@@ -14687,10 +14665,6 @@ function createControlCenter(rootDocument = document) {
     const button = event.target.closest('[data-jy-action]');
     if (!button) return;
     const action = button.dataset.jyAction;
-    if (action === 'open-fish-center') {
-      selectTab('fish-center');
-      return;
-    }
     if (action === 'import-processing' || action === 'import-processing-regex') {
       root.querySelector(action === 'import-processing' ? '[data-jy-processing-import]' : '[data-jy-processing-regex-import]').click();
       return;
@@ -15882,7 +15856,7 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="intimate"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="readWhileWriting"], [data-jy-tts-field="liveAudio"], [data-jy-tts-field="streamVoice"], [data-jy-tts-field="callChannelId"], [data-jy-tts-field="sttProvider"], [data-jy-tts-field="sttPreset"], [data-jy-tts-doubao="resourceId"], [data-jy-tts-doubao="viaProxy"], [data-jy-tts-minimax="baseUrl"], [data-jy-tts-minimax="model"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"], [data-jy-tts-fish-web], [data-jy-tts-field="provider"], [data-jy-tts-gsv="viaProxy"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="intimate"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="readWhileWriting"], [data-jy-tts-field="liveAudio"], [data-jy-tts-field="streamVoice"], [data-jy-tts-field="callChannelId"], [data-jy-tts-field="sttProvider"], [data-jy-tts-field="sttPreset"], [data-jy-tts-doubao="resourceId"], [data-jy-tts-doubao="viaProxy"], [data-jy-tts-minimax="baseUrl"], [data-jy-tts-minimax="model"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"], [data-jy-tts-field="provider"], [data-jy-tts-gsv="viaProxy"]')) {
       if (event.target.matches('[data-jy-tts-field="sttPreset"]')) {
         const preset = STT_PRESETS[event.target.value];
         if (preset) {
@@ -21519,8 +21493,7 @@ function apiTtsReason({ stream = false } = {}) {
   if (!tts.enabled) return '镜译的朗读没有打开：镜译 → 朗读 → 打开朗读。';
   const voice = stream ? tts.streamVoice : tts.provider;
   if (stream && fishWebSelectedForStream(tts)) return FISH_WEB_STREAM_REASON;
-  if (voice === 'fish-web') return fishWebReadyReason(tts.fishWeb);
-  if (voice === 'gsv') return '';
+  if (voice === 'gsv' || voice === 'fish-web') return '';
   if (voice === 'fish' && !tts.fish.key) return '镜译还没填 Fish Audio 的 API Key：镜译 → 朗读 →「Fish Audio」。';
   if (voice !== 'fish' && !tts[voice]?.key) return spacedLatin(`镜译还没填${CLOUD_VOICE_LABELS[voice]}的 Key：镜译 → 朗读 → 更多 → 实时通话。`);
   return '';
@@ -21951,7 +21924,7 @@ function installPublicApi() {
           enabled: tts.enabled === true,
           provider: tts.provider,
           // GPT-SoVITS runs on the reader's machine and needs no key; ready means as much as Fish's key does.
-          hasKey: tts.provider === 'gsv' || (tts.provider === 'fish-web' ? !fishWebReadyReason(tts.fishWeb) : Boolean(tts.fish.key)),
+          hasKey: tts.provider === 'gsv' || tts.provider === 'fish-web' || Boolean(tts.fish.key),
           // What tts.stream reads in, and whether it can: a caller that only streams asks this.
           streamProvider: tts.streamVoice,
           streamReady: tts.enabled === true && !fishWebSelectedForStream(tts) && Boolean(tts.streamVoice === 'gsv' ? tts.gsv?.baseUrl : tts.streamVoice === 'fish' ? tts.fish.key : tts[tts.streamVoice]?.key),
@@ -22239,8 +22212,6 @@ export const __testing = Object.freeze({
   ttsVoicesKey,
   ttsVoicesFor,
   ensureTtsRecording,
-  testFishWebConnection,
-  auditionFishWeb,
   resolveTtsEntry,
   findTtsEntry,
   testGsvConnection,

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { basename, dirname, resolve } from 'node:path';
 import { Readable, Writable } from 'node:stream';
-import { FISH_CENTER_PAGE_MARKUP } from '../fish-center.js';
-import { FISH_MANAGED_ROOT, fishWebRequest, probeFishWeb } from '../fish-web.js';
+import { FISH_CENTER_MARKUP } from '../fish-center.js';
+import { FISH_MANAGED_ROOT, fishManagedRequest } from '../fish-web.js';
 import { createFishRoutes } from '../server-plugin/index.mjs';
 import { makeTask } from '../server-plugin/lib/fish.mjs';
 import { mergeSettings, pagesForMode } from '../core.js';
@@ -42,11 +42,15 @@ function upstream(payload, contentType = 'application/json') {
   return Object.assign(body, { statusCode: 200, headers: { 'content-type': contentType } });
 }
 
-test('managed Fish has a native page in both modes and no standalone setup fields', () => {
-  for (const mode of ['normal', 'advanced']) assert.ok(pagesForMode(mode).includes('fish-center'));
-  assert.match(__testing.CONTROL_CENTER_MARKUP, /data-jy-tab="fish-center"/);
-  assert.match(__testing.CONTROL_CENTER_MARKUP, /data-jy-page="fish-center"/);
-  assert.doesNotMatch(FISH_CENTER_PAGE_MARKUP, /iframe|Fish\.exe|allowedOrigins|API Key/);
+test('Fish management is nested in the original reading page', () => {
+  assert.equal(pagesForMode('normal').includes('tts'), false);
+  assert.equal(pagesForMode('advanced').includes('tts'), true);
+  const markup = __testing.CONTROL_CENTER_MARKUP;
+  assert.doesNotMatch(markup, /data-jy-(?:tab|page)="fish-center"/);
+  const reading = markup.slice(markup.indexOf('data-jy-page="tts"'), markup.indexOf('</section>\n\n', markup.indexOf('data-jy-page="tts"')));
+  assert.match(reading, /class="jy-tts-sources"[\s\S]*data-jy-fold="tts-fish-center"/);
+  assert.match(FISH_CENTER_MARKUP, /releases\/latest\/download\/MirrorTranslate\.zip/);
+  assert.doesNotMatch(FISH_CENTER_MARKUP, /iframe|Fish\.exe|allowedOrigins|API Key/);
 });
 
 test('same-origin managed voice sends Tavern CSRF headers and accepts the supplied Fish task schema', async t => {
@@ -68,10 +72,10 @@ test('same-origin managed voice sends Tavern CSRF headers and accepts the suppli
     assert.equal(task.backend, SETTINGS.backend);
     return new Response(WAV, { headers: { 'content-type': 'audio/wav' } });
   };
-  const config = mergeSettings({ tts: { provider: 'fish-web' } }).tts.fishWeb;
-  assert.deepEqual(await probeFishWeb(config, undefined, HOST_HEADERS), { voiceConfigured: true });
-  const response = await fishWebRequest({ ...config, managed: true, key: 'old-key' }, '/v1/audio/speech', {
-    body: { input: '镜译试听。', model: 'tts-1', voice: 'default', response_format: 'wav' }, headers: HOST_HEADERS,
+  assert.deepEqual(await (await fishManagedRequest('/state', { headers: HOST_HEADERS })).json(), { service: 'mirrortranslate-fish', status: 'running' });
+  assert.deepEqual(await (await fishManagedRequest('/settings', { headers: HOST_HEADERS })).json(), SETTINGS);
+  const response = await fishManagedRequest('/speech', {
+    method: 'POST', body: { input: '镜译试听。', model: 'tts-1', voice: 'default', response_format: 'wav' }, headers: HOST_HEADERS,
   });
   assert.equal((await response.arrayBuffer()).byteLength, WAV.byteLength);
   assert.deepEqual(calls, ['/state', '/settings', '/speech'].map(route => FISH_MANAGED_ROOT + route));

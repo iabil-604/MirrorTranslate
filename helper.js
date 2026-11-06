@@ -178,9 +178,7 @@ export function buildSettingsSummaryLines(settings = {}) {
   lines.push(`副模型提示词 › 破限词：${String(tts.prompts?.jailbreak ?? '').trim() ? '已填写' : '未填写'}`);
   const sources = { fish: 'Fish Audio', 'fish-web': 'Fish 网页订阅', gsv: 'GPT-SoVITS（本地）' };
   lines.push(`声音来源：${sources[tts.provider] ?? sources.fish}`);
-  if (tts.provider === 'fish-web') lines.push(tts.fishWeb?.managed || !tts.fishWeb?.key
-    ? 'Fish 网页订阅：在「Fish 管理」启动服务、登录和选音色。'
-    : 'Fish 网页订阅：当前使用旧版外置服务，可在「Fish 管理」切换。');
+  if (tts.provider === 'fish-web') lines.push('Fish 网页订阅：在「Fish 管理」启动服务、登录和选音色。');
   if (tts.provider === 'gsv') {
     const gsv = tts.gsv || {};
     lines.push(`GPT-SoVITS › 接口地址：${urlHost(gsv.baseUrl) || '未填'}`);

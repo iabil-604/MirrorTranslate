@@ -970,8 +970,6 @@ export const DEFAULT_FISH = Object.freeze({
   concurrency: 2,
 });
 
-export const DEFAULT_FISH_WEB = Object.freeze({ baseUrl: 'http://127.0.0.1:7860', key: '' });
-
 // 豆包语音 (Volcengine) for what is read while written. The key is the new console's API Key; an App ID
 // makes it the old console's Access Token instead. Its key headers are refused across origins, so it
 // goes through the host's proxy like Fish.
@@ -1112,7 +1110,6 @@ export const DEFAULT_TTS = Object.freeze({
   // says what an id sounds like on each provider.
   provider: 'fish',
   fish: DEFAULT_FISH,
-  fishWeb: DEFAULT_FISH_WEB,
   doubao: DEFAULT_DOUBAO,
   minimax: DEFAULT_MINIMAX,
   gsv: DEFAULT_GSV,
@@ -1214,8 +1211,8 @@ export const CONSOLE_PRESET_IDS = Object.freeze(['light', 'comfort', 'audiobook'
 
 // Fish management is shared by both control-center modes.
 export const CONTROL_CENTER_PAGES = Object.freeze({
-  normal: Object.freeze(['main', 'finetune', 'fish-center', 'helper', 'logs']),
-  advanced: Object.freeze(['main', 'prompt', 'settings', 'processing', 'tts', 'fish-center', 'helper', 'logs']),
+  normal: Object.freeze(['main', 'finetune', 'helper', 'logs']),
+  advanced: Object.freeze(['main', 'prompt', 'settings', 'processing', 'tts', 'helper', 'logs']),
 });
 
 /** The page ids shown in a mode's rail, advanced's list for anything that is not a known mode. */
@@ -2233,11 +2230,6 @@ export function normalizeTts(value) {
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     provider: TTS_PROVIDERS.includes(source.provider) ? source.provider : DEFAULT_TTS.provider,
     fish: normalizeFishSettings(source.fish),
-    fishWeb: {
-      baseUrl: String(source.fishWeb?.baseUrl ?? '').trim().slice(0, 400) || DEFAULT_FISH_WEB.baseUrl,
-      key: String(source.fishWeb?.key ?? '').trim().slice(0, 512),
-      ...(source.fishWeb?.managed === true ? { managed: true } : {}),
-    },
     doubao: normalizeDoubaoSettings(source.doubao),
     minimax: normalizeMinimaxSettings(source.minimax),
     gsv: normalizeGsvSettings(source.gsv),

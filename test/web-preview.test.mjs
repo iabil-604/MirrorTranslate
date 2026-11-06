@@ -25,9 +25,11 @@ test('web beta can insert during dialogue translation, clear it safely and open 
   let selected;
   let enteredWorkshop = false;
   const fold = { open: false };
+  const fishFold = { open: false };
   const panel = {
     querySelector(selector) {
-      if (selector === '[data-jy-tab="fish-center"]') return { dataset: { jyTab: 'fish-center' }, click() { selected = 'fish-center'; } };
+      if (selector.startsWith('[data-jy-tab="tts"]')) return { dataset: { jyTab: 'tts' }, click() { selected = 'tts'; } };
+      if (selector === '[data-jy-fold="tts-fish-center"]') return fishFold;
       if (selector.includes('[data-jy-tab="finetune"]')) return { dataset: { jyTab: 'finetune' }, click() { selected = 'finetune'; } };
       if (selector === '[data-jy-page="finetune"] [data-jy-ws-go="workshop"]') return { click() { enteredWorkshop = true; }, closest() { return fold; } };
       return null;
@@ -46,11 +48,9 @@ test('web beta can insert during dialogue translation, clear it safely and open 
   });
   globalThis.document = { querySelector: key => elements.get(key) ?? null, querySelectorAll: () => [], getElementById: () => null };
   globalThis.location = new URL('http://127.0.0.1:8768/');
-  globalThis.localStorage = { setItem() {} };
-  globalThis.fetch = async url => {
-    assert.equal(url, '/preview/workshop/session');
-    return Response.json({ ok: true, base: location.origin, token: 'preview', user: {} });
-  };
+  const storage = new Map([['jingyi.workshop.api', location.origin], ['jingyi.workshop.session.v1', 'preview']]);
+  globalThis.localStorage = { getItem: key => storage.get(key), removeItem: key => storage.delete(key) };
+  globalThis.fetch = async url => assert.fail('unexpected network request: ' + url);
   const prepared = script
     .replace("await extension.onActivate();", "extension.__testing.initializeSettings(); extension.__testing.configureForTest({ initialized: true });")
     .replace(/import\('(\.\/[^']+)'\)/g, (_match, file) => 'import(' + JSON.stringify(new URL(file, fromPreview).href) + ')');
@@ -61,8 +61,10 @@ test('web beta can insert during dialogue translation, clear it safely and open 
   assert.equal(context.extensionSettings['jingyi-translator'].tts.enabled, true);
   assert.equal(get('translate').disabled, false);
   assert.equal(get('workshop-open').disabled, false);
+  assert.equal(storage.has('jingyi.workshop.session.v1'), false);
   await get('fish-web-open').click();
-  assert.equal(selected, 'fish-center');
+  assert.equal(selected, 'tts');
+  assert.equal(fishFold.open, true);
   await get('workshop-open').click();
   assert.equal(selected, 'finetune');
   assert.ok(fold.open && enteredWorkshop);

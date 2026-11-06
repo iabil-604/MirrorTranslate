@@ -2712,8 +2712,8 @@ test('preset remembers the last applied package id, and drops anything unrecogni
 });
 
 test('pagesForMode lists the rail per DESIGN §15.1/§16.1, and resolvePageForMode falls back to 翻译台', () => {
-  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'fish-center', 'helper', 'logs']);
-  assert.deepEqual(pagesForMode('advanced'), ['main', 'prompt', 'settings', 'processing', 'tts', 'fish-center', 'helper', 'logs']);
+  assert.deepEqual(pagesForMode('normal'), ['main', 'finetune', 'helper', 'logs']);
+  assert.deepEqual(pagesForMode('advanced'), ['main', 'prompt', 'settings', 'processing', 'tts', 'helper', 'logs']);
   assert.deepEqual(pagesForMode('bogus'), pagesForMode('advanced'));
   assert.equal(pageExistsInMode('tts', 'normal'), false);
   assert.equal(pageExistsInMode('tts', 'advanced'), true);

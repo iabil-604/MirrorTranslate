@@ -1,10 +1,11 @@
-import { fishManagedRequest } from './fish-web.js?v=0.51.5';
+import { FISH_SERVICE_MISSING, fishManagedRequest, missingFishService } from './fish-web.js?v=0.51.5';
 
-export const FISH_CENTER_ENTRY = '<button type="button" class="jy-button" data-jy-action="open-fish-center">Fish 管理 →</button>';
+export const FISH_CENTER_ENTRY = '<button type="button" class="jy-button" data-jy-action="goto-advanced" data-jy-goto-page="tts" data-jy-open-fold="tts-fish-center">Fish 管理 →</button>';
 
-export const FISH_CENTER_PAGE_MARKUP = `
-<section class="jy-page" data-jy-page="fish-center" role="tabpanel" hidden>
-  <header class="jy-page-heading"><h1>Fish 管理</h1><button type="button" class="jy-text-button" data-fish-action="back">← 返回</button></header>
+export const FISH_CENTER_MARKUP = `
+<details class="jy-text-scope jy-fold" data-jy-fold="tts-fish-center">
+  <summary><h2>Fish 管理</h2></summary>
+  <div class="jy-form-body">
   <section class="jy-brief">
     <div class="jy-row-between"><h2>网页订阅</h2><span data-fish-state></span></div>
     <div class="jy-actions">
@@ -14,6 +15,7 @@ export const FISH_CENTER_PAGE_MARKUP = `
       <button type="button" class="jy-text-button" data-fish-action="refresh">刷新</button>
     </div>
     <p class="jy-muted" data-fish-note role="status" hidden></p>
+    <a class="jy-text-button" data-fish-install href="https://github.com/iabil-604/MirrorTranslate/releases/latest/download/MirrorTranslate.zip" target="_blank" rel="noopener noreferrer" hidden>下载镜译安装包</a>
   </section>
   <div data-fish-workspace hidden>
     <section class="jy-brief">
@@ -53,7 +55,8 @@ export const FISH_CENTER_PAGE_MARKUP = `
       <ul class="jy-fish-list" data-fish-tasks></ul>
     </section>
   </div>
-</section>`;
+  </div>
+</details>`;
 
 const SERVICE_STATES = { stopped: '未启动', starting: '启动中…', running: '运行中', stopping: '停止中…' };
 const ACCOUNT_STATES = {
@@ -67,12 +70,13 @@ const TASK_STATES = {
 const MODELS = { 'drama-3': 'Drama 3', 's2.1-pro': 'S2.1 Pro', 's2-pro': 'S2 Pro', s1: 'S1（旧版）' };
 const accountPath = id => `/accounts/${encodeURIComponent(id)}`;
 
-export function createFishCenter(root, { headers, back, selected, use, onSettings }) {
-  const page = root.querySelector('[data-jy-page="fish-center"]');
-  const field = name => page.querySelector(`[data-fish-${name}]`);
-  const button = action => page.querySelector(`[data-fish-action="${action}"]`);
-  const document = page.ownerDocument;
-  const audio = page.querySelector('audio');
+export function createFishCenter(root, { headers, selected, use, onSettings }) {
+  const page = root.querySelector('[data-jy-page="tts"]');
+  const fold = page.querySelector('[data-jy-fold="tts-fish-center"]');
+  const field = name => fold.querySelector(`[data-fish-${name}]`);
+  const button = action => fold.querySelector(`[data-fish-action="${action}"]`);
+  const document = fold.ownerDocument;
+  const audio = fold.querySelector('audio');
   let visible;
   let timer;
   let busy = false;
@@ -94,10 +98,11 @@ export function createFishCenter(root, { headers, back, selected, use, onSetting
   };
   const json = async (path, options, signal) => (await api(path, options, signal)).json();
 
-  function note(message = '', error = false) {
+  function note(message = '', error) {
     field('note').textContent = message;
     field('note').hidden = !message;
     field('note').dataset.state = error ? 'error' : '';
+    field('install').hidden = error?.code !== FISH_SERVICE_MISSING;
   }
 
   function statusView(next) {
@@ -227,9 +232,13 @@ export function createFishCenter(root, { headers, back, selected, use, onSetting
 
   async function loadState({ force = false, signal = visible?.signal } = {}) {
     signal?.throwIfAborted();
-    const state = await json('/state', undefined, signal);
+    const state = await json('/state', undefined, signal).catch(error => {
+      if (error instanceof SyntaxError) throw missingFishService();
+      throw error;
+    });
     signal?.throwIfAborted();
-    if (state.service !== 'mirrortranslate-fish') throw new Error('请安装镜译内置版并重启酒馆。');
+    if (state?.service !== 'mirrortranslate-fish') throw missingFishService();
+    if (!field('install').hidden) note();
     statusView(state.status);
     if (state.status !== 'running') {
       settingsLoaded = false;
@@ -263,7 +272,7 @@ export function createFishCenter(root, { headers, back, selected, use, onSetting
       current.signal.throwIfAborted();
       await handler(current.signal);
     } catch (error) {
-      if (!current.signal.aborted && (!preview || status === 'running')) note(error.message, true);
+      if (!current.signal.aborted && (!preview || status === 'running')) note(error.message, error);
     } finally {
       control.disabled = control === button('use') && selected();
       if (!preview) busy = false;
@@ -319,13 +328,12 @@ export function createFishCenter(root, { headers, back, selected, use, onSetting
     },
   };
 
-  page.addEventListener('click', event => {
+  fold.addEventListener('click', event => {
     const control = event.target.closest('[data-fish-action]');
     const name = control?.dataset.fishAction;
-    if (name === 'back') back();
-    else if (Object.hasOwn(handlers, name)) void run(control, handlers[name]);
+    if (Object.hasOwn(handlers, name)) void run(control, handlers[name]);
   });
-  page.addEventListener('submit', event => {
+  fold.addEventListener('submit', event => {
     const form = event.target;
     const name = form.dataset.fishForm;
     if (!name) return;
@@ -379,22 +387,28 @@ export function createFishCenter(root, { headers, back, selected, use, onSetting
     refreshing = loadState({ signal }).catch(error => {
       if (signal.aborted) return;
       if (initial) statusView('');
-      note(error.message, true);
+      note(error.message, error);
     }).finally(() => { refreshing = false; });
   }
 
+  function syncVisibility() {
+    if (page.hidden || page.dataset.jyTtsOff === 'true' || fold.hidden || !fold.open) return cleanup();
+    if (visible) return;
+    visible = new AbortController();
+    settingsLoaded = false;
+    statusView('');
+    field('state').textContent = '正在读取…';
+    note();
+    poll(true);
+    timer = setInterval(poll, 3000);
+  }
+
+  fold.addEventListener('toggle', syncVisibility);
   return {
-    onSelect(target) {
-      if (target !== 'fish-center') return cleanup();
-      if (visible) return;
-      visible = new AbortController();
-      settingsLoaded = false;
-      statusView('');
-      field('state').textContent = '正在读取…';
-      note();
-      poll(true);
-      timer = setInterval(poll, 3000);
+    onSelect: syncVisibility,
+    cleanup() {
+      fold.removeEventListener('toggle', syncVisibility);
+      cleanup();
     },
-    cleanup,
   };
 }

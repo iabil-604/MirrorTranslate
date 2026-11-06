@@ -1,20 +1,23 @@
-# 镜译 0.51.5 · Fish 安装说明
+# 镜译 0.51.5 · 一体安装
 
-适用于 Windows 本机 SillyTavern。Fish 登录需要已安装 Edge 或 Chrome。
+适用于 Windows、macOS 和 Linux 上的本机 SillyTavern。Fish 登录使用本机的 Edge、Chrome 或 Chromium。
 
 ## 安装
 
-**使用 Windows 安装包**。关闭酒馆，解压后运行 `Install-MirrorTranslate.cmd`，粘贴酒馆安装目录。安装器会同时安装扩展和 Fish 服务端插件，并启用酒馆的服务端插件。
+关闭酒馆，解压[镜译安装包](https://github.com/iabil-604/MirrorTranslate/releases/latest/download/MirrorTranslate.zip)。
 
-**从 GitHub 安装或更新扩展**。要使用 Fish 网页订阅，关闭酒馆，把镜译的 `server-plugin/` 复制到酒馆的 `plugins/mirrortranslate-fish/`，使 `index.mjs` 位于该目录下。将酒馆的 `config.yaml` 里的 `enableServerPlugins` 设为 `true`。此方式使用酒馆的 Node.js，需 22 或更新版本，使用系统代理时需 24.5 或更新版本。升级服务端插件时重新复制这份目录。
+- Windows 运行 `Install-MirrorTranslate.cmd`。
+- macOS 或 Linux 在解压目录运行 `node install-mirrortranslate.mjs`。启动酒馆的 Node.js 需 22 或更新版本，使用网络代理时需 24.5 或更新版本。
+
+按提示输入酒馆安装目录。安装器会一次装好镜译扩展和 Fish 服务。升级时运行新版安装器即可。从仓库源码安装也可以运行 `node scripts/install-mirrortranslate.mjs`，使用酒馆的 Node.js。
 
 ## 登录和试听
 
-1. 重启酒馆，用本机地址打开。进入「镜译 → Fish 管理」，启动服务并添加账号。
+1. 重启酒馆，用本机地址打开。在镜译打开朗读功能，进入高级模式的「朗读 → Fish 管理」，点「启动服务」并添加账号。
 2. 点「登录 / 验证」。在 Fish 官方窗口登录后，回镜译点「检查」。朗读时请保留该窗口。
 3. 搜索音色或粘贴 Fish 音色链接，保存默认音色。可以先生成试听，再点「设为朗读来源」。
 
-第一次使用内置服务需要在这里登录。内置服务和外置 Fish 使用各自的登录资料。试听和楼层播放会使用 Fish 网页额度。网页订阅支持手动朗读。
+首次在镜译使用 Fish 网页订阅时登录一次。试听和楼层播放会使用 Fish 网页额度。网页订阅支持手动朗读。
 
 ## 翻译
 
@@ -28,9 +31,7 @@
 
 ## 音色工坊
 
-- 正常模式在「微调 → 朗读 → 进入音色工坊」。高级模式打开朗读后，在「朗读 → 音色 → 音色工坊」。
-- 连接工坊后，可用 Discord 登录、浏览和搜索投稿，复制 Fish 音色 ID，或从详情存进本地音色库。工坊沿用镜译已有的 Fish 设置查询音色。
-- 包内 `workshop-worker/` 包含 Cloudflare Worker、D1 建表文件、测试和部署说明。工坊默认显示待配置。真实登录需要先配置 Worker 地址和 Discord 回调，步骤见[工坊部署说明](workshop-worker/README.md)。
+音色工坊入口保留，敬请期待。
 
 ## 版本与数据
 

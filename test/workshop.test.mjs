@@ -210,7 +210,8 @@ test('没有工坊地址时禁用登录，旧的未绑定会话不发请求', as
   view.click('[data-jy-ws-login]');
   await flush();
   assert.equal(view.get('[data-jy-ws-login]').disabled, true);
-  assert.match(view.get('[data-jy-ws-notice]').textContent, /未配置/);
+  assert.equal(view.get('[data-jy-ws-notice]').textContent, '敬请期待');
+  assert.equal(view.get('[data-jy-ws-gate]').hidden, true);
   assert.equal(network.mock.callCount(), 0);
 });
 
