@@ -129,12 +129,12 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.51.6-beta.2';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.51.6-beta.2';
-import { WORKSHOP_ENTRY_MARKUP, WORKSHOP_FOLD_MARKUP, WORKSHOP_LAYER_MARKUP, WORKSHOP_PAGE_MARKUP, createWorkshop } from './workshop.js?v=0.51.6-beta.2';
+} from './core.js?v=0.51.6-beta.3';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.51.6-beta.3';
+import { WORKSHOP_ENTRY_MARKUP, WORKSHOP_FOLD_MARKUP, WORKSHOP_LAYER_MARKUP, WORKSHOP_PAGE_MARKUP, createWorkshop } from './workshop.js?v=0.51.6-beta.3';
 import {
   FISH_WEB_TASK_CHECK, fishWebEndpoint, fishWebReadyReason, fishWebRequest, probeFishWeb,
-} from './fish-web.js?v=0.51.6-beta.2';
+} from './fish-web.js?v=0.51.6-beta.3';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -207,10 +207,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.51.6-beta.2';
-import { createTtsStore } from './tts-store.js?v=0.51.6-beta.2';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.51.6-beta.2';
-import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.51.6-beta.2';
+} from './tts.js?v=0.51.6-beta.3';
+import { createTtsStore } from './tts-store.js?v=0.51.6-beta.3';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.51.6-beta.3';
+import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.51.6-beta.3';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -220,7 +220,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.51.6-beta.2';
+} from './processing.js?v=0.51.6-beta.3';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -238,15 +238,15 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.51.6-beta.2';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.51.6-beta.2';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.51.6-beta.2';
-import { READING_API_VERSION, READING_STATES, readingPositions, readingSnapshot, readingState } from './reading.js?v=0.51.6-beta.2';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.51.6-beta.2';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.51.6-beta.2';
-import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.51.6-beta.2';
-import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.51.6-beta.2';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.51.6-beta.2';
+} from './prompts.js?v=0.51.6-beta.3';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.51.6-beta.3';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.51.6-beta.3';
+import { READING_API_VERSION, READING_STATES, readingPositions, readingSnapshot, readingState } from './reading.js?v=0.51.6-beta.3';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.51.6-beta.3';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.51.6-beta.3';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.51.6-beta.3';
+import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.51.6-beta.3';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.51.6-beta.3';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -264,8 +264,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.51.6-beta.2';
-import { sampleThemeBackground } from './theme-probe.js?v=0.51.6-beta.2';
+} from './palette.js?v=0.51.6-beta.3';
+import { sampleThemeBackground } from './theme-probe.js?v=0.51.6-beta.3';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -273,7 +273,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.51.6-beta.2';
+} from './diagnostics.js?v=0.51.6-beta.3';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -284,7 +284,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.51.6-beta.2';
+} from './helper.js?v=0.51.6-beta.3';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -1240,8 +1240,8 @@ function saveSettings(next) {
   const movesChanged = JSON.stringify(previous.moveOverrides ?? {}) !== JSON.stringify(runtime.settings.moveOverrides ?? {});
   const coloringPaintChanged = bandChanged || movesChanged;
   const coloringChanged = coloringRequestChanged || coloringPaintChanged;
-  const nonColoringVisualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key])
-    || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
+  const regexChanged = JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
+  const nonColoringVisualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key]) || regexChanged;
   const visualChanged = nonColoringVisualChanged || coloringChanged;
   // A change of look re-renders translations already written; the reply being generated is still owed
   // one — except a pure repaint (band/vividness only), which never touched the request and must not
@@ -1307,7 +1307,9 @@ function saveSettings(next) {
     const revision = ++runtime.processingRevision;
     const settings = runtime.settings;
     const paintOnly = !nonColoringVisualChanged;
-    const reload = nonColoringVisualChanged || coloringRequestChanged || bandChanged;
+    // Affixes only rewrite owned translation blocks; the native regex list is unchanged.
+    // Repaint those messages in place instead of reloading the entire chat on every field blur.
+    const reload = regexChanged || coloringRequestChanged || bandChanged;
     runtime.processingRefresh = runtime.processingRefresh.catch(() => {}).then(() => {
       if (revision !== runtime.processingRevision || !runtime.initialized) return;
       return restyleCurrentChat(settings, { paintOnly, reload });
@@ -7184,7 +7186,11 @@ async function ttsAskBox(body, { label = '选择' } = {}) {
       }
       if (action.primary) control.className = 'is-primary';
       if (action.run) control.addEventListener('click', event => { event.preventDefault(); action.run(); });
-      else if (!action.href) control.dataset.jySave = action.value;
+      else if (action.href) control.addEventListener('click', event => {
+        try { relayTtsDownload(event, control); }
+        catch (error) { toast('error', '发起保存失败：' + safeError(error)); }
+      });
+      else control.dataset.jySave = action.value;
       control.textContent = action.label;
       actions.appendChild(control);
     }
@@ -7253,7 +7259,7 @@ async function ttsOfferFile(blob, name, { note = '' } = {}) {
   try {
     await ttsAskBox({
       title: '音频已经做好了',
-      text: `${name}（${formatBytes(blob.size)}）${note ? `。${note}` : ''}。点「保存文件」由浏览器下载；有的手机浏览器要长按它再选「下载链接」。`,
+      text: `${name}（${formatBytes(blob.size)}）${note ? `。${note}` : ''}`,
       actions: [
         { value: 'save', label: '保存文件', primary: true, href: url, download: name },
         ...(shareable ? [{ value: 'share', label: '分享', run: () => { void navigator.share({ files: [file], title: name }).catch(() => {}); } }] : []),
@@ -8434,6 +8440,22 @@ async function ttsSplicedWav(entries) {
   } finally {
     void context.close?.();
   }
+}
+
+// TT's document listener sees the shadow host instead of the actual save link.
+// Adapted from the user-provided 镜译音频下载修复（TT安卓） patch.
+function relayTtsDownload(event, anchor) {
+  if (event.defaultPrevented || detectTtsHost() !== 'tauritavern' || !anchor.href.startsWith('blob:')) return false;
+  event.preventDefault();
+  const relay = document.createElement('a');
+  relay.href = anchor.href;
+  relay.download = anchor.download;
+  relay.rel = 'noopener';
+  relay.style.display = 'none';
+  document.body.appendChild(relay);
+  try { relay.click(); }
+  finally { relay.remove(); }
+  return true;
 }
 
 /** A blob handed to the browser as a download, and the url let go once it has had time to take it. */
@@ -16099,6 +16121,7 @@ async function openControlCenter() {
     if (event.target === overlay) close();
   };
   const onKeydown = event => {
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === 'Escape') {
       // A `.jy-ask` confirm (confirmDestructive) opens its own top-level dialog with its own Escape
       // handler, registered on `document` after this one — capture-phase listeners on the same target
@@ -22172,6 +22195,8 @@ function configureForTest({
 }
 
 export const __testing = Object.freeze({
+  ttsOfferFile,
+  relayTtsDownload,
   withAbortTimeout,
   callController,
   describeCall,

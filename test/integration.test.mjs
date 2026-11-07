@@ -2382,3 +2382,61 @@ test('a restyle while a floor is still translating redraws only the floors it re
   assert.equal(reloads, 0);
   assert.deepEqual(drawn, [0, 1, 2], '改正则、前后缀时每一楼都重绘');
 });
+
+test('affix-only saves update translated swipes in place without reloading the chat', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousDocument = globalThis.document;
+  globalThis.document = { getElementById: () => null, createElement: () => ({ style: {} }), head: { appendChild() {} } };
+  t.after(() => { globalThis.document = previousDocument; globalThis.SillyTavern = previousHost; __testing.configureForTest({ initialized: false }); });
+  const context = mockHost();
+  let settings = __testing.configureForTest({ settings: { showFloatingButton: false }, initialized: true, inflight: new Map(), mainGenerationActive: false });
+  const first = await translatedFloor('雨が降っている。', [[1, '下雨了。']], settings);
+  const second = await translatedFloor('風が強い。', [[1, '风很大。']], settings);
+  first.swipes = [first.mes, second.mes];
+  first.swipe_info = [{ extra: structuredClone(first.extra) }, { extra: structuredClone(second.extra) }];
+  first.extra.other = 'untouched';
+  context.chat.push({ mes: '用户原文。', is_user: true }, first, { mes: 'まだ訳していない。', extra: {} });
+  let saves = 0, reloads = 0;
+  const drawn = [];
+  context.saveChat = async () => { saves += 1; };
+  context.reloadCurrentChat = async () => { reloads += 1; };
+  context.updateMessageBlock = id => drawn.push(id);
+  for (const [field, value] of Object.entries({ segmentPrefix: '<small>', segmentSuffix: '</small>', translationPrefix: '【', translationSuffix: '】' })) {
+    drawn.length = 0;
+    settings = __testing.saveSettings({ ...settings, [field]: value });
+    await __testing.processingRefresh();
+    assert.equal(reloads, 0, field + ' must not reload the chat behind the open editor');
+    assert.deepEqual(drawn, [1], 'only the translated message needs redrawing');
+    assert.equal(context.extensionSettings['jingyi-translator'][field], value);
+    assert.equal(first.mes, first.swipes[0]);
+    assert.deepEqual(first.swipes.map(text => [...extractGeneratedTranslations(text).values()]), [['下雨了。'], ['风很大。']]);
+    assert.equal(first.extra.other, 'untouched');
+  }
+  assert.equal(saves, 4);
+  assert.equal(context.chat[0].mes, '用户原文。');
+  assert.equal(context.chat[2].mes, 'まだ訳していない。');
+  const profiles = structuredClone(settings.processingProfiles);
+  profiles.find(profile => profile.id === settings.selectedProcessingProfileId).regexScripts.push({
+    id: 'affix-test-rule', scriptName: 'test', findRegex: '/雨/g', replaceString: '雨',
+    trimStrings: [], placement: [2], markdownOnly: true, runOnEdit: true,
+  });
+  __testing.saveSettings({ ...settings, processingProfiles: profiles });
+  await __testing.processingRefresh();
+  assert.equal(reloads, 1, 'a changed native regex still follows the full-refresh path');
+});
+
+test('affix-only saves with no translated messages do not save or reload the chat', async t => {
+  const previousHost = globalThis.SillyTavern;
+  const previousDocument = globalThis.document;
+  globalThis.document = { getElementById: () => null, createElement: () => ({ style: {} }), head: { appendChild() {} } };
+  t.after(() => { globalThis.document = previousDocument; globalThis.SillyTavern = previousHost; __testing.configureForTest({ initialized: false }); });
+  const context = mockHost([{ mes: 'まだ訳していない。', extra: {} }]);
+  const settings = __testing.configureForTest({ settings: { showFloatingButton: false }, initialized: true, inflight: new Map(), mainGenerationActive: false });
+  let saves = 0, reloads = 0, redraws = 0;
+  context.saveChat = async () => { saves += 1; };
+  context.reloadCurrentChat = async () => { reloads += 1; };
+  context.updateMessageBlock = () => { redraws += 1; };
+  __testing.saveSettings({ ...settings, translationPrefix: '【' });
+  await __testing.processingRefresh();
+  assert.deepEqual({ saves, reloads, redraws }, { saves: 0, reloads: 0, redraws: 0 });
+});
