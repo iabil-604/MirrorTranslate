@@ -129,14 +129,12 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.51.6-beta.1';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.51.6-beta.1';
-import { WORKSHOP_ENTRY_MARKUP, WORKSHOP_FOLD_MARKUP, WORKSHOP_LAYER_MARKUP, WORKSHOP_PAGE_MARKUP, createWorkshop } from './workshop.js?v=0.51.6-beta.1';
+} from './core.js?v=0.51.6-beta.2';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.51.6-beta.2';
+import { WORKSHOP_ENTRY_MARKUP, WORKSHOP_FOLD_MARKUP, WORKSHOP_LAYER_MARKUP, WORKSHOP_PAGE_MARKUP, createWorkshop } from './workshop.js?v=0.51.6-beta.2';
 import {
-  FISH_ANDROID_SETUP, FISH_ANDROID_TASK_CHECK, FISH_WEB_TASK_CHECK,
-  checkFishAndroid, fishAndroidSpeech, fishManagedRequest, isAndroidFishHost,
-} from './fish-web.js?v=0.51.6-beta.1';
-import { FISH_CENTER_ENTRY, FISH_CENTER_MARKUP, createFishCenter } from './fish-center.js?v=0.51.6-beta.1';
+  FISH_WEB_TASK_CHECK, fishWebEndpoint, fishWebReadyReason, fishWebRequest, probeFishWeb,
+} from './fish-web.js?v=0.51.6-beta.2';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -209,10 +207,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.51.6-beta.1';
-import { createTtsStore } from './tts-store.js?v=0.51.6-beta.1';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.51.6-beta.1';
-import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.51.6-beta.1';
+} from './tts.js?v=0.51.6-beta.2';
+import { createTtsStore } from './tts-store.js?v=0.51.6-beta.2';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.51.6-beta.2';
+import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.51.6-beta.2';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -222,7 +220,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.51.6-beta.1';
+} from './processing.js?v=0.51.6-beta.2';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -240,15 +238,15 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.51.6-beta.1';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.51.6-beta.1';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.51.6-beta.1';
-import { READING_API_VERSION, READING_STATES, readingPositions, readingSnapshot, readingState } from './reading.js?v=0.51.6-beta.1';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.51.6-beta.1';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.51.6-beta.1';
-import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.51.6-beta.1';
-import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.51.6-beta.1';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.51.6-beta.1';
+} from './prompts.js?v=0.51.6-beta.2';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.51.6-beta.2';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.51.6-beta.2';
+import { READING_API_VERSION, READING_STATES, readingPositions, readingSnapshot, readingState } from './reading.js?v=0.51.6-beta.2';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.51.6-beta.2';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.51.6-beta.2';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.51.6-beta.2';
+import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.51.6-beta.2';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.51.6-beta.2';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -266,8 +264,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.51.6-beta.1';
-import { sampleThemeBackground } from './theme-probe.js?v=0.51.6-beta.1';
+} from './palette.js?v=0.51.6-beta.2';
+import { sampleThemeBackground } from './theme-probe.js?v=0.51.6-beta.2';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -275,7 +273,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.51.6-beta.1';
+} from './diagnostics.js?v=0.51.6-beta.2';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -286,7 +284,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.51.6-beta.1';
+} from './helper.js?v=0.51.6-beta.2';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -493,7 +491,14 @@ const runtime = {
   },
 };
 
-const TTS_SOURCE_PICKER = `<label><span class="jy-label">声音来源</span><select data-jy-tts-field="provider"><option value="fish">Fish Audio · 官方 API</option><option value="fish-web">Fish 网页订阅</option><option value="gsv">GPT-SoVITS（本地）</option></select></label>`;
+const TTS_SOURCE_PICKER = `<label><span class="jy-label">声音来源</span><select data-jy-tts-field="provider"><option value="fish">Fish Audio · 官方 API</option><option value="fish-web">Fish 反代</option><option value="gsv">GPT-SoVITS（本地）</option></select></label>`;
+const FISH_WEB_CONTROLS = `
+<div class="jy-form-grid jy-form-grid-tight">
+  <label><span class="jy-label">反代地址</span><input type="url" data-jy-tts-fish-web="baseUrl" placeholder="http://127.0.0.1:7860/v1/audio/speech" spellcheck="false"></label>
+  <label><span class="jy-label">Key</span><input type="password" data-jy-tts-fish-web="key" autocomplete="new-password" spellcheck="false"></label>
+</div>
+<label class="jy-check"><input type="checkbox" data-jy-tts-fish-web="viaProxy">经酒馆代理</label>
+<div class="jy-actions"><button type="button" class="jy-button" data-jy-action="tts-test-fish-web">测试连接</button><span class="jy-muted" data-jy-fish-web-note role="status"></span></div>`;
 const CONTROL_CENTER_MARKUP = `
 <div class="jy-studio" data-jy-root>
 <aside class="jy-rail">
@@ -527,7 +532,7 @@ const CONTROL_CENTER_MARKUP = `
     <select data-jy-tts-fish="model" aria-label="模型"><option value="s2-pro">s2-pro</option><option value="s2.1-pro">s2.1-pro</option><option value="s2.1-pro-free">s2.1-pro-free（免费开发者档）</option><option value="drama-3-preview">drama-3-preview（预览版）</option><option value="s1">s1（旧版，不能一次用多个音色）</option></select>
     <button type="button" class="jy-button" data-jy-action="tts-test">测试连接</button>
    </div>
-    <div data-jy-tts-provider-card="fish-web" hidden>${FISH_CENTER_ENTRY}</div>
+    <div data-jy-tts-provider-card="fish-web" hidden>${FISH_WEB_CONTROLS}</div>
     <p class="jy-muted" data-jy-tts-provider-card="gsv" hidden><button type="button" class="jy-text-button" data-jy-action="goto-advanced" data-jy-goto-page="tts">打开 GPT-SoVITS 设置 →</button></p>
    <label class="jy-summary-row jy-summary-select"><span class="jy-label">分析模式</span><span class="jy-switch"><input type="checkbox" data-jy-tts-field="mode" aria-label="分析模式"><span></span></span></label>
    <p class="jy-muted" data-jy-desk-mode-help></p>
@@ -761,8 +766,9 @@ const CONTROL_CENTER_MARKUP = `
 <label class="jy-check"><input type="checkbox" data-jy-tts-fish="viaProxy">经酒馆 CORS 代理发送</label>
 <p class="jy-muted" data-jy-tts-proxy-help></p>
 </div>
-<div class="jy-text-scope" data-jy-tts-provider-card="fish-web" hidden><h2>Fish 网页订阅</h2>
+<div class="jy-text-scope" data-jy-tts-provider-card="fish-web" hidden><h2>Fish 反代</h2>
 <div class="jy-form-grid jy-form-grid-tight">${TTS_SOURCE_PICKER}</div>
+${FISH_WEB_CONTROLS}
 </div>
 <div class="jy-text-scope" data-jy-tts-provider-card="gsv" hidden><h2>GPT-SoVITS</h2>
 <div class="jy-form-grid jy-form-grid-tight">${TTS_SOURCE_PICKER}<label><span class="jy-label">接口地址</span><input type="url" data-jy-tts-gsv="baseUrl" placeholder="http://127.0.0.1:9880" spellcheck="false"></label></div>
@@ -774,7 +780,6 @@ const CONTROL_CENTER_MARKUP = `
 </div>
 <p class="jy-muted">请先启动 GPT-SoVITS 的 <code>api_v2.py</code>。</p>
 </div>
-${FISH_CENTER_MARKUP}
 </div>
 <div class="jy-text-scope"><h2>音色</h2>
 <div class="jy-actions"><button type="button" class="jy-button jy-button-primary" data-jy-action="tts-import-worldbook">从角色卡和世界书识别角色</button></div>
@@ -4295,10 +4300,8 @@ const TTS_RANGE_LABELS = Object.freeze({ all: '旁白 + 对白', dialogue: '只�
 const TTS_MODE_LABELS = Object.freeze({ off: '不分析', deep: '分析模式' });
 const TTS_INLINE_WRAPPERS = new Set(['Q', 'EM', 'STRONG', 'I', 'B', 'U', 'S', 'SPAN', 'FONT', 'SMALL', 'MARK', 'DEL', 'INS', 'SUB', 'SUP', 'CITE']);
 
-const FISH_WEB_STREAM_REASON = 'Fish 网页订阅用于常规朗读。边写边读和通话可在「朗读 → 更多 → 实时通话」另选声音来源。';
+const FISH_WEB_STREAM_REASON = 'Fish 反代用于常规朗读。边写边读和通话可在「朗读 → 更多 → 实时通话」另选声音来源。';
 const fishWebSelectedForStream = tts => tts.provider === 'fish-web' && tts.streamVoice === 'fish';
-const usesFishAndroid = () => isAndroidFishHost(detectTtsHost());
-const needsFishAndroidSetup = tts => tts.provider === 'fish-web' && usesFishAndroid() && !tts.fishAndroid.secretId;
 
 function ttsSettings(settings = runtime.settings) {
   let tts = normalizeTts(settings?.tts);
@@ -4448,7 +4451,10 @@ function ttsProviderName(tts) {
 /** What must be set before anything is asked of the provider: Fish's key; GPT-SoVITS needs none. */
 function requireTtsReady(tts) {
   if (tts.provider === 'fish') requireFishKey(tts);
-  if (needsFishAndroidSetup(tts)) throw new Error(FISH_ANDROID_SETUP);
+  if (tts.provider === 'fish-web') {
+    const reason = fishWebReadyReason(tts.fishWeb);
+    if (reason) throw new Error(reason);
+  }
 }
 
 /**
@@ -4472,8 +4478,7 @@ function ttsRequestUnit(tts) {
 
 /** What a part the browser could not play is said as: mp3 helps Fish; GPT-SoVITS only makes wav. */
 function ttsPlaybackFailure(tts) {
-  if (tts?.provider === 'fish-web' && usesFishAndroid()) return '音频播放失败，可在 Fish Local 里试听。';
-  if (tts?.provider === 'fish-web') return '音频播放失败，可在 Fish 管理里试听。';
+  if (tts?.provider === 'fish-web') return '音频播放失败，请在反代端检查生成结果。';
   return tts?.provider === 'gsv'
     ? '浏览器播放这段音频失败。点这一句的「重新生成」，让 GPT-SoVITS 再做一次。'
     : '浏览器播放这段音频失败。换成 mp3 格式通常能解决。';
@@ -5896,28 +5901,27 @@ async function gsvSynthesize(payload, gsv, signal, { onAttempt = null } = {}) {
 
 // The companion owns submission and account rotation. A failed response may already have used quota.
 async function fishWebSynthesize(body, tts, signal) {
-  const android = usesFishAndroid();
-  const label = android ? 'Fish Local' : 'Fish 网页订阅';
-  const taskCheck = android ? FISH_ANDROID_TASK_CHECK : FISH_WEB_TASK_CHECK;
+  const label = 'Fish 反代';
+  const taskCheck = FISH_WEB_TASK_CHECK;
   try {
     return await withTtsTimeout(signal, 240, async requestSignal => {
-      const options = { signal: requestSignal, headers: requestHeaders() };
-      const response = android
-        ? await fishAndroidSpeech(body, tts.fishAndroid, options)
-        : await fishManagedRequest('/speech', { method: 'POST', body, ...options });
+      const response = await fishWebRequest(tts.fishWeb, '/speech', {
+        body: { ...body, response_format: 'mp3' }, signal: requestSignal, headers: requestHeaders(), host: detectTtsHost(),
+      });
       let raw = await response.arrayBuffer().catch(error => {
         if (requestSignal.aborted) throw error;
         throw new Error(label + ' 的音频接收中断。' + taskCheck);
       });
       requestSignal.throwIfAborted();
-      if (android) {
+      const mime = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+      if (mime !== 'audio/wav' && mime !== 'audio/x-wav') {
         try {
-          if (!/^audio\/(mpeg|mp3)(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) throw new Error();
+          if (mime !== 'audio/mpeg' && mime !== 'audio/mp3') throw new Error();
           const wav = await sliceAudioToWav(new Blob([raw], { type: 'audio/mpeg' }), 0);
           raw = await wav.arrayBuffer();
         } catch {
           requestSignal.throwIfAborted();
-          throw new Error('无法播放 Fish Local 返回的 MP3。' + taskCheck);
+          throw new Error('无法播放反代返回的音频。' + taskCheck);
         }
         requestSignal.throwIfAborted();
       }
@@ -6058,7 +6062,7 @@ async function makeFishWebRecording({ floor, items, tts, provider, signal, onSta
     signal?.throwIfAborted();
     const detail = `${made.length}/${parts.length} 句已完成`;
     onStep?.(stepId, { state: 'active', label: ttsUnitLabel(unit), detail });
-    onStatus?.(`Fish 网页订阅正在生成${label}（${detail}）…`);
+    onStatus?.(`Fish 反代正在生成${label}（${detail}）…`);
     const { body } = provider.payload(part, tts);
     let result;
     try {
@@ -6120,51 +6124,12 @@ function reportTtsFish(floor) {
   }, '', { floor: floor.messageId });
 }
 
-let managedFishVoiceKey = '';
-let managedFishSettingsAt = 0;
-let managedFishSettingsRequest;
-let androidFishSettings;
-
-function rememberManagedFishSettings({ backend, defaultVoice }) {
-  managedFishSettingsAt = Date.now();
-  managedFishVoiceKey = JSON.stringify([backend, defaultVoice]);
-}
-
-async function managedFishFingerprint() {
-  if (!managedFishSettingsRequest && Date.now() - managedFishSettingsAt >= 4000) {
-    const last = managedFishSettingsAt = Date.now();
-    managedFishSettingsRequest = fishManagedRequest('/settings', { headers: requestHeaders(), signal: AbortSignal.timeout(1200) })
-      .then(response => response.json())
-      .then(settings => { if (last === managedFishSettingsAt) rememberManagedFishSettings(settings); })
-      .catch(() => {})
-      .finally(() => { managedFishSettingsRequest = undefined; });
-  }
-  await managedFishSettingsRequest;
-  return 'managed:' + managedFishVoiceKey;
-}
-
-async function androidFishFingerprint(connection) {
-  const id = 'android:' + JSON.stringify([connection.port, connection.secretId]);
-  if (!connection.secretId) return id;
-  if (androidFishSettings?.id !== id) androidFishSettings = { id, profile: connection.profile, at: 0 };
-  const state = androidFishSettings;
-  if (!state.request && Date.now() - state.at >= 4000) {
-    state.at = Date.now();
-    state.request = checkFishAndroid(connection, { headers: requestHeaders(), signal: AbortSignal.timeout(1600) })
-      .then(profile => { state.profile = profile; })
-      .catch(() => {})
-      .finally(() => { state.request = undefined; });
-  }
-  await state.request;
-  return id + ':' + state.profile;
-}
-
 // Everything that changes the sound, hashed once per distinct settings.
 async function ttsFingerprint(settings = runtime.settings) {
   const tts = ttsSettings(settings);
   const options = { consoles: consoleFingerprint(settings) };
   if (tts.provider === 'fish-web') {
-    options.origin = usesFishAndroid() ? await androidFishFingerprint(tts.fishAndroid) : await managedFishFingerprint();
+    options.origin = 'external:' + fishWebEndpoint(tts.fishWeb.baseUrl);
   }
   const fingerprint = ttsProviderFor(settings).fingerprint(tts, options);
   const json = JSON.stringify(fingerprint);
@@ -12830,6 +12795,9 @@ function syncTtsPickers(root, settings = runtime.settings, { all = false } = {})
 
 function updateTtsProxyHelp(root) {
   updateGsvProxyHelp(root);
+  for (const proxy of root.querySelectorAll('[data-jy-tts-fish-web="viaProxy"]')) {
+    proxy.disabled = detectTtsHost() === 'tauritavern';
+  }
   const proxy = root.querySelector('[data-jy-tts-fish="viaProxy"]');
   const help = root.querySelector('[data-jy-tts-proxy-help]');
   if (!help) return;
@@ -12912,7 +12880,7 @@ function syncTtsFields(root, settings = runtime.settings, { renderLists = true }
     }
     if (key === 'autoRead' || key === 'autoGenerate') {
       element.disabled = tts.provider === 'fish-web';
-      element.title = element.disabled ? 'Fish 网页订阅首版从播放或试听按钮手动生成语音。' : '';
+      element.title = element.disabled ? 'Fish 反代首版从播放或试听按钮手动生成语音。' : '';
     }
     // 分析模式 is one switch (DESIGN §17.2): on is the analysed reading, off the plain one.
     if (key === 'mode' && element.type === 'checkbox') {
@@ -12928,6 +12896,11 @@ function syncTtsFields(root, settings = runtime.settings, { renderLists = true }
   }
   for (const element of root.querySelectorAll('[data-jy-tts-fish]')) {
     const value = tts.fish[element.dataset.jyTtsFish];
+    if (element.type === 'checkbox') element.checked = value === true;
+    else element.value = value ?? '';
+  }
+  for (const element of root.querySelectorAll('[data-jy-tts-fish-web]')) {
+    const value = tts.fishWeb[element.dataset.jyTtsFishWeb];
     if (element.type === 'checkbox') element.checked = value === true;
     else element.value = value ?? '';
   }
@@ -13019,7 +12992,7 @@ function updateTtsModeHelp(root) {
  * once the reader moves elsewhere.
  */
 function syncTtsFeatureVisibility(root, settings = runtime.settings) {
-  const { enabled, provider } = ttsSettings(settings);
+  const { enabled } = ttsSettings(settings);
   const tab = root.querySelector('[data-jy-tab="tts"]');
   // DESIGN §15.1: 「朗读」has no rail button at all in normal mode (its settings live on 翻译台/微调
   // instead) — enabling TTS there must not resurrect this advanced-only tab. pageExistsInMode keeps
@@ -13027,11 +13000,6 @@ function syncTtsFeatureVisibility(root, settings = runtime.settings) {
   if (tab) tab.hidden = !pageExistsInMode('tts', settings.uiMode) || (!enabled && tab.getAttribute('aria-selected') !== 'true');
   const page = root.querySelector('[data-jy-page="tts"]');
   if (page) page.dataset.jyTtsOff = String(!enabled);
-  const fishFold = root.querySelector('[data-jy-fold="tts-fish-center"]');
-  if (fishFold) {
-    fishFold.hidden = provider === 'gsv';
-    if (!enabled || fishFold.hidden) fishFold.open = false;
-  }
   const shortcut = root.querySelector('[data-jy-action="open-tts"]');
   if (shortcut) shortcut.hidden = !enabled;
 }
@@ -13062,6 +13030,11 @@ function collectTtsFields(root, current) {
     if (element.type === 'checkbox') next.fish[key] = element.checked;
     else if (TTS_NUMERIC_FISH_FIELDS.has(key)) next.fish[key] = Number(element.value);
     else next.fish[key] = element.value.trim();
+  }
+  next.fishWeb = { ...previous.fishWeb };
+  for (const element of root.querySelectorAll('[data-jy-tts-fish-web]')) {
+    const key = element.dataset.jyTtsFishWeb;
+    next.fishWeb[key] = element.type === 'checkbox' ? element.checked : element.value.trim();
   }
   for (const kind of ['doubao', 'minimax']) {
     next[kind] = { ...previous[kind] };
@@ -14637,30 +14610,6 @@ function createControlCenter(rootDocument = document) {
     selectTab: target => selectTab(target === 'back' ? workshopParentPage() : target),
   });
 
-  const fishCenter = createFishCenter(root, {
-    headers: requestHeaders,
-    host: detectTtsHost(),
-    getAndroidConnection: () => ttsSettings().fishAndroid,
-    selected: () => {
-      const tts = ttsSettings();
-      return tts.enabled && tts.provider === 'fish-web';
-    },
-    use: androidConnection => {
-      const next = mergeSettings(runtime.settings);
-      if (androidConnection) {
-        if (next.tts.provider !== 'fish-web' || next.tts.fishAndroid.port !== androidConnection.port
-          || next.tts.fishAndroid.secretId !== androidConnection.secretId) stopTts();
-        next.tts.fishAndroid = androidConnection;
-        androidFishSettings = undefined;
-      }
-      next.tts.enabled = true;
-      next.tts.provider = 'fish-web';
-      saveSettings(next);
-      syncFields(root, runtime.settings);
-    },
-    onSettings: rememberManagedFishSettings,
-  });
-
   const selectTab = target => {
     const litTab = target === 'workshop' ? workshopParentPage() : target;
     for (const tabButton of root.querySelectorAll('[data-jy-tab]')) {
@@ -14679,7 +14628,6 @@ function createControlCenter(rootDocument = document) {
     syncTtsFeatureVisibility(root);
     if (target === 'tts' && ttsSettings().enabled) void renderTtsUsage(root);
     workshop.onSelect(target);
-    fishCenter.onSelect();
   };
 
   /**
@@ -15146,6 +15094,18 @@ function createControlCenter(rootDocument = document) {
         const hint = result.credit === 0 && ttsSettings().fish.model !== 's2.1-pro-free' ? '余额为 0，除了 s2.1-pro-free 以外的模型会返回余额不足。' : '';
         setText(root, '[data-jy-tts-save-note]', `Fish 连接正常。${credit}${hint}`);
         toast(hint ? 'warning' : 'success', `Fish 连接正常。${credit}${hint}`);
+      } else if (action === 'tts-test-fish-web') {
+        saveSettings(collectSettings(root));
+        setText(root, '[data-jy-fish-web-note]', '正在连接…');
+        try {
+          await withTtsTimeout(undefined, 10, signal => probeFishWeb(ttsSettings().fishWeb, {
+            signal, headers: requestHeaders(), host: detectTtsHost(),
+          }), { label: 'Fish 反代' });
+          setText(root, '[data-jy-fish-web-note]', '连接成功。');
+        } catch (error) {
+          setText(root, '[data-jy-fish-web-note]', safeError(error));
+          throw error;
+        }
       } else if (action === 'tts-test-gsv') {
         saveSettings(collectSettings(root));
         setText(root, '[data-jy-tts-gsv-note]', '正在连接 GPT-SoVITS…');
@@ -15615,6 +15575,7 @@ function createControlCenter(rootDocument = document) {
     ['jyField', 'data-jy-field'],
     ['jyTtsField', 'data-jy-tts-field'],
     ['jyTtsFish', 'data-jy-tts-fish'],
+    ['jyTtsFishWeb', 'data-jy-tts-fish-web'],
   ]);
   const twinField = target => {
     for (const [datasetKey, attr] of DESK_TWIN_ATTRS) {
@@ -15907,7 +15868,7 @@ function createControlCenter(rootDocument = document) {
       syncTtsFoldSummaries(root, runtime.settings);
       return;
     }
-    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="intimate"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="readWhileWriting"], [data-jy-tts-field="liveAudio"], [data-jy-tts-field="streamVoice"], [data-jy-tts-field="callChannelId"], [data-jy-tts-field="sttProvider"], [data-jy-tts-field="sttPreset"], [data-jy-tts-doubao="resourceId"], [data-jy-tts-doubao="viaProxy"], [data-jy-tts-minimax="baseUrl"], [data-jy-tts-minimax="model"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"], [data-jy-tts-field="provider"], [data-jy-tts-gsv="viaProxy"]')) {
+    if (event.target.matches('[data-jy-tts-field="enabled"], [data-jy-tts-field="side"], [data-jy-tts-field="mode"], [data-jy-tts-field="intimate"], [data-jy-tts-field="range"], [data-jy-tts-field="sanitizeHtml"], [data-jy-tts-field="emotionCues"], [data-jy-tts-field="prosodySplit"], [data-jy-tts-field="autoGenerate"], [data-jy-tts-field="dialogueFallback"], [data-jy-tts-field="speechMarks"], [data-jy-tts-field="playAfterGenerate"], [data-jy-tts-field="autoRead"], [data-jy-tts-field="readWhileWriting"], [data-jy-tts-field="liveAudio"], [data-jy-tts-field="streamVoice"], [data-jy-tts-field="callChannelId"], [data-jy-tts-field="sttProvider"], [data-jy-tts-field="sttPreset"], [data-jy-tts-doubao="resourceId"], [data-jy-tts-doubao="viaProxy"], [data-jy-tts-minimax="baseUrl"], [data-jy-tts-minimax="model"], [data-jy-tts-field="tamePunctuation"], [data-jy-tts-field="deepChannelId"], [data-jy-tts-field="requestUnit"], [data-jy-tts-field="downloadScope"], [data-jy-tts-field="voiceScope"], [data-jy-tts-context], [data-jy-tts-fish="key"], [data-jy-tts-fish="model"], [data-jy-tts-fish="viaProxy"], [data-jy-tts-fish="format"], [data-jy-tts-fish="latency"], [data-jy-tts-field="provider"], [data-jy-tts-fish-web], [data-jy-tts-gsv="viaProxy"]')) {
       if (event.target.matches('[data-jy-tts-field="sttPreset"]')) {
         const preset = STT_PRESETS[event.target.value];
         if (preset) {
@@ -16041,7 +16002,6 @@ function createControlCenter(rootDocument = document) {
     activeSheet: () => workshop.activeSheet(),
     cleanup() {
       workshop.cleanup();
-      fishCenter.cleanup();
       unsubscribe();
       unsubscribeDiagnostics();
       // A question still in flight when the panel closes is left to finish (DESIGN §17.3): the reader
@@ -21545,7 +21505,7 @@ function apiTtsReason({ stream = false } = {}) {
   const voice = stream ? tts.streamVoice : tts.provider;
   if (stream && fishWebSelectedForStream(tts)) return FISH_WEB_STREAM_REASON;
   if (voice === 'gsv') return '';
-  if (voice === 'fish-web') return needsFishAndroidSetup(tts) ? FISH_ANDROID_SETUP : '';
+  if (voice === 'fish-web') return fishWebReadyReason(tts.fishWeb);
   if (voice === 'fish' && !tts.fish.key) return '镜译还没填 Fish Audio 的 API Key：镜译 → 朗读 →「Fish Audio」。';
   if (voice !== 'fish' && !tts[voice]?.key) return spacedLatin(`镜译还没填${CLOUD_VOICE_LABELS[voice]}的 Key：镜译 → 朗读 → 更多 → 实时通话。`);
   return '';
@@ -21976,7 +21936,7 @@ function installPublicApi() {
           enabled: tts.enabled === true,
           provider: tts.provider,
           // GPT-SoVITS runs on the reader's machine and needs no key; ready means as much as Fish's key does.
-          hasKey: tts.provider === 'fish-web' ? !needsFishAndroidSetup(tts) : tts.provider === 'gsv' || Boolean(tts.fish.key),
+          hasKey: tts.provider === 'fish-web' ? !fishWebReadyReason(tts.fishWeb) : tts.provider === 'gsv' || Boolean(tts.fish.key),
           // What tts.stream reads in, and whether it can: a caller that only streams asks this.
           streamProvider: tts.streamVoice,
           streamReady: tts.enabled === true && !fishWebSelectedForStream(tts) && Boolean(tts.streamVoice === 'gsv' ? tts.gsv?.baseUrl : tts.streamVoice === 'fish' ? tts.fish.key : tts[tts.streamVoice]?.key),

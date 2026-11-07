@@ -50,7 +50,7 @@
     </section>
     <aside class="mock-card">
       <div class="beta-actions">
-        <button type="button" id="beta-fish-web-open" class="menu_button" disabled>Fish 管理</button>
+        <button type="button" id="beta-fish-web-open" class="menu_button" disabled>反代设置</button>
         <button type="button" id="beta-workshop-open" class="menu_button" disabled>音色工坊</button>
       </div>
       <p class="beta-note" id="beta-entry-status" role="status"></p>
@@ -259,6 +259,7 @@
           autoGeneration: false,
           tts: {
             enabled: true, autoRead: false, autoGenerate: false, fish: { key: 'preview-key' },
+            fishWeb: { baseUrl: location.origin + '/preview/fish', key: 'preview-local-key', viaProxy: false },
           },
         },
         connectionManager: {
@@ -381,9 +382,11 @@
         target.panel.querySelector('[data-jy-action="set-ui-mode"][data-jy-ui-mode="advanced"]')?.click();
         target.panel.querySelector('[data-jy-tab="tts"]:not([hidden])')?.click();
       }
-      const fold = target?.panel.querySelector('[data-jy-fold="tts-fish-center"]');
-      if (fold) fold.open = true;
-      else entryStatus.textContent = 'Fish 管理打开失败。';
+      const source = target?.panel.querySelector('[data-jy-page="tts"] [data-jy-tts-field="provider"]');
+      if (source) {
+        source.value = 'fish-web';
+        source.dispatchEvent(new Event('change', { bubbles: true }));
+      } else entryStatus.textContent = '反代设置打开失败。';
     });
     workshopButton.addEventListener('click', async () => {
       const target = await openPreviewTab('[data-jy-tab="finetune"]:not([hidden]), [data-jy-tab="tts"]:not([hidden])');

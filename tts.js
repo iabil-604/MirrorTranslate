@@ -15,9 +15,9 @@ import {
   SPEECH_OPEN,
   SPEECH_SEP,
   SPEECH_CLOSE,
-} from './core.js?v=0.51.6-beta.1';
-import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.51.6-beta.1';
-import { sanitizeForTts } from './tts-sanitizer.js?v=0.51.6-beta.1';
+} from './core.js?v=0.51.6-beta.2';
+import { EMOTION_KEYS, EMOTION_STYLES, normalizeEmotion, normalizeIntensity } from './palette.js?v=0.51.6-beta.2';
+import { sanitizeForTts } from './tts-sanitizer.js?v=0.51.6-beta.2';
 
 // ---------------------------------------------------------------------------------------------
 // Reading the translation aloud.
@@ -1868,7 +1868,7 @@ export function unsungText(text) {
  */
 export function singingBlockedReason(tts) {
   if (tts?.provider === 'gsv') return 'GPT-SoVITS 不能唱，换成 Fish 的 S2 系列才能唱。';
-  if (tts?.provider === 'fish-web') return 'Fish 网页订阅目前支持朗读。需要唱歌时请使用官方 API 的 S2 系列。';
+  if (tts?.provider === 'fish-web') return 'Fish 反代目前支持朗读。需要唱歌时请使用官方 API 的 S2 系列。';
   if (tts?.fish?.model === 's1') return 's1 不能唱，换成 Fish 的 S2 系列才能唱。';
   return '';
 }
@@ -2985,7 +2985,7 @@ const fishWebProsody = (item, tts) => ({
 });
 export const FISH_WEB_ADAPTER = Object.freeze({
   id: 'fish-web',
-  label: 'Fish 网页订阅',
+  label: 'Fish 反代',
   vocabulary: FISH_ADAPTER.vocabulary,
   sentenceText: gsvSentenceText,
   prosody: fishWebProsody,

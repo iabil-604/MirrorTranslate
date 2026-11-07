@@ -17,7 +17,7 @@ const waitFor = async check => {
   assert.fail('the expected translation event did not arrive');
 };
 
-function fixture(t, { stream = false, translationOnly = false, paragraphPerLine = false, onSave = () => {} } = {}) {
+function fixture(t, { stream = false, translationOnly = false, paragraphPerLine = false, onSave = () => {}, source = SOURCE, bodyTags = ['story_scene'] } = {}) {
   const globals = Object.fromEntries(['SillyTavern', 'fetch', 'crypto', 'toastr'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   t.after(() => {
     __testing.stopTranslating();
@@ -27,7 +27,7 @@ function fixture(t, { stream = false, translationOnly = false, paragraphPerLine 
     }
   });
   globalThis.toastr = Object.fromEntries(['success', 'error', 'warning', 'info'].map(key => [key, () => {}]));
-  const message = { mes: SOURCE, swipe_id: 0, swipes: [SOURCE], swipe_info: [{ extra: {} }], extra: {} };
+  const message = { mes: source, swipe_id: 0, swipes: [source], swipe_info: [{ extra: {} }], extra: {} };
   const requested = Promise.withResolvers();
   const answer = Promise.withResolvers();
   const requests = [];
@@ -57,7 +57,7 @@ function fixture(t, { stream = false, translationOnly = false, paragraphPerLine 
   __testing.initializeSettings();
   const settings = __testing.configureForTest({ initialized: true, settings: {
     apiMode: stream ? 'independent' : 'follow', streamingWriteback: stream, translationOnly, paragraphPerLine,
-    bodyTags: ['story_scene'], excludedTags: ['bbi_image'], channels: [channel], selectedChannelId: 'test',
+    bodyTags, excludedTags: ['bbi_image'], channels: [channel], selectedChannelId: 'test',
     autoEdit: true, retries: 0, includeWorldbook: false, includeCharacterCard: false, includeRecentContext: false,
   } });
   clearDiagnostics();
@@ -71,6 +71,28 @@ function fixture(t, { stream = false, translationOnly = false, paragraphPerLine 
       else answer.resolve(content);
     },
   };
+}
+
+for (const stream of [false, true]) for (const translationOnly of [false, true]) for (const paragraphPerLine of [false, true]) {
+  test('inline thoughts translate inside their container and clear cleanly ' + JSON.stringify({ stream, translationOnly, paragraphPerLine }), async t => {
+    const source = '<lilith name="莉莉丝" mood="坏笑">\nふん！ご主人様のことは渡さないわ！♥\n<thoughts>悔しいけど極上のカモが歩いてきたわ！</thoughts>\n</lilith>';
+    const f = fixture(t, { source, bodyTags: ['lilith'], stream, translationOnly, paragraphPerLine });
+    const running = f.start();
+    await f.requested;
+    f.finish(JSON.stringify([{ id: 1, text: '哼！我才不会让出主人呢！♥' }, { id: 2, text: '虽然不甘心，但送上门的好机会来了！' }]));
+    const result = await running;
+    assert.equal(result.skipped, false);
+    assert.equal(result.partial, undefined);
+    assert.match(f.message.mes, /<thoughts>[^]*虽然不甘心，但送上门的好机会来了！[^]*<\/thoughts>/);
+    const snapshot = await __testing.readMessageSnapshot(0, f.settings);
+    assert.equal(snapshot.translated, true);
+    assert.equal(snapshot.existingTranslations.get(2), '虽然不甘心，但送上门的好机会来了！');
+    assert.equal((await f.start()).reason, 'already-translated');
+    assert.equal(f.requests.length, 1);
+    await __testing.clearFloorTranslation(0, { ask: () => true });
+    assert.equal(f.message.mes, source);
+    assert.equal(f.message.swipes[0], source);
+  });
 }
 
 function setText(message, text) {

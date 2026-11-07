@@ -22,9 +22,7 @@
 
 ## 安装
 
-[下载镜译一体安装包](https://github.com/iabil-604/MirrorTranslate/releases/latest/download/MirrorTranslate.zip)。关闭酒馆后解压。Windows 运行 `Install-MirrorTranslate.cmd`，macOS 或 Linux 在解压目录运行 `node install-mirrortranslate.mjs`。选择酒馆目录后，安装器会一次装好镜译和 Fish 服务。见 [安装说明](BETA.md)。
-
-酒馆的扩展管理也可以用下面的地址安装界面。需要 Fish 网页订阅时，请用上面的一体安装包。
+在酒馆的扩展管理中使用下面的仓库地址安装镜译。测试版的分支和使用方法见 [Beta 说明](BETA.md)。
 
 ```text
 https://github.com/iabil-604/MirrorTranslate.git
@@ -41,7 +39,7 @@ https://github.com/iabil-604/MirrorTranslate.git
 - 扩展设置页里的「打开控制中心」；
 - 屏幕边上可以拖动的悬浮按钮，点一下打开悬浮窗（不想要的话，在「正文处理 → 界面与正则」里关掉「显示悬浮入口」）。
 
-一体安装的用户运行新版安装器即可升级。通过扩展管理安装的用户可以在控制中心或酒馆扩展管理页更新。
+更新时，在镜译控制中心或酒馆的扩展管理页检查更新。
 
 ## 快速上手
 
@@ -139,7 +137,7 @@ https://github.com/iabil-604/MirrorTranslate.git
 1. 打开「翻译台 → 朗读（有声小说）」。
 2. 选择声音来源：
    - **Fish Audio**：填 API Key。Fish 要经过酒馆的 CORS 代理，第一次用之前，在酒馆目录的 `config.yaml` 里把 `enableCorsProxy` 改成 `true`，然后重启酒馆。
-   - **Fish 网页订阅**：在「朗读 → Fish 管理」启动服务、登录并选音色，再点「设为朗读来源」。支持手动朗读。
+   - **Fish 反代**：自行启动反代服务，在镜译填写反代地址和 Key，点「测试连接」。支持兼容 OpenAI 的 `/v1/audio/speech` 接口，按每个角色绑定的音色朗读。
    - **GPT-SoVITS（本地）**：在自己电脑上运行，不花钱、不限字数，需要 N 卡。先启动 GPT-SoVITS 的 `api_v2.py`，再填接口地址和默认音色，点「测试连接」。它默认也经过酒馆的 CORS 代理，同样要打开 `enableCorsProxy`。
 3. 配声音（「音色」一栏）：
    - 设好旁白音色和对白默认音色。
@@ -290,6 +288,11 @@ https://github.com/iabil-604/MirrorTranslate.git
 
 <details>
 <summary>更新记录</summary>
+
+### v0.51.6-beta.2 · 外置反代与同行标签修复
+
+- Fish 反代由用户独立安装和启动，镜译通过 URL 和 Key 连接。朗读设置提供免费连接检查。
+- 自定义标签和正文写在同一行时，译文保留在对应标签内。兼容双语、只留译文、流式写回和清除译文。
 
 ### v0.51.5 · 对白翻译、插入标签保护、Fish 管理和音色工坊
 

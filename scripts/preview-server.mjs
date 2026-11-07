@@ -28,7 +28,7 @@ const SAMPLE_RATE = 22050;
 const CHARACTER_SECONDS = 0.17;
 const PAUSE_SECONDS = 0.28;
 const workshop = createBetaWorkshop('http://127.0.0.1:' + previewPort);
-const fishRoot = '/api/plugins/mirrortranslate-fish';
+const fishRoot = '/preview/fish';
 const previewFish = createPreviewFish((text, speaker) => synthesizeChunks([{ text, speaker }]).wav);
 
 function readBody(request) {

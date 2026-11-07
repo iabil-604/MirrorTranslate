@@ -328,19 +328,8 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
 .jy-card-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 160px; }
 .jy-card-row-text h3 { overflow-wrap: anywhere; }
 .jy-card-row-text > .jy-muted { margin-top: 0; }
-.jy-fish-list { padding: 0; margin: 10px 0 0; list-style: none; }
 .jy-tts-sources { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
-[data-jy-fold="tts-fish-center"] { overflow-wrap: anywhere; }
-[data-jy-fold="tts-fish-center"] .jy-brief + .jy-brief, [data-fish-workspace] { margin-top: 12px; }
-[data-fish-workspace] .jy-inline-actions { margin: 8px 0; }
-[data-fish-workspace] .jy-inline-actions input { flex: 1 1 12rem; min-width: 0; }
-[data-fish-workspace] .jy-inline-field { flex-wrap: wrap; }
-[data-fish-workspace] .jy-inline-field select { flex: 1 1 10rem; min-width: 0; max-width: 100%; }
-[data-fish-workspace] .jy-form-grid, [data-fish-android] .jy-form-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
-[data-fish-workspace] details > summary { cursor: pointer; }
-[data-fish-player] audio { width: min(320px, 100%); }
-[data-fish-note][data-state="error"], [data-fish-android-note][data-state="error"] { color: var(--jy-danger, #a33); }
-[data-fish-install] { margin-top: 10px; }
+[data-jy-tts-provider-card="fish-web"] .jy-form-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
 .jy-card-row select { min-width: 0; max-width: 220px; }
 .jy-card-row-field { display: inline-flex; align-items: center; gap: 6px; }
 .jy-card-row-field input[type="number"] { width: 72px; }
@@ -387,9 +376,6 @@ summary { cursor: pointer; font-size: 12px; color: var(--jy-accent); }
    height, leaving hundreds of pixels of empty bordered space below a shorter card's own content on
    both 正文处理 and 朗读 (review finding index.js:625, same class on both pages). */
 .jy-processing-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; border-bottom: 1px solid var(--jy-line); padding-bottom: 26px; }
-[data-jy-page="tts"] > .jy-processing-columns:has([data-jy-fold="tts-fish-center"][open]:not([hidden])) {
-  grid-template-columns: minmax(0, 1fr);
-}
 .jy-text-scope { padding: 15px 17px; background: var(--jy-surface); border: 1px solid var(--jy-line); border-radius: var(--jy-radius); }
 .jy-text-scope h2 { margin-bottom: 12px; font-size: 14px; }
 .jy-text-scope .jy-overline { margin-bottom: 3px; }

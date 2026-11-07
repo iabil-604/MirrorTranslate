@@ -5,12 +5,12 @@
 | 项 | 内容 |
 | --- | --- |
 | 是什么 | SillyTavern 的浏览器端扩展。主模型照常用原文写正文；回复写完后，镜译把正文翻成目标语言，用不可见边界写回楼层；发给主模型前由生成拦截器去掉译文。另有朗读（有声小说）、实时通话、小助手 |
-| 技术栈 | 扩展使用原生 ES 模块和 CSS；Fish 网页订阅使用酒馆的 Node.js 服务端插件；音色工坊使用 Cloudflare Worker 和 D1。自动测试用 `node --test` |
+| 技术栈 | 扩展使用原生 ES 模块和 CSS；Fish 反代由用户独立运行，通过 URL 和 Key 连接；音色工坊预留 Cloudflare Worker 和 D1 后端。自动测试用 `node --test` |
 | 入口 | `manifest.json` → `index.js`（生命周期钩子 `onActivate` / `onDisable` / `onClean`，生成拦截器 `JingyiTranslator_interceptGeneration`）；宿主页面样式 `host.css`（引入 `reading.css`）；控制中心、悬浮窗和弹出的对话框用的 `style.css` 由脚本读进各自的 shadow root |
 | 设置存放 | `SillyTavern.getContext().extensionSettings['jingyi-translator']`，`schemaVersion: 13`，读入时由 `core.js` 的 `mergeSettings` 补默认值并迁移旧字段 |
 | 公开接口 | `window.__JINGYI__`：`tts`（`status` / `voices` / `speak` / `read` / `stream` / `stop`）、`stt`（`status` / `start`）、`llm`（`status` / `stream`）、`call.connect`、`scene`（`get` / `list` / `onChange`）、`floor.original`、`reading`（`get` / `onChange` / `status`）。能不能用看 `features` |
-| 当前版本 | 0.51.5。版本号写在 `core.js` 的 `APP_VERSION`、`manifest.json`（`version` 和两个 `?v=`）、`package.json`，以及每个模块导入路径的 `?v=` |
-| 验证范围 | Fish 网页订阅已通过酒馆 1.18.0 隔离安装和服务测试，真实账号登录及合成待验证。音色工坊已通过模拟测试，真实 Discord 登录待验证。TauriTavern 真机和豆包、MiniMax 的真实接口未实测 |
+| 当前版本 | 0.51.6-beta.2。版本号写在 `core.js` 的 `APP_VERSION`、`manifest.json`（`version` 和两个 `?v=`）、`package.json`，以及每个模块导入路径的 `?v=` |
+| 验证范围 | 外置反代和同行标签的翻译通过模拟测试，安卓真机连接及真实语音合成待验证。音色工坊入口显示敬请期待 |
 | 当前未做 | 场景只记录，界面还没有配乐、大纲或配图功能；已完成「只留译文」的楼层在正文里插图后仍可能标为 `conflict`；`使用手册.md`、`VALIDATION.md` 停在 v0.32.3 |
 | 接手先看 | `交接.md`（交接时的状态和待办）、`AGENT_LOG.md` 末尾（开发记录，只追加）、`DESIGN.md`（界面与动效规约） |
 
@@ -38,8 +38,7 @@ MirrorTranslate/
 ├─ tts-store.js             音频缓存（IndexedDB）
 ├─ tts-stream.js            边写边读的切句
 ├─ tts-cloud.js             豆包语音、MiniMax 的请求与读流
-├─ fish-center.js / fish-web.js   Fish 管理页面和网页订阅客户端
-├─ server-plugin/           Fish 网页订阅的酒馆服务端插件
+├─ fish-web.js              用户配置的外置 Fish 反代客户端
 ├─ workshop.js              音色工坊页面
 ├─ workshop-worker/         工坊的 Cloudflare Worker、D1 与部署说明
 ├─ pcm-player.js            边收边放：PCM / WAV 流式播放
@@ -68,13 +67,12 @@ index.js  core.js  prompts.js  workflow.js  processing.js  palette.js  theme-pro
 scene.js  helper.js  mini.js  diagnostics.js  console-autosave.js  jailbreak-default.js
 tts.js  tts-deep.js  tts-speakers.js  tts-sanitizer.js  tts-store.js  tts-stream.js  tts-cloud.js
 pcm-player.js  call.js
-fish-center.js  fish-web.js  workshop.js  server-plugin/  workshop-worker/
+fish-web.js  workshop.js  workshop-worker/
 host.css  reading.css  style.css
 preview.html  reading-preview.html
 scripts/preview-server.mjs  scripts/create-reading-preview.mjs
 scripts/mock-services.mjs  scripts/sandbox-tavern.mjs
 scripts/preview-fish.mjs  scripts/web-beta-workshop.mjs
-scripts/Install-MirrorTranslate.cmd  scripts/install-mirrortranslate.mjs
 validation/sillytavern-1.18.0.snapshot.json
 design/Baseline.dc.html  design/Connection.dc.html  design/Logs.dc.html  design/Main.dc.html
 design/Mini.dc.html  design/MiniStates.dc.html  design/Motion.dc.html  design/Processing.dc.html

@@ -1195,6 +1195,57 @@ test('the tag inspector reports replace tags and catches a nesting the run would
   assert.equal(flat.translationUnits, 2);
 });
 
+test('custom containers retain translated content without requiring tags on separate lines', () => {
+  const sources = [
+    '<thoughts>日本語の心の声。</thoughts>',
+    '<thoughts>\n日本語の心の声。\n</thoughts>',
+    '<lilith name="莉莉丝" mood="坏笑">日本語の台詞。<thoughts>日本語の心の声。</thoughts></lilith>',
+    '<lilith name="莉莉丝">\n日本語の台詞。\n<thoughts>日本語の心の声。</thoughts>\n</lilith>',
+    '<thoughts note="a > b, <example>"><b>日本語の心の声。</b></thoughts>',
+  ];
+  for (const source of sources) for (const paragraphPerLine of [false, true]) {
+    const options = { paragraphPerLine };
+    const segmented = segmentSource(source, options);
+    const translations = new Map(segmented.segments.map(segment => [segment.id, '译文' + segment.id]));
+    for (const assemble of [assembleBilingual, assembleReplace]) {
+      const translated = assemble(segmented.layout, translations, options);
+      assert.equal(stripGeneratedTranslationLines(translated), source);
+      assert.match(translated, /<thoughts(?:\s[^]*?)?>[^]*译文[^]*<\/thoughts>/);
+      assert.deepEqual(
+        [...(assemble === assembleReplace ? extractReplaceTranslations(translated, options) : extractGeneratedTranslations(translated, options))],
+        [...translations],
+      );
+    }
+    const visible = assembleTranslationOnly(segmented.layout, translations, options);
+    assert.match(visible, /<thoughts(?:\s[^]*?)?>[^]*译文[^]*<\/thoughts>/);
+    assert.doesNotMatch(visible, /日本語/);
+    assert.equal((visible.match(/<thoughts\b/g) ?? []).length, 1);
+    assert.equal((visible.match(/<\/thoughts>/g) ?? []).length, 1);
+  }
+});
+
+test('custom container boundaries respect excluded blocks, preserve rules and older floor segmentation', () => {
+  const source = '日本語。<thoughts>秘密の心の声。</thoughts>次の台詞。';
+  const current = segmentSource(source);
+  assert.deepEqual(current.segments.map(segment => segment.text), ['日本語。', '秘密の心の声。', '次の台詞。']);
+  assert.deepEqual(segmentSource(source, { segmentationVersion: 4 }).segments.map(segment => segment.text), ['日本語。秘密の心の声。次の台詞。']);
+  const excluded = segmentSource(source, { excludedTags: ['thoughts'] });
+  const replaced = assembleTranslationOnly(excluded.layout, new Map(excluded.segments.map(segment => [segment.id, '译文。'])));
+  assert.ok(replaced.includes('<thoughts>秘密の心の声。</thoughts>'));
+  const preserved = segmentSource(source, { preserveLineRules: '/^日本語/' });
+  assert.equal(preserved.segments.length, 0);
+  assert.equal(assembleTranslationOnly(preserved.layout, new Map()), source);
+});
+
+test('dialogue quotes remain whole across a custom tag in the same sentence', () => {
+  const source = '<lilith>「こんにちは<thoughts>心の声。</thoughts>また会ったね」</lilith>';
+  const options = { translationScope: 'dialogue' };
+  const segmented = segmentSource(source, options);
+  assert.deepEqual(segmented.segments.map(segment => segment.text), ['「こんにちは心の声。また会ったね」']);
+  const translated = assembleBilingual(segmented.layout, new Map([[1, '「你好，又见面了」']]), options);
+  assert.equal(stripGeneratedTranslationLines(translated), source);
+});
+
 test('a body tag written inside another is translated as part of the outer block; only crossing tags are refused', () => {
   const tags = ['story_scene', 'parallel_line'];
   const inside = '<story_scene>\n一。\n<parallel_line>\n二。\n</parallel_line>\n三。\n</story_scene>';

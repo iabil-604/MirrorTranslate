@@ -34,7 +34,7 @@ import {
   pathSet,
   presetDrift,
   unwrapResponseContent,
-} from './core.js?v=0.51.6-beta.1';
+} from './core.js?v=0.51.6-beta.2';
 
 // ---------------------------------------------------------------------------------------------
 // Default prompt and quick questions
@@ -176,9 +176,9 @@ export function buildSettingsSummaryLines(settings = {}) {
   lines.push(`分析模式：${TTS_MODE_LABELS[tts.mode] || tts.mode || '未知'}`);
   lines.push(`亲密场景：${({ off: '关', auto: '自动（分析模式判断）', on: '开' })[tts.intimate === true ? 'on' : tts.intimate] ?? '关'}`);
   lines.push(`副模型提示词 › 破限词：${String(tts.prompts?.jailbreak ?? '').trim() ? '已填写' : '未填写'}`);
-  const sources = { fish: 'Fish Audio', 'fish-web': 'Fish 网页订阅', gsv: 'GPT-SoVITS（本地）' };
+  const sources = { fish: 'Fish Audio', 'fish-web': 'Fish 反代', gsv: 'GPT-SoVITS（本地）' };
   lines.push(`声音来源：${sources[tts.provider] ?? sources.fish}`);
-  if (tts.provider === 'fish-web') lines.push('Fish 网页订阅：从「Fish 管理」连接。');
+  if (tts.provider === 'fish-web') lines.push('Fish 反代：在朗读设置中填写接口地址和 Key。');
   if (tts.provider === 'gsv') {
     const gsv = tts.gsv || {};
     lines.push(`GPT-SoVITS › 接口地址：${urlHost(gsv.baseUrl) || '未填'}`);
@@ -255,7 +255,7 @@ export function buildRegexLines(regex) {
 
 const KNOWLEDGE_PAGE_LABELS = Object.freeze({
   main: '翻译台', finetune: '微调', prompt: '翻译规则', settings: '模型连接',
-  processing: '正文处理', tts: '朗读', 'fish-center': 'Fish 管理', helper: '小助手', logs: '运行记录',
+  processing: '正文处理', tts: '朗读', helper: '小助手', logs: '运行记录',
 });
 
 function stripTags(html) {

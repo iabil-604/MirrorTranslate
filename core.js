@@ -8,21 +8,20 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.51.6-beta.1';
+} from './prompts.js?v=0.51.6-beta.2';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.51.6-beta.1';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.51.6-beta.2';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.51.6-beta.1';
-import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.51.6-beta.1';
-import { DEFAULT_FISH_ANDROID_PORT, fishAndroidPort } from './fish-web.js?v=0.51.6-beta.1';
+import { resolveMoveStyle } from './palette.js?v=0.51.6-beta.2';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.51.6-beta.2';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.51.6-beta.1';
+export const APP_VERSION = '0.51.6-beta.2';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -30,12 +29,13 @@ export const APP_VERSION = '0.51.6-beta.1';
 // counts as an already-bilingual row, and a card's first row starts its own unit apart from whatever
 // narration precedes it. 4 is v0.42.1's reading of excluded tags: an attribute's quoted value may hold
 // < and > (a picture's prompt, <pic prompt="1girl, <lora:x:0.6>, rain"/>), and an excluded tag that opens
-// and never closes (<pic prompt="…"> with no /) is left out as a tag on its own. A floor already
+// and never closes (<pic prompt="…"> with no /) is left out as a tag on its own. 5 keeps custom
+// containers outside translation units whether their tags share a line with the prose or not. A floor already
 // translated keeps whichever rules produced what is stored on it — recorded on its metadata as
 // `segmentation_version` — so re-deriving its segments for matching never disagrees with what was
 // actually written; a floor with no record yet always starts on the latest rules. See segmentSource's
 // `segmentationVersion` option.
-export const SEGMENTATION_RULES_VERSION = 4;
+export const SEGMENTATION_RULES_VERSION = 5;
 export const MESSAGE_META_KEY = 'jingyi_translation';
 export const INVISIBLE_MARKER = '\u2063';
 // These boundaries belong to MirrorTranslate; visible affixes never identify a block.
@@ -971,6 +971,8 @@ export const DEFAULT_FISH = Object.freeze({
   concurrency: 2,
 });
 
+export const DEFAULT_FISH_WEB = Object.freeze({ baseUrl: '', key: '', viaProxy: false });
+
 // 豆包语音 (Volcengine) for what is read while written. The key is the new console's API Key; an App ID
 // makes it the old console's Access Token instead. Its key headers are refused across origins, so it
 // goes through the host's proxy like Fish.
@@ -1111,7 +1113,7 @@ export const DEFAULT_TTS = Object.freeze({
   // says what an id sounds like on each provider.
   provider: 'fish',
   fish: DEFAULT_FISH,
-  fishAndroid: Object.freeze({ port: DEFAULT_FISH_ANDROID_PORT, secretId: '', profile: '' }),
+  fishWeb: DEFAULT_FISH_WEB,
   doubao: DEFAULT_DOUBAO,
   minimax: DEFAULT_MINIMAX,
   gsv: DEFAULT_GSV,
@@ -2232,10 +2234,10 @@ export function normalizeTts(value) {
     dialogueTitle: normalizeVoiceTitle(source.dialogueTitle),
     provider: TTS_PROVIDERS.includes(source.provider) ? source.provider : DEFAULT_TTS.provider,
     fish: normalizeFishSettings(source.fish),
-    fishAndroid: {
-      port: fishAndroidPort(source.fishAndroid?.port) || DEFAULT_FISH_ANDROID_PORT,
-      secretId: String(source.fishAndroid?.secretId ?? '').slice(0, 128),
-      profile: String(source.fishAndroid?.profile ?? '').slice(0, 160),
+    fishWeb: {
+      baseUrl: String(source.fishWeb?.baseUrl ?? '').trim().slice(0, 400),
+      key: String(source.fishWeb?.key ?? '').trim().slice(0, 512),
+      viaProxy: source.fishWeb?.viaProxy === true,
     },
     doubao: normalizeDoubaoSettings(source.doubao),
     minimax: normalizeMinimaxSettings(source.minimax),
@@ -3718,6 +3720,14 @@ const CARRYABLE_FORMAT_TAGS = new Set([
   'span', 'font', 'b', 'strong', 'i', 'em', 'u', 's', 'del', 'ins',
   'mark', 'small', 'big', 'sub', 'sup', 'q', 'cite', 'abbr', 'tt',
 ]);
+const HTML_TAG_NAMES = new Set((
+  'a abbr acronym address applet area article aside audio b base basefont bdi bdo big blockquote body br button canvas caption center ' +
+  'cite code col colgroup data datalist dd del details dfn dialog dir div dl dt em embed fieldset figcaption figure font footer form ' +
+  'frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label legend li link main map mark menu ' +
+  'meta meter nav nobr noembed noframes noscript object ol optgroup option output p param picture plaintext portal pre progress q ' +
+  'rb rp rt rtc ruby s samp script search section select slot small source span strike strong style sub summary sup svg table ' +
+  'tbody td template textarea tfoot th thead time title tr track tt u ul var video wbr xmp math'
+).split(' '));
 // Presentation attributes only. Copying an event handler or an id onto a second element would be
 // this extension inventing behaviour the floor never had.
 const CARRYABLE_FORMAT_ATTRS = new Set(['style', 'color', 'class', 'size', 'face']);
@@ -4159,7 +4169,7 @@ function dialogueParts(source, options) {
 }
 
 function segmentDialogueSource(text, options) {
-  const base = segmentSource(text, { ...options, translationScope: 'all' });
+  const base = segmentSource(text, { ...options, translationScope: 'all', splitCustomContainers: false });
   const layout = [], segments = [], speech = new Map(), reading = new Map(), fragmentsById = new Map();
   const startId = clampInteger(options.startId, 1, Number.MAX_SAFE_INTEGER, 1);
   let sourceOffset = 0;
@@ -4594,14 +4604,36 @@ export function segmentSource(text, options = {}) {
     if (trailing) layout.push({ type: 'raw', text: trailing });
   };
 
-  const separatorPattern = /\n(?:[ \t]*\n)+/g;
+  const appendText = text => {
+    const tail = text.match(/(?:\n[ \t]*)+$/)?.[0] || '';
+    if (tail) text = text.slice(0, -tail.length);
+    let cursor = 0;
+    for (const match of text.matchAll(/\n(?:[ \t]*\n)+/g)) {
+      appendParagraph(text.slice(cursor, match.index));
+      layout.push({ type: 'raw', text: replaceMaskedBlocks(match[0], blocks, 'restore') });
+      cursor = match.index + match[0].length;
+    }
+    appendParagraph(text.slice(cursor));
+    if (tail) layout.push({ type: 'raw', text: replaceMaskedBlocks(tail, blocks, 'restore') });
+  };
+  // Custom containers belong around both source and translation. Keep their tokens outside
+  // translation units so <thoughts>text</thoughts> behaves like the same tags on separate lines.
   let cursor = 0;
-  for (const match of body.matchAll(separatorPattern)) {
-    appendParagraph(body.slice(cursor, match.index));
-    layout.push({ type: 'raw', text: replaceMaskedBlocks(match[0], blocks, 'restore') });
-    cursor = match.index + match[0].length;
+  if (segmentationRules >= 5 && options.splitCustomContainers !== false) {
+    for (const token of body.matchAll(QUOTED_TAG_TOKEN_RE)) {
+      const tag = token[1].toLowerCase();
+      if (HTML_TAG_NAMES.has(tag) || tag === 'say') continue;
+      const from = body.lastIndexOf('\n', token.index - 1) + 1;
+      const end = body.indexOf('\n', token.index + token[0].length);
+      const sourceLine = replaceMaskedBlocks(body.slice(from, end < 0 ? body.length : end), blocks, 'restore');
+      if (matchesPreserveLine(sourceLine, parsedRules.rules, { modern })) continue;
+      appendText(body.slice(cursor, token.index));
+      structuralTags.add(tag);
+      layout.push({ type: 'raw', text: token[0] });
+      cursor = token.index + token[0].length;
+    }
   }
-  appendParagraph(body.slice(cursor));
+  appendText(body.slice(cursor));
   if (trailing) layout.push({ type: 'raw', text: replaceMaskedBlocks(trailing, blocks, 'restore') });
   return {
     source,

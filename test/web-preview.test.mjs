@@ -25,11 +25,11 @@ test('web beta can insert during dialogue translation, clear it safely and open 
   let selected;
   let enteredWorkshop = false;
   const fold = { open: false };
-  const fishFold = { open: false };
+  const fishSource = { value: 'fish', dispatchEvent() {} };
   const panel = {
     querySelector(selector) {
       if (selector.startsWith('[data-jy-tab="tts"]')) return { dataset: { jyTab: 'tts' }, click() { selected = 'tts'; } };
-      if (selector === '[data-jy-fold="tts-fish-center"]') return fishFold;
+      if (selector === '[data-jy-page="tts"] [data-jy-tts-field="provider"]') return fishSource;
       if (selector.includes('[data-jy-tab="finetune"]')) return { dataset: { jyTab: 'finetune' }, click() { selected = 'finetune'; } };
       if (selector === '[data-jy-page="finetune"] [data-jy-ws-go="workshop"]') return { click() { enteredWorkshop = true; }, closest() { return fold; } };
       return null;
@@ -64,7 +64,7 @@ test('web beta can insert during dialogue translation, clear it safely and open 
   assert.equal(storage.has('jingyi.workshop.session.v1'), false);
   await get('fish-web-open').click();
   assert.equal(selected, 'tts');
-  assert.equal(fishFold.open, true);
+  assert.equal(fishSource.value, 'fish-web');
   await get('workshop-open').click();
   assert.equal(selected, 'finetune');
   assert.ok(fold.open && enteredWorkshop);
