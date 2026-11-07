@@ -9,7 +9,7 @@
 | 入口 | `manifest.json` → `index.js`（生命周期钩子 `onActivate` / `onDisable` / `onClean`，生成拦截器 `JingyiTranslator_interceptGeneration`）；宿主页面样式 `host.css`（引入 `reading.css`）；控制中心、悬浮窗和弹出的对话框用的 `style.css` 由脚本读进各自的 shadow root |
 | 设置存放 | `SillyTavern.getContext().extensionSettings['jingyi-translator']`，`schemaVersion: 13`，读入时由 `core.js` 的 `mergeSettings` 补默认值并迁移旧字段 |
 | 公开接口 | `window.__JINGYI__`：`tts`（`status` / `voices` / `speak` / `read` / `stream` / `stop`）、`stt`（`status` / `start`）、`llm`（`status` / `stream`）、`call.connect`、`scene`（`get` / `list` / `onChange`）、`floor.original`、`reading`（`get` / `onChange` / `status`）。能不能用看 `features` |
-| 当前版本 | 0.51.6-beta.3。版本号写在 `core.js` 的 `APP_VERSION`、`manifest.json`（`version` 和两个 `?v=`）、`package.json`，以及每个模块导入路径的 `?v=` |
+| 当前版本 | 0.51.6。版本号写在 `core.js` 的 `APP_VERSION`、`manifest.json`（`version` 和两个 `?v=`）、`package.json`，以及每个模块导入路径的 `?v=` |
 | 验证范围 | 外置反代和同行标签的翻译通过模拟测试，安卓真机连接及真实语音合成待验证。音色工坊入口显示敬请期待 |
 | 当前未做 | 场景只记录，界面还没有配乐、大纲或配图功能；已完成「只留译文」的楼层在正文里插图后仍可能标为 `conflict`；`使用手册.md`、`VALIDATION.md` 停在 v0.32.3 |
 | 接手先看 | `交接.md`（交接时的状态和待办）、`AGENT_LOG.md` 末尾（开发记录，只追加）、`DESIGN.md`（界面与动效规约） |
