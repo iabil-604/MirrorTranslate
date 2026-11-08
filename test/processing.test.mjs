@@ -144,11 +144,11 @@ test('native registration is isolated, stable across saves and switches, and rea
   const unrelated = { id: 'user-rule', scriptName: 'User rule', findRegex: 'x', replaceString: 'y', placement: [2] };
   const first = syncNativeRegex([unrelated], cute);
   assert.deepEqual(syncNativeRegex(first, cute), first);
-  // Internal rules sit ahead of everything else: display rules (boundary cleanup, hidden replace
+  // Internal rules sit ahead of everything else: display rules (boundary cleanup, old role compatibility, hidden replace
   // originals, the quotation marks inside the story's own speaker marks, the marks themselves) and
   // four prompt guards.
   const internal = first.filter(rule => rule.jingyi_managed?.internal);
-  assert.equal(internal.length, 10);
+  assert.equal(internal.length, 11);
   const marks = internal.find(rule => rule.id.endsWith(':speech-marks'));
   const quoteRules = internal.filter(rule => rule.id.includes(':speech-quote-'));
   assert.equal(quoteRules.length, 3);

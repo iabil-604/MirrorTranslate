@@ -1,7 +1,7 @@
 import {
-  DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END,
+  DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END, HTML_TAG_NAMES,
   deepClone, mergeSettings, parseStartMarkers, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors, parseLyricLineRulesWithErrors,
-} from './core.js?v=0.51.6';
+} from './core.js?v=0.51.7';
 
 export const PROCESSING_FIELDS = Object.freeze([
   'bodyTags', 'bodyStartMarkers', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
@@ -179,7 +179,7 @@ function parseManagedRegexId(id) {
   return sep < 0 ? null : { profileId: rest.slice(0, sep), ruleId: rest.slice(sep + 1) };
 }
 
-export function syncNativeRegex(existing, profile) {
+export function syncNativeRegex(existing, profile, { disableBuiltinCopies = false } = {}) {
   const originals = Array.isArray(existing) ? existing : [];
   const managed = profile ? profile.regexScripts.map(rule => ({
     ...deepClone(rule),
@@ -194,6 +194,13 @@ export function syncNativeRegex(existing, profile) {
     runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
     [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
   }, {
+    // Display-only compatibility for one complete old role wrapper; stored text stays unchanged.
+    id: `${MODULE_ID}:display-role-compat`, scriptName: '镜译 · 旧角色标签显示兼容',
+    findRegex: `/${ROLE_COMPAT_PATTERN}/gi`, replaceString: ROLE_COMPAT_REPLACE,
+    trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
+    runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
+    [REGEX_OWNER_KEY]: { owner: MODULE_ID, internal: true },
+  }, {
     // Replace-tag regions: the hidden original vanishes from the rendered floor but stays in mes.
     id: `${MODULE_ID}:hidden-source`, scriptName: '镜译 · 隐藏原文块',
     findRegex: `/\\n?${HIDDEN_START}[\\s\\S]*?${HIDDEN_END}/g`,
@@ -204,7 +211,10 @@ export function syncNativeRegex(existing, profile) {
   const fixedIds = new Set(fixed.map(rule => rule.id));
   const isFixed = rule => fixedIds.has(rule?.id) || Boolean(rule?.[REGEX_OWNER_KEY]?.internal);
   const first = originals.findIndex(rule => isJingyiRegex(rule) && !isFixed(rule));
-  const kept = originals.filter(rule => !isJingyiRegex(rule));
+  const retireCopies = disableBuiltinCopies && detectBuiltinReadingStyle(profile);
+  const kept = originals.filter(rule => !isJingyiRegex(rule)).map(rule => (
+    retireCopies && !rule?.disabled && isOriginalBuiltinReadingRule(rule) ? { ...rule, disabled: true } : rule
+  ));
   const insertion = first < 0 ? kept.length : originals.slice(0, first).filter(rule => !isJingyiRegex(rule)).length;
   kept.splice(insertion, 0, ...managed);
   kept.unshift(...fixed);
@@ -450,6 +460,12 @@ const BALANCED_SOURCE = `${BALANCED_SAFE}*(?:${BALANCED_PAIR_3}${BALANCED_SAFE}*
 // two groups the replaceString actually needs are named here and referenced as $<jySource>/$<jyTranslation>
 // instead, immune to however many more numbered groups BALANCED_SOURCE ends up defining.
 const readingPattern = `<jy-source>(?<jySource>${BALANCED_SOURCE})<\\/jy-source>\\n<jy-translation>(?<jyTranslation>[\\s\\S]*?)<\\/jy-translation>`;
+// Keep the same tag classification as new translations. Nested/sibling custom containers are
+// ambiguous in old single-segment records, so this display repair deliberately leaves them alone.
+const CUSTOM_ROLE_TAG = `(?!jy-)(?!(?:${[...HTML_TAG_NAMES, 'say'].join('|')})(?=[\\s/>]))[a-z][a-z0-9_-]*`;
+const ROLE_SOURCE_CONTENT = `(?:[^<]|<(?!%)(?!\\/?(?:script|style|iframe|template|pre|code)\\b)(?!\\/?${CUSTOM_ROLE_TAG}(?=[\\s/>]))(?!\\/?jy-(?:source|translation)\\b))*`;
+const ROLE_COMPAT_PATTERN = String.raw`<jy-source>(?<jyRoleLead>\s*)(?<jyRoleOpen><(?<jyRoleTag>${CUSTOM_ROLE_TAG})\b(?:[^<>"'/]|\/(?!>)|"[^"<]*"|'[^'<]*')*>)(?<jyRoleSource>${ROLE_SOURCE_CONTENT})(?<jyRoleClose><\/\k<jyRoleTag>\s*>)(?<jyRoleTrail>\s*)<\/jy-source>\n<jy-translation>(?<jyRoleTranslation>(?:[^<]|<(?!%)(?!\/?(?:jy-(?:source|translation)|script|style|iframe|template|pre|code)\b))*)<\/jy-translation>`;
+const ROLE_COMPAT_REPLACE = '$<jyRoleOpen><jy-source>$<jyRoleLead>$<jyRoleSource>$<jyRoleTrail></jy-source>\n<jy-translation>$<jyRoleTranslation></jy-translation>$<jyRoleClose>';
 export const BUILTIN_READING_STYLES = Object.freeze([
   { id: 'cute', name: '可爱风', description: '一点桃粉，一枚小花。' },
   { id: 'minimal', name: '极简风', description: '淡化原文，留白分隔。' },
@@ -515,4 +531,19 @@ function migrateLegacyReadingRule(rule) {
 // What makeBuiltinReadingProfile wrote before v0.36.1: the same template, reading its two groups by number.
 function legacyReadingReplaceString(styleId) {
   return builtinReadingReplaceString(styleId).replace('$<jySource>', '$1').replace('$<jyTranslation>', '$2');
+}
+
+const BUILTIN_NATIVE_FIELDS = new Set(['id', 'scriptName', 'findRegex', 'replaceString', 'trimStrings', 'placement',
+  'disabled', 'markdownOnly', 'promptOnly', 'runOnEdit', 'substituteRegex', 'minDepth', 'maxDepth']);
+function isOriginalBuiltinReadingRule(rule) {
+  if (!rule || Object.keys(rule).some(key => !BUILTIN_NATIVE_FIELDS.has(key))) return false;
+  const candidate = migrateLegacyReadingRule(rule);
+  const style = BUILTIN_READING_STYLES.find(item => candidate.replaceString === builtinReadingReplaceString(item.id));
+  if (!style) return false;
+  const expected = {
+    scriptName: '', findRegex: `/${readingPattern}/gi`, replaceString: builtinReadingReplaceString(style.id),
+    trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
+    runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
+  };
+  return regexScriptContentKey({ ...candidate, scriptName: '', disabled: false }) === regexScriptContentKey(expected);
 }

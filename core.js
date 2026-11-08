@@ -8,20 +8,20 @@ import {
   normalizeTargetLanguage,
   STYLE_PRESETS,
   LEANING_PRESETS,
-} from './prompts.js?v=0.51.6';
+} from './prompts.js?v=0.51.7';
 // The same judgement the reading applies everywhere else a line is heard (tts.js's plainLineText):
 // struck-through and redacted content dropped with its words, so a segment carries it for the
 // translation to see — that stays in `text`, unaffected — while what the floor's own words are read
 // with, `speech`/`reading`, never says a word neither the floor nor its reader is meant to hear.
-import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.51.6';
+import { dropHiddenMarkup } from './tts-sanitizer.js?v=0.51.7';
 // A move's colour is recomputed against the current band on restyle (`restyleBilingual` below), the
 // same maths index.js `moveStyleFor` used to paint it the first time.
-import { resolveMoveStyle } from './palette.js?v=0.51.6';
-import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.51.6';
+import { resolveMoveStyle } from './palette.js?v=0.51.7';
+import { DOUBAO_RESOURCES, MINIMAX_HOSTS, MINIMAX_MODELS } from './tts-cloud.js?v=0.51.7';
 
 export const MODULE_ID = 'jingyi-translator';
 export const APP_NAME = '镜译 · 正文翻译器';
-export const APP_VERSION = '0.51.6';
+export const APP_VERSION = '0.51.7';
 // How a floor's own segmentation rules read: 1 is v0.36.0 and older (a <br> mid-line glues its words,
 // a <say> shell or a custom preserve rule's indentation is matched literally). 2 adds the v0.36.1
 // built-in-regex fixes. 3 adds v0.40.0's 「音乐卡片」 tightening: a run of <br> rows is only treated as a
@@ -3720,7 +3720,7 @@ const CARRYABLE_FORMAT_TAGS = new Set([
   'span', 'font', 'b', 'strong', 'i', 'em', 'u', 's', 'del', 'ins',
   'mark', 'small', 'big', 'sub', 'sup', 'q', 'cite', 'abbr', 'tt',
 ]);
-const HTML_TAG_NAMES = new Set((
+export const HTML_TAG_NAMES = new Set((
   'a abbr acronym address applet area article aside audio b base basefont bdi bdo big blockquote body br button canvas caption center ' +
   'cite code col colgroup data datalist dd del details dfn dialog dir div dl dt em embed fieldset figcaption figure font footer form ' +
   'frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label legend li link main map mark menu ' +

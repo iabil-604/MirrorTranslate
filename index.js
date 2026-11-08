@@ -129,12 +129,12 @@ import {
   isGsvVoiceId,
   languageBase,
   normalizeGsvVoice,
-} from './core.js?v=0.51.6';
-import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.51.6';
-import { WORKSHOP_ENTRY_MARKUP, WORKSHOP_FOLD_MARKUP, WORKSHOP_LAYER_MARKUP, WORKSHOP_PAGE_MARKUP, createWorkshop } from './workshop.js?v=0.51.6';
+} from './core.js?v=0.51.7';
+import { resolveAutosaveWrite, ensureAutosaveIndicator } from './console-autosave.js?v=0.51.7';
+import { WORKSHOP_ENTRY_MARKUP, WORKSHOP_FOLD_MARKUP, WORKSHOP_LAYER_MARKUP, WORKSHOP_PAGE_MARKUP, createWorkshop } from './workshop.js?v=0.51.7';
 import {
   FISH_WEB_TASK_CHECK, fishWebEndpoint, fishWebReadyReason, fishWebRequest, probeFishWeb,
-} from './fish-web.js?v=0.51.6';
+} from './fish-web.js?v=0.51.7';
 import {
   FISH_EMOTIONS,
   FISH_MIME,
@@ -207,10 +207,10 @@ import {
   gsvVoiceFor,
   scaleWavVolume,
   wavInfo,
-} from './tts.js?v=0.51.6';
-import { createTtsStore } from './tts-store.js?v=0.51.6';
-import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.51.6';
-import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.51.6';
+} from './tts.js?v=0.51.7';
+import { createTtsStore } from './tts-store.js?v=0.51.7';
+import { SPEAKER_SOURCE_LABELS, discoverSpeakerAliases, pinSpeakers, refineCast, resolveSpeakers, speakerHints, speakersOf } from './tts-speakers.js?v=0.51.7';
+import { DEEP_PROMPT, DEEP_STATUS, acousticCallRules, acousticCallUtterances, buildDeepAnalysisMessages, buildDeepRefineMessages, deepRequestSettings, intimateAllowed, isAcousticPrompt, parseDeepAnalysis, pauseDisplay, stressDisplay } from './tts-deep.js?v=0.51.7';
 
 // The built-in prompts by name: the deep reading's comes from its own module.
 const TTS_PROMPT_DEFAULTS = Object.freeze({ ...DEFAULT_TTS_PROMPTS, deep: DEEP_PROMPT });
@@ -220,7 +220,7 @@ import {
   captureProcessingProfile, selectProcessingProfile, exportProcessingProfile, importProcessingProfile,
   importNativeRegex, makeBuiltinReadingProfile, detectBuiltinReadingStyle, syncNativeRegex, readNativeRegexEdits,
   dedupeManagedRegexScripts, planRegexCleanup, planScopedRegexCleanup,
-} from './processing.js?v=0.51.6';
+} from './processing.js?v=0.51.7';
 import {
   CORE_TRANSLATION_SPEC,
   DEFAULT_AVOID_PHRASES,
@@ -238,15 +238,15 @@ import {
   normalizeTargetLanguage,
   promptOptionLabel,
   resolvePromptVariables,
-} from './prompts.js?v=0.51.6';
-import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.51.6';
-import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.51.6';
-import { READING_API_VERSION, READING_STATES, readingPositions, readingSnapshot, readingState } from './reading.js?v=0.51.6';
-import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.51.6';
-import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.51.6';
-import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.51.6';
-import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.51.6';
-import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.51.6';
+} from './prompts.js?v=0.51.7';
+import { buildTranslationMessages, collectTranslationContext } from './workflow.js?v=0.51.7';
+import { SCENE_TONES, mergeScenes, normalizeScene, recoverScene } from './scene.js?v=0.51.7';
+import { READING_API_VERSION, READING_STATES, readingPositions, readingSnapshot, readingState } from './reading.js?v=0.51.7';
+import { describeLog, describeRemaining, estimateRemaining, filterLogs, floorRows, floorState, segmentAnchors, segmentAtPosition, untranslatedFloors } from './mini.js?v=0.51.7';
+import { mergeStreamText, readableStreamText, takeStreamPieces } from './tts-stream.js?v=0.51.7';
+import { callAppNames, callAppSummary, callMissing, callReminder, createCall, createCallApps, createCallHistory } from './call.js?v=0.51.7';
+import { createPcmPlayer, createWavStreamFeed, pcmDataOffset } from './pcm-player.js?v=0.51.7';
+import { CLOUD_VOICE_LABELS, spacedLatin, cloudBodyFailure, cloudFailure, cloudRequestGroups, createCloudAudioReader, doubaoRequest, minimaxRequest, parseVoiceMap } from './tts-cloud.js?v=0.51.7';
 import {
   DEFAULT_MIN_CONTRAST,
   EMOTION_STYLES,
@@ -264,8 +264,8 @@ import {
   spreadHues,
   srgbToOklch,
   toHex,
-} from './palette.js?v=0.51.6';
-import { sampleThemeBackground } from './theme-probe.js?v=0.51.6';
+} from './palette.js?v=0.51.7';
+import { sampleThemeBackground } from './theme-probe.js?v=0.51.7';
 import {
   addDiagnostic,
   clearDiagnostics,
@@ -273,7 +273,7 @@ import {
   formatFullDiagnosticReport,
   listDiagnosticFloors,
   readDiagnostics,
-} from './diagnostics.js?v=0.51.6';
+} from './diagnostics.js?v=0.51.7';
 import {
   DEFAULT_HELPER_PROMPT,
   HELPER_QUICK_QUESTIONS,
@@ -284,7 +284,7 @@ import {
   resolveHelperPrompt,
   validateHelperSuggestion,
   validateHelperSuggestions,
-} from './helper.js?v=0.51.6';
+} from './helper.js?v=0.51.7';
 
 const MENU_ENTRY_ID = `${MODULE_ID}-menu-entry`;
 const SETTINGS_ID = `${MODULE_ID}-settings`;
@@ -1190,7 +1190,7 @@ function initializeSettings() {
   return runtime.settings;
 }
 
-function saveSettings(next) {
+function saveSettings(next, { applyBuiltinStyle = false } = {}) {
   const context = getContext();
   const previous = runtime.settings;
   // A voice id edited in the library takes the rows, the narrator and the dialogue default that
@@ -1216,6 +1216,10 @@ function saveSettings(next) {
     const nativeEdits = readNativeRegexEdits(context.extensionSettings.regex, active);
     if (nativeEdits.length) active.regexScripts = dedupeManagedRegexScripts(nativeEdits);
   }
+  const nativeBefore = Array.isArray(context.extensionSettings.regex) ? context.extensionSettings.regex : [];
+  const nativeScripts = syncNativeRegex(nativeBefore, active, { disableBuiltinCopies: applyBuiltinStyle });
+  const nativeDisabledChanged = applyBuiltinStyle && nativeScripts.some(rule => rule?.disabled
+    && nativeBefore.some(old => old && old.id === rule.id && !old.disabled));
   // 取色 (runThemeProbe) only ever changes `coloring.band`, and 特效字/vividness live under the same
   // object — none of those are in VISUAL_FIELDS (the four affix strings), so without this a floor's
   // move colours would never be recomputed after a theme or background change, only after an affix or
@@ -1240,7 +1244,7 @@ function saveSettings(next) {
   const movesChanged = JSON.stringify(previous.moveOverrides ?? {}) !== JSON.stringify(runtime.settings.moveOverrides ?? {});
   const coloringPaintChanged = bandChanged || movesChanged;
   const coloringChanged = coloringRequestChanged || coloringPaintChanged;
-  const regexChanged = JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
+  const regexChanged = nativeDisabledChanged || JSON.stringify(previousRules) !== JSON.stringify(active.regexScripts);
   const nonColoringVisualChanged = VISUAL_FIELDS.some(key => previous[key] !== runtime.settings[key]) || regexChanged;
   const visualChanged = nonColoringVisualChanged || coloringChanged;
   // A change of look re-renders translations already written; the reply being generated is still owed
@@ -1260,7 +1264,7 @@ function saveSettings(next) {
     });
     runtime.pendingRepaint.catch(error => toast('error', `设置已保存，刷新已有译文失败：${safeError(error)}`));
   }
-  context.extensionSettings.regex = syncNativeRegex(context.extensionSettings.regex, active);
+  context.extensionSettings.regex = nativeScripts;
   context.extensionSettings[MODULE_ID] = runtime.settings;
   context.saveSettingsDebounced?.();
   syncFloatingButton();
@@ -13598,8 +13602,8 @@ function downloadProcessingProfile(profile) {
   runtime.timers.add(timer);
 }
 
-async function persistProcessing(root, settings) {
-  saveSettings(settings);
+async function persistProcessing(root, settings, options) {
+  saveSettings(settings, options);
   await runtime.processingRefresh;
   syncFields(root, runtime.settings);
 }
@@ -14901,7 +14905,8 @@ function createControlCenter(rootDocument = document) {
         refreshSpeakerPreviews(root, runtime.settings);
       } else if (action === 'builtin-processing') {
         const next = collectSettings(root);
-        await persistProcessing(root, addProcessingProfile(next, makeBuiltinReadingProfile(next, root.querySelector('[data-jy-reading-style]').value)));
+        const applied = addProcessingProfile(next, makeBuiltinReadingProfile(next, root.querySelector('[data-jy-reading-style]').value));
+        await persistProcessing(root, applied, { applyBuiltinStyle: true });
         toast('success', '已生成美化方案，已有译文同步换好样式。');
       } else if (['move-processing-up', 'move-processing-down', 'remove-processing-regex'].includes(action)) {
         const next = collectSettings(root), rules = getActiveProcessingProfile(next).regexScripts;
@@ -15667,7 +15672,7 @@ function createControlCenter(rootDocument = document) {
         // through the picker used to pile up 极简风、极简风 2、极简风 3… (review finding index.js:11796).
         const existing = next.processingProfiles.find(item => detectBuiltinReadingStyle(item) === styleId);
         const applied = existing ? selectProcessingProfile(next, existing.id) : addProcessingProfile(next, makeBuiltinReadingProfile(next, styleId));
-        await persistProcessing(root, applied);
+        await persistProcessing(root, applied, { applyBuiltinStyle: true });
         toast('success', existing ? `已切换到「${existing.name}」。` : '已套用内置美化样式。');
       } catch (error) { toast('error', `套用失败：${safeError(error)}`); }
       return;
