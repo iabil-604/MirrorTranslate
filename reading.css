@@ -61,6 +61,10 @@
 :is(.jy-reading-original, .custom-jy-reading-original) > summary:focus-visible { outline: 2px solid #91a196; outline-offset: 3px; }
 :is(.jy-reading-original, .custom-jy-reading-original) > :is(.jy-reading-source, .custom-jy-reading-source) { margin: .8em 0 .2em; padding: .7em 1em; background: #879b920b; border-radius: 6px; }
 :is(.jy-reading-fold, .custom-jy-reading-fold) > :is(.jy-reading-translation, .custom-jy-reading-translation) { margin: .85em 0 0 .3em; padding-left: 1.1em; border-left: 2px solid #879b9233; }
+/* Keep the original available to reading tools while hiding it from the rendered page. */
+:is(.jy-reading-hidden, .custom-jy-reading-hidden) { margin: 0; line-height: inherit; }
+:is(.jy-reading-hidden, .custom-jy-reading-hidden) > :is(.jy-reading-source, .custom-jy-reading-source) { display: none !important; }
+:is(.jy-reading-hidden, .custom-jy-reading-hidden) > :is(.jy-reading-translation, .custom-jy-reading-translation) { margin-top: 0; }
 @media (max-width: 560px) {
   :is(.jy-reading-cute, .custom-jy-reading-cute) { padding: 13px 15px 14px 18px; }
   :is(.jy-reading-minimal, .custom-jy-reading-minimal) { padding-left: 13px; }

@@ -1,7 +1,7 @@
 import {
   DEFAULT_SETTINGS, MODULE_ID, SOURCE_START, SOURCE_END, TRANSLATION_START, TRANSLATION_END, AFFIX_START, AFFIX_END, HIDDEN_START, HIDDEN_END, HTML_TAG_NAMES,
   deepClone, mergeSettings, parseStartMarkers, parseTagNamesWithErrors, parsePreserveLineRulesWithErrors, parseLyricLineRulesWithErrors,
-} from './core.js?v=0.51.7';
+} from './core.js?v=0.51.8';
 
 export const PROCESSING_FIELDS = Object.freeze([
   'bodyTags', 'bodyStartMarkers', 'replaceTags', 'excludedTags', 'preserveLineRules', 'segmentPrefix', 'segmentSuffix',
@@ -470,6 +470,7 @@ export const BUILTIN_READING_STYLES = Object.freeze([
   { id: 'cute', name: '可爱风', description: '一点桃粉，一枚小花。' },
   { id: 'minimal', name: '极简风', description: '淡化原文，留白分隔。' },
   { id: 'fold', name: '原文折叠', description: '原文可展开，译文缩进。' },
+  { id: 'hidden', name: '原文隐藏', description: '只显示译文。' },
 ]);
 
 // The one built-in reading rule's replaceString, for a style id — settings-independent, so it also
@@ -521,7 +522,8 @@ export function makeBuiltinReadingProfile(settings, styleId) {
 const LEGACY_READING_FIND_REGEX = '/<jy-source>([\\s\\S]*?)<\\/jy-source>\\n<jy-translation>([\\s\\S]*?)<\\/jy-translation>/g';
 function migrateLegacyReadingRule(rule) {
   if (rule.findRegex !== LEGACY_READING_FIND_REGEX) return rule;
-  const style = BUILTIN_READING_STYLES.find(item => legacyReadingReplaceString(item.id) === rule.replaceString);
+  const style = BUILTIN_READING_STYLES.find(item => ['cute', 'minimal', 'fold'].includes(item.id)
+    && legacyReadingReplaceString(item.id) === rule.replaceString);
   if (!style) return rule;
   // Both fields move together: the guarded pattern numbers its groups differently, so the old $1/$2
   // would no longer point at the source and the translation.

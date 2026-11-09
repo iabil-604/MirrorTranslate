@@ -179,9 +179,9 @@ test('native registration is isolated, stable across saves and switches, and rea
   assert.deepEqual(syncNativeRegex(switched, null), [unrelated]);
 });
 
-test('built-in styles preserve extraction settings and use display-only native rules with a collapsed original', () => {
+test('built-in styles preserve extraction settings and use display-only native rules', () => {
   let settings = normalizeProcessingSettings({ ...DEFAULT_SETTINGS, bodyTags: ['custom'], excludedTags: ['status'], preserveLineRules: 'prefix:【提示】', floatingStyle: 'edge' });
-  for (const id of ['cute', 'minimal', 'fold']) {
+  for (const id of ['cute', 'minimal', 'fold', 'hidden']) {
     const profile = makeBuiltinReadingProfile(settings, id);
     assert.deepEqual(profile.settings.bodyTags, ['custom']);
     assert.deepEqual(profile.settings.excludedTags, ['status']);
@@ -206,12 +206,49 @@ test('built-in styles preserve extraction settings and use display-only native r
   }
 });
 
+test('the hidden style preserves both languages and the independent translation-only preference', () => {
+  for (const translationOnly of [false, true]) {
+    let settings = normalizeProcessingSettings({ ...DEFAULT_SETTINGS, translationOnly });
+    const profile = makeBuiltinReadingProfile(settings, 'hidden');
+    settings.processingProfiles.push(profile);
+    settings = selectProcessingProfile(settings, profile.id);
+    assert.equal(settings.translationOnly, translationOnly);
+    const imported = importProcessingProfile(JSON.parse(JSON.stringify(exportProcessingProfile(profile))));
+    assert.equal(detectBuiltinReadingStyle(imported), 'hidden');
+
+    const source = '雨が降っています。';
+    const stored = assembleBilingual(segmentSource(source, settings).layout, new Map([[1, '正在下雨。']]), settings);
+    assert.equal(stripGeneratedTranslationLines(stored), source);
+    assert.equal(extractGeneratedTranslations(stored, settings).get(1), '正在下雨。');
+    const prompt = [{ mes: stored }];
+    interceptGenerationChat(prompt);
+    assert.equal(prompt[0].mes, source);
+    let display = stored;
+    for (const rule of syncNativeRegex([], imported)) {
+      if (rule.markdownOnly && !rule.promptOnly) display = display.replace(compileNativeRegex(rule.findRegex), rule.replaceString);
+    }
+    assert.ok(display.includes(source) && display.includes('正在下雨。'));
+    assert.doesNotMatch(display, /<details\b|<summary\b/);
+  }
+});
+
+test('a numbered-capture custom hidden template is not mistaken for a historical builtin', () => {
+  const fresh = makeBuiltinReadingProfile(normalizeProcessingSettings(), 'hidden');
+  const custom = { ...fresh.regexScripts[0], findRegex: '/<jy-source>([\\s\\S]*?)<\\/jy-source>\\n<jy-translation>([\\s\\S]*?)<\\/jy-translation>/g',
+    replaceString: fresh.regexScripts[0].replaceString.replace('$<jySource>', '$1').replace('$<jyTranslation>', '$2') };
+  const restored = normalizeProcessingProfile({ ...fresh, regexScripts: [custom] });
+  assert.equal(restored.regexScripts[0].findRegex, custom.findRegex);
+  assert.equal(restored.regexScripts[0].replaceString, custom.replaceString);
+  const synced = syncNativeRegex([custom], fresh, { disableBuiltinCopies: true });
+  assert.equal(synced.find(rule => rule.id === custom.id).disabled, false);
+});
+
 // 微调's 内置美化 picker used to always show 可爱风 and could not be told to reselect the style already
 // active (review finding index.js:11796/491) — detectBuiltinReadingStyle is the reverse lookup that
 // fixes both.
 test('detectBuiltinReadingStyle recognises each built-in style makeBuiltinReadingProfile produced, and nothing else', () => {
   const settings = normalizeProcessingSettings();
-  for (const id of ['cute', 'minimal', 'fold']) {
+  for (const id of ['cute', 'minimal', 'fold', 'hidden']) {
     assert.equal(detectBuiltinReadingStyle(makeBuiltinReadingProfile(settings, id)), id);
   }
   assert.equal(detectBuiltinReadingStyle(getActiveProcessingProfile(settings)), null, 'the plain 默认 profile matches none of them');
